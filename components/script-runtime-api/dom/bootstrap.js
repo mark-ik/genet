@@ -97,11 +97,24 @@
   // Each entry's key is the uppercased tag name `__tagName` returns.
   var elementSubclassProto = {};
   var htmlInterfaceConstructors = {};
+  var htmlInterfaceDefinitions = Object.create(null);
   var customElementDefinitions = Object.create(null);
   var autonomousCustomElementDefinitions = Object.create(null);
   var customizedBuiltInDefinitions = Object.create(null);
+  var customElementDefinitionsByCtor = new Map();
+  var reservedCustomElementNames = {
+    'annotation-xml': true,
+    'color-profile': true,
+    'font-face': true,
+    'font-face-src': true,
+    'font-face-uri': true,
+    'font-face-format': true,
+    'font-face-name': true,
+    'missing-glyph': true
+  };
   var upgradedCustomElements = new WeakMap();
   var connectedCustomElements = new WeakMap();
+  var ownerDocuments = new WeakMap();
   var htmlElementConstructionStack = [];
   var customElementReactionQueue = [];
   var customElementReactionScheduled = false;
@@ -121,10 +134,85 @@
       throw new DOMException("The new child is an ancestor of the parent.", "HierarchyRequestError");
     }
   }
+  function rootDocument(node) {
+    var n = node;
+    while (n && n.parentNode) n = n.parentNode;
+    return (n && n.nodeType === 9) ? n : null;
+  }
+  function ownerDocumentOf(node) {
+    if (!node) return null;
+    if (node.nodeType === 9) return null;
+    var root = rootDocument(node);
+    if (root) return root;
+    return ownerDocuments.get(node) || document;
+  }
+  function documentForInsertionTarget(parent) {
+    return parent ? (parent.nodeType === 9 ? parent : ownerDocumentOf(parent)) : null;
+  }
+  function movedRoots(node) {
+    if (!node) return [];
+    if (node.nodeType === 11) {
+      var kids = node.childNodes;
+      var roots = [];
+      for (var i = 0; i < kids.length; i++) roots.push(kids[i]);
+      return roots;
+    }
+    return [node];
+  }
+  function snapshotTree(root, out) {
+    out.push(root);
+    var kids = root.childNodes;
+    for (var i = 0; i < kids.length; i++) snapshotTree(kids[i], out);
+    return out;
+  }
+  function snapshotMovedNodes(node) {
+    return snapshotTree(node, []);
+  }
+  function setOwnerDocumentSnapshot(nodes, doc) {
+    if (!doc) return;
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i] && nodes[i].nodeType !== 9) ownerDocuments.set(nodes[i], doc);
+    }
+  }
+  function enqueueAdoptedTree(root, oldDoc, newDoc) {
+    if (!root || oldDoc === newDoc) return;
+    if (root.nodeType === 1 && upgradedCustomElements.get(root)) {
+      enqueueCustomElementReaction(root, 'adoptedCallback', [oldDoc, newDoc]);
+    }
+    var kids = root.childNodes;
+    for (var i = 0; i < kids.length; i++) enqueueAdoptedTree(kids[i], oldDoc, newDoc);
+  }
+  function prepareNodeMove(parent, node) {
+    return {
+      roots: movedRoots(node),
+      snapshot: snapshotMovedNodes(node),
+      oldDoc: ownerDocumentOf(node),
+      newDoc: documentForInsertionTarget(parent),
+      oldParent: node.parentNode
+    };
+  }
+  function disconnectMovedRoots(move) {
+    if (!move || !move.oldParent) return;
+    for (var i = 0; i < move.roots.length; i++) {
+      if (move.roots[i].isConnected) disconnectCustomElementTree(move.roots[i]);
+    }
+  }
+  function finalizeNodeMove(move) {
+    if (!move) return;
+    if (move.oldDoc && move.newDoc && move.oldDoc !== move.newDoc) {
+      setOwnerDocumentSnapshot(move.snapshot, move.newDoc);
+      for (var i = 0; i < move.roots.length; i++) {
+        enqueueAdoptedTree(move.roots[i], move.oldDoc, move.newDoc);
+      }
+    }
+    for (var j = 0; j < move.roots.length; j++) connectCustomElementTree(move.roots[j]);
+  }
   Node.prototype.appendChild = function(child) {
     ensureInsertable(this, child);
+    var move = prepareNodeMove(this, child);
+    if (move.oldDoc !== move.newDoc) disconnectMovedRoots(move);
     __appendChild(this.__ref, child.__ref);
-    connectCustomElementTree(child);
+    finalizeNodeMove(move);
     return child;
   };
   Object.defineProperty(Node.prototype, 'textContent', {
@@ -169,10 +257,10 @@
     return false;
   };
 
-  // Node identity / connectivity. ownerDocument is the primary document (created
-  // nodes are minted in the same arena); a Document's ownerDocument is null.
+  // Node identity / connectivity. ownerDocument resolves from the current root
+  // document when connected, otherwise from the last adopting/creating document.
   Object.defineProperty(Node.prototype, 'ownerDocument', {
-    configurable: true, get: function() { return this.nodeType === 9 ? null : document; }
+    configurable: true, get: function() { return ownerDocumentOf(this); }
   });
   Object.defineProperty(Node.prototype, 'isConnected', {
     configurable: true,
@@ -244,11 +332,12 @@
     // Shallow copy of this node by type, then (deep) recurse over children. Pure JS
     // over the existing create* / setAttribute primitives.
     var copy;
+    var copyDocument = this.nodeType === 9 ? document : ownerDocumentOf(this);
     switch (this.nodeType) {
       case 1: // Element: clone with namespace + every attribute.
         copy = this.namespaceURI
-          ? document.createElementNS(this.namespaceURI, this.prefix ? this.prefix + ':' + this.localName : this.localName)
-          : document.createElement(this.localName);
+          ? copyDocument.createElementNS(this.namespaceURI, this.prefix ? this.prefix + ':' + this.localName : this.localName)
+          : copyDocument.createElement(this.localName);
         var names = this.__ref !== undefined ? __attributeNames(this.__ref) : '';
         if (names) {
           var parts = names.split(' ');
@@ -257,11 +346,11 @@
           }
         }
         break;
-      case 3: copy = document.createTextNode(this.data); break;
-      case 8: copy = document.createComment(this.data); break;
-      case 11: copy = document.createDocumentFragment(); break;
+      case 3: copy = copyDocument.createTextNode(this.data); break;
+      case 8: copy = copyDocument.createComment(this.data); break;
+      case 11: copy = copyDocument.createDocumentFragment(); break;
       case 9: copy = document.implementation.createHTMLDocument(); break;
-      default: copy = document.createTextNode('');
+      default: copy = copyDocument.createTextNode('');
     }
     if (deep) {
       var kids = this.childNodes;
@@ -282,8 +371,10 @@
     if (ref !== null && ref !== undefined && ref.parentNode !== this) {
       throw new DOMException("The reference node is not a child of this node.", "NotFoundError");
     }
+    var move = prepareNodeMove(this, node);
+    if (move.oldDoc !== move.newDoc) disconnectMovedRoots(move);
     __insertBefore(this.__ref, node.__ref, ref ? ref.__ref : undefined);
-    connectCustomElementTree(node);
+    finalizeNodeMove(move);
     return node;
   };
   Node.prototype.replaceChild = function(newChild, oldChild) {
@@ -498,7 +589,7 @@
     if (offset > d.length) throw new DOMException("offset out of range", "IndexSizeError");
     var rest = d.slice(offset);
     this.data = d.slice(0, offset);
-    var newNode = document.createTextNode(rest);
+    var newNode = this.ownerDocument.createTextNode(rest);
     var parent = this.parentNode;
     if (parent) parent.insertBefore(newNode, this.nextSibling);
     return newNode;
@@ -817,6 +908,44 @@
     return String(tag).toUpperCase() + '\n' + String(isValue);
   }
 
+  function customElementSyntaxError(name) {
+    return new (globalThis.DOMException || TypeError)('invalid custom element name', 'SyntaxError');
+  }
+
+  function isValidCustomElementName(name) {
+    name = String(name);
+    if (reservedCustomElementNames[name]) return false;
+    if (name.indexOf('-') === -1) return false;
+    if (name !== name.toLowerCase()) return false;
+    try {
+      validateName(name);
+    } catch (_) {
+      return false;
+    }
+    return true;
+  }
+
+  function customElementCallback(holder, name) {
+    var value = holder[name];
+    if (value !== undefined && value !== null && typeof value !== 'function') {
+      throw new TypeError(name + ' must be a function');
+    }
+    return value || null;
+  }
+
+  function toDomStringSequence(value) {
+    if (value === undefined || value === null) return [];
+    var iter = value[Symbol.iterator];
+    if (typeof iter !== 'function') throw new TypeError('value is not iterable');
+    var iterator = iter.call(value);
+    var out = [];
+    while (true) {
+      var step = iterator.next();
+      if (step.done) return out;
+      out.push(String(step.value));
+    }
+  }
+
   function setElementPrototype(el, proto) {
     if (Object.setPrototypeOf) Object.setPrototypeOf(el, proto);
     else el.__proto__ = proto;
@@ -944,6 +1073,35 @@
     return el;
   }
 
+  function customElementConstructibleWithHtmlInterface(htmlName, htmlDef, def) {
+    if (!def) return false;
+    if (htmlName === 'HTMLElement') return !def.customizedBuiltIn;
+    if (!def.customizedBuiltIn) return false;
+    var tags = (htmlDef && htmlDef.tags) || [];
+    for (var i = 0; i < tags.length; i++) {
+      if (tags[i] === def.localName) return true;
+    }
+    return false;
+  }
+
+  function createElementForHtmlConstructor(Ctor, htmlName, newTarget) {
+    var def = customElementDefinitionsByCtor.get(newTarget);
+    var htmlDef = htmlInterfaceDefinitions[htmlName];
+    if (!customElementConstructibleWithHtmlInterface(htmlName, htmlDef, def)) {
+      throw new TypeError('Invalid custom element constructor');
+    }
+    var proto = newTarget.prototype;
+    if ((!proto || typeof proto !== 'object') && typeof proto !== 'function') {
+      proto = Ctor.prototype;
+    }
+    var el = wrapNode(__createElement(def.localName));
+    ownerDocuments.set(el, document);
+    if (def.customizedBuiltIn) el.setAttribute('is', def.name);
+    setElementPrototype(el, proto);
+    upgradedCustomElements.set(el, def);
+    return el;
+  }
+
   function upgradeCustomElementTree(root) {
     if (!root) return;
     if (root.nodeType === 1) {
@@ -998,6 +1156,7 @@
     // HTML document: the local name is lowercased.
     tag = tag.toLowerCase();
     var el = wrapNode(__createElement(tag));
+    ownerDocuments.set(el, this);
     var isValue = customElementIsOption(options);
     if (isValue !== null) {
       el.setAttribute('is', isValue);
@@ -1010,11 +1169,44 @@
     ns = (ns === null || ns === undefined) ? null : String(ns);
     qname = String(qname);
     validateNS(ns, qname);
-    return wrapNode(__createElementNS(ns === null ? '' : ns, qname));
+    var el = wrapNode(__createElementNS(ns === null ? '' : ns, qname));
+    ownerDocuments.set(el, this);
+    return el;
   };
-  Document.prototype.createTextNode = function(data) { return wrapNode(__createTextNode(String(data))); };
-  Document.prototype.createComment = function(data) { return wrapNode(__createComment(String(data))); };
-  Document.prototype.createDocumentFragment = function() { return wrapNode(__createFragment()); };
+  Document.prototype.createTextNode = function(data) {
+    var node = wrapNode(__createTextNode(String(data)));
+    ownerDocuments.set(node, this);
+    return node;
+  };
+  Document.prototype.createComment = function(data) {
+    var node = wrapNode(__createComment(String(data)));
+    ownerDocuments.set(node, this);
+    return node;
+  };
+  Document.prototype.createDocumentFragment = function() {
+    var node = wrapNode(__createFragment());
+    ownerDocuments.set(node, this);
+    return node;
+  };
+  Document.prototype.adoptNode = function(node) {
+    if (!node) return node;
+    if (node.nodeType === 9) {
+      throw new DOMException("Cannot adopt a document node.", "NotSupportedError");
+    }
+    var move = prepareNodeMove(this, node);
+    move.newDoc = this;
+    if (move.oldParent) {
+      disconnectMovedRoots(move);
+      __removeChild(move.oldParent.__ref, node.__ref);
+    }
+    if (move.oldDoc !== move.newDoc) {
+      setOwnerDocumentSnapshot(move.snapshot, move.newDoc);
+      for (var i = 0; i < move.roots.length; i++) {
+        enqueueAdoptedTree(move.roots[i], move.oldDoc, move.newDoc);
+      }
+    }
+    return node;
+  };
   // Legacy event construction (DOM §dom-document-createevent). Every accepted
   // interface alias ("Event"/"Events"/"HTMLEvents"/"UIEvent"/"MouseEvent"/…)
   // yields a base Event with the **initialized flag unset** — dispatchEvent
@@ -1230,6 +1422,9 @@
       if (htmlElementConstructionStack.length) {
         return htmlElementConstructionStack.pop();
       }
+      var newTarget = new.target || Ctor;
+      if (newTarget === Ctor) throw new TypeError('Illegal constructor');
+      return createElementForHtmlConstructor(Ctor, name, newTarget);
     };
     try { Object.defineProperty(Ctor, 'name', { configurable: true, value: name }); } catch (_) {}
     return Ctor;
@@ -1259,6 +1454,7 @@
     var table = globalThis.__servalHtmlInterfaceTable || [];
     for (var i = 0; i < table.length; i++) {
       var def = table[i];
+      htmlInterfaceDefinitions[def.name] = def;
       var parent = htmlInterfaceConstructors[def.parent] || globalThis[def.parent];
       if (typeof parent !== 'function') {
         throw new Error('Unknown HTML interface parent: ' + def.parent);
@@ -1768,53 +1964,81 @@
   // a first customized-built-ins slice over the HTML interface table.
   (function() {
     function CustomElementRegistry() {}
-    var byCtor = new Map();
     var pending = Object.create(null);
+    var definitionRunning = false;
     CustomElementRegistry.prototype.define = function(name, ctor, options) {
       if (typeof ctor !== 'function') {
         throw new TypeError('constructor must be a function');
       }
-      if (typeof name !== 'string' || name.indexOf('-') === -1) {
-        throw new (globalThis.DOMException || TypeError)('invalid custom element name', 'SyntaxError');
+      name = String(name);
+      if (!isValidCustomElementName(name)) {
+        throw customElementSyntaxError(name);
       }
-      if (name in customElementDefinitions || byCtor.has(ctor)) {
+      if (name in customElementDefinitions || customElementDefinitionsByCtor.has(ctor)) {
         throw new (globalThis.DOMException || TypeError)('name already defined', 'NotSupportedError');
       }
-      if (!ctor.prototype || (typeof ctor.prototype !== 'object' && typeof ctor.prototype !== 'function')) {
-        throw new TypeError('constructor prototype must be an object');
+      if (definitionRunning) {
+        throw new (globalThis.DOMException || TypeError)('definition already running', 'NotSupportedError');
       }
-      var observedAttributes = [];
-      if (ctor.observedAttributes !== undefined && ctor.observedAttributes !== null) {
-        var observed = ctor.observedAttributes;
-        for (var oi = 0; oi < observed.length; oi++) {
-          observedAttributes.push(String(observed[oi]).toLowerCase());
-        }
-      }
-      var localName = name;
+      definitionRunning = true;
+      var def;
+      var localName;
       var isCustomizedBuiltIn = false;
-      if (options && options.extends !== undefined) {
-        localName = String(options.extends).toLowerCase();
-        validateName(localName);
-        if (localName.indexOf('-') !== -1 || !elementSubclassProto[localName.toUpperCase()]) {
-          throw new (globalThis.DOMException || TypeError)('unknown built-in extension target', 'NotSupportedError');
+      try {
+        var prototype = ctor.prototype;
+        if (!prototype || (typeof prototype !== 'object' && typeof prototype !== 'function')) {
+          throw new TypeError('constructor prototype must be an object');
         }
-        isCustomizedBuiltIn = true;
+        var callbacks = {
+          connectedCallback: customElementCallback(prototype, 'connectedCallback'),
+          disconnectedCallback: customElementCallback(prototype, 'disconnectedCallback'),
+          adoptedCallback: customElementCallback(prototype, 'adoptedCallback'),
+          attributeChangedCallback: customElementCallback(prototype, 'attributeChangedCallback')
+        };
+        var observedAttributes = [];
+        if (callbacks.attributeChangedCallback) {
+          observedAttributes = toDomStringSequence(ctor.observedAttributes);
+          for (var oi = 0; oi < observedAttributes.length; oi++) {
+            observedAttributes[oi] = String(observedAttributes[oi]).toLowerCase();
+          }
+        }
+        toDomStringSequence(ctor.disabledFeatures);
+        var formAssociated = !!ctor.formAssociated;
+        if (formAssociated) {
+          callbacks.formAssociatedCallback = customElementCallback(prototype, 'formAssociatedCallback');
+          callbacks.formResetCallback = customElementCallback(prototype, 'formResetCallback');
+          callbacks.formDisabledCallback = customElementCallback(prototype, 'formDisabledCallback');
+          callbacks.formStateRestoreCallback = customElementCallback(prototype, 'formStateRestoreCallback');
+        }
+        localName = name;
+        if (options && options.extends !== undefined) {
+          localName = String(options.extends).toLowerCase();
+          validateName(localName);
+          if (localName.indexOf('-') !== -1 || !elementSubclassProto[localName.toUpperCase()]) {
+            throw new (globalThis.DOMException || TypeError)('unknown built-in extension target', 'NotSupportedError');
+          }
+          isCustomizedBuiltIn = true;
+        }
+        def = {
+          name: name,
+          localName: localName,
+          ctor: ctor,
+          customizedBuiltIn: isCustomizedBuiltIn,
+          observedAttributes: observedAttributes,
+          callbacks: callbacks,
+          formAssociated: formAssociated
+        };
+      } finally {
+        definitionRunning = false;
       }
-      var def = {
-        name: name,
-        localName: localName,
-        ctor: ctor,
-        customizedBuiltIn: isCustomizedBuiltIn,
-        observedAttributes: observedAttributes
-      };
       customElementDefinitions[name] = def;
       if (isCustomizedBuiltIn) {
         customizedBuiltInDefinitions[customElementKey(localName, name)] = def;
       } else {
         autonomousCustomElementDefinitions[localName.toUpperCase()] = def;
       }
-      byCtor.set(ctor, name);
-      if (pending[name]) { pending[name].forEach(function(r) { r(ctor); }); delete pending[name]; }
+      customElementDefinitionsByCtor.set(ctor, def);
+      if (pending[name]) { pending[name].resolve(ctor); delete pending[name]; }
       upgradeCustomElementTree(document);
     };
     CustomElementRegistry.prototype.get = function(name) {
@@ -1822,11 +2046,21 @@
       return def ? def.ctor : undefined;
     };
     CustomElementRegistry.prototype.getName = function(ctor) {
-      return byCtor.has(ctor) ? byCtor.get(ctor) : null;
+      if (typeof ctor !== 'function') throw new TypeError('constructor must be a function');
+      var def = customElementDefinitionsByCtor.get(ctor);
+      return def ? def.name : null;
     };
     CustomElementRegistry.prototype.whenDefined = function(name) {
+      name = String(name);
+      if (!isValidCustomElementName(name)) {
+        return Promise.reject(customElementSyntaxError(name));
+      }
       if (name in customElementDefinitions) return Promise.resolve(customElementDefinitions[name].ctor);
-      return new Promise(function(res) { (pending[name] = pending[name] || []).push(res); });
+      if (pending[name]) return pending[name].promise;
+      var slot = {};
+      slot.promise = new Promise(function(resolve) { slot.resolve = resolve; });
+      pending[name] = slot;
+      return slot.promise;
     };
     CustomElementRegistry.prototype.upgrade = function(root) { upgradeCustomElementTree(root); };
     globalThis.CustomElementRegistry = CustomElementRegistry;

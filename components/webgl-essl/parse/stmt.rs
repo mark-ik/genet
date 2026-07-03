@@ -32,7 +32,10 @@ impl Parser {
             }
         }
         let rbrace = self.expect_punct(Punct::RBrace, "`}`")?;
-        Ok(Block { stmts, span: lbrace.merge(rbrace) })
+        Ok(Block {
+            stmts,
+            span: lbrace.merge(rbrace),
+        })
     }
 
     fn stmt(&mut self) -> Result<Stmt, Error> {
@@ -77,7 +80,10 @@ impl Parser {
             Some(self.expr()?)
         };
         let semi = self.expect_punct(Punct::Semi, "`;`")?;
-        Ok(Stmt::Return { value, span: start.merge(semi) })
+        Ok(Stmt::Return {
+            value,
+            span: start.merge(semi),
+        })
     }
 
     fn parse_if(&mut self) -> Result<Stmt, Error> {
@@ -97,7 +103,12 @@ impl Parser {
             Some(s) => s.span(),
             None => then.span(),
         };
-        Ok(Stmt::If { cond, then, else_, span: start.merge(end) })
+        Ok(Stmt::If {
+            cond,
+            then,
+            else_,
+            span: start.merge(end),
+        })
     }
 
     fn parse_while(&mut self) -> Result<Stmt, Error> {
@@ -133,7 +144,11 @@ impl Parser {
         let cond = self.expr()?;
         self.expect_punct(Punct::RParen, "`)`")?;
         let semi = self.expect_punct(Punct::Semi, "`;`")?;
-        Ok(Stmt::Do { body, cond, span: start.merge(semi) })
+        Ok(Stmt::Do {
+            body,
+            cond,
+            span: start.merge(semi),
+        })
     }
 
     fn parse_for(&mut self) -> Result<Stmt, Error> {
@@ -167,7 +182,13 @@ impl Parser {
         self.expect_punct(Punct::RParen, "`)`")?;
         let body = Box::new(self.stmt()?);
         let span = start.merge(body.span());
-        Ok(Stmt::For { init, cond, step, body, span })
+        Ok(Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+            span,
+        })
     }
 
     fn parse_simple_jump(&mut self, kind: JumpKind) -> Result<Stmt, Error> {
@@ -185,7 +206,10 @@ impl Parser {
     fn peek_starts_local_decl(&self) -> bool {
         match self.peek_kind() {
             Some(TokenKind::Keyword(k)) => {
-                if matches!(k, Keyword::Const | Keyword::Lowp | Keyword::Mediump | Keyword::Highp) {
+                if matches!(
+                    k,
+                    Keyword::Const | Keyword::Lowp | Keyword::Mediump | Keyword::Highp
+                ) {
                     return true;
                 }
                 if TypeKind::from_keyword(*k).is_some() {
@@ -213,7 +237,11 @@ impl Parser {
         self.expect_punct(Punct::RParen, "`)`")?;
         let body = self.block()?;
         let span = start.merge(body.span);
-        Ok(Stmt::Switch { discriminant, body, span })
+        Ok(Stmt::Switch {
+            discriminant,
+            body,
+            span,
+        })
     }
 
     fn parse_case_label(&mut self) -> Result<Stmt, Error> {
@@ -221,14 +249,19 @@ impl Parser {
         self.bump();
         let value = self.expr()?;
         let colon = self.expect_punct(Punct::Colon, "`:` after `case <value>`")?;
-        Ok(Stmt::Case { value, span: start.merge(colon) })
+        Ok(Stmt::Case {
+            value,
+            span: start.merge(colon),
+        })
     }
 
     fn parse_default_label(&mut self) -> Result<Stmt, Error> {
         let start = self.peek_span();
         self.bump();
         let colon = self.expect_punct(Punct::Colon, "`:` after `default`")?;
-        Ok(Stmt::Default { span: start.merge(colon) })
+        Ok(Stmt::Default {
+            span: start.merge(colon),
+        })
     }
 
     fn local_decl(&mut self) -> Result<Stmt, Error> {

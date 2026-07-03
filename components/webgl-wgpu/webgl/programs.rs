@@ -190,8 +190,7 @@ impl WebGlContext {
             return;
         };
         program_object.translated = Some(translated);
-        program_object.uniform_block_bytes =
-            vec![0u8; reflection.uniform_block_size as usize];
+        program_object.uniform_block_bytes = vec![0u8; reflection.uniform_block_size as usize];
         program_object.sampler_texture_units = vec![None; reflection.samplers.len()];
         program_object.reflection = Some(reflection);
         program_object.pipelines.clear();
@@ -321,7 +320,9 @@ impl WebGlContext {
         {
             return Some(WebGlUniformLocation {
                 program,
-                slot: UniformSlot::BlockMember { index: index as u32 },
+                slot: UniformSlot::BlockMember {
+                    index: index as u32,
+                },
             });
         }
         if let Some((index, _)) = reflection
@@ -332,7 +333,9 @@ impl WebGlContext {
         {
             return Some(WebGlUniformLocation {
                 program,
-                slot: UniformSlot::Sampler { index: index as u32 },
+                slot: UniformSlot::Sampler {
+                    index: index as u32,
+                },
             });
         }
         None
@@ -364,27 +367,15 @@ impl WebGlContext {
     }
 
     pub fn uniform2fv(&mut self, location: WebGlUniformLocation, value: &[f32; 2]) {
-        self.write_block_member(
-            location,
-            UniformKind::Float32x2,
-            &f32_slice_to_bytes(value),
-        );
+        self.write_block_member(location, UniformKind::Float32x2, &f32_slice_to_bytes(value));
     }
 
     pub fn uniform3fv(&mut self, location: WebGlUniformLocation, value: &[f32; 3]) {
-        self.write_block_member(
-            location,
-            UniformKind::Float32x3,
-            &f32_slice_to_bytes(value),
-        );
+        self.write_block_member(location, UniformKind::Float32x3, &f32_slice_to_bytes(value));
     }
 
     pub fn uniform4fv(&mut self, location: WebGlUniformLocation, value: &[f32; 4]) {
-        self.write_block_member(
-            location,
-            UniformKind::Float32x4,
-            &f32_slice_to_bytes(value),
-        );
+        self.write_block_member(location, UniformKind::Float32x4, &f32_slice_to_bytes(value));
     }
 
     /// Column-major mat3 — WGSL pads each column to 16 bytes

@@ -36,8 +36,8 @@ void main() {
 }
 "#;
     let tu = parse_source(src).expect("parse");
-    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
-        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    let wgsl =
+        lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_or_else(|e| panic!("lowering failed: {e}"));
     eprintln!("--- WGSL (vertex) ---\n{wgsl}");
     assert!(wgsl.contains("vec4"));
     assert!(wgsl.contains("main"));
@@ -70,7 +70,10 @@ void main() {
     let tu = parse_source(src).expect("parse");
     let err = lower_to_wgsl(&tu, ShaderStage::Fragment).unwrap_err();
     assert!(
-        matches!(err, webgl_essl::lower::LoweringError::UnsupportedShape { .. }),
+        matches!(
+            err,
+            webgl_essl::lower::LoweringError::UnsupportedShape { .. }
+        ),
         "got: {err:?}"
     );
 }
@@ -83,7 +86,10 @@ fn fragment_target_with_vertex_lhs_is_rejected() {
     let tu = parse_source(src).expect("parse");
     let err = lower_to_wgsl(&tu, ShaderStage::Fragment).unwrap_err();
     assert!(
-        matches!(err, webgl_essl::lower::LoweringError::UnsupportedShape { .. }),
+        matches!(
+            err,
+            webgl_essl::lower::LoweringError::UnsupportedShape { .. }
+        ),
         "got: {err:?}"
     );
 }
@@ -99,12 +105,15 @@ void main() {
 }
 "#;
     let tu = parse_source(src).expect("parse");
-    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
-        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    let wgsl =
+        lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_or_else(|e| panic!("lowering failed: {e}"));
     eprintln!("--- WGSL (canonical vertex) ---\n{wgsl}");
     // naga renders the input variable somewhere; the location-0
     // decoration must come through.
-    assert!(wgsl.contains("location(0)"), "WGSL should expose @location(0) for the attribute: {wgsl}");
+    assert!(
+        wgsl.contains("location(0)"),
+        "WGSL should expose @location(0) for the attribute: {wgsl}"
+    );
     assert!(wgsl.contains("@vertex"));
 }
 
@@ -117,8 +126,8 @@ void main() {
 }
 "#;
     let tu = parse_source(src).expect("parse");
-    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
-        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    let wgsl =
+        lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_or_else(|e| panic!("lowering failed: {e}"));
     eprintln!("--- WGSL (vec3 attribute) ---\n{wgsl}");
     assert!(wgsl.contains("vec3<f32>"));
 }
@@ -136,8 +145,8 @@ void main() {
 }
 "#;
     let tu = parse_source(src).expect("parse");
-    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
-        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    let wgsl =
+        lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_or_else(|e| panic!("lowering failed: {e}"));
     eprintln!("--- WGSL (two attributes) ---\n{wgsl}");
     assert!(wgsl.contains("location(0)"));
     assert!(wgsl.contains("location(1)"));
@@ -151,8 +160,8 @@ void main() {
 }
 "#;
     let tu = parse_source(src).expect("parse");
-    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
-        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    let wgsl =
+        lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_or_else(|e| panic!("lowering failed: {e}"));
     eprintln!("--- WGSL (nested vec3) ---\n{wgsl}");
     assert!(wgsl.contains("vec4<f32>"));
 }
@@ -169,7 +178,10 @@ void main() {
     let tu = parse_source(src).expect("parse");
     let err = lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_err();
     assert!(
-        matches!(err, webgl_essl::lower::LoweringError::UnsupportedShape { .. }),
+        matches!(
+            err,
+            webgl_essl::lower::LoweringError::UnsupportedShape { .. }
+        ),
         "got: {err:?}"
     );
 }
@@ -189,7 +201,10 @@ void main() {
     let tu = parse_source(src).expect("parse");
     let err = lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_err();
     assert!(
-        matches!(err, webgl_essl::lower::LoweringError::UnsupportedShape { .. }),
+        matches!(
+            err,
+            webgl_essl::lower::LoweringError::UnsupportedShape { .. }
+        ),
         "got: {err:?}"
     );
 }
@@ -206,8 +221,8 @@ void main() {
 }
 "#;
     let tu = parse_source(src).expect("parse");
-    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
-        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    let wgsl =
+        lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_or_else(|e| panic!("lowering failed: {e}"));
     eprintln!("--- WGSL (vec2 add) ---\n{wgsl}");
     assert!(wgsl.contains("vec2<f32>"));
 }
@@ -221,8 +236,8 @@ void main() {
 }
 "#;
     let tu = parse_source(src).expect("parse");
-    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
-        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    let wgsl =
+        lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_or_else(|e| panic!("lowering failed: {e}"));
     eprintln!("--- WGSL (vec2 * scalar) ---\n{wgsl}");
     assert!(wgsl.contains("vec2<f32>"));
 }
@@ -238,8 +253,8 @@ void main() {
 }
 "#;
     let tu = parse_source(src).expect("parse");
-    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
-        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    let wgsl =
+        lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_or_else(|e| panic!("lowering failed: {e}"));
     eprintln!("--- WGSL (scalar * vec3) ---\n{wgsl}");
     assert!(wgsl.contains("vec3<f32>"));
 }
@@ -253,8 +268,8 @@ void main() {
 }
 "#;
     let tu = parse_source(src).expect("parse");
-    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
-        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    let wgsl =
+        lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_or_else(|e| panic!("lowering failed: {e}"));
     eprintln!("--- WGSL (float div) ---\n{wgsl}");
     assert!(wgsl.contains("vec4<f32>"));
 }
@@ -288,8 +303,8 @@ void main() {
 }
 "#;
     let tu = parse_source(src).expect("parse");
-    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
-        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    let wgsl =
+        lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_or_else(|e| panic!("lowering failed: {e}"));
     eprintln!("--- WGSL (uniform float + vec2 attribute) ---\n{wgsl}");
     assert!(wgsl.contains("vec2<f32>"));
 }
@@ -306,8 +321,8 @@ void main() {
 }
 "#;
     let tu = parse_source(src).expect("parse");
-    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
-        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    let wgsl =
+        lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_or_else(|e| panic!("lowering failed: {e}"));
     eprintln!("--- WGSL (MVP transform) ---\n{wgsl}");
     assert!(wgsl.contains("mat4x4<f32>"));
     assert!(wgsl.contains("@group(0)") && wgsl.contains("@binding(0)"));
@@ -324,8 +339,8 @@ void main() {
 }
 "#;
     let tu = parse_source(src).expect("parse");
-    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
-        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    let wgsl =
+        lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_or_else(|e| panic!("lowering failed: {e}"));
     eprintln!("--- WGSL (mat3 * vec3) ---\n{wgsl}");
     assert!(wgsl.contains("mat3x3<f32>"));
 }
@@ -340,8 +355,8 @@ void main() {
 }
 "#;
     let tu = parse_source(src).expect("parse");
-    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
-        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    let wgsl =
+        lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_or_else(|e| panic!("lowering failed: {e}"));
     eprintln!("--- WGSL (mat2 * vec2) ---\n{wgsl}");
     assert!(wgsl.contains("mat2x2<f32>"));
 }
@@ -356,8 +371,8 @@ void main() {
 }
 "#;
     let tu = parse_source(src).expect("parse");
-    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
-        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    let wgsl =
+        lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_or_else(|e| panic!("lowering failed: {e}"));
     eprintln!("--- WGSL (mat4 * scalar) ---\n{wgsl}");
     assert!(wgsl.contains("mat4x4<f32>"));
 }
@@ -376,8 +391,8 @@ void main() {
 }
 "#;
     let tu = parse_source(src).expect("parse");
-    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
-        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    let wgsl =
+        lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_or_else(|e| panic!("lowering failed: {e}"));
     eprintln!("--- WGSL (vertex varying out) ---\n{wgsl}");
     // The varying output decoration shows up as @location(0) on a
     // separate non-builtin output.
@@ -560,8 +575,8 @@ void main() {
 }
 "#;
     let tu = parse_source(src).expect("parse");
-    let wgsl = lower_to_wgsl(&tu, ShaderStage::Vertex)
-        .unwrap_or_else(|e| panic!("lowering failed: {e}"));
+    let wgsl =
+        lower_to_wgsl(&tu, ShaderStage::Vertex).unwrap_or_else(|e| panic!("lowering failed: {e}"));
     eprintln!("--- WGSL (realistic vertex pipeline) ---\n{wgsl}");
     assert!(wgsl.contains("mat4x4<f32>"));
     assert!(wgsl.contains("@vertex"));

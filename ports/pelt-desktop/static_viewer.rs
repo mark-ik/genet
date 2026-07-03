@@ -62,7 +62,10 @@ pub fn run_static_viewer(config: StaticViewerConfig) -> Result<StaticViewerOutco
 /// cannot proceed. (The light contracts + smoke build excludes it.)
 #[cfg(not(feature = "viewer"))]
 fn run_headed(_config: StaticViewerConfig) -> Result<StaticViewerOutcome, String> {
-    Err("the static viewer needs the `viewer` feature (pelt's default build enables it)".to_string())
+    Err(
+        "the static viewer needs the `viewer` feature (pelt's default build enables it)"
+            .to_string(),
+    )
 }
 
 #[cfg(feature = "viewer")]
@@ -102,7 +105,7 @@ pub(crate) mod windowed {
     use netrender::external_texture::ExternalTexturePlacement;
     use netrender::{ColorLoad, NetrenderOptions, Scene};
     use serval_layout::ScrollKey;
-    use serval_winit_host::{wheel_delta_from_winit, SurfaceHost};
+    use serval_winit_host::{SurfaceHost, wheel_delta_from_winit};
     use winit::application::ApplicationHandler;
     use winit::dpi::PhysicalSize;
     use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -162,7 +165,10 @@ pub(crate) mod windowed {
             // The bare viewer has no chrome/history to navigate, so it only acts on the
             // in-page scroll; a cross-document link is a no-op here (navigation is the
             // chrome (V2) and tile (V5) lanes' job).
-            matches!(LoadedDocument::click_at(self, x, y), crate::document::ClickOutcome::Scrolled)
+            matches!(
+                LoadedDocument::click_at(self, x, y),
+                crate::document::ClickOutcome::Scrolled
+            )
         }
     }
 
@@ -245,14 +251,18 @@ pub(crate) mod windowed {
             // (scripted timers), so the shell keeps the frame loop running.
             let now_ms = self.start.elapsed().as_secs_f64() * 1000.0;
             let more = self.doc.pump(now_ms);
-            let Some(host) = self.host.as_ref() else { return };
+            let Some(host) = self.host.as_ref() else {
+                return;
+            };
             let (w, h) = (self.width.max(1), self.height.max(1));
             let scene = self.doc.frame(w, h);
             // White canvas: a document with no root/body background paints over white
             // (the page background), as a browser does.
             let (_tex, view) = host.rasterize(&scene, w, h, ColorLoad::Clear(wgpu::Color::WHITE));
             let Some(frame) = host.acquire() else { return };
-            let target = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let target = frame
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
             host.renderer().compose_external_texture(
                 &view,
                 &target,

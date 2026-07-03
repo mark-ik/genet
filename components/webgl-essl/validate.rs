@@ -137,7 +137,10 @@ pub enum WebGlDiagnosticKind {
     MainNotDefined,
     /// `main` is defined but with the wrong signature; spec mandates
     /// `void main()` (or `void main(void)`).
-    MainBadSignature { return_ty: TypeKind, param_count: usize },
+    MainBadSignature {
+        return_ty: TypeKind,
+        param_count: usize,
+    },
     /// `for` loop does not match the Appendix A restricted form
     /// (ESSL 1.00 Appendix A §4): a counter-style loop with
     /// integer / float init, comparison cond against a constant, and
@@ -191,7 +194,10 @@ pub enum WebGlDiagnosticKind {
     MissingReturnInNonVoidFunction { name: String },
     /// `return <expr>;` whose expression type does not match the
     /// declared return type. ESSL §6.1 forbids implicit conversions.
-    ReturnTypeMismatch { expected: TypeKind, actual: TypeKind },
+    ReturnTypeMismatch {
+        expected: TypeKind,
+        actual: TypeKind,
+    },
     /// Two user function definitions share the same name AND the
     /// same parameter types. ESSL §6.1.1.
     FunctionRedefinition { name: String },
@@ -209,7 +215,11 @@ pub enum WebGlDiagnosticKind {
     /// Conservative — does not yet implement Appendix A's
     /// inter-declaration packing scheme, so it rejects some shaders
     /// real implementations could pack.
-    PackingLimitExceeded { class: &'static str, used: u32, limit: u32 },
+    PackingLimitExceeded {
+        class: &'static str,
+        used: u32,
+        limit: u32,
+    },
 }
 
 impl WebGlDiagnosticKind {
@@ -222,7 +232,10 @@ impl WebGlDiagnosticKind {
                 format!("`discard` is only allowed in fragment shaders (in `{function}`)")
             },
             WebGlDiagnosticKind::MainNotDefined => "no `main` function defined".to_string(),
-            WebGlDiagnosticKind::MainBadSignature { return_ty, param_count } => {
+            WebGlDiagnosticKind::MainBadSignature {
+                return_ty,
+                param_count,
+            } => {
                 format!(
                     "`main` must be `void main()`; got return type {return_ty:?} and {param_count} parameter(s)"
                 )
@@ -254,7 +267,8 @@ impl WebGlDiagnosticKind {
                 format!("duplicate `case {value}:` label within the same switch")
             },
             WebGlDiagnosticKind::IndirectArrayIndex => {
-                "array index must be a constant or a loop induction variable (ESSL 1.00 Appendix A)".to_string()
+                "array index must be a constant or a loop induction variable (ESSL 1.00 Appendix A)"
+                    .to_string()
             },
             WebGlDiagnosticKind::ConstWithoutInit { name } => {
                 format!("`const {name}` declared without an initializer")
@@ -266,7 +280,9 @@ impl WebGlDiagnosticKind {
                 format!("cannot assign to `const` variable `{name}`")
             },
             WebGlDiagnosticKind::MissingReturnInNonVoidFunction { name } => {
-                format!("function `{name}` has a non-void return type but its body does not end with a `return`")
+                format!(
+                    "function `{name}` has a non-void return type but its body does not end with a `return`"
+                )
             },
             WebGlDiagnosticKind::ReturnTypeMismatch { expected, actual } => {
                 format!("`return` expression has type {actual:?}, expected {expected:?}")
@@ -275,7 +291,9 @@ impl WebGlDiagnosticKind {
                 format!("function `{name}` is redefined with the same parameter types")
             },
             WebGlDiagnosticKind::AttributeInFragmentShader { name } => {
-                format!("`attribute {name}` declared in a fragment shader (attribute is vertex-only per ESSL §4.3.3)")
+                format!(
+                    "`attribute {name}` declared in a fragment shader (attribute is vertex-only per ESSL §4.3.3)"
+                )
             },
             WebGlDiagnosticKind::PackingLimitExceeded { class, used, limit } => {
                 format!("too many {class} slots: {used} declared, WebGL minimum is {limit}")
@@ -302,7 +320,10 @@ impl WebGlDiagnostic {
             Severity::Warning => ("WARNING", false),
         };
         let line = self.span.map(|s| line_column(src, s.start).0).unwrap_or(0);
-        format!("{severity}: 0:{line}: {message}", message = self.kind.message())
+        format!(
+            "{severity}: 0:{line}: {message}",
+            message = self.kind.message()
+        )
     }
 }
 
@@ -492,7 +513,8 @@ impl<'tree> ValidatorVisitor<'tree> {
 
     fn note_reserved_if_any(&mut self, name: &str, span: Span) {
         if let Some(reason) = reserved_reason(name) {
-            self.reserved_identifiers.push((span, name.to_string(), reason));
+            self.reserved_identifiers
+                .push((span, name.to_string(), reason));
         }
     }
 
@@ -859,11 +881,8 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
                 // every path. First-pass check is purely structural:
                 // the last top-level body stmt must be a Return.
                 // True path-completeness analysis is queued.
-                if fd.return_ty.kind != TypeKind::Void
-                    && !body_definitely_returns(&fd.body.stmts)
-                {
-                    self.missing_return_sites
-                        .push((fd.span, fd.name.clone()));
+                if fd.return_ty.kind != TypeKind::Void && !body_definitely_returns(&fd.body.stmts) {
+                    self.missing_return_sites.push((fd.span, fd.name.clone()));
                 }
                 // R17: track current return type so visit_stmt can
                 // gate `return <expr>;` against it.
@@ -871,11 +890,8 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
                 // R18: redefinition. If this name + param types
                 // matches a previously-seen function, fire.
                 if fd.name != "main" {
-                    let param_kinds: Vec<TypeKind> =
-                        fd.params.iter().map(|p| p.ty.kind).collect();
-                    if let Some((existing_kinds, _)) =
-                        self.function_signatures.get(&fd.name)
-                    {
+                    let param_kinds: Vec<TypeKind> = fd.params.iter().map(|p| p.ty.kind).collect();
+                    if let Some((existing_kinds, _)) = self.function_signatures.get(&fd.name) {
                         if existing_kinds == &param_kinds {
                             self.function_redefinition_sites
                                 .push((fd.span, fd.name.clone()));
@@ -994,8 +1010,7 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
                 if let Expr::Assign { lhs, span, .. } = e {
                     if let Expr::Ident { name, .. } = lhs.as_ref() {
                         if self.const_locals.contains(name) {
-                            self.const_assignment_sites
-                                .push((*span, name.clone()));
+                            self.const_assignment_sites.push((*span, name.clone()));
                         }
                     }
                 }
@@ -1013,10 +1028,16 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
             Visit::Pre => match s {
                 Stmt::Discard { span } => {
                     if let Some(fname) = self.current_function {
-                        self.discard_sites.push(DiscardSite { span: *span, function: fname });
+                        self.discard_sites.push(DiscardSite {
+                            span: *span,
+                            function: fname,
+                        });
                     }
                 },
-                Stmt::Return { value: Some(e), span } => {
+                Stmt::Return {
+                    value: Some(e),
+                    span,
+                } => {
                     // R17: return-expression type must match the
                     // enclosing function's declared return type.
                     // Skip when the typecheck did not annotate the
@@ -1024,10 +1045,9 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
                     // function's return type is Void (a stricter
                     // rule rejects `return <expr>;` in void, but is
                     // beyond R17's scope here).
-                    if let (Some(expected), Some(actual)) = (
-                        self.current_return_ty,
-                        self.types.get(&e.span()).copied(),
-                    ) {
+                    if let (Some(expected), Some(actual)) =
+                        (self.current_return_ty, self.types.get(&e.span()).copied())
+                    {
                         if expected != TypeKind::Void && expected != actual {
                             self.return_type_mismatch_sites
                                 .push((*span, expected, actual));
@@ -1051,7 +1071,9 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
                         self.loop_var_stack.push(String::new());
                     }
                 },
-                Stmt::Switch { discriminant, span, .. } => {
+                Stmt::Switch {
+                    discriminant, span, ..
+                } => {
                     // R9: discriminant must be Int.
                     if let Some(ty) = self.types.get(&discriminant.span()).copied() {
                         if ty != TypeKind::Int {
@@ -1107,7 +1129,10 @@ impl<'tree> Visitor<'tree> for ValidatorVisitor<'tree> {
 // hostile-input patterns.
 
 fn check_for_appendix_a(stmt: &Stmt) -> Option<&'static str> {
-    let Stmt::For { init, cond, step, .. } = stmt else {
+    let Stmt::For {
+        init, cond, step, ..
+    } = stmt
+    else {
         return None;
     };
 
@@ -1139,9 +1164,7 @@ fn check_for_appendix_a(stmt: &Stmt) -> Option<&'static str> {
                 BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::Eq | BinOp::Ne
             );
             if !is_comparison {
-                return Some(
-                    "loop condition operator must be `<`, `<=`, `>`, `>=`, `==`, or `!=`",
-                );
+                return Some("loop condition operator must be `<`, `<=`, `>`, `>=`, `==`, or `!=`");
             }
             let lhs_is_var = matches!(
                 lhs.as_ref(),
@@ -1191,19 +1214,18 @@ fn check_for_appendix_a(stmt: &Stmt) -> Option<&'static str> {
 
 fn count_expr_nodes(e: &Expr) -> usize {
     1 + match e {
-        Expr::IntLit { .. }
-        | Expr::FloatLit { .. }
-        | Expr::BoolLit { .. }
-        | Expr::Ident { .. } => 0,
+        Expr::IntLit { .. } | Expr::FloatLit { .. } | Expr::BoolLit { .. } | Expr::Ident { .. } => {
+            0
+        },
         Expr::Binary { lhs, rhs, .. } | Expr::Assign { lhs, rhs, .. } => {
             count_expr_nodes(lhs) + count_expr_nodes(rhs)
         },
         Expr::Unary { expr, .. } => count_expr_nodes(expr),
         Expr::Member { base, .. } => count_expr_nodes(base),
         Expr::Index { base, index, .. } => count_expr_nodes(base) + count_expr_nodes(index),
-        Expr::Ternary { cond, then, else_, .. } => {
-            count_expr_nodes(cond) + count_expr_nodes(then) + count_expr_nodes(else_)
-        },
+        Expr::Ternary {
+            cond, then, else_, ..
+        } => count_expr_nodes(cond) + count_expr_nodes(then) + count_expr_nodes(else_),
         Expr::Call { args, .. } => args.iter().map(count_expr_nodes).sum::<usize>(),
     }
 }
@@ -1278,9 +1300,11 @@ fn stmt_path_returns(s: &Stmt) -> bool {
         Stmt::Return { value: Some(_), .. } => true,
         Stmt::Discard { .. } => true,
         Stmt::Block(b) => body_definitely_returns(&b.stmts),
-        Stmt::If { then, else_: Some(else_), .. } => {
-            stmt_path_returns(then) && stmt_path_returns(else_)
-        },
+        Stmt::If {
+            then,
+            else_: Some(else_),
+            ..
+        } => stmt_path_returns(then) && stmt_path_returns(else_),
         _ => false,
     }
 }
@@ -1346,13 +1370,52 @@ fn reserved_reason(name: &str) -> Option<&'static str> {
 /// version-gated cases; the validator only flags names that are
 /// reserved in BOTH versions.
 const FUTURE_RESERVED: &[&str] = &[
-    "active", "asm", "cast", "class", "common", "dvec2", "dvec3", "dvec4",
-    "enum", "extern", "external", "fixed", "fvec2", "fvec3", "fvec4", "goto",
-    "half", "hvec2", "hvec3", "hvec4", "input", "interface", "long",
-    "namespace", "output", "packed", "partition", "public", "sampler1D",
-    "sampler1DShadow", "sampler2DRect", "sampler2DRectShadow", "sampler2DShadow",
-    "sampler3D", "sampler3DRect", "short", "sizeof", "static", "superp",
-    "template", "this", "typedef", "union", "unsigned", "using", "volatile",
+    "active",
+    "asm",
+    "cast",
+    "class",
+    "common",
+    "dvec2",
+    "dvec3",
+    "dvec4",
+    "enum",
+    "extern",
+    "external",
+    "fixed",
+    "fvec2",
+    "fvec3",
+    "fvec4",
+    "goto",
+    "half",
+    "hvec2",
+    "hvec3",
+    "hvec4",
+    "input",
+    "interface",
+    "long",
+    "namespace",
+    "output",
+    "packed",
+    "partition",
+    "public",
+    "sampler1D",
+    "sampler1DShadow",
+    "sampler2DRect",
+    "sampler2DRectShadow",
+    "sampler2DShadow",
+    "sampler3D",
+    "sampler3DRect",
+    "short",
+    "sizeof",
+    "static",
+    "superp",
+    "template",
+    "this",
+    "typedef",
+    "union",
+    "unsigned",
+    "using",
+    "volatile",
 ];
 
 // ---------- cycle detection (CallDAG-shaped) --------------------------
@@ -1377,7 +1440,15 @@ fn find_cycles(
             continue;
         }
         let mut path: Vec<String> = Vec::new();
-        dfs(start, graph, user_fns, &mut color, &mut path, &mut cycles, &mut seen_cycle);
+        dfs(
+            start,
+            graph,
+            user_fns,
+            &mut color,
+            &mut path,
+            &mut cycles,
+            &mut seen_cycle,
+        );
     }
     cycles
 }

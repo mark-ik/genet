@@ -75,21 +75,21 @@ fn walk<D: LayoutDom>(dom: &D, node: D::NodeId, depth: usize, report: &mut Conte
                 if !text.is_empty() {
                     report.title = Some(text);
                 }
-            }
+            },
             "a" => {
                 if let Some(href) =
                     dom.attribute(node, &Namespace::default(), &LocalName::from("href"))
                 {
                     report.links.push(href.to_string());
                 }
-            }
+            },
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 let text = direct_text(dom, node);
                 if !text.is_empty() {
                     report.headings.push(text);
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
     for child in dom.dom_children(node) {
@@ -150,12 +150,23 @@ mod tests {
         assert_eq!(report.headings, vec!["Heading"]);
         assert_eq!(report.links, vec!["/next", "https://x.test/"]);
         assert!(
-            report.outline.iter().any(|e| e.role == "heading" && e.name == "Heading"),
+            report
+                .outline
+                .iter()
+                .any(|e| e.role == "heading" && e.name == "Heading"),
             "the heading is in the outline: {:?}",
             report.outline,
         );
-        assert!(report.outline.iter().any(|e| e.role == "link"), "the links are in the outline");
-        assert!(report.outline.iter().any(|e| e.role == "paragraph" && e.name == "a para"));
+        assert!(
+            report.outline.iter().any(|e| e.role == "link"),
+            "the links are in the outline"
+        );
+        assert!(
+            report
+                .outline
+                .iter()
+                .any(|e| e.role == "paragraph" && e.name == "a para")
+        );
     }
 
     /// A bare document with no structure reports empties, not panics.

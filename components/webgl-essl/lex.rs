@@ -52,11 +52,15 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Error> {
             } else {
                 TokenKind::Ident(word.to_string())
             };
-            tokens.push(Token { kind, span: Span::new(word_start, i) });
+            tokens.push(Token {
+                kind,
+                span: Span::new(word_start, i),
+            });
             continue;
         }
         // Number literal
-        if b.is_ascii_digit() || (b == b'.' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit()) {
+        if b.is_ascii_digit() || (b == b'.' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit())
+        {
             i = lex_number(src, bytes, i, &mut tokens)?;
             continue;
         }
@@ -69,7 +73,10 @@ pub fn lex(src: &str) -> Result<Vec<Token>, Error> {
             i += len;
             continue;
         }
-        return Err(Error::new(ErrorKind::UnexpectedByte(b), Span::new(start, start + 1)));
+        return Err(Error::new(
+            ErrorKind::UnexpectedByte(b),
+            Span::new(start, start + 1),
+        ));
     }
     Ok(tokens)
 }
@@ -82,12 +89,7 @@ fn is_ident_continue(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-fn lex_number(
-    src: &str,
-    bytes: &[u8],
-    start: usize,
-    out: &mut Vec<Token>,
-) -> Result<usize, Error> {
+fn lex_number(src: &str, bytes: &[u8], start: usize, out: &mut Vec<Token>) -> Result<usize, Error> {
     let mut i = start;
     let mut is_float = false;
     while i < bytes.len() && bytes[i].is_ascii_digit() {
@@ -132,7 +134,10 @@ fn lex_number(
             .map_err(|_| Error::new(ErrorKind::MalformedNumber, Span::new(start, i)))?;
         TokenKind::IntLit(v)
     };
-    out.push(Token { kind, span: Span::new(start, i) });
+    out.push(Token {
+        kind,
+        span: Span::new(start, i),
+    });
     Ok(i)
 }
 

@@ -159,13 +159,15 @@ pub(super) fn build_render_pipeline(
         bind_group_layouts: &bind_group_layouts,
         immediate_size: 0,
     });
-    let depth_stencil = pipeline_key.depth_state.map(|func| wgpu::DepthStencilState {
-        format: DEPTH_ATTACHMENT_FORMAT,
-        depth_write_enabled: Some(true),
-        depth_compare: Some(func.to_wgpu()),
-        stencil: wgpu::StencilState::default(),
-        bias: wgpu::DepthBiasState::default(),
-    });
+    let depth_stencil = pipeline_key
+        .depth_state
+        .map(|func| wgpu::DepthStencilState {
+            format: DEPTH_ATTACHMENT_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(func.to_wgpu()),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        });
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("webgl-wgpu render pipeline"),
         layout: Some(&pipeline_layout),

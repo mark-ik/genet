@@ -443,4 +443,16 @@ impl<NodeId: Copy + Eq + Hash> StylePlane<NodeId> {
         }
         acc
     }
+
+    /// How many entries carry non-empty `RestyleDamage` after a restyle pass.
+    pub fn damaged_entry_count(&self) -> usize {
+        self.entries
+            .values()
+            .filter(|entry| {
+                entry
+                    .borrow_data()
+                    .is_some_and(|data| !data.damage.is_empty())
+            })
+            .count()
+    }
 }

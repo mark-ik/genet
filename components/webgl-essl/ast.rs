@@ -203,15 +203,27 @@ pub struct Block {
 pub enum Stmt {
     Expr(Expr),
     /// `return [expr];`
-    Return { value: Option<Expr>, span: Span },
+    Return {
+        value: Option<Expr>,
+        span: Span,
+    },
     /// `<type> <name>[ = <init>];` at block scope.
     Decl(LocalDecl),
     /// `{ <stmts> }` as a statement (compound).
     Block(Block),
     /// `if (<cond>) <then> [else <else_>]`
-    If { cond: Expr, then: Box<Stmt>, else_: Option<Box<Stmt>>, span: Span },
+    If {
+        cond: Expr,
+        then: Box<Stmt>,
+        else_: Option<Box<Stmt>>,
+        span: Span,
+    },
     /// `while (<cond>) <body>`
-    While { cond: Expr, body: Box<Stmt>, span: Span },
+    While {
+        cond: Expr,
+        body: Box<Stmt>,
+        span: Span,
+    },
     /// `for (<init> <cond>; <step>) <body>`. `init` carries its own
     /// trailing `;`.
     For {
@@ -222,23 +234,42 @@ pub enum Stmt {
         span: Span,
     },
     /// `do <body> while (<cond>);`
-    Do { body: Box<Stmt>, cond: Expr, span: Span },
+    Do {
+        body: Box<Stmt>,
+        cond: Expr,
+        span: Span,
+    },
     /// `break;`
-    Break { span: Span },
+    Break {
+        span: Span,
+    },
     /// `continue;`
-    Continue { span: Span },
+    Continue {
+        span: Span,
+    },
     /// `discard;` — fragment-shader only; parser accepts everywhere.
-    Discard { span: Span },
+    Discard {
+        span: Span,
+    },
     /// `switch (<discriminant>) { <body> }`. ESSL 3.00. Case / default
     /// labels appear inside `body.stmts` as their own `Stmt` variants.
-    Switch { discriminant: Expr, body: Block, span: Span },
+    Switch {
+        discriminant: Expr,
+        body: Block,
+        span: Span,
+    },
     /// `case <value>:` label inside a switch body. The value must be
     /// a constant integer expression per spec; the parser is
     /// permissive and accepts any expression, leaving the constant
     /// check to a later pass.
-    Case { value: Expr, span: Span },
+    Case {
+        value: Expr,
+        span: Span,
+    },
     /// `default:` label inside a switch body.
-    Default { span: Span },
+    Default {
+        span: Span,
+    },
 }
 
 impl Stmt {
@@ -285,28 +316,68 @@ pub struct LocalDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
-    IntLit { value: i64, span: Span },
-    FloatLit { value: f64, span: Span },
-    BoolLit { value: bool, span: Span },
-    Ident { name: String, span: Span },
+    IntLit {
+        value: i64,
+        span: Span,
+    },
+    FloatLit {
+        value: f64,
+        span: Span,
+    },
+    BoolLit {
+        value: bool,
+        span: Span,
+    },
+    Ident {
+        name: String,
+        span: Span,
+    },
     /// `callee(arg, arg, ...)`. ESSL constructors (`vec4(...)`) and function
     /// calls share this shape; the validator distinguishes them later via
     /// the type/symbol table.
-    Call { callee: String, callee_span: Span, args: Vec<Expr>, span: Span },
+    Call {
+        callee: String,
+        callee_span: Span,
+        args: Vec<Expr>,
+        span: Span,
+    },
     /// `<lhs> = <rhs>`, `<lhs> += <rhs>`, etc.
-    Assign { op: AssignOp, lhs: Box<Expr>, rhs: Box<Expr>, span: Span },
+    Assign {
+        op: AssignOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+        span: Span,
+    },
     /// `<lhs> <op> <rhs>`. Arithmetic, comparison, logical.
-    Binary { op: BinOp, lhs: Box<Expr>, rhs: Box<Expr>, span: Span },
+    Binary {
+        op: BinOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+        span: Span,
+    },
     /// `<op> <expr>` for prefix ops, or `<expr> <op>` for postfix
     /// `++` / `--`. The validator enforces the prefix-vs-postfix
     /// difference on the same `UnaryOp` enum.
-    Unary { op: UnaryOp, expr: Box<Expr>, span: Span },
+    Unary {
+        op: UnaryOp,
+        expr: Box<Expr>,
+        span: Span,
+    },
     /// `<base>.<field>`. ESSL swizzles (`.xyz`) and struct field access
     /// both lower to this; the validator picks an interpretation by
     /// inspecting `base`'s type.
-    Member { base: Box<Expr>, field: String, field_span: Span, span: Span },
+    Member {
+        base: Box<Expr>,
+        field: String,
+        field_span: Span,
+        span: Span,
+    },
     /// `<base>[<index>]` — array or vector subscript.
-    Index { base: Box<Expr>, index: Box<Expr>, span: Span },
+    Index {
+        base: Box<Expr>,
+        index: Box<Expr>,
+        span: Span,
+    },
     /// `<cond> ? <then> : <else_>`. Right-associative; precedence sits
     /// between assignment (looser) and logical-or (tighter).
     Ternary {

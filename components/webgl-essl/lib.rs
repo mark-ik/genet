@@ -64,7 +64,10 @@ pub fn compile(source: &str, stage: validate::ShaderStage) -> Result<CompileResu
         return Err(CompileError::Validate(validation));
     }
     let wgsl = lower::lower_to_wgsl(&tu, stage).map_err(CompileError::Lower)?;
-    Ok(CompileResult { wgsl, info_log: validation.info_log })
+    Ok(CompileResult {
+        wgsl,
+        info_log: validation.info_log,
+    })
 }
 
 /// Success result of [`compile`]. `info_log` carries any non-error

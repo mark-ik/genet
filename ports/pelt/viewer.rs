@@ -224,7 +224,10 @@ pub(crate) fn main() {
     // `pelt --engine static|viewer <url>`: the serval-native on-screen document
     // viewer (the orrery-host present shape over the pelt-core / pelt-desktop
     // contracts). Static and Viewer are the script-free document profiles.
-    if matches!(engine_profile, EngineProfile::Static | EngineProfile::Viewer) {
+    if matches!(
+        engine_profile,
+        EngineProfile::Static | EngineProfile::Viewer
+    ) {
         // A smolweb scheme (gemini/gopher/…) renders natively through the smolweb
         // viewer (errand transport + parse + native themed view), not the HTML path.
         #[cfg(feature = "smolweb")]
@@ -291,9 +294,16 @@ pub(crate) fn main() {
 /// Whether `url` is a smolweb scheme the native smolweb viewer handles.
 #[cfg(feature = "smolweb")]
 fn is_smolweb_url(url: &str) -> bool {
-    ["gemini://", "gopher://", "nex://", "finger://", "spartan://", "guppy://"]
-        .iter()
-        .any(|scheme| url.starts_with(scheme))
+    [
+        "gemini://",
+        "gopher://",
+        "nex://",
+        "finger://",
+        "spartan://",
+        "guppy://",
+    ]
+    .iter()
+    .any(|scheme| url.starts_with(scheme))
 }
 
 /// Dispatch a smolweb URL to the chrome browser over a native smolweb content root:
@@ -311,7 +321,11 @@ fn run_smolweb_profile(url: String, side: String, profile: EngineProfile) {
             std::process::exit(2);
         },
     };
-    let thickness = if matches!(side, StripSide::Left | StripSide::Right) { 280 } else { 40 };
+    let thickness = if matches!(side, StripSide::Left | StripSide::Right) {
+        280
+    } else {
+        40
+    };
     let config =
         pelt_desktop::StaticViewerConfig::new(profile, pelt_desktop::WindowingMode::Headed, url);
     match pelt_desktop::run_smolweb_browser(config, side, thickness) {
@@ -395,7 +409,11 @@ fn run_chrome_profile(url: String, side: String, profile: EngineProfile) {
         },
     };
     // A vertical strip wants room for the toolbar; a horizontal one is a thin bar.
-    let thickness = if matches!(side, StripSide::Left | StripSide::Right) { 280 } else { 40 };
+    let thickness = if matches!(side, StripSide::Left | StripSide::Right) {
+        280
+    } else {
+        40
+    };
     let config =
         pelt_desktop::StaticViewerConfig::new(profile, pelt_desktop::WindowingMode::Headed, url);
     match pelt_desktop::run_chrome_viewer(config, side, thickness) {
@@ -434,13 +452,8 @@ fn run_scripted_profile(_url: String, _js: String) {
 /// otherwise render `url` to a single scene snapshot, to `out` (or stdout). Exits
 /// non-zero on any reftest failure / error. (Always available here — viewer.rs is
 /// wholly under `viewer-engine`, which enables pelt-desktop's viewer stack.)
-fn run_headless_profile(
-    url: String,
-    out: Option<String>,
-    reftest: Option<String>,
-    bless: bool,
-) {
-    use pelt_desktop::{render_snapshot, run_reftests, Outcome, DEFAULT_HEIGHT, DEFAULT_WIDTH};
+fn run_headless_profile(url: String, out: Option<String>, reftest: Option<String>, bless: bool) {
+    use pelt_desktop::{DEFAULT_HEIGHT, DEFAULT_WIDTH, Outcome, render_snapshot, run_reftests};
 
     if let Some(dir) = reftest {
         let results = match run_reftests(
@@ -462,9 +475,14 @@ fn run_headless_profile(
                     passed += 1;
                     println!("  ok     {}", result.name);
                 },
-                Outcome::Fail { first_diff_line, .. } => {
+                Outcome::Fail {
+                    first_diff_line, ..
+                } => {
                     failed += 1;
-                    println!("  FAIL   {} (first diff at line {first_diff_line})", result.name);
+                    println!(
+                        "  FAIL   {} (first diff at line {first_diff_line})",
+                        result.name
+                    );
                 },
                 Outcome::PngFail { detail } => {
                     failed += 1;
@@ -514,7 +532,7 @@ fn run_headless_profile(
 /// png-reftest` (it boots wgpu); without it, a clean pointer to the feature.
 #[cfg(feature = "png-reftest")]
 fn write_headless_png(url: &str, path: &str) {
-    use pelt_desktop::{render_png, DEFAULT_HEIGHT, DEFAULT_WIDTH};
+    use pelt_desktop::{DEFAULT_HEIGHT, DEFAULT_WIDTH, render_png};
     match render_png(url, DEFAULT_WIDTH, DEFAULT_HEIGHT) {
         Ok(png) => match std::fs::write(path, &png) {
             Ok(()) => println!("pelt headless wrote {} PNG bytes to {path}", png.len()),

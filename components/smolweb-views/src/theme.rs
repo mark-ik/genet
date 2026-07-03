@@ -118,7 +118,10 @@ fn site_palette(site_url: &str) -> SmolwebPalette {
 /// Hash the URL's host into a hue in `0..360`. Stable per host, so a capsule keeps
 /// one identity across its pages. djb2 over the host bytes.
 fn hue_from_host(site_url: &str) -> u16 {
-    let after_scheme = site_url.split_once("://").map(|(_, rest)| rest).unwrap_or(site_url);
+    let after_scheme = site_url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(site_url);
     let host = after_scheme.split('/').next().unwrap_or("");
     let mut hash: u32 = 5381;
     for byte in host.bytes() {
@@ -128,7 +131,13 @@ fn hue_from_host(site_url: &str) -> u16 {
 }
 
 fn render_css(p: &SmolwebPalette) -> String {
-    let SmolwebPalette { bg, fg, link, quote, pre_bg } = p;
+    let SmolwebPalette {
+        bg,
+        fg,
+        link,
+        quote,
+        pre_bg,
+    } = p;
     format!(
         ".gemtext {{ background:{bg}; color:{fg}; padding:1.5rem 2rem; \
 line-height:1.5; font-family:serif; max-width:48rem; }}

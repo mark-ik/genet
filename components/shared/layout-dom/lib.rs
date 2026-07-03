@@ -18,8 +18,12 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::ops::ControlFlow;
 
+#[cfg(feature = "capture")]
+use markup5ever::Prefix;
 pub use markup5ever::interface::QuirksMode;
 pub use markup5ever::{LocalName, Namespace, QualName};
+#[cfg(feature = "capture")]
+use serde::{Deserialize, Serialize};
 
 /// Profile-neutral DOM. Implementors expose opaque `NodeId`s and a small set
 /// of lookup primitives; traversal happens through the default `walk` impl
@@ -73,14 +77,11 @@ pub trait LayoutDom {
     fn next_sibling(&self, id: Self::NodeId) -> Option<Self::NodeId>;
 
     /// DOM-tree children (parse-order, ignores shadow trees).
-    fn dom_children(&self, id: Self::NodeId)
-        -> impl Iterator<Item = Self::NodeId> + '_;
+    fn dom_children(&self, id: Self::NodeId) -> impl Iterator<Item = Self::NodeId> + '_;
 
     /// Flat-tree children (slot-assigned for shadow hosts, otherwise DOM
     /// order). Backends without shadow DOM should leave this defaulted.
-    fn flat_children(&self, id: Self::NodeId)
-        -> impl Iterator<Item = Self::NodeId> + '_
-    {
+    fn flat_children(&self, id: Self::NodeId) -> impl Iterator<Item = Self::NodeId> + '_ {
         self.dom_children(id)
     }
 
@@ -118,18 +119,12 @@ pub trait LayoutDom {
     /// Attribute value lookup by namespace + local name. Hot on selector/style
     /// match paths. Backends with column-stored attrs can implement this as
     /// a keyed lookup without materializing a full slice.
-    fn attribute(
-        &self,
-        id: Self::NodeId,
-        ns: &Namespace,
-        local: &LocalName,
-    ) -> Option<&str>;
+    fn attribute(&self, id: Self::NodeId, ns: &Namespace, local: &LocalName) -> Option<&str>;
 
     /// Iterate this element's attributes (cold path: serialization,
     /// introspection). Yields `AttributeView`s borrowed from the backing
     /// store.
-    fn attributes(&self, id: Self::NodeId)
-        -> impl Iterator<Item = AttributeView<'_>> + '_;
+    fn attributes(&self, id: Self::NodeId) -> impl Iterator<Item = AttributeView<'_>> + '_;
 
     /// Text content for text or comment nodes, else `None`.
     fn text(&self, id: Self::NodeId) -> Option<&str>;
@@ -165,7 +160,8 @@ pub trait LayoutDom {
         if self.has_class(id, class) {
             return Some(id);
         }
-        self.dom_children(id).find_map(|c| self.first_with_class(c, class))
+        self.dom_children(id)
+            .find_map(|c| self.first_with_class(c, class))
     }
 
     /// Every element carrying CSS class `class` in pre-order under `id` (inclusive).
@@ -182,7 +178,10 @@ pub trait LayoutDom {
 
     /// The first element with local tag name `local` in pre-order under `id` (inclusive).
     fn first_tag(&self, id: Self::NodeId, local: &str) -> Option<Self::NodeId> {
-        if self.element_name(id).is_some_and(|q| q.local.as_ref() == local) {
+        if self
+            .element_name(id)
+            .is_some_and(|q| q.local.as_ref() == local)
+        {
             return Some(id);
         }
         self.dom_children(id).find_map(|c| self.first_tag(c, local))
@@ -247,7 +246,7 @@ pub trait LayoutDomMut: LayoutDom {
 
 /// A recorded structural DOM mutation — render-state-free (no dirty bits, no style).
 /// `Id` is the implementor's [`LayoutDom::NodeId`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DomMutation<Id> {
     /// `node` was inserted under `parent`.
     Inserted { node: Id, parent: Id },
@@ -270,6 +269,125 @@ pub enum DomMutation<Id> {
     CharacterDataChanged { node: Id },
     /// `node`'s entire child subtree was replaced (e.g. via `innerHTML`).
     SubtreeReplaced { node: Id },
+}
+
+/// Serializable mirror of [`QualName`] for capture/replay logs.
+#[cfg(feature = "capture")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CapturedQualName {
+    pub prefix: Option<String>,
+    pub ns: String,
+    pub local: String,
+}
+
+#[cfg(feature = "capture")]
+impl From<&QualName> for CapturedQualName {
+    fn from(value: &QualName) -> Self {
+        Self {
+            prefix: value.prefix.as_ref().map(ToString::to_string),
+            ns: value.ns.to_string(),
+            local: value.local.to_string(),
+        }
+    }
+}
+
+#[cfg(feature = "capture")]
+impl CapturedQualName {
+    pub fn into_qual_name(self) -> QualName {
+        QualName::new(
+            self.prefix.map(Prefix::from),
+            Namespace::from(self.ns),
+            LocalName::from(self.local),
+        )
+    }
+}
+
+/// Serializable mirror of [`DomMutation`] for capture/replay logs.
+#[cfg(feature = "capture")]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum CapturedMutation {
+    Inserted {
+        node: u64,
+        parent: u64,
+    },
+    Removed {
+        node: u64,
+        former_parent: u64,
+    },
+    AttributeChanged {
+        node: u64,
+        name: CapturedQualName,
+        old_value: Option<String>,
+    },
+    CharacterDataChanged {
+        node: u64,
+    },
+    SubtreeReplaced {
+        node: u64,
+    },
+}
+
+#[cfg(feature = "capture")]
+impl CapturedMutation {
+    pub fn capture<Id>(mutation: &DomMutation<Id>, to_raw: impl Fn(&Id) -> u64) -> Self {
+        match mutation {
+            DomMutation::Inserted { node, parent } => Self::Inserted {
+                node: to_raw(node),
+                parent: to_raw(parent),
+            },
+            DomMutation::Removed {
+                node,
+                former_parent,
+            } => Self::Removed {
+                node: to_raw(node),
+                former_parent: to_raw(former_parent),
+            },
+            DomMutation::AttributeChanged {
+                node,
+                name,
+                old_value,
+            } => Self::AttributeChanged {
+                node: to_raw(node),
+                name: CapturedQualName::from(name),
+                old_value: old_value.clone(),
+            },
+            DomMutation::CharacterDataChanged { node } => {
+                Self::CharacterDataChanged { node: to_raw(node) }
+            },
+            DomMutation::SubtreeReplaced { node } => Self::SubtreeReplaced { node: to_raw(node) },
+        }
+    }
+
+    pub fn replay<Id>(self, from_raw: impl Fn(u64) -> Id) -> DomMutation<Id> {
+        match self {
+            Self::Inserted { node, parent } => DomMutation::Inserted {
+                node: from_raw(node),
+                parent: from_raw(parent),
+            },
+            Self::Removed {
+                node,
+                former_parent,
+            } => DomMutation::Removed {
+                node: from_raw(node),
+                former_parent: from_raw(former_parent),
+            },
+            Self::AttributeChanged {
+                node,
+                name,
+                old_value,
+            } => DomMutation::AttributeChanged {
+                node: from_raw(node),
+                name: name.into_qual_name(),
+                old_value,
+            },
+            Self::CharacterDataChanged { node } => DomMutation::CharacterDataChanged {
+                node: from_raw(node),
+            },
+            Self::SubtreeReplaced { node } => DomMutation::SubtreeReplaced {
+                node: from_raw(node),
+            },
+        }
+    }
 }
 
 /// Plain node kind. Use the typed accessors on [`LayoutDom`]
@@ -304,22 +422,12 @@ pub trait NodeVisitor<D: LayoutDom + ?Sized> {
     type Stop;
 
     /// Called when descending into a node. Default: descend.
-    fn enter(
-        &mut self,
-        _dom: &D,
-        _id: D::NodeId,
-    ) -> ControlFlow<Self::Stop, Descent>
-    {
+    fn enter(&mut self, _dom: &D, _id: D::NodeId) -> ControlFlow<Self::Stop, Descent> {
         ControlFlow::Continue(Descent::Descend)
     }
 
     /// Called after a node's subtree has been visited. Default: continue.
-    fn exit(
-        &mut self,
-        _dom: &D,
-        _id: D::NodeId,
-    ) -> ControlFlow<Self::Stop>
-    {
+    fn exit(&mut self, _dom: &D, _id: D::NodeId) -> ControlFlow<Self::Stop> {
         ControlFlow::Continue(())
     }
 }
@@ -336,11 +444,7 @@ pub enum Descent {
 /// Walk `root`'s subtree with `visitor`, descending via
 /// [`LayoutDom::dom_children`]. Returns `ControlFlow::Break(stop)` if any
 /// visitor method bailed; otherwise `ControlFlow::Continue(())`.
-pub fn walk_subtree<D, V>(
-    dom: &D,
-    root: D::NodeId,
-    visitor: &mut V,
-) -> ControlFlow<V::Stop>
+pub fn walk_subtree<D, V>(dom: &D, root: D::NodeId, visitor: &mut V) -> ControlFlow<V::Stop>
 where
     D: LayoutDom + ?Sized,
     V: NodeVisitor<D> + ?Sized,
@@ -352,6 +456,6 @@ where
                 walk_subtree(dom, child, visitor)?;
             }
             visitor.exit(dom, root)
-        }
+        },
     }
 }

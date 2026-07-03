@@ -21,7 +21,9 @@
 
 use std::hash::Hash;
 
-use engine_observables_api::{FragmentQuery, Point};
+use engine_observables_api::{
+    FragmentQuery, LayoutApplyKind, LayoutBatchStats, LayoutDamageClass, Point,
+};
 use layout_dom_api::{DomMutation, LayoutDom};
 use paint_list_api::DeviceIntSize;
 use style::selector_parser::RestyleDamage;
@@ -60,6 +62,45 @@ pub enum Applied {
     /// subtree's outer size changed, so ancestors would reflow, or a
     /// root wasn't previously laid out).
     FullRecompute,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AppliedBatch {
+    applied: Applied,
+    coalesced_invalidations: usize,
+    restyled_elements: usize,
+    boxes_rebuilt: usize,
+    damage: RestyleDamage,
+    box_tree_valid: bool,
+}
+
+impl From<Applied> for LayoutApplyKind {
+    fn from(value: Applied) -> Self {
+        match value {
+            Applied::Unchanged => Self::Unchanged,
+            Applied::RepaintOnly => Self::RepaintOnly,
+            Applied::Restyled => Self::Restyled,
+            Applied::Spliced => Self::Spliced,
+            Applied::FullRecompute => Self::FullRecompute,
+        }
+    }
+}
+
+fn damage_class(applied: Applied, damage: RestyleDamage) -> LayoutDamageClass {
+    match applied {
+        Applied::Restyled | Applied::Spliced | Applied::FullRecompute => {
+            LayoutDamageClass::Relayout
+        },
+        Applied::Unchanged | Applied::RepaintOnly => {
+            if damage.is_empty() {
+                LayoutDamageClass::None
+            } else if damage.contains(RestyleDamage::RELAYOUT) {
+                LayoutDamageClass::Relayout
+            } else {
+                LayoutDamageClass::PaintOnly
+            }
+        },
+    }
 }
 
 /// A persistent cascade + layout session over one `LayoutDom`.
@@ -123,6 +164,8 @@ pub struct IncrementalLayout<Id: Copy + Eq + Hash> {
     /// a batch produced (e.g. a transform-only motion frame registers
     /// `RECALCULATE_OVERFLOW` without `RELAYOUT`). `empty()` before any restyle.
     last_damage: RestyleDamage,
+    /// Cheap counters for the most recent mutation batch over this session.
+    last_batch_stats: LayoutBatchStats,
 }
 
 impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
@@ -157,6 +200,11 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             &styles,
             DeviceIntSize::new(width as i32, height as i32),
         );
+        let last_batch_stats = LayoutBatchStats {
+            fragment_count: fragments.len(),
+            box_tree_nodes: Some(built.node_count()),
+            ..LayoutBatchStats::default()
+        };
         Self {
             styles,
             stylist,
@@ -171,6 +219,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             viewport,
             element_scroll: ScrollOffsets::default(),
             last_damage: RestyleDamage::empty(),
+            last_batch_stats,
         }
     }
 
@@ -703,6 +752,11 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         self.last_damage
     }
 
+    /// Cheap counters for the most recent mutation batch over this session.
+    pub fn last_batch_stats(&self) -> LayoutBatchStats {
+        self.last_batch_stats
+    }
+
     /// Enforce the fixed-stylesheet invariant in debug builds. The persistent
     /// Stylist is built once from `new()`'s stylesheets and cannot be safely
     /// rebuilt mid-session (the prior passes' rule nodes, held on `ElementData`,
@@ -717,6 +771,36 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
              tree cannot be rebuilt mid-session (hot-reload is a follow-up). Got a \
              different set in apply().",
         );
+    }
+
+    fn write_batch_stats(
+        &mut self,
+        applied: Applied,
+        mutations_in: usize,
+        coalesced_invalidations: usize,
+        restyled_elements: usize,
+        boxes_rebuilt: usize,
+        damage: RestyleDamage,
+        box_tree_valid: bool,
+    ) {
+        self.last_batch_stats = LayoutBatchStats {
+            applied: applied.into(),
+            damage: damage_class(applied, damage),
+            mutations_in,
+            coalesced_invalidations,
+            restyled_elements,
+            boxes_rebuilt,
+            fragment_count: self.fragments.len(),
+            box_tree_nodes: box_tree_valid.then_some(self.built.node_count()),
+        };
+    }
+
+    fn coalesced_invalidation_count<D>(&self, dom: &D, mutations: &[DomMutation<Id>]) -> usize
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let invalidations: Vec<_> = mutations.iter().map(classify).collect();
+        coalesce(&invalidations, |id| dom.parent(id)).len()
     }
 
     /// Apply a drained mutation batch, updating styles (and fragments
@@ -738,16 +822,36 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         D: LayoutDom<NodeId = Id>,
     {
         if mutations.is_empty() {
+            self.write_batch_stats(
+                Applied::Unchanged,
+                0,
+                0,
+                0,
+                0,
+                RestyleDamage::empty(),
+                self.paint_side_valid,
+            );
             return Applied::Unchanged;
         }
         self.debug_assert_fixed_sheets(stylesheets);
+        let coalesced_invalidations = self.coalesced_invalidation_count(dom, mutations);
 
         let attribute_only = mutations
             .iter()
             .all(|m| matches!(m, DomMutation::AttributeChanged { .. }));
 
         if !attribute_only {
-            return self.apply_structural(dom, mutations);
+            let batch = self.apply_structural(dom, mutations);
+            self.write_batch_stats(
+                batch.applied,
+                mutations.len(),
+                batch.coalesced_invalidations,
+                batch.restyled_elements,
+                batch.boxes_rebuilt,
+                batch.damage,
+                batch.box_tree_valid,
+            );
+            return batch.applied;
         }
 
         // Attribute-only → incremental restyle over the persistent plane,
@@ -768,7 +872,17 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             self.paint_side_valid = true;
             self.images = ImagePlane::decode_from_dom(dom);
             self.recompute_viewport(dom);
-            Applied::Restyled
+            let applied = Applied::Restyled;
+            self.write_batch_stats(
+                applied,
+                mutations.len(),
+                coalesced_invalidations,
+                outcome.restyled_elements,
+                self.built.node_count(),
+                outcome.damage,
+                true,
+            );
+            applied
         } else {
             // Paint-only: prior fragments (and box-tree side-table) still valid.
             // But paint reads each box node's cached `style` (the box-tree paint
@@ -782,7 +896,17 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
                 _ => None,
             });
             self.built.refresh_styles_for(&self.styles, mutated);
-            Applied::RepaintOnly
+            let applied = Applied::RepaintOnly;
+            self.write_batch_stats(
+                applied,
+                mutations.len(),
+                coalesced_invalidations,
+                outcome.restyled_elements,
+                0,
+                outcome.damage,
+                true,
+            );
+            applied
         }
     }
 
@@ -971,7 +1095,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     /// position. Falls back to a full layout when a subtree's outer size
     /// changed (ancestors would reflow) or a root wasn't previously laid
     /// out — the same boundary the coarse-oracle diff-test guards.
-    fn apply_structural<D>(&mut self, dom: &D, mutations: &[DomMutation<Id>]) -> Applied
+    fn apply_structural<D>(&mut self, dom: &D, mutations: &[DomMutation<Id>]) -> AppliedBatch
     where
         D: LayoutDom<NodeId = Id>,
     {
@@ -980,29 +1104,41 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         let invalidations: Vec<_> = mutations.iter().map(classify).collect();
         let roots = coalesce(&invalidations, |id| dom.parent(id));
         let root_ids: Vec<Id> = roots.iter().map(|inv| inv.node()).collect();
+        let outcome = restyle_structural(dom, &mut self.styles, &self.stylist, &root_ids);
+        self.last_damage = outcome.damage;
 
         // 1. Styles: partial cascade — re-cascade only the affected
         //    subtrees over the persistent plane (the inserted/replaced
         //    nodes + within-parent sibling/nth-child effects).
-        restyle_structural(dom, &mut self.styles, &self.stylist, &root_ids);
 
         // 2. Fragments: incremental layout splice over the restyled plane.
 
         let mut result = self.fragments.clone();
+        let mut boxes_rebuilt = 0usize;
         for inv in &roots {
             let root = inv.node();
             let Some(prior_root) = self.fragments.rect_of(root).copied() else {
-                return self.full_relayout(dom);
+                return self.full_relayout(
+                    dom,
+                    roots.len(),
+                    outcome.restyled_elements,
+                    outcome.damage,
+                );
             };
             // Lay out just this subtree (re-rooted) over the persistent styles.
-            let scoped = lay_out(
+            let (scoped, scoped_boxes) = lay_out_with_box_count(
                 &SubtreeView::new(dom, root),
                 &self.styles,
                 self.width,
                 self.height,
             );
             let Some(scoped_root) = scoped.rect_of(root).copied() else {
-                return self.full_relayout(dom);
+                return self.full_relayout(
+                    dom,
+                    roots.len(),
+                    outcome.restyled_elements,
+                    outcome.damage,
+                );
             };
             // Margin-collapse parity at the splice boundary. A `SubtreeView`-rooted
             // scoped layout makes `root` the scoped ICB — a block formatting context
@@ -1013,13 +1149,23 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             // a correct full relayout. (CSS 2.2 §8.3.1; for a shallow root like
             // `<body>` the full relayout is barely more than the subtree layout.)
             if splice_loses_margin_collapse(dom, &self.styles, &scoped, root) {
-                return self.full_relayout(dom);
+                return self.full_relayout(
+                    dom,
+                    roots.len(),
+                    outcome.restyled_elements,
+                    outcome.damage,
+                );
             }
             // Outer size change → ancestors would reflow → full fallback.
             if (scoped_root.size.width - prior_root.size.width).abs() >= 0.5
                 || (scoped_root.size.height - prior_root.size.height).abs() >= 0.5
             {
-                return self.full_relayout(dom);
+                return self.full_relayout(
+                    dom,
+                    roots.len(),
+                    outcome.restyled_elements,
+                    outcome.damage,
+                );
             }
             // Splice the scoped subtree into the prior fragments. Fragment
             // locations are *parent-relative* (Taffy's `final_layout.location`;
@@ -1044,6 +1190,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
                     result.insert(node, placed);
                 }
             }
+            boxes_rebuilt += scoped_boxes;
         }
         self.fragments = result;
         // The splice updates fragments but not the box-tree side-table, so a
@@ -1051,12 +1198,25 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         // re-validates). Attribute-only hosts (the pool) never take this path.
         self.paint_side_valid = false;
         self.recompute_viewport(dom);
-        Applied::Spliced
+        AppliedBatch {
+            applied: Applied::Spliced,
+            coalesced_invalidations: roots.len(),
+            restyled_elements: outcome.restyled_elements,
+            boxes_rebuilt,
+            damage: outcome.damage,
+            box_tree_valid: false,
+        }
     }
 
     /// Full layout over the current (already-cascaded) styles. The
     /// fallback for the structural splice.
-    fn full_relayout<D>(&mut self, dom: &D) -> Applied
+    fn full_relayout<D>(
+        &mut self,
+        dom: &D,
+        coalesced_invalidations: usize,
+        restyled_elements: usize,
+        damage: RestyleDamage,
+    ) -> AppliedBatch
     where
         D: LayoutDom<NodeId = Id>,
     {
@@ -1072,7 +1232,14 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         self.paint_side_valid = true;
         self.images = ImagePlane::decode_from_dom(dom);
         self.recompute_viewport(dom);
-        Applied::FullRecompute
+        AppliedBatch {
+            applied: Applied::FullRecompute,
+            coalesced_invalidations,
+            restyled_elements,
+            boxes_rebuilt: self.built.node_count(),
+            damage,
+            box_tree_valid: true,
+        }
     }
 }
 
@@ -1216,10 +1383,26 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash + Send + Sync,
 {
-    // Scoped-splice fallback path (fragments only): a throwaway context is fine
-    // here; the session's persistent one rides the `full_layout` relayout paths.
+    lay_out_with_box_count(dom, styles, width, height).0
+}
+
+fn lay_out_with_box_count<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    width: f32,
+    height: f32,
+) -> (FragmentPlane<D::NodeId>, usize)
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash + Send + Sync,
+{
+    // Scoped-splice fallback path (fragments + cheap counts): a throwaway
+    // context is fine here; the session's persistent one rides the
+    // `full_layout` relayout paths.
     let mut text_ctx = TextMeasureCtx::new();
-    full_layout(dom, styles, width, height, &mut text_ctx).0
+    let (fragments, built) = full_layout(dom, styles, width, height, &mut text_ctx);
+    let box_count = built.node_count();
+    (fragments, box_count)
 }
 
 /// Full layout into the session's retained `text_ctx` (reset per pass, font
@@ -1248,6 +1431,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use engine_observables_api::{LayoutApplyKind, LayoutDamageClass};
     use html5ever::ns;
     use layout_dom_api::{LayoutDomMut, QualName};
     use serval_scripted_dom::ScriptedDom;
@@ -1319,6 +1503,18 @@ mod tests {
             Applied::RepaintOnly,
             "color swap should skip layout"
         );
+        let stats = layout.last_batch_stats();
+        assert_eq!(stats.applied, LayoutApplyKind::RepaintOnly);
+        assert_eq!(stats.damage, LayoutDamageClass::PaintOnly);
+        assert_eq!(stats.mutations_in, 1);
+        assert_eq!(stats.coalesced_invalidations, 1);
+        assert!(
+            stats.restyled_elements >= 1,
+            "the changed <p> should restyle"
+        );
+        assert_eq!(stats.boxes_rebuilt, 0, "paint-only path skips box rebuild");
+        assert_eq!(stats.fragment_count, layout.fragments().len());
+        assert_eq!(stats.box_tree_nodes, Some(layout.built.node_count()));
         assert!(
             (color(&layout, p)[2] - 1.0).abs() < 0.001,
             "p should be blue after restyle"
@@ -1515,6 +1711,24 @@ mod tests {
         dom.append_child(body, p);
         let muts = drain(&mut dom);
         assert_eq!(layout.apply(&dom, SHEET, &muts), Applied::Spliced);
+        let stats = layout.last_batch_stats();
+        assert_eq!(stats.applied, LayoutApplyKind::Spliced);
+        assert_eq!(stats.damage, LayoutDamageClass::Relayout);
+        assert_eq!(stats.mutations_in, 1);
+        assert_eq!(stats.coalesced_invalidations, 1);
+        assert!(
+            stats.restyled_elements >= 1,
+            "the affected subtree should restyle"
+        );
+        assert!(
+            stats.boxes_rebuilt > 0,
+            "structural splice must rebuild boxes"
+        );
+        assert_eq!(stats.fragment_count, layout.fragments().len());
+        assert_eq!(
+            stats.box_tree_nodes, None,
+            "structural splice invalidates the retained box-tree side-table"
+        );
 
         // The new <p> matches a full cascade + layout of the mutated DOM.
         let mut oracle_styles = StylePlane::new();
@@ -1607,6 +1821,21 @@ mod tests {
         dom.append_child(div, p2);
         let muts = drain(&mut dom);
         assert_eq!(layout.apply(&dom, SHEET, &muts), Applied::FullRecompute);
+        let stats = layout.last_batch_stats();
+        assert_eq!(stats.applied, LayoutApplyKind::FullRecompute);
+        assert_eq!(stats.damage, LayoutDamageClass::Relayout);
+        assert_eq!(stats.mutations_in, 1);
+        assert_eq!(stats.coalesced_invalidations, 1);
+        assert!(
+            stats.restyled_elements >= 1,
+            "the grown subtree should restyle"
+        );
+        assert!(
+            stats.boxes_rebuilt > 0,
+            "full fallback should report rebuilt box-tree nodes"
+        );
+        assert_eq!(stats.fragment_count, layout.fragments().len());
+        assert_eq!(stats.box_tree_nodes, Some(layout.built.node_count()));
         assert!(
             layout.fragments().rect_of(p2).is_some(),
             "new <p> laid out after fallback"

@@ -66,7 +66,11 @@ pub enum TypeDiagnosticKind {
     UnknownIdentifier { name: String },
     /// Binary operator does not accept the operand pair under ESSL
     /// rules (e.g., `bool + bool` or `mat3 * mat4`).
-    BinaryOpMismatch { op: BinOp, lhs: TypeKind, rhs: TypeKind },
+    BinaryOpMismatch {
+        op: BinOp,
+        lhs: TypeKind,
+        rhs: TypeKind,
+    },
     /// Unary operator does not accept this operand type (e.g., `!float`).
     UnaryOpMismatch { op: UnaryOp, operand: TypeKind },
     /// Assignment LHS / RHS type mismatch.
@@ -83,10 +87,17 @@ pub enum TypeDiagnosticKind {
     UnknownFunction { name: String },
     /// `name(args)` where overloads of `name` exist but none match the
     /// actual argument types.
-    CallSignatureMismatch { name: String, candidates: Vec<Signature>, actual: Vec<TypeKind> },
+    CallSignatureMismatch {
+        name: String,
+        candidates: Vec<Signature>,
+        actual: Vec<TypeKind>,
+    },
     /// `.field` access on a struct base where the struct has no
     /// member named `field`.
-    UnknownStructField { struct_name: Option<String>, field: String },
+    UnknownStructField {
+        struct_name: Option<String>,
+        field: String,
+    },
 }
 
 impl TypeDiagnostic {
@@ -108,16 +119,25 @@ impl fmt::Display for DiagnosticDisplay<'_> {
                 write!(f, "{line}:{col}: unknown identifier `{name}`")
             },
             TypeDiagnosticKind::BinaryOpMismatch { op, lhs, rhs } => {
-                write!(f, "{line}:{col}: binary `{op:?}` does not accept {lhs:?} and {rhs:?}")
+                write!(
+                    f,
+                    "{line}:{col}: binary `{op:?}` does not accept {lhs:?} and {rhs:?}"
+                )
             },
             TypeDiagnosticKind::UnaryOpMismatch { op, operand } => {
-                write!(f, "{line}:{col}: unary `{op:?}` does not accept {operand:?}")
+                write!(
+                    f,
+                    "{line}:{col}: unary `{op:?}` does not accept {operand:?}"
+                )
             },
             TypeDiagnosticKind::AssignTypeMismatch { lhs, rhs } => {
                 write!(f, "{line}:{col}: cannot assign {rhs:?} to {lhs:?}")
             },
             TypeDiagnosticKind::TernaryCondNotBool { cond } => {
-                write!(f, "{line}:{col}: ternary condition must be bool, got {cond:?}")
+                write!(
+                    f,
+                    "{line}:{col}: ternary condition must be bool, got {cond:?}"
+                )
             },
             TypeDiagnosticKind::TernaryBranchMismatch { then, else_ } => {
                 write!(
@@ -131,7 +151,11 @@ impl fmt::Display for DiagnosticDisplay<'_> {
             TypeDiagnosticKind::UnknownFunction { name } => {
                 write!(f, "{line}:{col}: unknown function `{name}`")
             },
-            TypeDiagnosticKind::CallSignatureMismatch { name, candidates, actual } => {
+            TypeDiagnosticKind::CallSignatureMismatch {
+                name,
+                candidates,
+                actual,
+            } => {
                 let actual_str = actual
                     .iter()
                     .map(|t| format!("{t:?}"))
@@ -175,7 +199,12 @@ pub struct ScopeEntry {
 
 impl ScopeEntry {
     fn var(ty: TypeKind, decl_span: Span, kind: SymbolKind) -> Self {
-        Self { ty, decl_span, kind, signature: None }
+        Self {
+            ty,
+            decl_span,
+            kind,
+            signature: None,
+        }
     }
 }
 
@@ -291,7 +320,10 @@ impl TypeChecker {
                 if let Some(n) = &s.name {
                     self.struct_name_to_idx.insert(n.clone(), idx);
                 }
-                self.structs.push(StructEntry { name: s.name.clone(), fields });
+                self.structs.push(StructEntry {
+                    name: s.name.clone(),
+                    fields,
+                });
             }
         }
     }
@@ -501,7 +533,12 @@ impl<'tree> Visitor<'tree> for TypeChecker {
                         }
                     }
                 },
-                Expr::Ternary { cond, then, else_, span } => {
+                Expr::Ternary {
+                    cond,
+                    then,
+                    else_,
+                    span,
+                } => {
                     let ct = self.types.get(&cond.span()).copied();
                     let tt = self.types.get(&then.span()).copied();
                     let et = self.types.get(&else_.span()).copied();
@@ -518,13 +555,18 @@ impl<'tree> Visitor<'tree> for TypeChecker {
                             self.types.insert(*span, tt);
                         } else {
                             self.diagnostics.push(TypeDiagnostic {
-                                kind: TypeDiagnosticKind::TernaryBranchMismatch { then: tt, else_: et },
+                                kind: TypeDiagnosticKind::TernaryBranchMismatch {
+                                    then: tt,
+                                    else_: et,
+                                },
                                 span: *span,
                             });
                         }
                     }
                 },
-                Expr::Member { base, field, span, .. } => {
+                Expr::Member {
+                    base, field, span, ..
+                } => {
                     if let Some(bt) = self.types.get(&base.span()).copied() {
                         // Dispatch on base kind: struct → field
                         // lookup; vector → swizzle. Anything else
@@ -568,7 +610,9 @@ impl<'tree> Visitor<'tree> for TypeChecker {
                         }
                     }
                 },
-                Expr::Call { callee, args, span, .. } => {
+                Expr::Call {
+                    callee, args, span, ..
+                } => {
                     // Three-stage Call resolution:
                     //   1. Constructor (vec_n / mat_n / scalar) by
                     //      structural rule in `typing::constructor_result`.
@@ -646,22 +690,20 @@ impl<'tree> Visitor<'tree> for TypeChecker {
                     // 3. User-defined function via the overload set.
                     let overloads = self.user_functions.get(callee).cloned();
                     match overloads {
-                        Some(sigs) => {
-                            match sigs.iter().find(|s| s.matches(&arg_types)) {
-                                Some(sig) => {
-                                    self.types.insert(*span, sig.result);
-                                },
-                                None => {
-                                    self.diagnostics.push(TypeDiagnostic {
-                                        kind: TypeDiagnosticKind::CallSignatureMismatch {
-                                            name: callee.clone(),
-                                            candidates: sigs,
-                                            actual: arg_types,
-                                        },
-                                        span: *span,
-                                    });
-                                },
-                            }
+                        Some(sigs) => match sigs.iter().find(|s| s.matches(&arg_types)) {
+                            Some(sig) => {
+                                self.types.insert(*span, sig.result);
+                            },
+                            None => {
+                                self.diagnostics.push(TypeDiagnostic {
+                                    kind: TypeDiagnosticKind::CallSignatureMismatch {
+                                        name: callee.clone(),
+                                        candidates: sigs,
+                                        actual: arg_types,
+                                    },
+                                    span: *span,
+                                });
+                            },
                         },
                         None => {
                             // Synthetic computed callee from a postfix
@@ -687,4 +729,3 @@ impl<'tree> Visitor<'tree> for TypeChecker {
         Walk::Continue
     }
 }
-

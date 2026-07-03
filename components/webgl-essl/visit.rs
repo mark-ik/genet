@@ -41,11 +41,7 @@ pub enum Walk {
 /// tree's borrow through every method, so visitors can hold
 /// references to nodes in their own state without cloning.
 pub trait Visitor<'tree> {
-    fn visit_translation_unit(
-        &mut self,
-        _node: &'tree TranslationUnit,
-        _visit: Visit,
-    ) -> Walk {
+    fn visit_translation_unit(&mut self, _node: &'tree TranslationUnit, _visit: Visit) -> Walk {
         Walk::Continue
     }
     fn visit_precision_decl(&mut self, _node: &'tree PrecisionDecl, _visit: Visit) -> Walk {
@@ -146,7 +142,9 @@ pub fn walk_stmt<'tree, V: Visitor<'tree>>(v: &mut V, stmt: &'tree Stmt) {
         Stmt::Return { value: None, .. } => {},
         Stmt::Decl(d) => walk_local_decl(v, d),
         Stmt::Block(b) => walk_block(v, b),
-        Stmt::If { cond, then, else_, .. } => {
+        Stmt::If {
+            cond, then, else_, ..
+        } => {
             walk_expr(v, cond);
             v.visit_stmt(stmt, Visit::In);
             walk_stmt(v, then);
@@ -165,7 +163,13 @@ pub fn walk_stmt<'tree, V: Visitor<'tree>>(v: &mut V, stmt: &'tree Stmt) {
             v.visit_stmt(stmt, Visit::In);
             walk_expr(v, cond);
         },
-        Stmt::For { init, cond, step, body, .. } => {
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
             match init {
                 ForInit::Empty => {},
                 ForInit::Decl(d) => walk_local_decl(v, d),
@@ -180,7 +184,9 @@ pub fn walk_stmt<'tree, V: Visitor<'tree>>(v: &mut V, stmt: &'tree Stmt) {
             walk_stmt(v, body);
         },
         Stmt::Break { .. } | Stmt::Continue { .. } | Stmt::Discard { .. } => {},
-        Stmt::Switch { discriminant, body, .. } => {
+        Stmt::Switch {
+            discriminant, body, ..
+        } => {
             walk_expr(v, discriminant);
             v.visit_stmt(stmt, Visit::In);
             walk_block(v, body);
@@ -206,10 +212,8 @@ pub fn walk_expr<'tree, V: Visitor<'tree>>(v: &mut V, expr: &'tree Expr) {
         return;
     }
     match expr {
-        Expr::IntLit { .. }
-        | Expr::FloatLit { .. }
-        | Expr::BoolLit { .. }
-        | Expr::Ident { .. } => {},
+        Expr::IntLit { .. } | Expr::FloatLit { .. } | Expr::BoolLit { .. } | Expr::Ident { .. } => {
+        },
         Expr::Call { args, .. } => {
             let n = args.len();
             for (i, a) in args.iter().enumerate() {
@@ -231,7 +235,9 @@ pub fn walk_expr<'tree, V: Visitor<'tree>>(v: &mut V, expr: &'tree Expr) {
             v.visit_expr(expr, Visit::In);
             walk_expr(v, index);
         },
-        Expr::Ternary { cond, then, else_, .. } => {
+        Expr::Ternary {
+            cond, then, else_, ..
+        } => {
             walk_expr(v, cond);
             v.visit_expr(expr, Visit::In);
             walk_expr(v, then);

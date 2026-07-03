@@ -35,7 +35,10 @@ vec4 lerp(vec4 a, vec4 b, float t) {
     assert_eq!(func.params[2].name, "t");
     // Body should hold one return statement.
     assert_eq!(func.body.stmts.len(), 1);
-    assert!(matches!(func.body.stmts[0], Stmt::Return { value: Some(_), .. }));
+    assert!(matches!(
+        func.body.stmts[0],
+        Stmt::Return { value: Some(_), .. }
+    ));
 }
 
 #[test]
@@ -90,7 +93,9 @@ void main() {
         other => panic!("expected assign stmt, got {other:?}"),
     };
     match rhs {
-        Expr::Ternary { cond, then, else_, .. } => {
+        Expr::Ternary {
+            cond, then, else_, ..
+        } => {
             assert!(matches!(cond.as_ref(), Expr::Ident { .. }));
             assert!(matches!(then.as_ref(), Expr::Call { .. }));
             assert!(matches!(else_.as_ref(), Expr::Call { .. }));
@@ -122,9 +127,7 @@ void main() {
     };
     match outer_else {
         Expr::Ternary { .. } => {},
-        other => panic!(
-            "expected nested ternary on else_ side (right-assoc), got {other:?}"
-        ),
+        other => panic!("expected nested ternary on else_ side (right-assoc), got {other:?}"),
     }
 }
 
@@ -147,7 +150,9 @@ void main() {
     // Should parse as `(true || false) ? 1.0 : 0.0` — log-or binds tighter.
     match init {
         Expr::Ternary { cond, .. } => match cond.as_ref() {
-            Expr::Binary { op: BinOp::LogOr, .. } => {},
+            Expr::Binary {
+                op: BinOp::LogOr, ..
+            } => {},
             other => panic!("expected log-or as ternary cond, got {other:?}"),
         },
         other => panic!("expected ternary, got {other:?}"),

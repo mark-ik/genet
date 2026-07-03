@@ -32,8 +32,7 @@ pub(crate) fn translate_canonical_essl_pair(
     let (fragment_wgsl, fragment_refl) =
         compile_with_reflection(fragment_source, EsslStage::Fragment)?;
     check_pair_interface(&vertex_refl, &fragment_refl)?;
-    let reflection =
-        narrow_reflection(&vertex_refl, &fragment_refl, fragment_source)?;
+    let reflection = narrow_reflection(&vertex_refl, &fragment_refl, fragment_source)?;
     Ok(TranslatedProgram {
         vertex_wgsl,
         fragment_wgsl,
@@ -70,9 +69,8 @@ fn compile_with_reflection(
     source: &str,
     stage: EsslStage,
 ) -> Result<(String, EsslReflection), ShaderTranslationError> {
-    let tu = webgl_essl::parse_source(source).map_err(|error| {
-        ShaderTranslationError::Parse(format!("{error:?}"))
-    })?;
+    let tu = webgl_essl::parse_source(source)
+        .map_err(|error| ShaderTranslationError::Parse(format!("{error:?}")))?;
     let check_result = webgl_essl::check::check(&tu);
     if !check_result.diagnostics.is_empty() {
         return Err(ShaderTranslationError::Validate(format!(
@@ -170,9 +168,9 @@ fn narrow_reflection(
     let mut block_cursor: u32 = 0;
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let push_uniform = |u: &webgl_essl::reflect::UniformBinding,
-                            uniforms: &mut Vec<UniformReflection>,
-                            block_cursor: &mut u32,
-                            seen: &mut std::collections::HashSet<String>|
+                        uniforms: &mut Vec<UniformReflection>,
+                        block_cursor: &mut u32,
+                        seen: &mut std::collections::HashSet<String>|
      -> Result<(), ShaderTranslationError> {
         if seen.contains(&u.name) {
             return Ok(());
@@ -241,8 +239,8 @@ fn narrow_reflection(
             block_offset: 0,
             block_size: 0,
         });
-    let fragment_float_precision = extract_fragment_float_precision(fragment_source)
-        .unwrap_or(WebGlPrecision::Medium);
+    let fragment_float_precision =
+        extract_fragment_float_precision(fragment_source).unwrap_or(WebGlPrecision::Medium);
     Ok(ProgramReflection {
         attributes,
         uniforms,
@@ -323,10 +321,9 @@ impl From<CompileError> for ShaderTranslationError {
     fn from(error: CompileError) -> Self {
         match error {
             CompileError::Parse(error) => Self::Parse(format!("{error:?}")),
-            CompileError::Check(diagnostics) => Self::Validate(format!(
-                "{} typecheck diagnostic(s)",
-                diagnostics.len()
-            )),
+            CompileError::Check(diagnostics) => {
+                Self::Validate(format!("{} typecheck diagnostic(s)", diagnostics.len()))
+            },
             CompileError::Validate(result) => Self::Validate(result.info_log),
             CompileError::Lower(error) => Self::Emit(format!("{error}")),
         }

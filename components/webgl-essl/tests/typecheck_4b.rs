@@ -14,9 +14,15 @@ fn check_clean(src: &str) -> webgl_essl::check::CheckResult {
     let tu = parse_source(src).unwrap_or_else(|e| panic!("parse: {}", e.display(src)));
     let r = check(&tu);
     if !r.diagnostics.is_empty() {
-        let rendered: Vec<String> =
-            r.diagnostics.iter().map(|d| format!("{}", d.display(src))).collect();
-        panic!("expected zero diagnostics, got: {}\n--- source ---\n{src}", rendered.join("; "));
+        let rendered: Vec<String> = r
+            .diagnostics
+            .iter()
+            .map(|d| format!("{}", d.display(src)))
+            .collect();
+        panic!(
+            "expected zero diagnostics, got: {}\n--- source ---\n{src}",
+            rendered.join("; ")
+        );
     }
     r
 }
@@ -54,7 +60,10 @@ void main() {
 "#;
     let r = check_clean(src);
     // a_position * u_scale should resolve to Vec2.
-    assert!(count_of(&r, TypeKind::Vec2) >= 2, "scaled decl + binary result");
+    assert!(
+        count_of(&r, TypeKind::Vec2) >= 2,
+        "scaled decl + binary result"
+    );
 }
 
 #[test]
@@ -116,7 +125,11 @@ fn binary_bool_add_emits_mismatch_diagnostic() {
         .iter()
         .filter(|d| matches!(d.kind, TypeDiagnosticKind::BinaryOpMismatch { .. }))
         .collect();
-    assert_eq!(mismatches.len(), 1, "exactly one binary mismatch on `a + b`");
+    assert_eq!(
+        mismatches.len(),
+        1,
+        "exactly one binary mismatch on `a + b`"
+    );
 }
 
 #[test]
@@ -196,7 +209,10 @@ void main() {
 "#;
     let r = check_clean(src);
     // The .rgb access should annotate Vec3.
-    assert!(count_of(&r, TypeKind::Vec3) >= 1, "swizzle .rgb produces Vec3");
+    assert!(
+        count_of(&r, TypeKind::Vec3) >= 1,
+        "swizzle .rgb produces Vec3"
+    );
 }
 
 #[test]

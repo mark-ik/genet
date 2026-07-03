@@ -57,7 +57,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(r12_count(&r), 0, "loop induction var should pass R12: {:#?}", r.errors);
+    assert_eq!(
+        r12_count(&r),
+        0,
+        "loop induction var should pass R12: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -159,7 +164,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(r12_count(&r), 0, "both loop vars should pass: {:#?}", r.errors);
+    assert_eq!(
+        r12_count(&r),
+        0,
+        "both loop vars should pass: {:#?}",
+        r.errors
+    );
 }
 
 // ---------- version gate ----------------------------------------------
@@ -178,5 +188,10 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(r12_count(&r), 0, "ESSL 3.00 should not fire R12: {:#?}", r.errors);
+    assert_eq!(
+        r12_count(&r),
+        0,
+        "ESSL 3.00 should not fire R12: {:#?}",
+        r.errors
+    );
 }

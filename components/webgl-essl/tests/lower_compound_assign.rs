@@ -7,9 +7,9 @@
 //! The target must be a local (writable); compound assigns on a
 //! swizzled LHS or a write-only output are queued.
 
+use webgl_essl::CompileError;
 use webgl_essl::compile;
 use webgl_essl::validate::ShaderStage;
-use webgl_essl::CompileError;
 
 fn frag_wgsl(body: &str) -> String {
     let src = format!(
@@ -78,8 +78,7 @@ fn vec3_add_assign_lowers() {
 
 #[test]
 fn vec3_mul_assign_by_vec3_lowers() {
-    let wgsl =
-        frag_wgsl("vec3 acc = v; acc *= vec3(0.5); gl_FragColor = vec4(acc, 1.0);");
+    let wgsl = frag_wgsl("vec3 acc = v; acc *= vec3(0.5); gl_FragColor = vec4(acc, 1.0);");
     assert!(wgsl.contains("vec4"));
 }
 

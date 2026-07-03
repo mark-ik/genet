@@ -73,7 +73,12 @@ fn expect_call<'a>(expr: &'a Expr) -> (&'a str, &'a [Expr]) {
 
 fn expect_assign<'a>(expr: &'a Expr) -> (&'a Expr, &'a Expr) {
     match expr {
-        Expr::Assign { op: AssignOp::Assign, lhs, rhs, .. } => (lhs.as_ref(), rhs.as_ref()),
+        Expr::Assign {
+            op: AssignOp::Assign,
+            lhs,
+            rhs,
+            ..
+        } => (lhs.as_ref(), rhs.as_ref()),
         _ => panic!("expected `=` assign, got {expr:?}"),
     }
 }

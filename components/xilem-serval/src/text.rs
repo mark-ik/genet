@@ -11,7 +11,7 @@
 //! resets its character data when the value changes.
 
 use crate::pod::{ServalElement, ServalElementMut};
-use crate::{ServalCtx, DomHandle};
+use crate::{DomHandle, ServalCtx};
 use layout_dom_api::LayoutDomMut;
 use xilem_core::{MessageCtx, MessageResult, Mut, OrphanView};
 
@@ -112,7 +112,10 @@ macro_rules! impl_to_string_view {
                 _: &mut State,
             ) {
                 if prev != new {
-                    element.dom.borrow_mut().set_text(*element.node, &new.to_string());
+                    element
+                        .dom
+                        .borrow_mut()
+                        .set_text(*element.node, &new.to_string());
                 }
             }
 

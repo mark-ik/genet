@@ -27,9 +27,7 @@ fn complexity_count_and_limit(
     })
 }
 
-fn call_depth_and_limit(
-    r: &webgl_essl::validate::ValidationResult,
-) -> Option<(usize, usize)> {
+fn call_depth_and_limit(r: &webgl_essl::validate::ValidationResult) -> Option<(usize, usize)> {
     r.errors.iter().find_map(|d| match d.kind {
         WebGlDiagnosticKind::CallStackTooDeep { depth, limit } => Some((depth, limit)),
         _ => None,
@@ -52,7 +50,10 @@ void main() {
 #[test]
 fn moderate_expression_below_cap() {
     // ~30 binary additions; total node count around 60, well under 256.
-    let body = std::iter::repeat("1.0").take(30).collect::<Vec<_>>().join(" + ");
+    let body = std::iter::repeat("1.0")
+        .take(30)
+        .collect::<Vec<_>>()
+        .join(" + ");
     let src = format!("void main() {{ float x = {body}; }}");
     let r = validate_src(&src, ShaderStage::Fragment);
     assert!(
@@ -67,7 +68,10 @@ fn expression_just_over_cap_triggers_diagnostic() {
     // 130 float literals separated by `+`. Each lit is a node; each
     // `+` is a Binary node combining the running sum with the next
     // lit. 130 lits + 129 binaries = 259 nodes, just over the 256 cap.
-    let body = std::iter::repeat("1.0").take(130).collect::<Vec<_>>().join(" + ");
+    let body = std::iter::repeat("1.0")
+        .take(130)
+        .collect::<Vec<_>>()
+        .join(" + ");
     let src = format!("void main() {{ float x = {body}; }}");
     let r = validate_src(&src, ShaderStage::Fragment);
     let (count, limit) = complexity_count_and_limit(&r).expect("complexity diagnostic");
@@ -162,7 +166,9 @@ void main() { f(); }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
     assert!(
-        r.errors.iter().any(|d| matches!(d.kind, WebGlDiagnosticKind::Recursion { .. })),
+        r.errors
+            .iter()
+            .any(|d| matches!(d.kind, WebGlDiagnosticKind::Recursion { .. })),
         "expected Recursion diagnostic"
     );
     assert!(call_depth_and_limit(&r).is_none(), "no CallStackTooDeep");

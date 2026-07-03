@@ -457,21 +457,25 @@ fn html_interface_table_works<E: ScriptEngine>() {
     rt.set_base_url("http://example.test/base/index.html")
         .expect("base url");
     rt.load_dom(&StaticDocument::parse(
-        "<html><body><a id='a' href='p'></a><button id='b'></button><canvas id='c'></canvas></body></html>",
+        "<html><body><a id='a' href='p'></a><button id='b'></button><canvas id='c'></canvas><video id='v'></video><audio id='au'></audio></body></html>",
     ));
 
     rt.eval(
         "var a = document.getElementById('a');\
          var b = document.getElementById('b');\
          var c = document.getElementById('c');\
+         var v = document.getElementById('v');\
+         var au = document.getElementById('au');\
          var div = document.createElement('div');\
-         console.log(typeof HTMLAnchorElement + ',' + typeof HTMLButtonElement + ',' + typeof HTMLCanvasElement);\
-         console.log(HTMLCanvasElement.name + ',' + HTMLButtonElement.name);\
+         console.log(typeof HTMLAnchorElement + ',' + typeof HTMLButtonElement + ',' + typeof HTMLCanvasElement + ',' + typeof HTMLMediaElement);\
+         console.log(HTMLCanvasElement.name + ',' + HTMLButtonElement.name + ',' + HTMLMediaElement.name);\
          console.log(String(a instanceof HTMLAnchorElement) + ',' + String(b instanceof HTMLButtonElement) + ',' + String(c instanceof HTMLCanvasElement) + ',' + String(c instanceof HTMLElement));\
          console.log(String(a instanceof HTMLButtonElement) + ',' + String(b instanceof HTMLAnchorElement));\
          console.log(a.href + ',' + String('href' in div));\
          a.text = 'go'; console.log(a.text + ',' + a.textContent + ',' + String(a.getAttribute('text')));\
          b.disabled = true; console.log(String(b.disabled) + ',' + String(b.hasAttribute('disabled')) + ',' + String('disabled' in div));\
+         console.log(String(v instanceof HTMLVideoElement) + ',' + String(v instanceof HTMLMediaElement) + ',' + String(au instanceof HTMLAudioElement) + ',' + String(au instanceof HTMLMediaElement));\
+         v.src = 'clip.mp4'; au.controls = true; console.log(v.getAttribute('src') + ',' + String(au.hasAttribute('controls')));\
          console.log(String(c.width) + ',' + String(c.height));\
          c.width = 640; console.log(c.getAttribute('width') + ',' + String(c.width));\
          console.log(String(c.getContext === HTMLCanvasElement.prototype.getContext));\
@@ -484,13 +488,15 @@ fn html_interface_table_works<E: ScriptEngine>() {
     assert_eq!(
         rt.host().borrow().console,
         vec![
-            "function,function,function",
-            "HTMLCanvasElement,HTMLButtonElement",
+            "function,function,function,function",
+            "HTMLCanvasElement,HTMLButtonElement,HTMLMediaElement",
             "true,true,true,true",
             "false,false",
             "http://example.test/base/p,false",
             "go,go,null",
             "true,true,false",
+            "true,true,true,true",
+            "clip.mp4,true",
             "300,150",
             "640,640",
             "true",
@@ -509,6 +515,161 @@ fn html_interface_table_on_boa() {
 #[test]
 fn html_interface_table_on_nova() {
     html_interface_table_works::<script_engine_nova::NovaEngine>();
+}
+
+/// Focused CustomElementRegistry follow-on slice: tighten custom-element name
+/// validation, keep pending whenDefined promises stable, type-check getName,
+/// and match the constructor/prototype property access order expected by the
+/// WPT registry surface.
+fn custom_elements_registry_contract_works<E: ScriptEngine>() {
+    use serval_static_dom::StaticDocument;
+    let mut rt = Runtime::<E>::new().expect("runtime");
+    rt.load_dom(&StaticDocument::parse("<html><body></body></html>"));
+
+    rt.eval(
+        "globalThis.registryLog = [];\
+         function thrown(fn){ try { fn(); return 'no-throw'; } catch(e){ return e.name; } }\
+         console.log(thrown(function(){ customElements.getName(undefined); }));\
+         console.log(thrown(function(){ customElements.define('a-Bc', function BadUpper(){}); }));\
+         console.log(thrown(function(){ customElements.define('annotation-xml', function Reserved(){}); }));\
+         console.log(String(customElements.whenDefined('pending-el') === customElements.whenDefined('pending-el')));\
+         customElements.whenDefined('badname').then(function(){ registryLog.push('invalid:resolved'); }, function(e){ registryLog.push('invalid:' + e.name); });\
+         var ctorCalls = [];\
+         function Ordered(){}\
+         Ordered.prototype.attributeChangedCallback = function(){};\
+         Ordered.prototype = new Proxy(Ordered.prototype, { get: function(target, name){ registryLog.push('proto:' + String(name)); return target[name]; } });\
+         var OrderedProxy = new Proxy(Ordered, { get: function(target, name){ ctorCalls.push(String(name)); return target[name]; } });\
+         customElements.define('ordered-element', OrderedProxy);\
+         console.log('ctor:' + ctorCalls.join('|'));\
+         var noObservedCalls = [];\
+         function NoObserved(){}\
+         var NoObservedProxy = new Proxy(NoObserved, { get: function(target, name){ noObservedCalls.push(String(name)); if (name === 'observedAttributes') return 1; return target[name]; } });\
+         customElements.define('no-observed-element', NoObservedProxy);\
+         console.log('no-observed:' + noObservedCalls.join('|'));\
+         customElements.define('dupe-element', function FirstDupe(){});\
+         var dupeCalls = [];\
+         var DupeProxy = new Proxy(function DupeProxy(){}, { get: function(target, name){ dupeCalls.push(String(name)); return target[name]; } });\
+         console.log(thrown(function(){ customElements.define('dupe-element', DupeProxy); }) + ',' + String(dupeCalls.length));\
+         var outerCalls = [];\
+         var Outer = new Proxy(function Outer(){}, { get: function(target, name){ outerCalls.push(String(name)); customElements.define('inner-running-element', function Inner(){}); return target[name]; } });\
+         console.log(thrown(function(){ customElements.define('outer-running-element', Outer); }));\
+         console.log('outer:' + outerCalls.join('|'));\
+         class BuiltIn extends HTMLButtonElement {}\
+         customElements.define('named-builtin', BuiltIn, { extends: 'button' });\
+         console.log(customElements.getName(BuiltIn));\
+         class ResolvedEl extends HTMLElement {}\
+         customElements.define('resolved-el', ResolvedEl);\
+         customElements.whenDefined('resolved-el').then(function(value){ registryLog.push('resolved:' + String(value === ResolvedEl)); });\
+         class LaterEl extends HTMLElement {}\
+         customElements.whenDefined('later-el').then(function(value){ registryLog.push('later:' + String(value === LaterEl)); });\
+         customElements.define('later-el', LaterEl);",
+    )
+    .expect("custom elements registry setup script");
+
+    rt.run_microtasks();
+    rt.eval("console.log('async:' + registryLog.join('|'));")
+        .expect("custom elements registry async script");
+
+    assert_eq!(
+        rt.host().borrow().console,
+        vec![
+            "TypeError",
+            "SyntaxError",
+            "SyntaxError",
+            "true",
+            "ctor:prototype|observedAttributes|disabledFeatures|formAssociated",
+            "no-observed:prototype|disabledFeatures|formAssociated",
+            "NotSupportedError,0",
+            "NotSupportedError",
+            "outer:prototype",
+            "named-builtin",
+            "async:proto:connectedCallback|proto:disconnectedCallback|proto:adoptedCallback|proto:attributeChangedCallback|invalid:SyntaxError|resolved:true|later:true",
+        ],
+    );
+}
+
+#[test]
+fn custom_elements_registry_contract_on_boa() {
+    custom_elements_registry_contract_works::<script_engine_boa::BoaEngine>();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn custom_elements_registry_contract_on_nova() {
+    custom_elements_registry_contract_works::<script_engine_nova::NovaEngine>();
+}
+
+/// HTML constructor follow-on slice: direct `new` / `Reflect.construct`
+/// construction now consults the custom-element definition table instead of
+/// only the upgrade-time construction stack, while still preserving the WPT
+/// sanity-check ordering around `NewTarget.prototype`.
+fn custom_elements_html_constructor_works<E: ScriptEngine>() {
+    use serval_static_dom::StaticDocument;
+    let mut rt = Runtime::<E>::new().expect("runtime");
+    rt.load_dom(&StaticDocument::parse("<html><body></body></html>"));
+
+    rt.eval(
+        "function thrown(fn){ try { fn(); return 'no-throw'; } catch(e){ return e.name; } }\
+         console.log(thrown(function(){ new HTMLElement(); }));\
+         class NotDefined extends HTMLElement {}\
+         console.log(thrown(function(){ new NotDefined(); }));\
+         class WrongAutonomous extends HTMLParagraphElement {}\
+         customElements.define('wrong-autonomous', WrongAutonomous);\
+         console.log(thrown(function(){ new WrongAutonomous(); }));\
+         class WrongBuiltIn extends HTMLButtonElement {}\
+         customElements.define('wrong-built-in', WrongBuiltIn, { extends: 'p' });\
+         console.log(thrown(function(){ new WrongBuiltIn(); }));\
+         class FancyEl extends HTMLElement {}\
+         customElements.define('fancy-el', FancyEl);\
+         var fancy = new FancyEl();\
+         console.log(String(fancy instanceof FancyEl) + ',' + String(fancy instanceof Element) + ',' + fancy.localName + ',' + fancy.nodeName);\
+         class SubFancy extends FancyEl {}\
+         customElements.define('sub-fancy', SubFancy);\
+         var sub = new SubFancy();\
+         console.log(String(sub instanceof FancyEl) + ',' + String(sub instanceof SubFancy) + ',' + sub.localName);\
+         class FancyButton extends HTMLButtonElement { constructor(){ super(); this.ready = 'yes'; } }\
+         customElements.define('fancy-button', FancyButton, { extends: 'button' });\
+         var button = new FancyButton();\
+         console.log(String(button instanceof FancyButton) + ',' + String(button instanceof HTMLButtonElement) + ',' + button.localName + ',' + button.getAttribute('is') + ',' + button.ready);\
+         class PlainCtor {}\
+         customElements.define('plain-ctor-el', PlainCtor);\
+         var plain = Reflect.construct(HTMLElement, [], PlainCtor);\
+         console.log(String(plain instanceof PlainCtor) + ',' + String(plain.localName) + ',' + String(plain.nodeName));\
+         class FailureCtor extends HTMLElement {}\
+         customElements.define('failure-counting-element', FailureCtor, { extends: 'button' });\
+         console.log(thrown(function(){ Reflect.construct(HTMLElement, [], FailureCtor); }));\
+         class FailureParagraph extends HTMLParagraphElement {}\
+         customElements.define('failure-counting-paragraph', FailureParagraph);\
+         console.log(thrown(function(){ Reflect.construct(HTMLParagraphElement, [], FailureParagraph); }));",
+    )
+    .expect("custom elements html constructor script");
+
+    assert_eq!(
+        rt.host().borrow().console,
+        vec![
+            "TypeError",
+            "TypeError",
+            "TypeError",
+            "TypeError",
+            "true,true,fancy-el,FANCY-EL",
+            "true,true,sub-fancy",
+            "true,true,button,fancy-button,yes",
+            "true,undefined,undefined",
+            "TypeError",
+            "TypeError",
+        ],
+    );
+}
+
+#[test]
+fn custom_elements_html_constructor_on_boa() {
+    custom_elements_html_constructor_works::<script_engine_boa::BoaEngine>();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn custom_elements_html_constructor_on_nova() {
+    custom_elements_html_constructor_works::<script_engine_nova::NovaEngine>();
 }
 
 /// First custom-elements I3 slice: use the HTML interface table for customized
@@ -602,6 +763,117 @@ fn custom_elements_customized_builtins_on_boa() {
 #[test]
 fn custom_elements_customized_builtins_on_nova() {
     custom_elements_customized_builtins_work::<script_engine_nova::NovaEngine>();
+}
+
+/// Minimal adoption slice over the HTML interface table bootstrap: track
+/// ownerDocument across detached documents, enqueue adoptedCallback on
+/// cross-document moves/adoptNode, and keep the callback ordering aligned with
+/// the existing connected/disconnected microtask queue.
+fn custom_elements_adoption_works<E: ScriptEngine>() {
+    use serval_static_dom::StaticDocument;
+    let mut rt = Runtime::<E>::new().expect("runtime");
+    rt.load_dom(&StaticDocument::parse("<html><body></body></html>"));
+
+    rt.eval(
+        "document.title = 'main';\
+         globalThis.adoptLog = [];\
+         function logAdopt(s){ adoptLog.push(s); }\
+         function XAdopt(){}\
+         XAdopt.prototype = Object.create(HTMLElement.prototype);\
+         XAdopt.prototype.constructor = XAdopt;\
+         XAdopt.prototype.connectedCallback = function(){ logAdopt('connected:' + this.ownerDocument.title); };\
+         XAdopt.prototype.disconnectedCallback = function(){ logAdopt('disconnected'); };\
+         XAdopt.prototype.adoptedCallback = function(oldDocument, newDocument){ logAdopt('adopted:' + oldDocument.title + '>' + newDocument.title); };\
+         customElements.define('x-adopt', XAdopt);\
+         globalThis.otherDoc = document.implementation.createHTMLDocument('other');\
+         globalThis.node = document.createElement('x-adopt');\
+         console.log(String(node.ownerDocument === document));\
+         document.body.appendChild(node);",
+    )
+    .expect("custom elements adoption setup script");
+
+    rt.run_microtasks();
+    rt.eval(
+        "console.log('step1:' + adoptLog.join('|'));\
+         adoptLog = [];\
+         otherDoc.body.appendChild(node);",
+    )
+    .expect("custom elements adoption move script");
+
+    rt.run_microtasks();
+    rt.eval(
+        "console.log(String(node.ownerDocument === otherDoc));\
+         console.log('step2:' + adoptLog.join('|'));\
+         adoptLog = [];\
+         globalThis.detached = otherDoc.createElement('x-adopt');\
+         console.log(String(detached.ownerDocument === otherDoc));\
+         document.adoptNode(detached);",
+    )
+    .expect("custom elements detached adoptNode script");
+
+    rt.run_microtasks();
+    rt.eval(
+        "console.log(String(detached.ownerDocument === document));\
+         console.log('step3:' + adoptLog.join('|'));\
+         adoptLog = [];\
+         globalThis.connected = otherDoc.createElement('x-adopt');\
+         otherDoc.body.appendChild(connected);",
+    )
+    .expect("custom elements connected setup script");
+
+    rt.run_microtasks();
+    rt.eval(
+        "adoptLog = [];\
+         document.adoptNode(connected);",
+    )
+    .expect("custom elements connected adoptNode script");
+
+    rt.run_microtasks();
+    rt.eval(
+        "console.log(String(connected.ownerDocument === document) + ',' + String(connected.isConnected));\
+         console.log('step4:' + adoptLog.join('|'));\
+         adoptLog = [];\
+         globalThis.parent = document.createElement('div');\
+         globalThis.descendant = document.createElement('x-adopt');\
+         parent.appendChild(descendant);\
+         otherDoc.body.appendChild(parent);",
+    )
+    .expect("custom elements ancestor move setup script");
+
+    rt.run_microtasks();
+    rt.eval(
+        "console.log(String(descendant.ownerDocument === otherDoc));\
+         console.log('step5:' + adoptLog.join('|'));",
+    )
+    .expect("custom elements ancestor move script");
+
+    assert_eq!(
+        rt.host().borrow().console,
+        vec![
+            "true",
+            "step1:connected:main",
+            "true",
+            "step2:disconnected|adopted:main>other|connected:other",
+            "true",
+            "true",
+            "step3:adopted:other>main",
+            "true,false",
+            "step4:disconnected|adopted:other>main",
+            "true",
+            "step5:adopted:main>other|connected:other",
+        ],
+    );
+}
+
+#[test]
+fn custom_elements_adoption_on_boa() {
+    custom_elements_adoption_works::<script_engine_boa::BoaEngine>();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn custom_elements_adoption_on_nova() {
+    custom_elements_adoption_works::<script_engine_nova::NovaEngine>();
 }
 
 /// Probe: does the backend's `Proxy` support the traps a live HTMLCollection

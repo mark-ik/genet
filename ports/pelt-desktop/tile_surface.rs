@@ -28,10 +28,10 @@ use pelt_core::tile::{
     TileTree,
 };
 use serval_layout::IncrementalLayout;
-use serval_render::{scene_from_session_dom, ContentReport};
+use serval_render::{ContentReport, scene_from_session_dom};
 use serval_scripted_dom::{NodeId, ScriptedDom};
 use xilem_serval::{
-    el, on_click, AnyView, DomHandle, PointerClick, ServalAppRunner, ServalCtx, ServalElement,
+    AnyView, DomHandle, PointerClick, ServalAppRunner, ServalCtx, ServalElement, el, on_click,
 };
 
 use crate::document::{ClickOutcome, LoadedDocument, LocalFetcher};
@@ -58,7 +58,10 @@ fn tile_view(state: &TileState) -> TileView {
 /// Encode a split path (`[0, 1]`) as a DOM-attr string (`"0.1"`); the empty path (the
 /// root split) is `""`.
 fn encode_path(path: &[usize]) -> String {
-    path.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(".")
+    path.iter()
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// Decode the `data-divider` attr back to a [`TilePath`].
@@ -109,7 +112,7 @@ fn render_node(node: &TileTree, path: &[usize]) -> TileView {
                     .attr("class", "tile-split")
                     .attr("style", format!("display: flex; flex-direction: {dir};")),
             )
-        }
+        },
         TileTree::Stack(stack) => render_stack(stack, path),
     }
 }
@@ -123,10 +126,15 @@ fn render_stack(stack: &TabStack, path: &[usize]) -> TileView {
         .enumerate()
         .map(|(i, tile)| {
             let id = tile.id;
-            let class = if i == stack.active { "tile-tab active" } else { "tile-tab" };
+            let class = if i == stack.active {
+                "tile-tab active"
+            } else {
+                "tile-tab"
+            };
             // The label activates the tab; the close × removes it. The × stops
             // propagation so its click does not also reach the tab's activate handler.
-            let label = el::<_, TileState, ()>("span", tile.title.clone()).attr("class", "tile-label");
+            let label =
+                el::<_, TileState, ()>("span", tile.title.clone()).attr("class", "tile-label");
             let close = on_click(
                 el::<_, TileState, ()>("span", "\u{00d7}").attr("class", "tile-close"),
                 move |s: &mut TileState, ev: PointerClick| {
@@ -140,8 +148,12 @@ fn render_stack(stack: &TabStack, path: &[usize]) -> TileView {
             let style = match tile.accent {
                 Some(a) => format!(
                     "background-color: rgb({}, {}, {}); color: rgb({}, {}, {});",
-                    a.background[0], a.background[1], a.background[2],
-                    a.foreground[0], a.foreground[1], a.foreground[2],
+                    a.background[0],
+                    a.background[1],
+                    a.background[2],
+                    a.foreground[0],
+                    a.foreground[1],
+                    a.foreground[2],
                 ),
                 None => String::new(),
             };
@@ -241,8 +253,14 @@ impl TileSurface {
     /// Build the surface for `tree`, loading a document for each document-lane tile.
     pub fn new(tree: TileTree) -> Self {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let runner =
-            ServalAppRunner::new(dom, tile_view as TileLogic, TileState { tree, pending: Vec::new() });
+        let runner = ServalAppRunner::new(
+            dom,
+            tile_view as TileLogic,
+            TileState {
+                tree,
+                pending: Vec::new(),
+            },
+        );
         let mut surface = Self {
             runner,
             docs: HashMap::new(),
@@ -288,7 +306,8 @@ impl TileSurface {
     /// then reconcile the live document set. Returns whether the tree changed.
     pub fn pump(&mut self) -> bool {
         let mut events = Vec::new();
-        self.runner.update(|s| events = std::mem::take(&mut s.pending));
+        self.runner
+            .update(|s| events = std::mem::take(&mut s.pending));
         if events.is_empty() {
             return false;
         }
@@ -326,7 +345,8 @@ impl TileSurface {
     /// pumps, an embedding host takes.
     pub fn take_events(&mut self) -> Vec<TileEvent> {
         let mut events = Vec::new();
-        self.runner.update(|s| events = std::mem::take(&mut s.pending));
+        self.runner
+            .update(|s| events = std::mem::take(&mut s.pending));
         events
     }
 
@@ -357,25 +377,37 @@ impl TileSurface {
         // External-texture tiles: surface each one's content rect + key so the host
         // composites its producer texture there. Read off the tree before the doc loop
         // borrows `self.docs` mutably (disjoint fields, separate borrows).
-        let external_tiles: Vec<(TileId, (f32, f32, f32, f32), pelt_core::tile::TextureKey)> = areas
-            .iter()
-            .filter_map(|(id, rect)| match &self.runner.state().tree.find(*id)?.content {
-                ContentSource::ExternalTexture(key) => Some((*id, *rect, *key)),
-                _ => None,
-            })
-            .collect();
+        let external_tiles: Vec<(TileId, (f32, f32, f32, f32), pelt_core::tile::TextureKey)> =
+            areas
+                .iter()
+                .filter_map(
+                    |(id, rect)| match &self.runner.state().tree.find(*id)?.content {
+                        ContentSource::ExternalTexture(key) => Some((*id, *rect, *key)),
+                        _ => None,
+                    },
+                )
+                .collect();
         // Render each active document tile into its content rect.
         let mut tiles = Vec::new();
         for (tile_id, rect) in areas {
             if let Some(doc) = self.docs.get_mut(&tile_id) {
                 let (w, h) = (rect.2.max(1.0) as u32, rect.3.max(1.0) as u32);
                 let scene = doc.frame(w, h);
-                tiles.push(TileLayer { tile: tile_id, rect, scene });
+                tiles.push(TileLayer {
+                    tile: tile_id,
+                    rect,
+                    scene,
+                });
             }
         }
         // The ghost is a host-input concern (it tracks a live drag): the surface renders
         // the frame body, the shell overlays the ghost when a drag is moving.
-        TileFrame { frame_scene, tiles, external_tiles, ghost: None }
+        TileFrame {
+            frame_scene,
+            tiles,
+            external_tiles,
+            ghost: None,
+        }
     }
 
     /// The shared frame DOM handle (for the host's hit-testing of tab bars / dividers).
@@ -403,7 +435,9 @@ impl TileSurface {
     /// Scroll the document in tile `id` by a device-px wheel delta; returns whether it
     /// moved (a no-op for a tile with no document, or at a scroll edge).
     pub fn scroll_tile(&mut self, id: TileId, dx: f32, dy: f32) -> bool {
-        self.docs.get_mut(&id).is_some_and(|doc| doc.scroll_by(dx, dy))
+        self.docs
+            .get_mut(&id)
+            .is_some_and(|doc| doc.scroll_by(dx, dy))
     }
 
     /// Scroll tile `id`'s document by a device-px wheel delta at tile-local point
@@ -412,7 +446,9 @@ impl TileSurface {
     /// anything moved. The position-aware form of [`scroll_tile`](Self::scroll_tile),
     /// for routing the wheel to the scroller under the cursor.
     pub fn scroll_tile_at(&mut self, id: TileId, x: f32, y: f32, dx: f32, dy: f32) -> bool {
-        self.docs.get_mut(&id).is_some_and(|doc| doc.scroll_at(x, y, dx, dy))
+        self.docs
+            .get_mut(&id)
+            .is_some_and(|doc| doc.scroll_at(x, y, dx, dy))
     }
 
     /// Handle a click at tile-local `(x, y)` in tile `id`'s document. An in-page link
@@ -476,10 +512,21 @@ impl TileSurface {
                 // pixels-per-fraction for the drag.
                 let split_node = dom.parent(node)?;
                 let split_rect = absolute_rect(&dom, &session, split_node)?;
-                let horizontal =
-                    matches!(self.runner.state().tree.axis_at(&path), Some(SplitAxis::Row));
-                let extent = if horizontal { split_rect.2 } else { split_rect.3 };
-                return Some(DividerHit { path, index, horizontal, extent });
+                let horizontal = matches!(
+                    self.runner.state().tree.axis_at(&path),
+                    Some(SplitAxis::Row)
+                );
+                let extent = if horizontal {
+                    split_rect.2
+                } else {
+                    split_rect.3
+                };
+                return Some(DividerHit {
+                    path,
+                    index,
+                    horizontal,
+                    extent,
+                });
             }
             node = dom.parent(node)?;
         }
@@ -506,7 +553,10 @@ impl TileSurface {
         }
         let tabid = LocalName::from("data-tabid");
         loop {
-            if let Some(id) = dom.attribute(node, &ns, &tabid).and_then(|s| s.parse::<u64>().ok()) {
+            if let Some(id) = dom
+                .attribute(node, &ns, &tabid)
+                .and_then(|s| s.parse::<u64>().ok())
+            {
                 return Some(TileId(id));
             }
             node = dom.parent(node)?;
@@ -570,7 +620,10 @@ impl TileSurface {
     /// Set the child fractions of the split at `path` (a divider drag), applied through
     /// the reducer.
     pub fn set_divider_fractions(&mut self, path: &TilePath, fractions: Vec<f32>) {
-        let event = TileEvent::DividerMoved { split: path.clone(), fractions };
+        let event = TileEvent::DividerMoved {
+            split: path.clone(),
+            fractions,
+        };
         self.runner.update(|s| {
             s.tree.apply(&event);
         });
@@ -638,7 +691,10 @@ fn content_area_rects(
     let mut out = Vec::new();
     let mut stack = vec![dom.document()];
     while let Some(node) = stack.pop() {
-        if let Some(id) = dom.attribute(node, &ns, &attr).and_then(|s| s.parse::<u64>().ok()) {
+        if let Some(id) = dom
+            .attribute(node, &ns, &attr)
+            .and_then(|s| s.parse::<u64>().ok())
+        {
             if let Some(rect) = absolute_rect(dom, session, node) {
                 out.push((TileId(id), rect));
             }
@@ -718,12 +774,22 @@ mod tests {
     fn external_texture_tile_surfaces_its_rect_and_key() {
         let mut surface = TileSurface::new(TileTree::single(external_tile(1, 99)));
         let frame = surface.frame(800, 600);
-        assert!(frame.tiles.is_empty(), "an external-texture tile has no document layer");
-        assert_eq!(frame.external_tiles.len(), 1, "its content rect + key are surfaced");
+        assert!(
+            frame.tiles.is_empty(),
+            "an external-texture tile has no document layer"
+        );
+        assert_eq!(
+            frame.external_tiles.len(),
+            1,
+            "its content rect + key are surfaced"
+        );
         let (tile, rect, key) = frame.external_tiles[0];
         assert_eq!(tile, TileId(1));
         assert_eq!(key, TextureKey(99), "carries the host's texture key");
-        assert!(rect.2 > 1.0 && rect.3 > 1.0, "non-degenerate content rect: {rect:?}");
+        assert!(
+            rect.2 > 1.0 && rect.3 > 1.0,
+            "non-degenerate content rect: {rect:?}"
+        );
     }
 
     /// A document tile and an external-texture tile side by side: the document gets a
@@ -741,7 +807,11 @@ mod tests {
         let frame = surface.frame(800, 600);
         assert_eq!(frame.tiles.len(), 1, "one document layer");
         assert_eq!(frame.tiles[0].tile, TileId(1));
-        assert_eq!(frame.external_tiles.len(), 1, "one external-texture rect+key");
+        assert_eq!(
+            frame.external_tiles.len(),
+            1,
+            "one external-texture rect+key"
+        );
         assert_eq!(frame.external_tiles[0].0, TileId(2));
         // The external tile sits to the right of the document tile.
         assert!(
@@ -756,12 +826,23 @@ mod tests {
     fn single_tile_renders_frame_and_content() {
         let mut surface = TileSurface::new(TileTree::single(doc_tile(1, "<h1>Hello</h1>")));
         let frame = surface.frame(800, 600);
-        assert!(!frame.frame_scene.ops.is_empty(), "the frame paints (the tab bar)");
+        assert!(
+            !frame.frame_scene.ops.is_empty(),
+            "the frame paints (the tab bar)"
+        );
         assert_eq!(frame.tiles.len(), 1, "one active tile composited");
         let layer = &frame.tiles[0];
-        assert!(layer.rect.2 > 1.0 && layer.rect.3 > 1.0, "content rect is non-degenerate: {:?}", layer.rect);
         assert!(
-            layer.scene.ops.iter().any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
+            layer.rect.2 > 1.0 && layer.rect.3 > 1.0,
+            "content rect is non-degenerate: {:?}",
+            layer.rect
+        );
+        assert!(
+            layer
+                .scene
+                .ops
+                .iter()
+                .any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
             "the tile's document paints text",
         );
     }
@@ -781,7 +862,10 @@ mod tests {
         let frame = surface.frame(800, 600);
         assert_eq!(frame.tiles.len(), 2, "two active tiles");
         let xs: Vec<f32> = frame.tiles.iter().map(|t| t.rect.0).collect();
-        assert!(xs.iter().any(|&x| x < 10.0) && xs.iter().any(|&x| x > 100.0), "tiles are side by side: {xs:?}");
+        assert!(
+            xs.iter().any(|&x| x < 10.0) && xs.iter().any(|&x| x > 100.0),
+            "tiles are side by side: {xs:?}"
+        );
     }
 
     /// Clicking a tab queues an Activated event, and `pump` applies it through the
@@ -811,17 +895,26 @@ mod tests {
     /// one surface serves (standalone pelt pumps; an embedding host like meerkat takes).
     #[test]
     fn take_events_reports_gestures_without_applying() {
-        let stack =
-            TileTree::stack(vec![doc_tile(1, "<p>one</p>"), doc_tile(2, "<p>two</p>")], 0);
+        let stack = TileTree::stack(
+            vec![doc_tile(1, "<p>one</p>"), doc_tile(2, "<p>two</p>")],
+            0,
+        );
         let mut surface = TileSurface::new(stack);
         let _ = surface.frame(800, 600);
         let tab = find_tab(&surface, "tab2").expect("tab2 exists");
         surface.dispatch_click(tab, PointerClick::at((0.0, 0.0)));
 
         let events = surface.take_events();
-        assert_eq!(events, vec![TileEvent::Activated(TileId(2))], "the gesture is reported");
+        assert_eq!(
+            events,
+            vec![TileEvent::Activated(TileId(2))],
+            "the gesture is reported"
+        );
         if let TileTree::Stack(s) = surface.tree() {
-            assert_eq!(s.active, 0, "take_events does NOT apply — the host owns the tree");
+            assert_eq!(
+                s.active, 0,
+                "take_events does NOT apply — the host owns the tree"
+            );
         } else {
             panic!("expected a stack");
         }
@@ -842,9 +935,16 @@ mod tests {
             ],
         ));
         let frame = surface.frame(800, 600);
-        assert_eq!(frame.tiles.len(), 2, "the surface renders the host's new tree");
+        assert_eq!(
+            frame.tiles.len(),
+            2,
+            "the surface renders the host's new tree"
+        );
         let ids: Vec<u64> = frame.tiles.iter().map(|t| t.tile.0).collect();
-        assert!(ids.contains(&2) && ids.contains(&3), "the host's new tiles, got {ids:?}");
+        assert!(
+            ids.contains(&2) && ids.contains(&3),
+            "the host's new tiles, got {ids:?}"
+        );
     }
 
     /// A divider sits at the boundary between split children; resizing it rewrites the
@@ -866,7 +966,11 @@ mod tests {
             .expect("a divider at the center boundary");
         assert_eq!(hit.index, 0);
         assert!(hit.horizontal, "a Row split drags horizontally");
-        assert!(hit.extent > 700.0, "extent is ~ the window width: {}", hit.extent);
+        assert!(
+            hit.extent > 700.0,
+            "extent is ~ the window width: {}",
+            hit.extent
+        );
         surface.set_divider_fractions(&hit.path, vec![0.7, 0.3]);
         let fracs = surface.fractions_at(&hit.path).expect("split fractions");
         assert!(
@@ -892,9 +996,18 @@ mod tests {
         let mut surface = TileSurface::new(tree);
         let _ = surface.frame(800, 600);
         // A tab sits in the left stack's tab bar.
-        assert!(surface.tab_at(20.0, 14.0, 800, 600).is_some(), "a tab is hit at the tab bar");
+        assert!(
+            surface.tab_at(20.0, 14.0, 800, 600).is_some(),
+            "a tab is hit at the tab bar"
+        );
         // Drag tile 1 onto tile 3's right edge.
-        surface.drag_tile(TileId(1), DropTarget::Edge { tile: TileId(3), edge: Edge::Right });
+        surface.drag_tile(
+            TileId(1),
+            DropTarget::Edge {
+                tile: TileId(3),
+                edge: Edge::Right,
+            },
+        );
         // Left stack lost tile 1 ([2]); the right became a split [3 | 1].
         let ids: Vec<u64> = surface.tree().tiles().iter().map(|t| t.id.0).collect();
         assert_eq!(ids, vec![2, 3, 1], "tile 1 moved beside tile 3: {ids:?}");
@@ -943,12 +1056,18 @@ mod tests {
         }));
         // Lay the tile's document out so the click hit-tests its link.
         let _ = surface.frame(800, 600);
-        assert!(surface.click_tile(TileId(1), 10.0, 20.0), "the link click navigated the tile");
+        assert!(
+            surface.click_tile(TileId(1), 10.0, 20.0),
+            "the link click navigated the tile"
+        );
         let tile = surface.tree().find(TileId(1)).expect("tile 1 survives");
         match &tile.content {
             ContentSource::Document(DocumentRef(url)) => {
-                assert!(url.ends_with("next.html"), "tile retargeted to next.html: {url}");
-            }
+                assert!(
+                    url.ends_with("next.html"),
+                    "tile retargeted to next.html: {url}"
+                );
+            },
             _ => panic!("expected a document tile"),
         }
         assert_eq!(tile.title, "next", "the tab retitled to the new page");

@@ -29,12 +29,12 @@ mod smolweb;
 pub use smolweb::SmolwebDocument;
 // Re-exported so a host that builds a `SmolwebDocument` can name its theme (and, for
 // the App theme, supply a palette) without depending on `smolweb-views` directly.
-#[cfg(feature = "smolweb")]
-pub use smolweb_views::{SmolwebPalette, SmolwebTheme};
-#[cfg(all(feature = "smolweb", feature = "viewer"))]
-pub use smolweb::run_smolweb_viewer;
 #[cfg(all(feature = "smolweb", feature = "viewer", feature = "chrome"))]
 pub use chrome_viewer::run_smolweb_browser;
+#[cfg(all(feature = "smolweb", feature = "viewer"))]
+pub use smolweb::run_smolweb_viewer;
+#[cfg(feature = "smolweb")]
+pub use smolweb_views::{SmolwebPalette, SmolwebTheme};
 
 #[cfg(feature = "viewer")]
 mod headless;
@@ -78,13 +78,23 @@ pub(crate) const STRUCTURAL_SHEET: &[&str] = &[
 mod smoke_macos;
 #[cfg(feature = "netrender")]
 mod smoke_netrender;
+#[cfg(feature = "linux-present")]
+mod smoke_wayland;
 #[cfg(feature = "netrender")]
 mod smoke_webgl;
 #[cfg(feature = "windows-present")]
 mod smoke_windows;
-#[cfg(feature = "linux-present")]
-mod smoke_wayland;
 
+#[cfg(feature = "tile-surface")]
+pub use document::{ClickOutcome, LoadedDocument, LocalFetcher};
+#[cfg(feature = "viewer")]
+pub use headless::{
+    DEFAULT_HEIGHT, DEFAULT_WIDTH, Outcome, ReftestResult, render_snapshot, run_reftests,
+};
+#[cfg(feature = "png-reftest")]
+pub use headless::{Fuzz, png_within_fuzz, render_png, render_png_scrolled};
+#[cfg(any(feature = "tile-surface", feature = "scripted"))]
+pub use href::resolve_href;
 pub use profile::{DesktopHostProfile, WindowingMode};
 #[cfg(feature = "macos-present")]
 pub use smoke_macos::{
@@ -93,29 +103,23 @@ pub use smoke_macos::{
 };
 #[cfg(feature = "netrender")]
 pub use smoke_netrender::{NetrenderSmokeOutcome, run_netrender_smoke};
+#[cfg(feature = "linux-present")]
+pub use smoke_wayland::{
+    WaylandPresentSmokeConfig, WaylandPresentSmokeOutcome, run_wayland_subsurface_present_smoke,
+};
 #[cfg(feature = "netrender")]
 pub use smoke_webgl::{WebGlWgpuSmokeOutcome, run_webgl_wgpu_smoke};
 #[cfg(feature = "windows-present")]
 pub use smoke_windows::{
     WindowsDxgiPresentSmokeConfig, WindowsDxgiPresentSmokeOutcome, run_windows_dxgi_present_smoke,
 };
-#[cfg(feature = "linux-present")]
-pub use smoke_wayland::{
-    run_wayland_subsurface_present_smoke, WaylandPresentSmokeConfig, WaylandPresentSmokeOutcome,
-};
 pub use static_viewer::{StaticViewerConfig, StaticViewerOutcome, run_static_viewer};
-#[cfg(feature = "tile-surface")]
-pub use document::{ClickOutcome, LoadedDocument, LocalFetcher};
-#[cfg(any(feature = "tile-surface", feature = "scripted"))]
-pub use href::resolve_href;
-#[cfg(feature = "viewer")]
-pub use headless::{
-    render_snapshot, run_reftests, Outcome, ReftestResult, DEFAULT_HEIGHT, DEFAULT_WIDTH,
-};
-#[cfg(feature = "png-reftest")]
-pub use headless::{render_png, render_png_scrolled, png_within_fuzz, Fuzz};
+// `ScriptResourceFetcher` is `serval_scripted::ResourceFetcher` (the external-script
+// byte seam `ScriptedDocument::from_body` takes), distinct from `pelt_core::
+// ResourceFetcher` (the shell-level fetch contract); re-exported so a host can impl
+// it without a direct `serval-scripted` dep.
 #[cfg(feature = "scripted")]
-pub use scripted::{ScriptedDocument, ScriptedEngine};
+pub use scripted::{ScriptResourceFetcher, ScriptedDocument, ScriptedEngine};
 // The host installs a cookie store on a scripted document (e.g. meerkat's session jar)
 // for `document.cookie`; re-export the seam so the host can name it without a direct
 // `script-runtime-api` dep. (Render ladder 2c.)
@@ -123,14 +127,14 @@ pub use scripted::{ScriptedDocument, ScriptedEngine};
 pub use script_runtime_api::CookieProvider;
 // The headless-scripted-DOM scrape (`ScriptedDocument::extract`) returns these; re-export
 // so the host names the post-JS extract without a direct `serval-extract` dep. (Phase 4.)
-#[cfg(feature = "scripted")]
-pub use serval_extract::{Heading, Link, Metadata, PageExtract};
-#[cfg(all(feature = "viewer", feature = "scripted"))]
-pub use scripted_viewer::run_scripted_viewer;
 #[cfg(feature = "chrome")]
 pub use chrome::{Chrome, ChromeIntent, ChromeState, StripSide};
 #[cfg(all(feature = "viewer", feature = "chrome"))]
 pub use chrome_viewer::run_chrome_viewer;
+#[cfg(all(feature = "viewer", feature = "scripted"))]
+pub use scripted_viewer::run_scripted_viewer;
+#[cfg(feature = "scripted")]
+pub use serval_extract::{Heading, Link, Metadata, PageExtract};
 #[cfg(feature = "tile-surface")]
 pub use tile_shell::TileShell;
 #[cfg(feature = "tile-surface")]

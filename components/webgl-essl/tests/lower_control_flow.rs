@@ -402,7 +402,10 @@ void main() {
 "#;
     let err = compile(src, ShaderStage::Fragment).unwrap_err();
     assert!(
-        matches!(err, webgl_essl::CompileError::Lower(_) | webgl_essl::CompileError::Check(_)),
+        matches!(
+            err,
+            webgl_essl::CompileError::Lower(_) | webgl_essl::CompileError::Check(_)
+        ),
         "got: {err:?}"
     );
 }
@@ -532,7 +535,10 @@ void main() {
 }
 "#;
     let err = compile(src, ShaderStage::Fragment).unwrap_err();
-    assert!(matches!(err, webgl_essl::CompileError::Check(_)), "got: {err:?}");
+    assert!(
+        matches!(err, webgl_essl::CompileError::Check(_)),
+        "got: {err:?}"
+    );
 }
 
 /// Audit #11: `while (true)` infinite loop with a writing body.

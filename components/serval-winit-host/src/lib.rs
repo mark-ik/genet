@@ -108,7 +108,10 @@ impl RenderCore {
             view_formats: vec![],
         };
         surface.configure(&core.device, &surface_config);
-        Ok(WindowSurface { surface, surface_config })
+        Ok(WindowSurface {
+            surface,
+            surface_config,
+        })
     }
 
     /// The netrender renderer — call `compose_external_texture` (and friends) on
@@ -157,7 +160,11 @@ impl RenderCore {
         let device = self.device();
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("serval-winit-host scene"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -172,7 +179,8 @@ impl RenderCore {
             format: Some(wgpu::TextureFormat::Rgba8Unorm),
             ..Default::default()
         });
-        self.renderer.render_vello_scaled(scene, &view, clear, scale);
+        self.renderer
+            .render_vello_scaled(scene, &view, clear, scale);
         (tex, view)
     }
 }
@@ -368,16 +376,23 @@ mod tests {
     fn wheel_line_delta_maps_to_document_scroll() {
         let (dx, down) = wheel_delta_from_winit(MouseScrollDelta::LineDelta(0.0, -1.0));
         assert_eq!(dx, 0.0);
-        assert!((down - WHEEL_LINE_PX).abs() < 0.01, "one line down = +{WHEEL_LINE_PX}px, got {down}");
+        assert!(
+            (down - WHEEL_LINE_PX).abs() < 0.01,
+            "one line down = +{WHEEL_LINE_PX}px, got {down}"
+        );
         let (_, up) = wheel_delta_from_winit(MouseScrollDelta::LineDelta(0.0, 1.0));
-        assert!((up + WHEEL_LINE_PX).abs() < 0.01, "one line up = -{WHEEL_LINE_PX}px, got {up}");
+        assert!(
+            (up + WHEEL_LINE_PX).abs() < 0.01,
+            "one line up = -{WHEEL_LINE_PX}px, got {up}"
+        );
     }
 
     /// Pixel deltas (trackpads) pass through unscaled, sign-flipped.
     #[test]
     fn wheel_pixel_delta_passes_through() {
-        let got =
-            wheel_delta_from_winit(MouseScrollDelta::PixelDelta(PhysicalPosition::new(3.0, -10.0)));
+        let got = wheel_delta_from_winit(MouseScrollDelta::PixelDelta(PhysicalPosition::new(
+            3.0, -10.0,
+        )));
         assert_eq!(got, (-3.0, 10.0));
     }
 }

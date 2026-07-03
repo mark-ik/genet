@@ -332,6 +332,207 @@ fn message_to_unknown_path_is_handled() {
     element.node = node;
 }
 
+// --- MARK: keyed sequences ----------------------------------------------------
+
+#[cfg(test)]
+mod keyed {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use layout_dom_api::LayoutDom;
+    use serval_scripted_dom::{NodeId, ScriptedDom};
+    use xilem_core::{MessageCtx, MessageResult, Mut, View, ViewMarker};
+
+    use crate::{Keyed, ServalAppRunner, ServalCtx, ServalElement, el};
+
+    #[derive(Default)]
+    struct KeyedStats {
+        builds: Vec<&'static str>,
+        rebuilds: Vec<&'static str>,
+        teardowns: Vec<&'static str>,
+    }
+
+    impl KeyedStats {
+        fn clear(&mut self) {
+            self.builds.clear();
+            self.rebuilds.clear();
+            self.teardowns.clear();
+        }
+    }
+
+    struct KeyedDemo {
+        ids: Vec<&'static str>,
+        stats: Rc<RefCell<KeyedStats>>,
+    }
+
+    #[derive(Clone)]
+    struct TaggedText {
+        id: &'static str,
+        stats: Rc<RefCell<KeyedStats>>,
+    }
+
+    impl ViewMarker for TaggedText {}
+
+    impl View<KeyedDemo, (), ServalCtx> for TaggedText {
+        type Element = ServalElement;
+        type ViewState = <&'static str as View<KeyedDemo, (), ServalCtx>>::ViewState;
+
+        fn build(
+            &self,
+            ctx: &mut ServalCtx,
+            app_state: &mut KeyedDemo,
+        ) -> (Self::Element, Self::ViewState) {
+            let _ = app_state;
+            self.stats.borrow_mut().builds.push(self.id);
+            View::<KeyedDemo, (), ServalCtx>::build(&self.id, ctx, app_state)
+        }
+
+        fn rebuild(
+            &self,
+            prev: &Self,
+            view_state: &mut Self::ViewState,
+            ctx: &mut ServalCtx,
+            element: Mut<'_, Self::Element>,
+            app_state: &mut KeyedDemo,
+        ) {
+            assert_eq!(
+                self.id, prev.id,
+                "keyed rebuild paired different logical children"
+            );
+            self.stats.borrow_mut().rebuilds.push(self.id);
+            View::<KeyedDemo, (), ServalCtx>::rebuild(
+                &self.id, &prev.id, view_state, ctx, element, app_state,
+            );
+        }
+
+        fn teardown(
+            &self,
+            view_state: &mut Self::ViewState,
+            ctx: &mut ServalCtx,
+            element: Mut<'_, Self::Element>,
+        ) {
+            self.stats.borrow_mut().teardowns.push(self.id);
+            View::<KeyedDemo, (), ServalCtx>::teardown(&self.id, view_state, ctx, element);
+        }
+
+        fn message(
+            &self,
+            view_state: &mut Self::ViewState,
+            message: &mut MessageCtx,
+            element: Mut<'_, Self::Element>,
+            app_state: &mut KeyedDemo,
+        ) -> MessageResult<()> {
+            View::<KeyedDemo, (), ServalCtx>::message(
+                &self.id, view_state, message, element, app_state,
+            )
+        }
+    }
+
+    fn keyed_logic(
+        demo: &KeyedDemo,
+    ) -> impl View<KeyedDemo, (), ServalCtx, Element = ServalElement> + use<> {
+        let children: Keyed<&'static str, TaggedText> = demo
+            .ids
+            .iter()
+            .copied()
+            .map(|id| {
+                (
+                    id,
+                    TaggedText {
+                        id,
+                        stats: demo.stats.clone(),
+                    },
+                )
+            })
+            .collect();
+        el::<_, KeyedDemo, ()>("div", children)
+    }
+
+    fn child_texts(dom: &ScriptedDom, node: NodeId) -> Vec<String> {
+        dom.dom_children(node)
+            .filter_map(|child| dom.text(child).map(str::to_string))
+            .collect()
+    }
+
+    #[test]
+    fn keyed_middle_insert_retains_later_child_state() {
+        let stats = Rc::new(RefCell::new(KeyedStats::default()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            Rc::new(RefCell::new(ScriptedDom::new())),
+            keyed_logic,
+            KeyedDemo {
+                ids: vec!["a", "c"],
+                stats: stats.clone(),
+            },
+        );
+        stats.borrow_mut().clear();
+
+        runner.update(|demo| demo.ids = vec!["a", "b", "c"]);
+
+        let dom = runner.dom();
+        let dom = dom.borrow();
+        assert_eq!(child_texts(&dom, runner.root()), vec!["a", "b", "c"]);
+        drop(dom);
+
+        let stats = stats.borrow();
+        assert_eq!(stats.builds, vec!["b"]);
+        assert_eq!(stats.rebuilds, vec!["a", "c"]);
+        assert!(stats.teardowns.is_empty());
+    }
+
+    #[test]
+    fn keyed_middle_delete_retains_later_child_state() {
+        let stats = Rc::new(RefCell::new(KeyedStats::default()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            Rc::new(RefCell::new(ScriptedDom::new())),
+            keyed_logic,
+            KeyedDemo {
+                ids: vec!["a", "b", "c"],
+                stats: stats.clone(),
+            },
+        );
+        stats.borrow_mut().clear();
+
+        runner.update(|demo| demo.ids = vec!["a", "c"]);
+
+        let dom = runner.dom();
+        let dom = dom.borrow();
+        assert_eq!(child_texts(&dom, runner.root()), vec!["a", "c"]);
+        drop(dom);
+
+        let stats = stats.borrow();
+        assert!(stats.builds.is_empty());
+        assert_eq!(stats.rebuilds, vec!["a", "c"]);
+        assert_eq!(stats.teardowns, vec!["b"]);
+    }
+
+    #[test]
+    fn keyed_reorder_falls_back_to_teardown_and_build() {
+        let stats = Rc::new(RefCell::new(KeyedStats::default()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            Rc::new(RefCell::new(ScriptedDom::new())),
+            keyed_logic,
+            KeyedDemo {
+                ids: vec!["a", "b"],
+                stats: stats.clone(),
+            },
+        );
+        stats.borrow_mut().clear();
+
+        runner.update(|demo| demo.ids = vec!["b", "a"]);
+
+        let dom = runner.dom();
+        let dom = dom.borrow();
+        assert_eq!(child_texts(&dom, runner.root()), vec!["b", "a"]);
+        drop(dom);
+
+        let stats = stats.borrow();
+        assert_eq!(stats.builds, vec!["a"]);
+        assert_eq!(stats.rebuilds, vec!["b"]);
+        assert_eq!(stats.teardowns, vec!["a"]);
+    }
+}
+
 // --- MARK: Stage 3a — component composition (backend-only) --------------------
 //
 // These prove the `xilem_core` composition vocabulary works over `ServalCtx`

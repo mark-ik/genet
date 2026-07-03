@@ -15,9 +15,9 @@
 //!   - struct equality (`s == t`).
 //!   - struct const initializers.
 
+use webgl_essl::CompileError;
 use webgl_essl::compile;
 use webgl_essl::validate::ShaderStage;
-use webgl_essl::CompileError;
 
 // ---------- declaration + field-by-field initialization -------------
 

@@ -30,9 +30,9 @@ pub fn resolve_href(base: &str, href: &str) -> String {
 /// relative path (`page.html`, `sub/page.html`) has neither.
 fn has_scheme(url: &str) -> bool {
     match url.find(':') {
-        Some(i) if i > 0 => {
-            url[..i].chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-        }
+        Some(i) if i > 0 => url[..i]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')),
         _ => false,
     }
 }
@@ -47,9 +47,18 @@ mod tests {
     fn resolve_href_joins_relative_and_passes_absolute() {
         assert_eq!(resolve_href("docs/a.html", "b.html"), "docs/b.html");
         assert_eq!(resolve_href("a.html", "sub/c.html"), "sub/c.html");
-        assert_eq!(resolve_href("file:///x/a.html", "b.html"), "file:///x/b.html");
-        assert_eq!(resolve_href("a.html", "https://example.org/p"), "https://example.org/p");
-        assert_eq!(resolve_href("a.html", "data:text/html,<p>x</p>"), "data:text/html,<p>x</p>");
+        assert_eq!(
+            resolve_href("file:///x/a.html", "b.html"),
+            "file:///x/b.html"
+        );
+        assert_eq!(
+            resolve_href("a.html", "https://example.org/p"),
+            "https://example.org/p"
+        );
+        assert_eq!(
+            resolve_href("a.html", "data:text/html,<p>x</p>"),
+            "data:text/html,<p>x</p>"
+        );
         assert_eq!(resolve_href("docs/a.html", "/root.html"), "/root.html");
     }
 }

@@ -30,7 +30,9 @@ pub fn run_chrome_viewer(
             created_window: false,
             redraws: 0,
         }),
-        WindowingMode::Headed => windowed::run::<crate::document::LoadedDocument>(config, side, thickness),
+        WindowingMode::Headed => {
+            windowed::run::<crate::document::LoadedDocument>(config, side, thickness)
+        },
     }
 }
 
@@ -49,9 +51,7 @@ pub fn run_smolweb_browser(
             created_window: false,
             redraws: 0,
         }),
-        WindowingMode::Headed => {
-            windowed::run::<crate::SmolwebDocument>(config, side, thickness)
-        }
+        WindowingMode::Headed => windowed::run::<crate::SmolwebDocument>(config, side, thickness),
     }
 }
 
@@ -62,7 +62,7 @@ pub(crate) mod windowed {
     use netrender::{ColorLoad, NetrenderOptions};
     use serval_layout::ScrollKey;
     use serval_winit_host::{
-        key_event_from_winit, modifiers_from_winit, wheel_delta_from_winit, SurfaceHost,
+        SurfaceHost, key_event_from_winit, modifiers_from_winit, wheel_delta_from_winit,
     };
     use winit::application::ApplicationHandler;
     use winit::dpi::PhysicalSize;
@@ -202,9 +202,15 @@ pub(crate) mod windowed {
                 .min(if side.is_horizontal() { h } else { w });
             match side {
                 StripSide::Top => ((0, 0, w, t), (0, t, w, h.saturating_sub(t))),
-                StripSide::Bottom => ((0, h.saturating_sub(t), w, t), (0, 0, w, h.saturating_sub(t))),
+                StripSide::Bottom => (
+                    (0, h.saturating_sub(t), w, t),
+                    (0, 0, w, h.saturating_sub(t)),
+                ),
                 StripSide::Left => ((0, 0, t, h), (t, 0, w.saturating_sub(t), h)),
-                StripSide::Right => ((w.saturating_sub(t), 0, t, h), (0, 0, w.saturating_sub(t), h)),
+                StripSide::Right => (
+                    (w.saturating_sub(t), 0, t, h),
+                    (0, 0, w.saturating_sub(t), h),
+                ),
             }
         }
 
@@ -227,7 +233,7 @@ pub(crate) mod windowed {
                     Ok(doc) => {
                         self.content = doc;
                         self.loaded_url = url;
-                    }
+                    },
                     Err(error) => eprintln!("[pelt] could not navigate to {url}: {error}"),
                 }
             }
@@ -235,13 +241,17 @@ pub(crate) mod windowed {
         }
 
         fn render(&mut self, event_loop: &ActiveEventLoop) {
-            let Some(host) = self.host.as_ref() else { return };
+            let Some(host) = self.host.as_ref() else {
+                return;
+            };
             let (win_w, win_h) = (self.width.max(1), self.height.max(1));
             let (strip, content_rect) = self.regions();
 
             // Each root renders its own scene at its layer size.
             let chrome_scene = self.chrome.frame(strip.2.max(1), strip.3.max(1));
-            let content_scene = self.content.frame(content_rect.2.max(1), content_rect.3.max(1));
+            let content_scene = self
+                .content
+                .frame(content_rect.2.max(1), content_rect.3.max(1));
 
             // Rasterize both layers (kept alive until present), then composite each into
             // its window rect over the backbuffer.
@@ -249,7 +259,12 @@ pub(crate) mod windowed {
                 &chrome_scene,
                 strip.2.max(1),
                 strip.3.max(1),
-                ColorLoad::Clear(wgpu::Color { r: 0.17, g: 0.17, b: 0.2, a: 1.0 }),
+                ColorLoad::Clear(wgpu::Color {
+                    r: 0.17,
+                    g: 0.17,
+                    b: 0.2,
+                    a: 1.0,
+                }),
             );
             let (_vt, content_view) = host.rasterize(
                 &content_scene,
@@ -258,7 +273,9 @@ pub(crate) mod windowed {
                 ColorLoad::Clear(wgpu::Color::WHITE),
             );
             let Some(frame) = host.acquire() else { return };
-            let target = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let target = frame
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
             let renderer = host.renderer();
             renderer.compose_external_texture(
                 &chrome_view,
@@ -325,7 +342,7 @@ pub(crate) mod windowed {
                 } else {
                     ScrollKey::PageDown
                 }
-            }
+            },
             _ => return None,
         })
     }
@@ -357,7 +374,7 @@ pub(crate) mod windowed {
                     eprintln!("[pelt-browser] could not create window: {err}");
                     event_loop.exit();
                     return;
-                }
+                },
             };
             let size = window.inner_size();
             self.width = size.width.max(1);
@@ -373,7 +390,7 @@ pub(crate) mod windowed {
                     eprintln!("[pelt-browser] {err}");
                     event_loop.exit();
                     return;
-                }
+                },
             }
             window.request_redraw();
             self.window = Some(window);
@@ -397,21 +414,25 @@ pub(crate) mod windowed {
                         host.resize(self.width, self.height);
                     }
                     self.request_redraw();
-                }
+                },
                 WindowEvent::CursorMoved { position, .. } => {
                     self.cursor = (position.x as f32, position.y as f32);
-                }
+                },
                 WindowEvent::ModifiersChanged(mods) => {
                     self.mods = modifiers_from_winit(mods.state());
-                }
+                },
                 WindowEvent::MouseInput { state, button, .. } => {
                     if state != ElementState::Pressed || button != MouseButton::Left {
                         return;
                     }
                     let (strip, content_rect) = self.regions();
                     if in_rect(self.cursor, strip) {
-                        let local = (self.cursor.0 - strip.0 as f32, self.cursor.1 - strip.1 as f32);
-                        if let Some(node) = self.chrome.hit_test(local.0, local.1, strip.2, strip.3) {
+                        let local = (
+                            self.cursor.0 - strip.0 as f32,
+                            self.cursor.1 - strip.1 as f32,
+                        );
+                        if let Some(node) = self.chrome.hit_test(local.0, local.1, strip.2, strip.3)
+                        {
                             self.chrome.dispatch_click(node, PointerClick::at(local));
                             self.apply_chrome_intents();
                         }
@@ -435,11 +456,11 @@ pub(crate) mod windowed {
                                 let url = resolve_href(&self.loaded_url, &href);
                                 self.chrome.navigate_to(url);
                                 self.apply_chrome_intents();
-                            }
-                            ContentClick::None => {}
+                            },
+                            ContentClick::None => {},
                         }
                     }
-                }
+                },
                 WindowEvent::MouseWheel { delta, .. } => {
                     let (_, content_rect) = self.regions();
                     if in_rect(self.cursor, content_rect) {
@@ -456,7 +477,7 @@ pub(crate) mod windowed {
                             self.request_redraw();
                         }
                     }
-                }
+                },
                 WindowEvent::KeyboardInput { event, .. } => {
                     if event.state != ElementState::Pressed {
                         return;
@@ -485,9 +506,9 @@ pub(crate) mod windowed {
                             self.request_redraw();
                         }
                     }
-                }
+                },
                 WindowEvent::RedrawRequested => self.render(event_loop),
-                _ => {}
+                _ => {},
             }
         }
     }

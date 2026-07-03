@@ -67,7 +67,12 @@ impl PointerEvent {
     /// A pointer event with a fresh [`Propagation`] cell. The host builds one per
     /// winit pointer event from the captured element's laid-out rect.
     pub fn new(phase: PointerPhase, local: (f32, f32), size: (f32, f32)) -> Self {
-        Self { phase, local, size, prop: Propagation::new() }
+        Self {
+            phase,
+            local,
+            size,
+            prop: Propagation::new(),
+        }
     }
 }
 
@@ -83,10 +88,7 @@ pub struct OnPointer<V, State, Action, F> {
 /// [`PointerEvent`] (Down/Move/Up) the runner routes to this element during a
 /// drag it captured. It mutates app state and may return an
 /// [`OptionalAction`]; the runner rebuilds afterward.
-pub fn on_pointer<V, State, Action, OA, F>(
-    child: V,
-    handler: F,
-) -> OnPointer<V, State, Action, F>
+pub fn on_pointer<V, State, Action, OA, F>(child: V, handler: F) -> OnPointer<V, State, Action, F>
 where
     State: 'static,
     Action: 'static,
@@ -94,7 +96,11 @@ where
     OA: OptionalAction<Action>,
     F: Fn(&mut State, PointerEvent) -> OA + 'static,
 {
-    OnPointer { child, handler, phantom: PhantomData }
+    OnPointer {
+        child,
+        handler,
+        phantom: PhantomData,
+    }
 }
 
 /// Retained state for an [`OnPointer`].
@@ -116,7 +122,11 @@ where
     type ViewState = OnPointerState<V::ViewState>;
     type Element = ServalElement;
 
-    fn build(&self, ctx: &mut ServalCtx, app_state: &mut State) -> (Self::Element, Self::ViewState) {
+    fn build(
+        &self,
+        ctx: &mut ServalCtx,
+        app_state: &mut State,
+    ) -> (Self::Element, Self::ViewState) {
         ctx.with_id(ON_POINTER_ID, |ctx| {
             let (element, child_state) = self.child.build(ctx, app_state);
             let node = element.node;
@@ -161,7 +171,8 @@ where
     ) {
         ctx.with_id(ON_POINTER_ID, |ctx| {
             ctx.unregister_pointer(view_state.node);
-            self.child.teardown(&mut view_state.child_state, ctx, element);
+            self.child
+                .teardown(&mut view_state.child_state, ctx, element);
         });
     }
 

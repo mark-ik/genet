@@ -107,8 +107,13 @@ mod tests {
             .create();
 
         let url = format!("{}/page.html", server.url());
-        let bytes = LocalFetcher.fetch(&url).expect("the http(s) document fetches over netfetcher");
-        assert_eq!(bytes, b"<h1>From the network</h1>", "the fetched bytes are the served body");
+        let bytes = LocalFetcher
+            .fetch(&url)
+            .expect("the http(s) document fetches over netfetcher");
+        assert_eq!(
+            bytes, b"<h1>From the network</h1>",
+            "the fetched bytes are the served body"
+        );
         mock.assert();
     }
 
@@ -117,10 +122,17 @@ mod tests {
     #[test]
     fn http_not_found_is_none() {
         let mut server = mockito::Server::new();
-        let mock = server.mock("GET", "/missing").with_status(404).with_body("nope").create();
+        let mock = server
+            .mock("GET", "/missing")
+            .with_status(404)
+            .with_body("nope")
+            .create();
 
         let url = format!("{}/missing", server.url());
-        assert!(LocalFetcher.fetch(&url).is_none(), "a 404 is a failed load, not a document");
+        assert!(
+            LocalFetcher.fetch(&url).is_none(),
+            "a 404 is a failed load, not a document"
+        );
         mock.assert();
     }
 }

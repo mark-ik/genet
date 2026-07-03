@@ -4,7 +4,9 @@
 
 //! Pelt adapter for the host-neutral scripted document owner.
 
-pub use serval_scripted::{ScriptedDocument, ScriptedEngine};
+pub use serval_scripted::{
+    ResourceFetcher as ScriptResourceFetcher, ScriptedDocument, ScriptedEngine,
+};
 
 #[cfg(feature = "tile-surface")]
 impl serval_scripted::ResourceFetcher for crate::document::LocalFetcher {

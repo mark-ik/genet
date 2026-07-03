@@ -20,12 +20,12 @@ use errand::parse::feed::{Feed, FeedEntry};
 use errand::parse::gemtext::GemLine;
 use errand::parse::gopher::{GopherItem, GopherKind};
 use xilem_serval::{
-    a, clickable, div, el, h1, h2, h3, li, p, span, text, ul, AnyView, ElementView, PointerClick,
-    ServalCtx, ServalElement,
+    AnyView, ElementView, PointerClick, ServalCtx, ServalElement, a, clickable, div, el, h1, h2,
+    h3, li, p, span, text, ul,
 };
 
 mod theme;
-pub use theme::{stylesheet, SmolwebPalette, SmolwebTheme};
+pub use theme::{SmolwebPalette, SmolwebTheme, stylesheet};
 
 /// A built smolweb view: a boxed, type-erased element view. Boxing erases the
 /// concrete view type (so a document's heterogeneous line elements share one child
@@ -33,7 +33,9 @@ pub use theme::{stylesheet, SmolwebPalette, SmolwebTheme};
 /// `&[…]` lifetime — the `chrome.rs` / `tile_surface.rs` `*View` pattern.
 pub type SmolwebView<State, Action> = Box<dyn AnyView<State, Action, ServalCtx, ServalElement>>;
 
-fn boxed<State, Action>(view: impl ElementView<State, Action> + 'static) -> SmolwebView<State, Action>
+fn boxed<State, Action>(
+    view: impl ElementView<State, Action> + 'static,
+) -> SmolwebView<State, Action>
 where
     State: 'static,
     Action: 'static,
@@ -49,7 +51,10 @@ where
 /// lines into one blockquote. Links are keyboard-reachable [`clickable`]s that
 /// carry `href` (so pelt's link resolution still works) and emit `on_navigate(url)`
 /// as the action the host routes.
-pub fn gemtext_view<State, Action, N>(lines: &[GemLine], on_navigate: N) -> SmolwebView<State, Action>
+pub fn gemtext_view<State, Action, N>(
+    lines: &[GemLine],
+    on_navigate: N,
+) -> SmolwebView<State, Action>
 where
     State: 'static,
     // The host's action type opts into bubbling via `xilem_serval::Action`; a link
@@ -101,27 +106,28 @@ where
                     _ => h3(text(t.clone())),
                 };
                 self.children.push(boxed(heading.attr("class", class)));
-            }
+            },
             GemLine::Text(t) => {
                 self.flush_list();
                 self.flush_quote();
                 self.para.push(t.clone());
-            }
+            },
             GemLine::Link { url, label } => {
                 self.flush_all();
                 let link = self.link(url, label);
                 self.children.push(link);
-            }
+            },
             GemLine::Item(t) => {
                 self.flush_para();
                 self.flush_quote();
-                self.list.push(boxed(li(text(t.clone())).attr("class", "gemtext-item")));
-            }
+                self.list
+                    .push(boxed(li(text(t.clone())).attr("class", "gemtext-item")));
+            },
             GemLine::Quote(t) => {
                 self.flush_para();
                 self.flush_list();
                 self.quote.push(t.clone());
-            }
+            },
             GemLine::Pre { alt, text: t } => {
                 self.flush_all();
                 let mut pre = el("pre", text(t.clone())).attr("class", "gemtext-pre");
@@ -129,7 +135,7 @@ where
                     pre = pre.attr("data-alt", alt.clone());
                 }
                 self.children.push(boxed(pre));
-            }
+            },
             GemLine::Blank => self.flush_para(),
         }
     }
@@ -143,7 +149,9 @@ where
         let anchor = a(text(display.to_string()))
             .attr("href", url)
             .attr("class", "gemtext-link");
-        let link = clickable(anchor, move |_state: &mut State, _click: PointerClick| navigate(&target));
+        let link = clickable(anchor, move |_state: &mut State, _click: PointerClick| {
+            navigate(&target)
+        });
         boxed(p(link).attr("class", "gemtext-linkline"))
     }
 
@@ -153,7 +161,8 @@ where
         }
         // Consecutive text lines flow into one paragraph (gemtext clients re-wrap).
         let joined = std::mem::take(&mut self.para).join(" ");
-        self.children.push(boxed(p(text(joined)).attr("class", "gemtext-text")));
+        self.children
+            .push(boxed(p(text(joined)).attr("class", "gemtext-text")));
     }
 
     fn flush_quote(&mut self) {
@@ -161,8 +170,9 @@ where
             return;
         }
         let joined = std::mem::take(&mut self.quote).join(" ");
-        self.children
-            .push(boxed(el("blockquote", text(joined)).attr("class", "gemtext-quote")));
+        self.children.push(boxed(
+            el("blockquote", text(joined)).attr("class", "gemtext-quote"),
+        ));
     }
 
     fn flush_list(&mut self) {
@@ -170,7 +180,8 @@ where
             return;
         }
         let items = std::mem::take(&mut self.list);
-        self.children.push(boxed(ul(items).attr("class", "gemtext-list")));
+        self.children
+            .push(boxed(ul(items).attr("class", "gemtext-list")));
     }
 
     fn flush_all(&mut self) {
@@ -192,7 +203,10 @@ where
 /// type-marked, focusable link (`p.gopher-itemline > span.gopher-type + a[href]`)
 /// emitting `on_navigate(url)`. The item type drives the marker and a `data-kind`
 /// attribute for theming.
-pub fn gopher_view<State, Action, N>(items: &[GopherItem], on_navigate: N) -> SmolwebView<State, Action>
+pub fn gopher_view<State, Action, N>(
+    items: &[GopherItem],
+    on_navigate: N,
+) -> SmolwebView<State, Action>
 where
     State: 'static,
     Action: xilem_serval::Action + 'static,
@@ -207,14 +221,14 @@ where
                 flush_info(&mut info, &mut children);
                 let line = format!("[error] {}", item.display);
                 children.push(boxed(p(text(line)).attr("class", "gopher-error")));
-            }
+            },
             _ => {
                 flush_info(&mut info, &mut children);
                 // Every non-info/error item carries a URL.
                 if let Some(url) = &item.url {
                     children.push(gopher_link(&item.kind, &item.display, url, &on_navigate));
                 }
-            }
+            },
         }
     }
     flush_info(&mut info, &mut children);
@@ -254,7 +268,9 @@ where
     let anchor = a(text(display.to_string()))
         .attr("href", url)
         .attr("class", "gopher-link");
-    let link = clickable(anchor, move |_state: &mut State, _click: PointerClick| navigate(&target));
+    let link = clickable(anchor, move |_state: &mut State, _click: PointerClick| {
+        navigate(&target)
+    });
     boxed(
         p((marker_span, link))
             .attr("class", "gopher-itemline")
@@ -280,7 +296,9 @@ where
         children.push(boxed(h1(text(title.clone())).attr("class", "feed-title")));
     }
     if let Some(subtitle) = &feed.subtitle {
-        children.push(boxed(p(text(subtitle.clone())).attr("class", "feed-subtitle")));
+        children.push(boxed(
+            p(text(subtitle.clone())).attr("class", "feed-subtitle"),
+        ));
     }
     for entry in &feed.entries {
         children.push(feed_entry_card(entry, &on_navigate));
@@ -290,7 +308,10 @@ where
 
 /// One feed entry as an `article`: a (linked) title, an optional date, an optional
 /// summary.
-fn feed_entry_card<State, Action, N>(entry: &FeedEntry, on_navigate: &N) -> SmolwebView<State, Action>
+fn feed_entry_card<State, Action, N>(
+    entry: &FeedEntry,
+    on_navigate: &N,
+) -> SmolwebView<State, Action>
 where
     State: 'static,
     Action: xilem_serval::Action + 'static,
@@ -302,17 +323,25 @@ where
         Some(url) => {
             let navigate = on_navigate.clone();
             let target = url.to_string();
-            let anchor = a(text(title)).attr("href", url).attr("class", "feed-entry-link");
-            let link = clickable(anchor, move |_state: &mut State, _click: PointerClick| navigate(&target));
+            let anchor = a(text(title))
+                .attr("href", url)
+                .attr("class", "feed-entry-link");
+            let link = clickable(anchor, move |_state: &mut State, _click: PointerClick| {
+                navigate(&target)
+            });
             parts.push(boxed(h2(link).attr("class", "feed-entry-title")));
-        }
+        },
         None => parts.push(boxed(h2(text(title)).attr("class", "feed-entry-title"))),
     }
     if let Some(date) = &entry.date {
-        parts.push(boxed(span(text(date.clone())).attr("class", "feed-entry-date")));
+        parts.push(boxed(
+            span(text(date.clone())).attr("class", "feed-entry-date"),
+        ));
     }
     if let Some(summary) = &entry.summary {
-        parts.push(boxed(p(text(summary.clone())).attr("class", "feed-entry-summary")));
+        parts.push(boxed(
+            p(text(summary.clone())).attr("class", "feed-entry-summary"),
+        ));
     }
     boxed(el("article", parts).attr("class", "feed-entry"))
 }
@@ -353,7 +382,8 @@ mod tests {
     /// children are a heading, a paragraph, a link line, and a grouped list.
     #[test]
     fn gemtext_builds_native_element_tree() {
-        let lines = parse_gemtext("# Title\n\nHello world.\n=> gemini://x.test/ A link\n* one\n* two\n");
+        let lines =
+            parse_gemtext("# Title\n\nHello world.\n=> gemini://x.test/ A link\n* one\n* two\n");
         let dom = Rc::new(RefCell::new(ScriptedDom::new()));
         let runner = ServalAppRunner::<(), _, _, Nav>::new(
             dom.clone(),
@@ -371,11 +401,19 @@ mod tests {
             .iter()
             .map(|n| d.element_name(*n).unwrap().local.as_ref())
             .collect();
-        assert_eq!(names, vec!["h1", "p", "p", "ul"], "heading, paragraph, link line, list");
+        assert_eq!(
+            names,
+            vec!["h1", "p", "p", "ul"],
+            "heading, paragraph, link line, list"
+        );
 
         // The list groups both items.
         let ul = *kids.last().unwrap();
-        assert_eq!(d.dom_children(ul).count(), 2, "two list items grouped into one ul");
+        assert_eq!(
+            d.dom_children(ul).count(),
+            2,
+            "two list items grouped into one ul"
+        );
     }
 
     /// A gopher menu builds: an info run folds to one `pre`, a resource is a
@@ -401,11 +439,18 @@ mod tests {
             .iter()
             .map(|n| d.element_name(*n).unwrap().local.as_ref())
             .collect();
-        assert_eq!(names, vec!["pre", "p"], "two info lines fold to one pre, then the item line");
+        assert_eq!(
+            names,
+            vec!["pre", "p"],
+            "two info lines fold to one pre, then the item line"
+        );
 
         // The item line: span marker + anchor with the synthesised gopher URL.
         let itemline = kids[1];
-        let anchor = d.dom_children(itemline).nth(1).expect("the anchor after the marker span");
+        let anchor = d
+            .dom_children(itemline)
+            .nth(1)
+            .expect("the anchor after the marker span");
         assert_eq!(d.element_name(anchor).unwrap().local.as_ref(), "a");
         assert_eq!(
             d.attribute(anchor, &no_ns, &LocalName::from("href")),
@@ -431,7 +476,10 @@ mod tests {
                     date: Some("2026-01-01".into()),
                     summary: Some("A summary.".into()),
                 },
-                FeedEntry { title: Some("Second".into()), ..FeedEntry::default() },
+                FeedEntry {
+                    title: Some("Second".into()),
+                    ..FeedEntry::default()
+                },
             ],
             ..Feed::default()
         };
@@ -449,7 +497,11 @@ mod tests {
             .dom_children(root)
             .map(|n| d.element_name(n).unwrap().local.as_ref())
             .collect();
-        assert_eq!(names, vec!["h1", "article", "article"], "feed title then two entries");
+        assert_eq!(
+            names,
+            vec!["h1", "article", "article"],
+            "feed title then two entries"
+        );
 
         // First entry: an h2 title whose anchor links to the entry URL.
         let first = d.dom_children(root).nth(1).unwrap();

@@ -79,7 +79,7 @@ pub fn parse_meta(src: &str) -> Test262Meta {
                     "noStrict" => meta.flags.no_strict = true,
                     "module" => meta.flags.module = true,
                     "async" => meta.flags.r#async = true,
-                    _ => {}
+                    _ => {},
                 }
             }
         } else if trimmed.starts_with("negative:") {
@@ -243,7 +243,11 @@ mod tests {
         assert_eq!(m.includes, vec!["resizableArrayBufferUtils.js"]);
         assert_eq!(m.features, vec!["resizable-arraybuffer"]);
         assert!(m.negative.is_none());
-        assert_eq!(strict_variants(&m.flags), vec![false, true], "no flag -> both modes");
+        assert_eq!(
+            strict_variants(&m.flags),
+            vec![false, true],
+            "no flag -> both modes"
+        );
     }
 
     #[test]
@@ -252,7 +256,10 @@ mod tests {
         let m = parse_meta(src);
         assert_eq!(
             m.negative,
-            Some(Negative { phase: "parse".into(), error_type: "SyntaxError".into() })
+            Some(Negative {
+                phase: "parse".into(),
+                error_type: "SyntaxError".into()
+            })
         );
         assert!(m.flags.only_strict);
         assert_eq!(strict_variants(&m.flags), vec![true]);
@@ -284,7 +291,11 @@ mod tests {
         let meta = parse_meta("/*---\n---*/\ncode;");
         let strict = h.assemble("code;", &meta, true).unwrap();
         assert!(strict.starts_with("\"use strict\";\n"));
-        assert!(strict.contains("/*assert*/") && strict.contains("/*sta*/") && strict.ends_with("code;"));
+        assert!(
+            strict.contains("/*assert*/")
+                && strict.contains("/*sta*/")
+                && strict.ends_with("code;")
+        );
 
         let raw_meta = parse_meta("/*---\nflags: [raw]\n---*/\ncode;");
         assert_eq!(h.assemble("code;", &raw_meta, false).unwrap(), "code;");

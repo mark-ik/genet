@@ -49,7 +49,9 @@ void main() {
         .stmts
         .iter()
         .find_map(|s| match s {
-            Stmt::Switch { discriminant, body, .. } => Some((discriminant, body)),
+            Stmt::Switch {
+                discriminant, body, ..
+            } => Some((discriminant, body)),
             _ => None,
         })
         .expect("a switch stmt in main");
@@ -95,7 +97,10 @@ void main() {
         .stmts
         .iter()
         .filter_map(|s| match s {
-            Stmt::Case { value: Expr::IntLit { value, .. }, .. } => Some(*value),
+            Stmt::Case {
+                value: Expr::IntLit { value, .. },
+                ..
+            } => Some(*value),
             _ => None,
         })
         .collect();

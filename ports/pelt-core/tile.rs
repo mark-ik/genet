@@ -37,7 +37,10 @@ pub enum SplitAxis {
 #[derive(Clone, Debug, PartialEq)]
 pub enum TileTree {
     /// A row/column of child subtrees, each taking a fraction of the axis.
-    Split { axis: SplitAxis, children: Vec<TileBranch> },
+    Split {
+        axis: SplitAxis,
+        children: Vec<TileBranch>,
+    },
     /// A leaf: a stack of tabbed tiles, one shown.
     Stack(TabStack),
 }
@@ -139,7 +142,10 @@ pub enum TileEvent {
     Dragged { tile: TileId, to: DropTarget },
     /// A split divider moved: the new fractional shares for the split addressed by
     /// `split` (same length + order as that split's children).
-    DividerMoved { split: TilePath, fractions: Vec<f32> },
+    DividerMoved {
+        split: TilePath,
+        fractions: Vec<f32>,
+    },
 }
 
 /// Where a dragged tile was dropped.
@@ -150,6 +156,9 @@ pub enum DropTarget {
     /// Onto an edge of an existing tile, creating a new split that places the dragged
     /// tile on that side of the target.
     Edge { tile: TileId, edge: Edge },
+    /// Outside the tile surface entirely. Standalone pelt leaves the tree unchanged;
+    /// an embedding host may interpret it as "tear this tile out".
+    Outside,
 }
 
 /// Which edge of a tile a drag landed on (the side the dropped tile takes).
@@ -171,7 +180,10 @@ impl TileBranch {
 impl TileTree {
     /// A tree of a single tile (a one-tab stack) — the surface's initial state.
     pub fn single(tile: Tile) -> Self {
-        TileTree::Stack(TabStack { tabs: vec![tile], active: 0 })
+        TileTree::Stack(TabStack {
+            tabs: vec![tile],
+            active: 0,
+        })
     }
 
     /// A leaf stack of `tabs` with `active` shown.
@@ -198,7 +210,7 @@ impl TileTree {
                 for branch in children {
                     branch.tree.collect_tiles(out);
                 }
-            }
+            },
             TileTree::Stack(stack) => out.extend(stack.tabs.iter()),
         }
     }
@@ -216,7 +228,7 @@ impl TileTree {
             TileTree::Stack(stack) => stack.tabs.iter_mut().find(|t| t.id == id),
             TileTree::Split { children, .. } => {
                 children.iter_mut().find_map(|b| b.tree.tile_mut(id))
-            }
+            },
         }
     }
 
@@ -253,7 +265,7 @@ impl TileTree {
                     self.collapse();
                 }
                 removed
-            }
+            },
             TileEvent::DividerMoved { split, fractions } => self.set_fractions(split, fractions),
             TileEvent::Dragged { tile, to } => self.drag(*tile, to),
         }
@@ -266,12 +278,10 @@ impl TileTree {
                 Some(i) if stack.active != i => {
                     stack.active = i;
                     true
-                }
+                },
                 _ => false,
             },
-            TileTree::Split { children, .. } => {
-                children.iter_mut().any(|b| b.tree.activate(id))
-            }
+            TileTree::Split { children, .. } => children.iter_mut().any(|b| b.tree.activate(id)),
         }
     }
 
@@ -287,10 +297,10 @@ impl TileTree {
                     stack.active = stack.tabs.len().saturating_sub(1);
                 }
                 Some(tile)
-            }
+            },
             TileTree::Split { children, .. } => {
                 children.iter_mut().find_map(|b| b.tree.remove_tile(id))
-            }
+            },
         }
     }
 
@@ -349,7 +359,7 @@ impl TileTree {
                     }
                 }
                 changed
-            }
+            },
             _ => false,
         }
     }
@@ -361,8 +371,9 @@ impl TileTree {
         let target_ok = match to {
             DropTarget::Stack { stack, .. } => {
                 matches!(self.node_at(stack), Some(TileTree::Stack(_)))
-            }
+            },
             DropTarget::Edge { tile, .. } => self.find(*tile).is_some(),
+            DropTarget::Outside => false,
         };
         if !target_ok {
             return false;
@@ -377,10 +388,11 @@ impl TileTree {
                     s.tabs.insert(i, tile);
                     s.active = i;
                 }
-            }
+            },
             DropTarget::Edge { tile: target, edge } => {
                 self.split_at_tile(*target, *edge, tile);
-            }
+            },
+            DropTarget::Outside => return false,
         }
         self.collapse();
         true
@@ -394,7 +406,10 @@ impl TileTree {
                     Edge::Left | Edge::Right => SplitAxis::Row,
                     Edge::Top | Edge::Bottom => SplitAxis::Column,
                 };
-                let placeholder = TileTree::Stack(TabStack { tabs: Vec::new(), active: 0 });
+                let placeholder = TileTree::Stack(TabStack {
+                    tabs: Vec::new(),
+                    active: 0,
+                });
                 let target_tree = std::mem::replace(self, placeholder);
                 let new_tree = TileTree::single(tile);
                 let (first, second) = match edge {
@@ -406,7 +421,7 @@ impl TileTree {
                     vec![TileBranch::new(0.5, first), TileBranch::new(0.5, second)],
                 );
                 true
-            }
+            },
             TileTree::Stack(_) => false,
             TileTree::Split { children, .. } => children
                 .iter_mut()
@@ -449,7 +464,10 @@ mod tests {
     fn single_tile_tree() {
         let tree = TileTree::single(doc_tile(1, "a.html"));
         assert_eq!(tree.tiles().len(), 1);
-        assert_eq!(tree.find(TileId(1)).map(|t| t.title.as_str()), Some("a.html"));
+        assert_eq!(
+            tree.find(TileId(1)).map(|t| t.title.as_str()),
+            Some("a.html")
+        );
         assert!(tree.find(TileId(2)).is_none());
     }
 
@@ -464,8 +482,14 @@ mod tests {
         let tree = TileTree::Split {
             axis: SplitAxis::Row,
             children: vec![
-                TileBranch { fraction: 0.5, tree: left },
-                TileBranch { fraction: 0.5, tree: right },
+                TileBranch {
+                    fraction: 0.5,
+                    tree: left,
+                },
+                TileBranch {
+                    fraction: 0.5,
+                    tree: right,
+                },
             ],
         };
         let ids: Vec<u64> = tree.tiles().iter().map(|t| t.id.0).collect();
@@ -482,18 +506,27 @@ mod tests {
         // Left half: two tiles split top/bottom.
         let left = TileTree::split(
             SplitAxis::Column,
-            vec![TileBranch::new(0.5, stack(1)), TileBranch::new(0.5, stack(2))],
+            vec![
+                TileBranch::new(0.5, stack(1)),
+                TileBranch::new(0.5, stack(2)),
+            ],
         );
         // Right half: a quad — two rows, each split into two.
         let row = |a, b| {
             TileTree::split(
                 SplitAxis::Row,
-                vec![TileBranch::new(0.5, stack(a)), TileBranch::new(0.5, stack(b))],
+                vec![
+                    TileBranch::new(0.5, stack(a)),
+                    TileBranch::new(0.5, stack(b)),
+                ],
             )
         };
         let right = TileTree::split(
             SplitAxis::Column,
-            vec![TileBranch::new(0.5, row(3, 4)), TileBranch::new(0.5, row(5, 6))],
+            vec![
+                TileBranch::new(0.5, row(3, 4)),
+                TileBranch::new(0.5, row(5, 6)),
+            ],
         );
         let tree = TileTree::split(
             SplitAxis::Row,
@@ -557,7 +590,10 @@ mod tests {
         assert!(tree.apply(&TileEvent::Closed(TileId(1))));
         // The split flattened to the remaining single stack holding tile 2.
         assert!(matches!(&tree, TileTree::Stack(_)));
-        assert_eq!(tree.tiles().iter().map(|t| t.id.0).collect::<Vec<_>>(), vec![2]);
+        assert_eq!(
+            tree.tiles().iter().map(|t| t.id.0).collect::<Vec<_>>(),
+            vec![2]
+        );
     }
 
     /// A divider move rewrites the addressed split's fractions.
@@ -584,16 +620,25 @@ mod tests {
         let mut tree = TileTree::split(
             SplitAxis::Row,
             vec![
-                TileBranch::new(0.5, TileTree::stack(vec![doc_tile(1, "a"), doc_tile(2, "b")], 0)),
+                TileBranch::new(
+                    0.5,
+                    TileTree::stack(vec![doc_tile(1, "a"), doc_tile(2, "b")], 0),
+                ),
                 TileBranch::new(0.5, TileTree::single(doc_tile(3, "c"))),
             ],
         );
         assert!(tree.apply(&TileEvent::Dragged {
             tile: TileId(1),
-            to: DropTarget::Stack { stack: TilePath(vec![1]), index: 1 },
+            to: DropTarget::Stack {
+                stack: TilePath(vec![1]),
+                index: 1
+            },
         }));
         // Order preserved: left now [2], right now [3, 1].
-        assert_eq!(tree.tiles().iter().map(|t| t.id.0).collect::<Vec<_>>(), vec![2, 3, 1]);
+        assert_eq!(
+            tree.tiles().iter().map(|t| t.id.0).collect::<Vec<_>>(),
+            vec![2, 3, 1]
+        );
     }
 
     /// Dragging a tile onto a tile's edge creates a new split with the dragged tile on
@@ -608,7 +653,10 @@ mod tests {
         // Drag tile 2 onto the right edge of tile 1: Row split [stack(1), stack(2)].
         assert!(tree.apply(&TileEvent::Dragged {
             tile: TileId(2),
-            to: DropTarget::Edge { tile: TileId(1), edge: Edge::Right },
+            to: DropTarget::Edge {
+                tile: TileId(1),
+                edge: Edge::Right
+            },
         }));
         match &tree {
             TileTree::Split { axis, children } => {
@@ -617,7 +665,7 @@ mod tests {
                 // Right edge → target (1) first, dragged (2) second.
                 assert_eq!(children[0].tree.tiles()[0].id.0, 1);
                 assert_eq!(children[1].tree.tiles()[0].id.0, 2);
-            }
+            },
             _ => panic!("expected a split"),
         }
     }
@@ -628,9 +676,25 @@ mod tests {
         let mut tree = TileTree::stack(vec![doc_tile(1, "a"), doc_tile(2, "b")], 0);
         assert!(!tree.apply(&TileEvent::Dragged {
             tile: TileId(1),
-            to: DropTarget::Edge { tile: TileId(99), edge: Edge::Top },
+            to: DropTarget::Edge {
+                tile: TileId(99),
+                edge: Edge::Top
+            },
         }));
         // Both tiles still present.
         assert_eq!(tree.tiles().len(), 2);
+    }
+
+    /// An outside drop is for the embedding host to interpret; the reference reducer
+    /// leaves the tree alone.
+    #[test]
+    fn apply_drag_outside_preserves_tile() {
+        let mut tree = TileTree::stack(vec![doc_tile(1, "a"), doc_tile(2, "b")], 0);
+        let before = tree.clone();
+        assert!(!tree.apply(&TileEvent::Dragged {
+            tile: TileId(1),
+            to: DropTarget::Outside,
+        }));
+        assert_eq!(tree, before);
     }
 }

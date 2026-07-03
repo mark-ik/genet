@@ -209,7 +209,11 @@ void main() {
         .iter()
         .filter(|d| matches!(d.kind, WebGlDiagnosticKind::CaseValueNotIntegerConstant))
         .collect();
-    assert_eq!(r10.len(), 1, "binary-expression case value should fail R10 (first pass)");
+    assert_eq!(
+        r10.len(),
+        1,
+        "binary-expression case value should fail R10 (first pass)"
+    );
 }
 
 // ---------- R11: duplicate case values --------------------------------
@@ -258,7 +262,10 @@ void main() {
         .iter()
         .filter(|d| matches!(d.kind, WebGlDiagnosticKind::DuplicateCaseValue { .. }))
         .collect();
-    assert!(r11.is_empty(), "distinct case values should pass R11: {r11:?}");
+    assert!(
+        r11.is_empty(),
+        "distinct case values should pass R11: {r11:?}"
+    );
 }
 
 #[test]
@@ -284,7 +291,10 @@ void main() {
         .iter()
         .filter(|d| matches!(d.kind, WebGlDiagnosticKind::DuplicateCaseValue { .. }))
         .collect();
-    assert!(r11.is_empty(), "duplicates only fire within a single switch: {r11:?}");
+    assert!(
+        r11.is_empty(),
+        "duplicates only fire within a single switch: {r11:?}"
+    );
 }
 
 #[test]
@@ -311,5 +321,9 @@ void main() {
         .iter()
         .filter(|d| matches!(d.kind, WebGlDiagnosticKind::DuplicateCaseValue { value: 2 }))
         .collect();
-    assert_eq!(r11.len(), 1, "inner switch's duplicate `case 2:` should fire");
+    assert_eq!(
+        r11.len(),
+        1,
+        "inner switch's duplicate `case 2:` should fire"
+    );
 }

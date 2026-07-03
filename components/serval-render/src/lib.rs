@@ -32,12 +32,11 @@ pub mod inspect;
 pub mod render;
 
 pub use a11y::accesskit_tree;
-pub use inspect::{content_report, ContentReport, OutlineEntry};
+pub use inspect::{ContentReport, OutlineEntry, content_report};
 pub use render::{
-    caret_byte_at, caret_screen_rect, fragments_from_scripted_dom, hit_test_node,
+    TextCursor, caret_byte_at, caret_screen_rect, fragments_from_scripted_dom, hit_test_node,
     paint_list_from_scripted_dom, paint_list_from_session, scene_from_layout_dom,
     scene_from_scripted_dom, scene_from_session, scene_from_session_dom, soft_wrap_caret_byte,
-    TextCursor,
 };
 
 #[cfg(test)]
@@ -82,8 +81,10 @@ mod tests {
     /// own `ScriptedDom` so it can run on any thread: `ScriptedDom` is `!Send`,
     /// and the `&'static` HTML source is what crosses the thread boundary.
     fn render_ops_debug(html: &str, w: u32, h: u32) -> String {
-        const BLOCK_SHEET: &[&str] =
-            &["html, body, div, p, h1 { display: block; }", "body { padding: 16px; }"];
+        const BLOCK_SHEET: &[&str] = &[
+            "html, body, div, p, h1 { display: block; }",
+            "body { padding: 16px; }",
+        ];
         let mut dom = ScriptedDom::new();
         let root = dom.document();
         dom.set_inner_html(root, html);
@@ -104,21 +105,31 @@ mod tests {
              <h1>Heading</h1><p>One paragraph of text.</p><p>Another paragraph here.</p>";
 
         let baseline = render_ops_debug(HTML, 420, 360);
-        assert!(baseline.contains("GlyphRun"), "the baseline cascade should emit glyph runs");
+        assert!(
+            baseline.contains("GlyphRun"),
+            "the baseline cascade should emit glyph runs"
+        );
 
         let off = std::thread::spawn(|| render_ops_debug(HTML, 420, 360))
             .join()
             .expect("the off-thread cascade panicked");
-        assert_eq!(off, baseline, "off-thread ops must match the main thread byte for byte");
+        assert_eq!(
+            off, baseline,
+            "off-thread ops must match the main thread byte for byte"
+        );
 
         const N: usize = 8;
-        let handles: Vec<_> =
-            (0..N).map(|_| std::thread::spawn(|| render_ops_debug(HTML, 420, 360))).collect();
+        let handles: Vec<_> = (0..N)
+            .map(|_| std::thread::spawn(|| render_ops_debug(HTML, 420, 360)))
+            .collect();
         for (i, handle) in handles.into_iter().enumerate() {
             let ops = handle
                 .join()
                 .unwrap_or_else(|_| panic!("concurrent cascade thread {i} panicked"));
-            assert_eq!(ops, baseline, "concurrent thread {i} diverged from the main thread");
+            assert_eq!(
+                ops, baseline,
+                "concurrent thread {i} diverged from the main thread"
+            );
         }
     }
 
@@ -162,7 +173,8 @@ mod tests {
             // (b2) Paint emission + Scene translation builds without panic over
             // the live ScriptedDom (paint-over-ScriptedDom works — no fallback
             // needed). The Scene carries the requested viewport.
-            let scene = scene_from_scripted_dom(&dom_ref, SHEET, 800, 600, None, &Default::default());
+            let scene =
+                scene_from_scripted_dom(&dom_ref, SHEET, 800, 600, None, &Default::default());
             assert_eq!(scene.viewport_width, 800);
             assert_eq!(scene.viewport_height, 600);
             // The counter's text paints: emission produces at least one draw op
@@ -198,7 +210,16 @@ mod tests {
 
         // A point well outside every fragment recovers nothing.
         assert!(
-            hit_test_node(&dom_ref, SHEET, 800, 600, 10_000.0, 10_000.0, &Default::default()).is_none(),
+            hit_test_node(
+                &dom_ref,
+                SHEET,
+                800,
+                600,
+                10_000.0,
+                10_000.0,
+                &Default::default()
+            )
+            .is_none(),
             "a point outside all fragments should miss"
         );
     }
@@ -228,7 +249,10 @@ mod tests {
     /// (the existing tests' type-alias convention). Reuses the module's
     /// [`Counter`] state.
     type ButtonView = El<
-        (String, OnClick<El<&'static str, Counter, ()>, Counter, (), fn(&mut Counter, PointerClick)>),
+        (
+            String,
+            OnClick<El<&'static str, Counter, ()>, Counter, (), fn(&mut Counter, PointerClick)>,
+        ),
         Counter,
         (),
     >;
@@ -278,27 +302,19 @@ mod tests {
     /// A parent `<div>` handler fires when the click is dispatched on the child
     /// `<button>`: the bubble walk (target → root) reaches the div's registered
     /// handler. The button itself has no handler here, so only the parent fires.
-    type BubbleView = El<
-        (String, El<&'static str, Counter, ()>),
-        Counter,
-        (),
-    >;
+    type BubbleView = El<(String, El<&'static str, Counter, ()>), Counter, ()>;
 
     /// `on_click(<div>{count}<button>+</button></div>, parent_handler)` — the
     /// handler is on the *div*, the button is a plain leaf. Dispatching on the
     /// button must bubble up to the div.
-    type BubbleRoot =
-        OnClick<BubbleView, Counter, (), fn(&mut Counter, PointerClick)>;
+    type BubbleRoot = OnClick<BubbleView, Counter, (), fn(&mut Counter, PointerClick)>;
 
     fn bubble_view(s: &Counter) -> BubbleRoot {
         let increment: fn(&mut Counter, PointerClick) = |s: &mut Counter, _ev| s.count += 1;
         on_click(
             el::<_, Counter, ()>(
                 "div",
-                (
-                    s.count.to_string(),
-                    el::<_, Counter, ()>("button", "+"),
-                ),
+                (s.count.to_string(), el::<_, Counter, ()>("button", "+")),
             ),
             increment,
         )
@@ -617,8 +633,8 @@ mod tests {
             Key::Character(c) => s.text.push_str(&c),
             Key::Named(NamedKey::Backspace) => {
                 s.text.pop();
-            }
-            Key::Named(_) => {}
+            },
+            Key::Named(_) => {},
         }
     }
 
@@ -696,7 +712,8 @@ mod tests {
         );
 
         // The render path still builds over the edited DOM.
-        let scene = scene_from_scripted_dom(&dom.borrow(), SHEET, 800, 600, None, &Default::default());
+        let scene =
+            scene_from_scripted_dom(&dom.borrow(), SHEET, 800, 600, None, &Default::default());
         assert_eq!(scene.viewport_width, 800);
         assert!(
             fragments_from_scripted_dom(&dom.borrow(), SHEET, 800, 600)
@@ -756,8 +773,16 @@ mod tests {
         // either way click-to-focus picks the nearest focusable ancestor: the div.
         let hit = {
             let dom_ref = dom.borrow();
-            hit_test_node(&dom_ref, &["div { display: block; }"], 800, 600, 5.0, 5.0, &Default::default())
-                .expect("a point inside the div should hit something")
+            hit_test_node(
+                &dom_ref,
+                &["div { display: block; }"],
+                800,
+                600,
+                5.0,
+                5.0,
+                &Default::default(),
+            )
+            .expect("a point inside the div should hit something")
         };
         runner.dispatch_click(hit, PointerClick::at((0.0, 0.0)));
         assert_eq!(
@@ -816,7 +841,10 @@ mod tests {
             let dom_ref = dom.borrow();
             find_element_by_name(&dom_ref, div, "button").expect("a <button> must exist")
         };
-        assert_ne!(button, div, "button is a descendant of the handler-bearing div");
+        assert_ne!(
+            button, div,
+            "button is a descendant of the handler-bearing div"
+        );
 
         // The button is click-only (not focusable); aim focus at it to exercise
         // the bubble: a key on a child with no key handler reaches the parent.
@@ -842,7 +870,9 @@ mod tests {
 
     /// `<div on_click(capture)><button on_click /></div>`: a capture-phase parent
     /// handler and a default (bubble) child handler, each logging its label.
-    fn click_phase_view(_s: &Log) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+    fn click_phase_view(
+        _s: &Log,
+    ) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
         on_click(
             el::<_, Log, ()>(
                 "div",
@@ -879,7 +909,8 @@ mod tests {
         );
 
         // The render path still builds over the live ScriptedDom after dispatch.
-        let scene = scene_from_scripted_dom(&dom.borrow(), SHEET, 800, 600, None, &Default::default());
+        let scene =
+            scene_from_scripted_dom(&dom.borrow(), SHEET, 800, 600, None, &Default::default());
         assert_eq!(scene.viewport_width, 800);
     }
 

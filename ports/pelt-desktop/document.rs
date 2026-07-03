@@ -11,8 +11,8 @@
 
 use netrender::Scene;
 use pelt_core::ResourceFetcher;
-use serval_layout::{inline_stylesheets, IncrementalLayout, ScrollKey, ScrollOffsets};
-use serval_render::{content_report, scene_from_session_dom, ContentReport};
+use serval_layout::{IncrementalLayout, ScrollKey, ScrollOffsets, inline_stylesheets};
+use serval_render::{ContentReport, content_report, scene_from_session_dom};
 use serval_static_dom::{StaticDocument, StaticNodeId};
 
 /// A local-scheme [`ResourceFetcher`]: `data:` decodes the inline payload,
@@ -66,7 +66,7 @@ fn file_url_to_path(after_scheme: &str) -> String {
     let path = match after_scheme.split_once('/') {
         Some((auth, rest)) if auth.is_empty() || auth.eq_ignore_ascii_case("localhost") => {
             format!("/{rest}")
-        }
+        },
         _ => after_scheme.to_string(),
     };
     #[cfg(windows)]
@@ -133,10 +133,18 @@ impl LoadedDocument {
     /// `data:` content), layering the document's inline sheets over the defaults.
     pub fn parse(html: &str) -> Self {
         let doc = StaticDocument::parse(html);
-        let mut sheets: Vec<String> =
-            crate::STRUCTURAL_SHEET.iter().map(|s| s.to_string()).collect();
+        let mut sheets: Vec<String> = crate::STRUCTURAL_SHEET
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         sheets.extend(inline_stylesheets(&doc));
-        Self { doc, sheets, session: None, size: (0, 0), pending_fragment: None }
+        Self {
+            doc,
+            sheets,
+            session: None,
+            size: (0, 0),
+            pending_fragment: None,
+        }
     }
 
     /// Build (or rebuild, on a size change) the layout session for `width`×`height`.
@@ -145,7 +153,12 @@ impl LoadedDocument {
             return;
         }
         let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
-        self.session = Some(IncrementalLayout::new(&self.doc, &sheets, width as f32, height as f32));
+        self.session = Some(IncrementalLayout::new(
+            &self.doc,
+            &sheets,
+            width as f32,
+            height as f32,
+        ));
         self.size = (width, height);
     }
 
@@ -161,7 +174,10 @@ impl LoadedDocument {
                 session.scroll_to_id(&self.doc, &fragment);
             }
         }
-        let session = self.session.as_ref().expect("session built by ensure_session");
+        let session = self
+            .session
+            .as_ref()
+            .expect("session built by ensure_session");
         scene_from_session_dom(session, &self.doc, width, height)
     }
 
@@ -233,7 +249,9 @@ impl LoadedDocument {
     /// The current document scroll offset in device px (`(0, 0)` before the first
     /// frame).
     pub fn scroll(&self) -> (f32, f32) {
-        self.session.as_ref().map_or((0.0, 0.0), |s| s.viewport_scroll())
+        self.session
+            .as_ref()
+            .map_or((0.0, 0.0), |s| s.viewport_scroll())
     }
 
     /// A structural [`ContentReport`] of this document's addressed content (title,
@@ -259,7 +277,10 @@ mod tests {
                 .expect("a data: URL loads");
         let scene = doc.frame(400, 300);
         assert!(
-            scene.ops.iter().any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
+            scene
+                .ops
+                .iter()
+                .any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
             "the rendered document paints text",
         );
     }
@@ -270,7 +291,10 @@ mod tests {
         // "<h1>Hi</h1>" percent-encoded.
         let mut doc = LoadedDocument::load(&LocalFetcher, "data:text/html,%3Ch1%3EHi%3C%2Fh1%3E")
             .expect("a percent-encoded data: URL loads");
-        assert!(!doc.frame(400, 300).ops.is_empty(), "the decoded document renders");
+        assert!(
+            !doc.frame(400, 300).ops.is_empty(),
+            "the decoded document renders"
+        );
     }
 
     /// A `;base64` `data:` payload decodes before parsing (the spec parser handles the
@@ -278,12 +302,14 @@ mod tests {
     #[test]
     fn base64_data_url_decodes() {
         // base64("<h1>Hi</h1>") = PGgxPkhpPC9oMT4=
-        let mut doc =
-            LoadedDocument::load(&LocalFetcher, "data:text/html;base64,PGgxPkhpPC9oMT4=")
-                .expect("a base64 data: URL loads");
+        let mut doc = LoadedDocument::load(&LocalFetcher, "data:text/html;base64,PGgxPkhpPC9oMT4=")
+            .expect("a base64 data: URL loads");
         let scene = doc.frame(400, 300);
         assert!(
-            scene.ops.iter().any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
+            scene
+                .ops
+                .iter()
+                .any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
             "the base64-decoded document paints its text",
         );
     }
@@ -297,7 +323,10 @@ mod tests {
         std::fs::write(&path, "<h1>From disk</h1>").expect("write temp html");
         let mut doc = LoadedDocument::load(&LocalFetcher, path.to_str().expect("utf8 path"))
             .expect("a bare path loads from disk");
-        assert!(!doc.frame(400, 300).ops.is_empty(), "the on-disk document renders");
+        assert!(
+            !doc.frame(400, 300).ops.is_empty(),
+            "the on-disk document renders"
+        );
     }
 
     /// A document taller than the viewport scrolls: the offset advances on a wheel
@@ -312,14 +341,24 @@ mod tests {
         let _ = doc.frame(400, 300);
         assert_eq!(doc.scroll(), (0.0, 0.0), "starts at the top");
 
-        assert!(doc.scroll_by(0.0, 250.0), "scrolling a tall document moves the offset");
-        assert!((doc.scroll().1 - 250.0).abs() < 0.5, "offset advanced by 250: {:?}", doc.scroll());
+        assert!(
+            doc.scroll_by(0.0, 250.0),
+            "scrolling a tall document moves the offset"
+        );
+        assert!(
+            (doc.scroll().1 - 250.0).abs() < 0.5,
+            "offset advanced by 250: {:?}",
+            doc.scroll()
+        );
 
         // Jump past the bottom: the offset clamps, and a further scroll is a no-op.
         let _ = doc.scroll_by(0.0, 100_000.0);
         let bottom = doc.scroll().1;
         assert!(bottom > 250.0, "scrolled near the bottom: {bottom}");
-        assert!(!doc.scroll_by(0.0, 100.0), "already at the bottom edge → no change");
+        assert!(
+            !doc.scroll_by(0.0, 100.0),
+            "already at the bottom edge → no change"
+        );
     }
 
     /// The wheel at a point scrolls a nested `overflow: scroll` container under the
@@ -338,7 +377,10 @@ mod tests {
 
         // The page fits the 300px viewport (the scroller is only 100px tall), so a
         // plain viewport wheel finds no headroom.
-        assert!(!doc.scroll_by(0.0, 100.0), "the short page does not scroll its viewport");
+        assert!(
+            !doc.scroll_by(0.0, 100.0),
+            "the short page does not scroll its viewport"
+        );
         assert_eq!(doc.scroll(), (0.0, 0.0), "viewport stays at the top");
 
         // A wheel over the nested scroller (at scene point 50,50) scrolls IT, even
@@ -393,12 +435,20 @@ mod tests {
             "clicking the in-page link scrolls to its target",
         );
         // #mark sits at y = 40 (link) + 1000 (spacer) = 1040.
-        assert!((doc.scroll().1 - 1040.0).abs() < 1.0, "scrolled to #mark: {:?}", doc.scroll());
+        assert!(
+            (doc.scroll().1 - 1040.0).abs() < 1.0,
+            "scrolled to #mark: {:?}",
+            doc.scroll()
+        );
 
         // The point now shows the target (a div, not a link), so a click there is a
         // no-op.
         let before = doc.scroll();
-        assert_eq!(doc.click_at(10.0, 20.0), ClickOutcome::None, "no link under the point now");
+        assert_eq!(
+            doc.click_at(10.0, 20.0),
+            ClickOutcome::None,
+            "no link under the point now"
+        );
         assert_eq!(doc.scroll(), before, "scroll unchanged off a link");
     }
 
@@ -415,7 +465,11 @@ mod tests {
             ClickOutcome::Navigate("next.html".to_string()),
             "an external link reports a navigation to its href",
         );
-        assert_eq!(doc.scroll(), (0.0, 0.0), "a navigation does not scroll the current document");
+        assert_eq!(
+            doc.scroll(),
+            (0.0, 0.0),
+            "a navigation does not scroll the current document"
+        );
     }
 
     /// Keyboard scroll defaults reach the document viewport through the session:
@@ -426,9 +480,19 @@ mod tests {
             "<style>.tall { height: 2000px; }</style><div class=\"tall\">tall</div>",
         );
         let _ = doc.frame(400, 300);
-        assert!(doc.scroll_for_key(ScrollKey::PageDown), "PageDown scrolls a tall document");
-        assert!(doc.scroll().1 > 0.0, "the offset advanced: {:?}", doc.scroll());
-        assert!(doc.scroll_for_key(ScrollKey::Home), "Home returns to the top");
+        assert!(
+            doc.scroll_for_key(ScrollKey::PageDown),
+            "PageDown scrolls a tall document"
+        );
+        assert!(
+            doc.scroll().1 > 0.0,
+            "the offset advanced: {:?}",
+            doc.scroll()
+        );
+        assert!(
+            doc.scroll_for_key(ScrollKey::Home),
+            "Home returns to the top"
+        );
         assert_eq!(doc.scroll(), (0.0, 0.0));
     }
 
@@ -440,7 +504,10 @@ mod tests {
     fn document_without_overflow_does_not_scroll() {
         let mut doc = LoadedDocument::parse("<div>short</div>");
         let _ = doc.frame(400, 300);
-        assert!(!doc.scroll_by(0.0, 250.0), "a short page has no scroll headroom");
+        assert!(
+            !doc.scroll_by(0.0, 250.0),
+            "a short page has no scroll headroom"
+        );
         assert_eq!(doc.scroll(), (0.0, 0.0));
     }
 
@@ -458,7 +525,9 @@ mod tests {
     #[test]
     fn missing_path_fetches_none() {
         assert!(
-            LocalFetcher.fetch("definitely/not/a/real/file.html").is_none(),
+            LocalFetcher
+                .fetch("definitely/not/a/real/file.html")
+                .is_none(),
             "an unreadable path (or an http URL with no netfetch) fetches None",
         );
     }

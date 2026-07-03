@@ -115,16 +115,14 @@ pub fn reflect(tu: &TranslationUnit, stage: ShaderStage) -> ProgramReflection {
                 g.storage,
                 StorageQualifier::Attribute | StorageQualifier::In
             ),
-            ShaderStage::Fragment => matches!(
-                g.storage,
-                StorageQualifier::Varying | StorageQualifier::In
-            ),
+            ShaderStage::Fragment => {
+                matches!(g.storage, StorageQualifier::Varying | StorageQualifier::In)
+            },
         };
         let is_output = match stage {
-            ShaderStage::Vertex => matches!(
-                g.storage,
-                StorageQualifier::Varying | StorageQualifier::Out
-            ),
+            ShaderStage::Vertex => {
+                matches!(g.storage, StorageQualifier::Varying | StorageQualifier::Out)
+            },
             ShaderStage::Fragment => g.storage == StorageQualifier::Out,
         };
         if is_input {
@@ -214,10 +212,7 @@ fn location_span_for(kind: TypeKind) -> u32 {
         TypeKind::Mat2 => 2,
         TypeKind::Mat3 => 3,
         TypeKind::Mat4 => 4,
-        TypeKind::Void
-        | TypeKind::Sampler2D
-        | TypeKind::SamplerCube
-        | TypeKind::Struct(_) => 0,
+        TypeKind::Void | TypeKind::Sampler2D | TypeKind::SamplerCube | TypeKind::Struct(_) => 0,
     }
 }
 

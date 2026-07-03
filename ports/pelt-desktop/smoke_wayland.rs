@@ -168,14 +168,15 @@ mod linux_impl {
                 ash::khr::external_semaphore_fd::NAME,
             ];
 
-            let callback: Box<wgpu::hal::vulkan::CreateDeviceCallback<'_>> =
-                Box::new(move |args: wgpu::hal::vulkan::CreateDeviceCallbackArgs<'_, '_, '_>| {
+            let callback: Box<wgpu::hal::vulkan::CreateDeviceCallback<'_>> = Box::new(
+                move |args: wgpu::hal::vulkan::CreateDeviceCallbackArgs<'_, '_, '_>| {
                     for ext in &extra_extensions {
                         if !args.extensions.iter().any(|existing| *existing == *ext) {
                             args.extensions.push(ext);
                         }
                     }
-                });
+                },
+            );
 
             hal_adapter
                 .open_with_callback(features, &limits, &memory_hints, Some(callback))
@@ -251,8 +252,7 @@ mod linux_impl {
             ) {
                 Ok(r) => r,
                 Err(err) => {
-                    return self
-                        .fail(event_loop, format!("create_netrender_instance: {err:?}"));
+                    return self.fail(event_loop, format!("create_netrender_instance: {err:?}"));
                 },
             };
 

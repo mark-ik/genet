@@ -24,7 +24,7 @@ use pelt_core::ResourceFetcher;
 use serval_layout::{IncrementalLayout, ScrollKey, ScrollOffsets};
 use serval_render::scene_from_session_dom;
 use serval_scripted_dom::{NodeId, ScriptedDom};
-use smolweb_views::{feed_view, gemtext_view, gopher_view, stylesheet, SmolwebTheme, SmolwebView};
+use smolweb_views::{SmolwebTheme, SmolwebView, feed_view, gemtext_view, gopher_view, stylesheet};
 use xilem_serval::{DomHandle, PointerClick, ServalAppRunner};
 
 /// A link-click navigation target, the action the smolweb views bubble.
@@ -58,7 +58,8 @@ fn view(state: &SmolwebState) -> SmolwebView<SmolwebState, Navigate> {
 /// A loaded smolweb document: a serval `ScriptedDom` built from a native smolweb
 /// view, rendered GPU-free to a [`Scene`], with link clicks resolving to URLs.
 pub struct SmolwebDocument {
-    runner: ServalAppRunner<SmolwebState, SmolwebLogic, SmolwebView<SmolwebState, Navigate>, Navigate>,
+    runner:
+        ServalAppRunner<SmolwebState, SmolwebLogic, SmolwebView<SmolwebState, Navigate>, Navigate>,
     sheets: Vec<String>,
     /// The retained cascade + layout session, owner of the viewport scroll. Built
     /// lazily at the first render size and rebuilt on resize; `None` before the first
@@ -87,12 +88,19 @@ impl SmolwebDocument {
         let content = detect(url, body);
         // Structural display defaults (div/p/h1/… block) under the themed sheet, the
         // same base the static document path layers its sheets over.
-        let mut sheets: Vec<String> =
-            crate::STRUCTURAL_SHEET.iter().map(|s| s.to_string()).collect();
+        let mut sheets: Vec<String> = crate::STRUCTURAL_SHEET
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         sheets.push(stylesheet(theme, url));
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
         let runner = ServalAppRunner::new(dom, view as SmolwebLogic, SmolwebState { content });
-        Self { runner, sheets, session: None, size: (0, 0) }
+        Self {
+            runner,
+            sheets,
+            session: None,
+            size: (0, 0),
+        }
     }
 
     /// Build (or rebuild, on a size change) the retained layout session.
@@ -117,7 +125,10 @@ impl SmolwebDocument {
         self.ensure_session(width, height);
         let dom = self.runner.dom();
         let dom = dom.borrow();
-        let session = self.session.as_ref().expect("session built by ensure_session");
+        let session = self
+            .session
+            .as_ref()
+            .expect("session built by ensure_session");
         scene_from_session_dom(session, &*dom, width.max(1), height.max(1))
     }
 
@@ -177,7 +188,10 @@ impl SmolwebDocument {
         self.ensure_session(width, height);
         let dom = self.runner.dom();
         let dom = dom.borrow();
-        let session = self.session.as_ref().expect("session built by ensure_session");
+        let session = self
+            .session
+            .as_ref()
+            .expect("session built by ensure_session");
         let (_, max_y) = session.scroll_range(&*dom);
         height.max(1) + max_y.round() as u32
     }
@@ -321,10 +335,17 @@ mod tests {
     /// path produces glyphs (mirrors the chrome's render test).
     #[test]
     fn gemtext_renders_text() {
-        let mut doc = SmolwebDocument::parse("gemini://x.test/", "# Hello\n\nWorld.\n", SmolwebTheme::Site);
+        let mut doc = SmolwebDocument::parse(
+            "gemini://x.test/",
+            "# Hello\n\nWorld.\n",
+            SmolwebTheme::Site,
+        );
         let scene = doc.frame(800, 600);
         assert!(
-            scene.ops.iter().any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
+            scene
+                .ops
+                .iter()
+                .any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
             "the capsule paints text",
         );
     }
@@ -336,8 +357,14 @@ mod tests {
         let body: String = (0..200).map(|i| format!("Line {i}\n")).collect();
         let mut doc = SmolwebDocument::parse("gemini://x.test/", &body, SmolwebTheme::Plain);
         let _ = doc.frame(400, 300); // build the session at a short viewport
-        assert!(!doc.scroll_by(0.0, -50.0), "at the top, scrolling up clamps (no move)");
-        assert!(doc.scroll_by(0.0, 240.0), "a capsule taller than the viewport scrolls down");
+        assert!(
+            !doc.scroll_by(0.0, -50.0),
+            "at the top, scrolling up clamps (no move)"
+        );
+        assert!(
+            doc.scroll_by(0.0, 240.0),
+            "a capsule taller than the viewport scrolls down"
+        );
     }
 
     /// `content_height` reports more than the viewport for a tall capsule, and
@@ -348,14 +375,20 @@ mod tests {
         let body: String = (0..200).map(|i| format!("Line {i}\n")).collect();
         let mut doc = SmolwebDocument::parse("gemini://x.test/", &body, SmolwebTheme::Plain);
         let height = doc.content_height(400, 300);
-        assert!(height > 300, "a 200-line capsule exceeds a 300px viewport: {height}");
+        assert!(
+            height > 300,
+            "a 200-line capsule exceeds a 300px viewport: {height}"
+        );
 
         doc.scroll_to(1_000_000.0);
         let (_, y) = {
             let _ = doc.frame(400, 300);
             doc.session.as_ref().expect("framed").viewport_scroll()
         };
-        assert!(y > 0.0 && y < 1_000_000.0, "scroll_to clamps to the scroll range: {y}");
+        assert!(
+            y > 0.0 && y < 1_000_000.0,
+            "scroll_to clamps to the scroll range: {y}"
+        );
 
         doc.scroll_to(0.0);
         let (_, y0) = {
@@ -382,7 +415,10 @@ mod tests {
         assert!(hrefs.contains(&"gemini://x.test/a"));
         assert!(hrefs.contains(&"gemini://x.test/b"));
         for (_, rect) in &links {
-            assert!(rect[2] > rect[0] && rect[3] > rect[1], "positive-area rect: {rect:?}");
+            assert!(
+                rect[2] > rect[0] && rect[3] > rect[1],
+                "positive-area rect: {rect:?}"
+            );
         }
     }
 
@@ -392,7 +428,10 @@ mod tests {
     fn short_capsule_content_height_is_not_inflated_past_viewport() {
         let mut doc = SmolwebDocument::parse("gemini://x.test/", "# Hi\n", SmolwebTheme::Plain);
         let height = doc.content_height(400, 300);
-        assert_eq!(height, 300, "a short capsule's height floors at the viewport, no scroll range");
+        assert_eq!(
+            height, 300,
+            "a short capsule's height floors at the viewport, no scroll range"
+        );
     }
 
     /// A gopher menu is detected by scheme and renders a typed item line.
@@ -404,7 +443,12 @@ mod tests {
             SmolwebTheme::Plain,
         );
         let scene = doc.frame(800, 600);
-        assert!(scene.ops.iter().any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))));
+        assert!(
+            scene
+                .ops
+                .iter()
+                .any(|op| matches!(op, netrender::SceneOp::GlyphRun(_)))
+        );
     }
 
     /// An RSS body served over gemini is detected as a feed.
@@ -415,7 +459,12 @@ mod tests {
         assert!(matches!(doc, SmolwebDocument { .. }));
         // The feed title paints.
         let scene = doc.frame(800, 600);
-        assert!(scene.ops.iter().any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))));
+        assert!(
+            scene
+                .ops
+                .iter()
+                .any(|op| matches!(op, netrender::SceneOp::GlyphRun(_)))
+        );
     }
 
     /// Clicking a gemtext link resolves to its navigation target — the `on_navigate`
@@ -429,9 +478,15 @@ mod tests {
             SmolwebTheme::Plain,
         );
         let anchor = find_anchor(&doc).expect("a link anchor in the DOM");
-        let actions = doc.runner.dispatch_click(anchor, PointerClick::at((0.0, 0.0)));
+        let actions = doc
+            .runner
+            .dispatch_click(anchor, PointerClick::at((0.0, 0.0)));
         assert_eq!(
-            actions.into_iter().next().map(|Navigate(url)| url).as_deref(),
+            actions
+                .into_iter()
+                .next()
+                .map(|Navigate(url)| url)
+                .as_deref(),
             Some("gemini://x.test/page"),
         );
     }
@@ -442,7 +497,10 @@ mod tests {
         let dom = dom.borrow();
         let mut stack = vec![dom.document()];
         while let Some(node) = stack.pop() {
-            if dom.element_name(node).is_some_and(|q| q.local.as_ref() == "a") {
+            if dom
+                .element_name(node)
+                .is_some_and(|q| q.local.as_ref() == "a")
+            {
                 return Some(node);
             }
             for child in dom.dom_children(node) {

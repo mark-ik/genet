@@ -12,13 +12,14 @@ from typing import Any
 ALLOWED_BOUNDARIES = {
     "eval",
     "dispatch_event",
+    "post_message",
     "run_event_loop",
     "run_timers",
     "pump_microtasks",
     "timer_task",
 }
 
-ALLOWED_PHASES = {"start", "end", "error", "performed"}
+ALLOWED_PHASES = {"start", "end", "error", "performed", "enqueue", "deliver"}
 
 
 def tla_string(value: str) -> str:

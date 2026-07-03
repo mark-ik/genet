@@ -91,7 +91,9 @@ void main() {
 "#;
     let body = main_body(src);
     match &body.stmts[0] {
-        Stmt::If { else_: None, then, .. } => {
+        Stmt::If {
+            else_: None, then, ..
+        } => {
             // then is a block stmt holding one expr stmt
             let block = expect_block_stmt(then);
             assert_eq!(block.stmts.len(), 1);
@@ -200,7 +202,12 @@ void main() {
 "#;
     let body = main_body(src);
     match &body.stmts[1] {
-        Stmt::For { init: ForInit::Decl(d), cond: Some(_), step: Some(_), .. } => {
+        Stmt::For {
+            init: ForInit::Decl(d),
+            cond: Some(_),
+            step: Some(_),
+            ..
+        } => {
             assert_eq!(d.ty.kind, TypeKind::Int);
             assert_eq!(d.name, "i");
             assert!(d.init.is_some(), "for-init decl has its own initializer");
@@ -214,7 +221,12 @@ fn for_loop_with_empty_slots() {
     let src = r#"void main() { for (;;) { discard; } }"#;
     let body = main_body(src);
     match &body.stmts[0] {
-        Stmt::For { init: ForInit::Empty, cond: None, step: None, .. } => {},
+        Stmt::For {
+            init: ForInit::Empty,
+            cond: None,
+            step: None,
+            ..
+        } => {},
         other => panic!("expected for with all-empty slots, got {other:?}"),
     }
 }
@@ -300,7 +312,11 @@ fn unary_minus_on_float_lit() {
         _ => panic!("expected assign stmt"),
     };
     match &args[0] {
-        Expr::Unary { op: UnaryOp::Neg, expr, .. } => match expr.as_ref() {
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            expr,
+            ..
+        } => match expr.as_ref() {
             Expr::FloatLit { value, .. } => assert_eq!(*value, 1.0),
             other => panic!("expected float lit under unary, got {other:?}"),
         },
@@ -317,7 +333,11 @@ fn unary_not_on_bool_lit() {
         _ => panic!("expected if stmt"),
     };
     match cond {
-        Expr::Unary { op: UnaryOp::Not, expr, .. } => match expr.as_ref() {
+        Expr::Unary {
+            op: UnaryOp::Not,
+            expr,
+            ..
+        } => match expr.as_ref() {
             Expr::BoolLit { value: true, .. } => {},
             other => panic!("expected true under !, got {other:?}"),
         },
@@ -342,7 +362,11 @@ void main() {
         _ => panic!("expected for with step"),
     };
     match step {
-        Expr::Unary { op: UnaryOp::PostInc, expr, .. } => match expr.as_ref() {
+        Expr::Unary {
+            op: UnaryOp::PostInc,
+            expr,
+            ..
+        } => match expr.as_ref() {
             Expr::Ident { name, .. } => assert_eq!(name, "i"),
             other => panic!("expected ident under postinc, got {other:?}"),
         },
@@ -391,7 +415,11 @@ void main() {
     };
     // Should parse as 1 + (2 * 3), i.e. top-level is Add with right child Mul.
     match &args[0] {
-        Expr::Binary { op: BinOp::Add, rhs, .. } => match rhs.as_ref() {
+        Expr::Binary {
+            op: BinOp::Add,
+            rhs,
+            ..
+        } => match rhs.as_ref() {
             Expr::Binary { op: BinOp::Mul, .. } => {},
             other => panic!("expected mul under add.rhs, got {other:?}"),
         },

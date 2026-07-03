@@ -11,8 +11,8 @@
 //! component-wise expressions; the binary going through round-trip
 //! is the load-bearing check.
 
-use webgl_essl::validate::ShaderStage;
 use webgl_essl::compile;
+use webgl_essl::validate::ShaderStage;
 
 fn frag_wgsl(body: &str) -> String {
     let src = format!(
@@ -52,8 +52,10 @@ fn atan_one_arg_lowers() {
 #[test]
 fn radians_lowers() {
     let wgsl = frag_wgsl("gl_FragColor = vec4(radians(a));");
-    assert!(wgsl.contains("radians") || wgsl.contains("0.0174"),
-        "radians may emit literal multiplier: {wgsl}");
+    assert!(
+        wgsl.contains("radians") || wgsl.contains("0.0174"),
+        "radians may emit literal multiplier: {wgsl}"
+    );
 }
 
 // ---------- §8.2 Exponential ---------------------------------------
@@ -73,8 +75,10 @@ fn sqrt_lowers() {
 #[test]
 fn inversesqrt_lowers() {
     let wgsl = frag_wgsl("gl_FragColor = vec4(inversesqrt(a));");
-    assert!(wgsl.contains("inverseSqrt") || wgsl.contains("inversesqrt"),
-        "naga emits inverseSqrt: {wgsl}");
+    assert!(
+        wgsl.contains("inverseSqrt") || wgsl.contains("inversesqrt"),
+        "naga emits inverseSqrt: {wgsl}"
+    );
 }
 
 #[test]
@@ -160,8 +164,10 @@ fn length_lowers() {
 #[test]
 fn distance_lowers() {
     let wgsl = frag_wgsl("gl_FragColor = vec4(distance(v, vec3(0.0)));");
-    assert!(wgsl.contains("distance") || wgsl.contains("length"),
-        "distance often expands to length(a-b): {wgsl}");
+    assert!(
+        wgsl.contains("distance") || wgsl.contains("length"),
+        "distance often expands to length(a-b): {wgsl}"
+    );
 }
 
 #[test]
@@ -259,7 +265,10 @@ fn min_max_chain_with_scalars_lowers() {
 fn cross_of_vec2_rejected_by_typecheck() {
     let src = "precision mediump float;\nuniform vec2 a;\nuniform vec2 b;\nvoid main() {\n    gl_FragColor = vec4(cross(a, b), 0.0, 0.0);\n}\n";
     let err = compile(src, ShaderStage::Fragment).unwrap_err();
-    assert!(matches!(err, webgl_essl::CompileError::Check(_)), "got: {err:?}");
+    assert!(
+        matches!(err, webgl_essl::CompileError::Check(_)),
+        "got: {err:?}"
+    );
 }
 
 /// Audit finding #7: `pow(float, int)` — implicit `int -> float`
@@ -269,7 +278,10 @@ fn cross_of_vec2_rejected_by_typecheck() {
 fn pow_with_int_exponent_rejected_by_typecheck() {
     let src = "precision mediump float;\nuniform float a;\nvoid main() {\n    gl_FragColor = vec4(pow(a, 2));\n}\n";
     let err = compile(src, ShaderStage::Fragment).unwrap_err();
-    assert!(matches!(err, webgl_essl::CompileError::Check(_)), "got: {err:?}");
+    assert!(
+        matches!(err, webgl_essl::CompileError::Check(_)),
+        "got: {err:?}"
+    );
 }
 
 /// Audit finding #8: `faceforward(vec3, vec3, vec3)` — first

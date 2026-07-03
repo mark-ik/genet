@@ -80,14 +80,25 @@ where
 
     type Element = ServalElement;
 
-    fn build(&self, ctx: &mut ServalCtx, app_state: &mut State) -> (Self::Element, Self::ViewState) {
+    fn build(
+        &self,
+        ctx: &mut ServalCtx,
+        app_state: &mut State,
+    ) -> (Self::Element, Self::ViewState) {
         // Push our own id so the captured routing position (and any descendant
         // handler's path) is well-formed — mirrors `OnKey::build`.
         ctx.with_id(ON_FOCUSABLE_ID, |ctx| {
             let (element, child_state) = self.child.build(ctx, app_state);
             let node = element.node;
             ctx.register_focusable(node);
-            (element, FocusableState { child_state, node, phantom: PhantomData })
+            (
+                element,
+                FocusableState {
+                    child_state,
+                    node,
+                    phantom: PhantomData,
+                },
+            )
         })
     }
 

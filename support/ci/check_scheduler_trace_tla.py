@@ -28,6 +28,7 @@ def run(command: list[str], cwd: Path | None = None) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tla-tools-jar", type=Path, help="path to tla2tools.jar")
+    parser.add_argument("--java-bin", default="java", help="java executable to run TLC")
     args = parser.parse_args()
 
     for path in [FIXTURE, GENERATOR, SPEC, CFG, CHECKED_IN_DATA]:
@@ -65,7 +66,7 @@ def main() -> None:
         shutil.copy2(CFG, tmp_path / CFG.name)
         run(
             [
-                "java",
+                args.java_bin,
                 "-cp",
                 str(jar),
                 "tlc2.TLC",

@@ -65,12 +65,10 @@ fn run_scripted_headed(
 ) -> Result<StaticViewerOutcome, String> {
     match engine {
         ScriptedEngine::Boa => {
-            let doc = ScriptedDocument::<script_engine_boa::BoaEngine>::load(
-                &LocalFetcher,
-                &config.url,
-            )?;
+            let doc =
+                ScriptedDocument::<script_engine_boa::BoaEngine>::load(&LocalFetcher, &config.url)?;
             run_headed_with(config, doc)
-        }
+        },
         #[cfg(feature = "scripted-nova")]
         ScriptedEngine::Nova => {
             let doc = ScriptedDocument::<script_engine_nova::NovaEngine>::load(
@@ -78,7 +76,7 @@ fn run_scripted_headed(
                 &config.url,
             )?;
             run_headed_with(config, doc)
-        }
+        },
         #[cfg(not(feature = "scripted-nova"))]
         ScriptedEngine::Nova => Err(
             "the Nova engine needs `--features scripted-nova` (this build links Boa only)"

@@ -33,17 +33,24 @@ use webgl_wgpu::{CANONICAL_TRIANGLE_FRAGMENT_SHADER, CANONICAL_TRIANGLE_VERTEX_S
 
 #[test]
 fn canonical_triangle_vertex_round_trips_through_webgl_essl() {
-    let r = compile(CANONICAL_TRIANGLE_VERTEX_SHADER, ShaderStage::Vertex)
-        .expect("vertex compile");
+    let r = compile(CANONICAL_TRIANGLE_VERTEX_SHADER, ShaderStage::Vertex).expect("vertex compile");
     // The attribute lands at @location(0); the primary output
     // carries the BuiltIn::Position decoration.
-    assert!(r.wgsl.contains("@location(0)"), "missing attribute location: {}", r.wgsl);
+    assert!(
+        r.wgsl.contains("@location(0)"),
+        "missing attribute location: {}",
+        r.wgsl
+    );
     assert!(
         r.wgsl.contains("@builtin(position)"),
         "missing BuiltIn::Position: {}",
         r.wgsl
     );
-    assert!(r.info_log.is_empty(), "vertex info_log nonempty: {}", r.info_log);
+    assert!(
+        r.info_log.is_empty(),
+        "vertex info_log nonempty: {}",
+        r.info_log
+    );
 }
 
 #[test]
@@ -51,8 +58,16 @@ fn canonical_triangle_fragment_round_trips_through_webgl_essl() {
     let r = compile(CANONICAL_TRIANGLE_FRAGMENT_SHADER, ShaderStage::Fragment)
         .expect("fragment compile");
     // Naga emits the fragment output at @location(0).
-    assert!(r.wgsl.contains("@location(0)"), "missing output location: {}", r.wgsl);
-    assert!(r.info_log.is_empty(), "fragment info_log nonempty: {}", r.info_log);
+    assert!(
+        r.wgsl.contains("@location(0)"),
+        "missing output location: {}",
+        r.wgsl
+    );
+    assert!(
+        r.info_log.is_empty(),
+        "fragment info_log nonempty: {}",
+        r.info_log
+    );
 }
 
 // =====================================================================
@@ -88,8 +103,16 @@ void main() {
 "#;
     let r = compile(src, ShaderStage::Fragment).expect("compile");
     // The uniform block lives at @group(0) @binding(0).
-    assert!(r.wgsl.contains("@group(0)"), "expected group decoration: {}", r.wgsl);
-    assert!(r.wgsl.contains("@binding(0)"), "expected binding decoration: {}", r.wgsl);
+    assert!(
+        r.wgsl.contains("@group(0)"),
+        "expected group decoration: {}",
+        r.wgsl
+    );
+    assert!(
+        r.wgsl.contains("@binding(0)"),
+        "expected binding decoration: {}",
+        r.wgsl
+    );
 }
 
 #[test]
@@ -106,7 +129,11 @@ void main() {
     // Sampler descriptor goes to @binding(1) (the uniform Block
     // takes @binding(0) when present, kept at 0 even when
     // absent — see register_samplers).
-    assert!(r.wgsl.contains("@binding(1)"), "expected sampler binding: {}", r.wgsl);
+    assert!(
+        r.wgsl.contains("@binding(1)"),
+        "expected sampler binding: {}",
+        r.wgsl
+    );
 }
 
 // =====================================================================
@@ -148,10 +175,7 @@ fn webgl_essl_info_log_carries_line_number_for_failed_compile() {
 /// `ProgramReflection` derivation from the WGSL or directly
 /// from the SPIR-V module). For this probe it stays as a
 /// reference implementation in the test crate.
-fn integrated_compile(
-    source: &str,
-    stage: ShaderStage,
-) -> Result<String, String> {
+fn integrated_compile(source: &str, stage: ShaderStage) -> Result<String, String> {
     compile(source, stage)
         .map(|r| r.wgsl)
         .map_err(|e| format!("{e:?}"))
@@ -159,8 +183,8 @@ fn integrated_compile(
 
 #[test]
 fn integrated_compile_returns_wgsl_for_canonical_pair() {
-    let v = integrated_compile(CANONICAL_TRIANGLE_VERTEX_SHADER, ShaderStage::Vertex)
-        .expect("vertex");
+    let v =
+        integrated_compile(CANONICAL_TRIANGLE_VERTEX_SHADER, ShaderStage::Vertex).expect("vertex");
     let f = integrated_compile(CANONICAL_TRIANGLE_FRAGMENT_SHADER, ShaderStage::Fragment)
         .expect("fragment");
     assert!(v.contains("@vertex"));
@@ -176,8 +200,8 @@ fn integrated_compile_returns_wgsl_for_canonical_pair() {
 // =====================================================================
 
 use webgl_essl::ast::TypeKind;
-use webgl_essl::reflect::reflect;
 use webgl_essl::parse_source;
+use webgl_essl::reflect::reflect;
 
 /// Translate webgl-essl's [`reflect::ProgramReflection`] into
 /// the `wgpu::BindGroupLayoutEntry` rows a pipeline layout
@@ -252,7 +276,10 @@ void main() {
     assert_eq!(entries[0].binding, 0);
     assert!(matches!(
         entries[0].ty,
-        wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, .. }
+        wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            ..
+        }
     ));
 }
 

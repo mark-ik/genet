@@ -96,7 +96,10 @@ impl Parser {
                 Ok(sp)
             },
             Some(k) => Err(Error::new(
-                ErrorKind::Expected { wanted: label, got: k.label() },
+                ErrorKind::Expected {
+                    wanted: label,
+                    got: k.label(),
+                },
                 self.peek_span(),
             )),
             None => Err(Error::new(
@@ -117,7 +120,10 @@ impl Parser {
                 Ok((name, span))
             },
             Some(k) => Err(Error::new(
-                ErrorKind::Expected { wanted: label, got: k.label() },
+                ErrorKind::Expected {
+                    wanted: label,
+                    got: k.label(),
+                },
                 self.peek_span(),
             )),
             None => Err(Error::new(

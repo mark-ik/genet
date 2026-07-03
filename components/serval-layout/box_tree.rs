@@ -247,6 +247,11 @@ impl<Id: Copy + Eq + Hash> BoxTree<Id> {
         nid(arena)
     }
 
+    /// The number of box nodes currently in the arena.
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
     /// Re-point each *directly mutated* element box's cached paint style to the
     /// plane's freshly cascaded value. Paint reads `BoxNode::style` (the box-tree
     /// paint re-root), and the `RepaintOnly` apply path keeps this box tree (its

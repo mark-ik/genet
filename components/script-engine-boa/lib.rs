@@ -99,13 +99,18 @@ impl HostCell {
 fn make_pending(ctx: &mut Context) -> JsResult<(JsValue, PromiseToken)> {
     let (promise, resolvers) = JsPromise::new_pending(ctx);
     let Some(cell) = ctx.get_data::<HostCell>() else {
-        return Err(JsNativeError::typ().with_message("host cell missing").into());
+        return Err(JsNativeError::typ()
+            .with_message("host cell missing")
+            .into());
     };
     let token = cell.next_token.get();
     cell.next_token.set(token + 1);
     cell.pending.borrow_mut().insert(
         token,
-        PendingPromise { resolve: resolvers.resolve, reject: resolvers.reject },
+        PendingPromise {
+            resolve: resolvers.resolve,
+            reject: resolvers.reject,
+        },
     );
     Ok((promise.into(), token))
 }
@@ -160,8 +165,11 @@ impl ModuleLoader for HostModuleLoader {
             let specifier = request.specifier().to_std_string_escaped();
             // The importing module's URL (its `path`, set when we parsed it) is the
             // base its relative imports resolve against; empty for the entry's realm.
-            let referrer_url =
-                referrer.path().and_then(Path::to_str).unwrap_or("").to_string();
+            let referrer_url = referrer
+                .path()
+                .and_then(Path::to_str)
+                .unwrap_or("")
+                .to_string();
 
             let Some(ptr) = self.resolver.get() else {
                 return Err(JsNativeError::typ()
@@ -215,14 +223,20 @@ impl CallCx for BoaCallCx<'_> {
     }
 
     fn host_data(&self) -> Option<HostData> {
-        self.ctx.get_data::<HostCell>().and_then(|c| c.data.borrow().clone())
+        self.ctx
+            .get_data::<HostCell>()
+            .and_then(|c| c.data.borrow().clone())
     }
 
     fn reflector_for(&mut self, data: ReflectorData) -> Result<JsValue, JsError> {
         // Cache hit *and still alive*: return the same object so reflectors compare
         // `===`. A dead weak (script dropped it) falls through to a fresh mint.
         if let Some(cell) = self.ctx.get_data::<HostCell>() {
-            if let Some(obj) = cell.reflectors.borrow().get(&data).and_then(WeakJsObject::upgrade)
+            if let Some(obj) = cell
+                .reflectors
+                .borrow()
+                .get(&data)
+                .and_then(WeakJsObject::upgrade)
             {
                 return Ok(obj.into());
             }
@@ -399,10 +413,14 @@ impl ScriptEngine for BoaEngine {
         let undefined = JsValue::undefined();
         match outcome {
             Ok(value) => {
-                pending.resolve.call(&undefined, &[value.clone()], &mut self.ctx)?;
+                pending
+                    .resolve
+                    .call(&undefined, &[value.clone()], &mut self.ctx)?;
             },
             Err(error) => {
-                pending.reject.call(&undefined, &[error.clone()], &mut self.ctx)?;
+                pending
+                    .reject
+                    .call(&undefined, &[error.clone()], &mut self.ctx)?;
             },
         }
         Ok(())

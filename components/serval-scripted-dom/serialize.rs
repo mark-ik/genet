@@ -9,7 +9,7 @@
 
 use std::io;
 
-use html5ever::serialize::{serialize as html5ever_serialize, SerializeOpts};
+use html5ever::serialize::{SerializeOpts, serialize as html5ever_serialize};
 use layout_dom_api::NodeKind;
 use markup5ever::serialize::{Serialize, Serializer, TraversalScope};
 
@@ -54,7 +54,7 @@ impl Serialize for SerializableNode<'_> {
                         )?;
                         self.serialize_children(serializer)?;
                         serializer.end_elem(name.clone())?;
-                    }
+                    },
                     // A nameless "element" is malformed; emit its children rather
                     // than a bare tag.
                     None => self.serialize_children(serializer)?,
@@ -63,22 +63,22 @@ impl Serialize for SerializableNode<'_> {
                     if let Some(text) = &node.text {
                         serializer.write_text(text)?;
                     }
-                }
+                },
                 NodeKind::Comment => {
                     if let Some(text) = &node.text {
                         serializer.write_comment(text)?;
                     }
-                }
+                },
                 NodeKind::Doctype => {
                     serializer.write_doctype(node.text.as_deref().unwrap_or("html"))?;
-                }
+                },
                 NodeKind::Document | NodeKind::DocumentFragment => {
                     self.serialize_children(serializer)?;
-                }
+                },
                 // Processing instructions are not valid HTML (html5ever parses them
                 // as bogus comments); the scripted DOM never holds one, so emit
                 // nothing rather than invalid markup.
-                NodeKind::ProcessingInstruction => {}
+                NodeKind::ProcessingInstruction => {},
             },
             TraversalScope::ChildrenOnly(_) => self.serialize_children(serializer)?,
         }
@@ -107,8 +107,15 @@ impl ScriptedDom {
             ..SerializeOpts::default()
         };
         // Writing to an in-memory Vec is infallible; html5ever emits UTF-8.
-        html5ever_serialize(&mut buf, &SerializableNode { dom: self, id: node }, opts)
-            .expect("serializing the scripted DOM to a Vec is infallible");
+        html5ever_serialize(
+            &mut buf,
+            &SerializableNode {
+                dom: self,
+                id: node,
+            },
+            opts,
+        )
+        .expect("serializing the scripted DOM to a Vec is infallible");
         String::from_utf8(buf).expect("html5ever emits valid UTF-8")
     }
 }

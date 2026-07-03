@@ -61,10 +61,9 @@ fn arithmetic_result(op: BinOp, lhs: TypeKind, rhs: TypeKind) -> Option<TypeKind
     // Same type: result is that type, modulo non-arithmetic kinds.
     if lhs == rhs {
         return match lhs {
-            Int | Float
-            | Vec2 | Vec3 | Vec4
-            | Ivec2 | Ivec3 | Ivec4
-            | Mat2 | Mat3 | Mat4 => Some(lhs),
+            Int | Float | Vec2 | Vec3 | Vec4 | Ivec2 | Ivec3 | Ivec4 | Mat2 | Mat3 | Mat4 => {
+                Some(lhs)
+            },
             _ => None,
         };
     }
@@ -119,10 +118,9 @@ pub(super) fn unary_result(op: UnaryOp, operand: TypeKind) -> Option<TypeKind> {
     use UnaryOp::*;
     match op {
         Neg | Pos => match operand {
-            Int | Float
-            | Vec2 | Vec3 | Vec4
-            | Ivec2 | Ivec3 | Ivec4
-            | Mat2 | Mat3 | Mat4 => Some(operand),
+            Int | Float | Vec2 | Vec3 | Vec4 | Ivec2 | Ivec3 | Ivec4 | Mat2 | Mat3 | Mat4 => {
+                Some(operand)
+            },
             _ => None,
         },
         Not => {
@@ -141,10 +139,9 @@ pub(super) fn unary_result(op: UnaryOp, operand: TypeKind) -> Option<TypeKind> {
             }
         },
         PreInc | PreDec | PostInc | PostDec => match operand {
-            Int | Float
-            | Vec2 | Vec3 | Vec4
-            | Ivec2 | Ivec3 | Ivec4
-            | Mat2 | Mat3 | Mat4 => Some(operand),
+            Int | Float | Vec2 | Vec3 | Vec4 | Ivec2 | Ivec3 | Ivec4 | Mat2 | Mat3 | Mat4 => {
+                Some(operand)
+            },
             _ => None,
         },
     }
@@ -191,21 +188,13 @@ pub(super) fn constructor_result(name: &str, args: &[TypeKind]) -> Option<TypeKi
                     Int | Float | Bool => Some(ty),
                     Vec2 | Vec3 | Vec4 => {
                         let m = vec_size(args[0])?;
-                        if m >= n {
-                            Some(ty)
-                        } else {
-                            None
-                        }
+                        if m >= n { Some(ty) } else { None }
                     },
                     _ => None,
                 }
             } else {
                 let total: u32 = args.iter().map(|t| component_count(*t).unwrap_or(0)).sum();
-                if total == n {
-                    Some(ty)
-                } else {
-                    None
-                }
+                if total == n { Some(ty) } else { None }
             }
         },
         CtorTarget::Mat(n, ty) => {
@@ -217,11 +206,7 @@ pub(super) fn constructor_result(name: &str, args: &[TypeKind]) -> Option<TypeKi
                 }
             } else {
                 let total: u32 = args.iter().map(|t| component_count(*t).unwrap_or(0)).sum();
-                if total == n * n {
-                    Some(ty)
-                } else {
-                    None
-                }
+                if total == n * n { Some(ty) } else { None }
             }
         },
     }
@@ -269,9 +254,14 @@ pub(super) fn swizzle_result(base: TypeKind, field: &str) -> Option<TypeKind> {
     if chars.is_empty() || chars.len() > 4 {
         return None;
     }
-    const SWIZZLE_SETS: [&[char]; 3] =
-        [&['x', 'y', 'z', 'w'], &['r', 'g', 'b', 'a'], &['s', 't', 'p', 'q']];
-    let set = SWIZZLE_SETS.iter().find(|s| chars.iter().all(|c| s.contains(c)))?;
+    const SWIZZLE_SETS: [&[char]; 3] = [
+        &['x', 'y', 'z', 'w'],
+        &['r', 'g', 'b', 'a'],
+        &['s', 't', 'p', 'q'],
+    ];
+    let set = SWIZZLE_SETS
+        .iter()
+        .find(|s| chars.iter().all(|c| s.contains(c)))?;
     for c in &chars {
         let idx = set.iter().position(|sc| sc == c)? as u32;
         if idx >= base_size {

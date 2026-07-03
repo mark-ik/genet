@@ -26,8 +26,8 @@ use serval_layout::{IncrementalLayout, ScrollOffsets};
 use serval_render::scene_from_scripted_dom;
 use serval_scripted_dom::{NodeId, ScriptedDom};
 use xilem_serval::{
-    el, lens, on_click, text_field_typed, AnyView, DomHandle, KeyEvent, PointerClick,
-    ServalAppRunner, ServalCtx, ServalElement, TextField, TextInput,
+    AnyView, DomHandle, KeyEvent, PointerClick, ServalAppRunner, ServalCtx, ServalElement,
+    TextField, TextInput, el, lens, on_click, text_field_typed,
 };
 
 /// Which side of the window the chrome strip occupies. A horizontal strip (top/bottom)
@@ -168,7 +168,11 @@ fn go_forward(c: &mut ChromeState, _: PointerClick) {
 /// history edge).
 fn chrome_view(c: &ChromeState) -> ChromeView {
     let back_class = if c.can_back() { "nav" } else { "nav disabled" };
-    let fwd_class = if c.can_forward() { "nav" } else { "nav disabled" };
+    let fwd_class = if c.can_forward() {
+        "nav"
+    } else {
+        "nav disabled"
+    };
     let back = on_click(
         el::<_, ChromeState, ()>("button", "back").attr("class", back_class),
         go_back as fn(&mut ChromeState, PointerClick),
@@ -261,7 +265,8 @@ impl Chrome {
     /// (loading the resolved URL into the content root, handling Reload/Zoom/Custom…).
     pub fn take_intents(&mut self) -> Vec<ChromeIntent> {
         let mut intents = Vec::new();
-        self.runner.update(|s| intents = std::mem::take(&mut s.pending));
+        self.runner
+            .update(|s| intents = std::mem::take(&mut s.pending));
         for intent in &intents {
             match intent {
                 ChromeIntent::Back => self.runner.update(|s| {
@@ -273,8 +278,8 @@ impl Chrome {
                 ChromeIntent::Navigate(url) => {
                     let url = url.clone();
                     self.runner.update(move |s| s.navigate(url));
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
         intents
@@ -284,7 +289,8 @@ impl Chrome {
     /// when Enter is pressed with the omnibar focused).
     pub fn submit_omnibar(&mut self) {
         let url = self.runner.state().omnibar.text().to_string();
-        self.runner.update(|s| s.queue(ChromeIntent::Navigate(url.clone())));
+        self.runner
+            .update(|s| s.queue(ChromeIntent::Navigate(url.clone())));
     }
 
     /// Queue a navigation to `url` (a content link click the shell resolved to a URL).
@@ -292,7 +298,8 @@ impl Chrome {
     /// followed link walks the same history + omnibar path as a typed URL.
     pub fn navigate_to(&mut self, url: impl Into<String>) {
         let url = url.into();
-        self.runner.update(move |s| s.queue(ChromeIntent::Navigate(url.clone())));
+        self.runner
+            .update(move |s| s.queue(ChromeIntent::Navigate(url.clone())));
     }
 
     /// Paste `text` into the omnibar at the caret, replacing any selection. The shell
@@ -380,7 +387,10 @@ mod tests {
         let chrome = Chrome::new("example.org", StripSide::Top, 40);
         let scene = chrome.frame(800, 40);
         assert!(
-            scene.ops.iter().any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
+            scene
+                .ops
+                .iter()
+                .any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
             "the toolbar paints text (buttons + omnibar URL)",
         );
     }
@@ -400,7 +410,10 @@ mod tests {
         chrome.dispatch_click(back_node, PointerClick::at((0.0, 0.0)));
 
         let intents = chrome.take_intents();
-        assert!(intents.contains(&ChromeIntent::Back), "click queued Back: {intents:?}");
+        assert!(
+            intents.contains(&ChromeIntent::Back),
+            "click queued Back: {intents:?}"
+        );
         assert_eq!(chrome.state().current(), "a", "Back stepped history");
     }
 
@@ -415,8 +428,16 @@ mod tests {
             intents.contains(&ChromeIntent::Navigate("b.html".to_string())),
             "navigate_to queued a Navigate: {intents:?}",
         );
-        assert_eq!(chrome.state().current(), "b.html", "history advanced to the link target");
-        assert_eq!(chrome.state().omnibar.text(), "b.html", "the omnibar shows the new URL");
+        assert_eq!(
+            chrome.state().current(),
+            "b.html",
+            "history advanced to the link target"
+        );
+        assert_eq!(
+            chrome.state().omnibar.text(),
+            "b.html",
+            "the omnibar shows the new URL"
+        );
     }
 
     /// Pasting inserts text into the omnibar at the caret (the shell supplies the
@@ -427,8 +448,14 @@ mod tests {
         let before = chrome.state().omnibar.text().to_string();
         chrome.paste("ZZ");
         let after = chrome.state().omnibar.text();
-        assert!(after.contains("ZZ"), "the pasted text is in the omnibar: {after}");
-        assert!(after.len() > before.len(), "the omnibar grew by the pasted text");
+        assert!(
+            after.contains("ZZ"),
+            "the pasted text is in the omnibar: {after}"
+        );
+        assert!(
+            after.len() > before.len(),
+            "the omnibar grew by the pasted text"
+        );
     }
 
     impl Chrome {
@@ -446,7 +473,10 @@ mod tests {
         let dom = dom.borrow();
         let mut stack = vec![dom.document()];
         while let Some(node) = stack.pop() {
-            if dom.element_name(node).is_some_and(|q| q.local.as_ref() == "button") {
+            if dom
+                .element_name(node)
+                .is_some_and(|q| q.local.as_ref() == "button")
+            {
                 let text: String = dom
                     .dom_children(node)
                     .filter_map(|c| dom.text(c).map(str::to_string))

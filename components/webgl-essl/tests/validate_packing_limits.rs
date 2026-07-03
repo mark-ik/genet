@@ -50,7 +50,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Vertex);
-    assert_eq!(r13_count(&r, "attribute"), 0, "8 attributes pass: {:#?}", r.errors);
+    assert_eq!(
+        r13_count(&r, "attribute"),
+        0,
+        "8 attributes pass: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -70,7 +75,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Vertex);
-    assert_eq!(r13_count(&r, "attribute"), 1, "9 attributes fail: {:#?}", r.errors);
+    assert_eq!(
+        r13_count(&r, "attribute"),
+        1,
+        "9 attributes fail: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -85,7 +95,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Vertex);
-    assert_eq!(r13_count(&r, "attribute"), 1, "3 mat4 (12 slots) fail: {:#?}", r.errors);
+    assert_eq!(
+        r13_count(&r, "attribute"),
+        1,
+        "3 mat4 (12 slots) fail: {:#?}",
+        r.errors
+    );
 }
 
 // ---------- varying slot limit (both stages) -------------------------
@@ -108,7 +123,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Vertex);
-    assert_eq!(r13_count(&r, "varying"), 0, "8 varyings pass: {:#?}", r.errors);
+    assert_eq!(
+        r13_count(&r, "varying"),
+        0,
+        "8 varyings pass: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -129,7 +149,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(r13_count(&r, "varying"), 1, "9 varyings fail: {:#?}", r.errors);
+    assert_eq!(
+        r13_count(&r, "varying"),
+        1,
+        "9 varyings fail: {:#?}",
+        r.errors
+    );
 }
 
 // ---------- fragment uniform slot limit ------------------------------
@@ -159,7 +184,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(r13_count(&r, "fragment uniform"), 0, "16 uniforms pass: {:#?}", r.errors);
+    assert_eq!(
+        r13_count(&r, "fragment uniform"),
+        0,
+        "16 uniforms pass: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -188,7 +218,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(r13_count(&r, "fragment uniform"), 1, "17 uniforms fail: {:#?}", r.errors);
+    assert_eq!(
+        r13_count(&r, "fragment uniform"),
+        1,
+        "17 uniforms fail: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -206,7 +241,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(r13_count(&r, "fragment uniform"), 1, "5 mat4 (20 slots) fail: {:#?}", r.errors);
+    assert_eq!(
+        r13_count(&r, "fragment uniform"),
+        1,
+        "5 mat4 (20 slots) fail: {:#?}",
+        r.errors
+    );
 }
 
 // ---------- vertex uniform slot limit (much higher) -----------------
@@ -225,7 +265,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Vertex);
-    assert_eq!(r13_count(&r, "vertex uniform"), 0, "few uniforms pass: {:#?}", r.errors);
+    assert_eq!(
+        r13_count(&r, "vertex uniform"),
+        0,
+        "few uniforms pass: {:#?}",
+        r.errors
+    );
 }
 
 // ---------- samplers do not count -----------------------------------
@@ -259,5 +304,10 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(r13_count(&r, "fragment uniform"), 0, "samplers do not count: {:#?}", r.errors);
+    assert_eq!(
+        r13_count(&r, "fragment uniform"),
+        0,
+        "samplers do not count: {:#?}",
+        r.errors
+    );
 }

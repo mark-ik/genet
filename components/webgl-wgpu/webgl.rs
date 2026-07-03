@@ -357,12 +357,7 @@ pub(super) fn color_mask_bits(mask: [bool; 4]) -> u8 {
 
 /// Inverse of [`color_mask_bits`]: unpack 4 mask bits into (R, G, B, A).
 pub(super) fn unpack_color_mask(bits: u8) -> [bool; 4] {
-    [
-        bits & 1 != 0,
-        bits & 2 != 0,
-        bits & 4 != 0,
-        bits & 8 != 0,
-    ]
+    [bits & 1 != 0, bits & 2 != 0, bits & 4 != 0, bits & 8 != 0]
 }
 
 mod draw;
@@ -526,7 +521,12 @@ impl WebGlContext {
     /// `LoadOp::Load` (preserve). The clear color rides in a uniform buffer.
     /// Used only when `color_mask` is partial; an all-true mask takes the
     /// faster `LoadOp::Clear` path.
-    fn masked_clear(&mut self, view: &wgpu::TextureView, format: wgpu::TextureFormat, color: wgpu::Color) {
+    fn masked_clear(
+        &mut self,
+        view: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        color: wgpu::Color,
+    ) {
         let device = &self.canvas.device;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("webgl-wgpu masked-clear shader"),
@@ -594,7 +594,10 @@ impl WebGlContext {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: true,
         });
-        buffer.slice(..).get_mapped_range_mut().copy_from_slice(&raw);
+        buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(&raw);
         buffer.unmap();
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("webgl-wgpu masked-clear bind group"),

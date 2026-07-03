@@ -34,7 +34,11 @@ impl Parser {
                 let rhs = self.expr_bp(r_bp)?;
                 let op = prefix_op_from_punct(op_punct);
                 let span = op_span.merge(rhs.span());
-                Expr::Unary { op, expr: Box::new(rhs), span }
+                Expr::Unary {
+                    op,
+                    expr: Box::new(rhs),
+                    span,
+                }
             } else {
                 self.primary_expr()?
             }
@@ -134,7 +138,11 @@ impl Parser {
                 })
             },
             Punct::PlusPlus | Punct::MinusMinus => {
-                let op = if p == Punct::PlusPlus { UnaryOp::PostInc } else { UnaryOp::PostDec };
+                let op = if p == Punct::PlusPlus {
+                    UnaryOp::PostInc
+                } else {
+                    UnaryOp::PostDec
+                };
                 let base_span = lhs.span();
                 Ok(Expr::Unary {
                     op,
@@ -208,11 +216,16 @@ impl Parser {
                 })
             },
             Some(k) => Err(Error::new(
-                ErrorKind::Expected { wanted: "expression", got: k.label() },
+                ErrorKind::Expected {
+                    wanted: "expression",
+                    got: k.label(),
+                },
                 self.peek_span(),
             )),
             None => Err(Error::new(
-                ErrorKind::UnexpectedEof { wanted: "expression" },
+                ErrorKind::UnexpectedEof {
+                    wanted: "expression",
+                },
                 self.peek_span(),
             )),
         }
@@ -233,13 +246,18 @@ impl Parser {
                 Some(TokenKind::Punct(Punct::RParen)) => break,
                 Some(k) => {
                     return Err(Error::new(
-                        ErrorKind::Expected { wanted: "`,` or `)`", got: k.label() },
+                        ErrorKind::Expected {
+                            wanted: "`,` or `)`",
+                            got: k.label(),
+                        },
                         self.peek_span(),
                     ));
                 },
                 None => {
                     return Err(Error::new(
-                        ErrorKind::UnexpectedEof { wanted: "`,` or `)`" },
+                        ErrorKind::UnexpectedEof {
+                            wanted: "`,` or `)`",
+                        },
                         self.peek_span(),
                     ));
                 },
@@ -263,11 +281,7 @@ const TERNARY_BP: u8 = 3;
 
 fn infix_bp(p: Punct) -> Option<(u8, u8)> {
     Some(match p {
-        Punct::Assign
-        | Punct::PlusEq
-        | Punct::MinusEq
-        | Punct::StarEq
-        | Punct::SlashEq => (2, 1),
+        Punct::Assign | Punct::PlusEq | Punct::MinusEq | Punct::StarEq | Punct::SlashEq => (2, 1),
         Punct::OrOr => (5, 6),
         Punct::AndAnd => (7, 8),
         Punct::Pipe => (9, 10),
@@ -316,7 +330,12 @@ fn prefix_op_from_punct(p: Punct) -> UnaryOp {
 fn make_infix(p: Punct, lhs: Expr, rhs: Expr) -> Expr {
     let span = lhs.span().merge(rhs.span());
     if let Some(op) = assign_op_from_punct(p) {
-        return Expr::Assign { op, lhs: Box::new(lhs), rhs: Box::new(rhs), span };
+        return Expr::Assign {
+            op,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+            span,
+        };
     }
     let op = match p {
         Punct::OrOr => BinOp::LogOr,
@@ -339,7 +358,12 @@ fn make_infix(p: Punct, lhs: Expr, rhs: Expr) -> Expr {
         Punct::Percent => BinOp::Rem,
         _ => unreachable!("infix_bp returned Some for non-binary `{p:?}`"),
     };
-    Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs), span }
+    Expr::Binary {
+        op,
+        lhs: Box::new(lhs),
+        rhs: Box::new(rhs),
+        span,
+    }
 }
 
 fn assign_op_from_punct(p: Punct) -> Option<AssignOp> {

@@ -14,9 +14,7 @@ use html5ever::interface::ElemName;
 use html5ever::interface::tree_builder::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
 use html5ever::tendril::{StrTendril, TendrilSink};
 use html5ever::{Attribute, LocalName, Namespace, QualName, parse_document};
-use layout_dom_api::{
-    AttributeView, LayoutDom, NodeKind as LayoutDomNodeKind,
-};
+use layout_dom_api::{AttributeView, LayoutDom, NodeKind as LayoutDomNodeKind};
 
 /// Stable identifier for a node in a [`StaticDocument`].
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -42,7 +40,7 @@ impl StaticDocument {
     /// `.xht` corpus that is the intended behavior. See
     /// `docs/2026-05-31_css_rendering_conformance_plan.md`.
     pub fn parse_xml(input: &str) -> Self {
-        use xml5ever::driver::{parse_document as parse_xml_document, XmlParseOpts};
+        use xml5ever::driver::{XmlParseOpts, parse_document as parse_xml_document};
         use xml5ever::tendril::TendrilSink;
         parse_xml_document(StaticTreeSink::new(), XmlParseOpts::default()).one(input)
     }
@@ -212,10 +210,7 @@ impl LayoutDom for StaticDocument {
         siblings.get(idx + 1).copied()
     }
 
-    fn dom_children(
-        &self,
-        id: StaticNodeId,
-    ) -> impl Iterator<Item = StaticNodeId> + '_ {
+    fn dom_children(&self, id: StaticNodeId) -> impl Iterator<Item = StaticNodeId> + '_ {
         self.nodes[id.0].children.iter().copied()
     }
 
@@ -244,12 +239,7 @@ impl LayoutDom for StaticDocument {
         }
     }
 
-    fn attribute(
-        &self,
-        id: StaticNodeId,
-        ns: &Namespace,
-        local: &LocalName,
-    ) -> Option<&str> {
+    fn attribute(&self, id: StaticNodeId, ns: &Namespace, local: &LocalName) -> Option<&str> {
         let StaticNodeKind::Element { attrs, .. } = &self.nodes[id.0].kind else {
             return None;
         };
@@ -259,10 +249,7 @@ impl LayoutDom for StaticDocument {
             .map(|a| a.value.as_ref())
     }
 
-    fn attributes(
-        &self,
-        id: StaticNodeId,
-    ) -> impl Iterator<Item = AttributeView<'_>> + '_ {
+    fn attributes(&self, id: StaticNodeId) -> impl Iterator<Item = AttributeView<'_>> + '_ {
         let attrs = match &self.nodes[id.0].kind {
             StaticNodeKind::Element { attrs, .. } => Some(attrs.as_slice()),
             _ => None,
@@ -589,7 +576,11 @@ mod tests {
             panic!("document element should be an element");
         };
         assert_eq!(name.local, local_name!("html"));
-        assert_eq!(name.ns, ns!(html), "xmlns should put <html> in the HTML namespace");
+        assert_eq!(
+            name.ns,
+            ns!(html),
+            "xmlns should put <html> in the HTML namespace"
+        );
 
         // The body/p text round-trips through the shared sink.
         let mut found_p_text = false;
@@ -600,7 +591,10 @@ mod tests {
                 }
             }
         }
-        assert!(found_p_text, "<p>Hi</p> text should be in the parsed XHTML tree");
+        assert!(
+            found_p_text,
+            "<p>Hi</p> text should be in the parsed XHTML tree"
+        );
     }
 
     #[test]

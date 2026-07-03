@@ -420,6 +420,7 @@ where
     RestyleOutcome {
         needs_relayout: damage.contains(RestyleDamage::RELAYOUT),
         damage,
+        restyled_elements: plane.damaged_entry_count(),
     }
 }
 
@@ -437,6 +438,8 @@ pub struct RestyleOutcome {
     /// `transform` change registered `RECALCULATE_OVERFLOW` rather than being a
     /// silent no-op that would also produce a (misleading) repaint-only result.
     pub damage: RestyleDamage,
+    /// How many elements Stylo actually restyled in this pass.
+    pub restyled_elements: usize,
 }
 
 // =============================================================================
@@ -566,6 +569,7 @@ where
     RestyleOutcome {
         needs_relayout: damage.contains(RestyleDamage::RELAYOUT),
         damage,
+        restyled_elements: plane.damaged_entry_count(),
     }
 }
 
@@ -591,15 +595,18 @@ pub fn restyle_structural<D>(
     plane: &mut StylePlane<D::NodeId>,
     stylist: &Stylist,
     roots: &[D::NodeId],
-) where
+) -> RestyleOutcome
+where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash + 'static,
 {
     use style::invalidation::element::restyle_hints::RestyleHint;
 
     plane.reset_damage();
+    let mut restyled_elements = 0usize;
 
     for &root in roots {
+        restyled_elements += count_element_subtree(dom, root);
         // Hint the root's subtree for restyle. The root existed before the
         // mutation (it's the container / replaced node), so it has data;
         // RESTYLE_DESCENDANTS propagates to its children — including any
@@ -624,6 +631,13 @@ pub fn restyle_structural<D>(
     // base_url None: structural restyle reuses prior resolved url()s
     // (same follow-up as the snapshot path).
     cascade_traverse(dom, plane, stylist, None, None);
+
+    let damage = plane.aggregate_damage();
+    RestyleOutcome {
+        needs_relayout: damage.contains(RestyleDamage::RELAYOUT),
+        damage,
+        restyled_elements,
+    }
 }
 
 /// Shared cascade traversal over a caller-owned [`Stylist`]. `snapshots =
@@ -1261,6 +1275,14 @@ fn first_element_descendant<D: LayoutDom>(dom: &D, from: D::NodeId) -> Option<D:
         }
     }
     None
+}
+
+fn count_element_subtree<D: LayoutDom>(dom: &D, root: D::NodeId) -> usize {
+    let mut count = usize::from(matches!(dom.kind(root), layout_dom_api::NodeKind::Element));
+    for child in dom.dom_children(root) {
+        count += count_element_subtree(dom, child);
+    }
+    count
 }
 
 #[cfg(test)]

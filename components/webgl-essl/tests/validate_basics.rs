@@ -9,9 +9,7 @@
 
 use webgl_essl::ast::TypeKind;
 use webgl_essl::parse_source;
-use webgl_essl::validate::{
-    ShaderStage, Severity, WebGlDiagnosticKind, validate,
-};
+use webgl_essl::validate::{Severity, ShaderStage, WebGlDiagnosticKind, validate};
 
 fn validate_src(src: &str, stage: ShaderStage) -> webgl_essl::validate::ValidationResult {
     let tu = parse_source(src).unwrap_or_else(|e| panic!("parse: {}", e.display(src)));
@@ -35,7 +33,10 @@ void main() { f(); }
     assert_eq!(recursion.len(), 1, "direct self-recursion `f -> f`");
     match &recursion[0].kind {
         WebGlDiagnosticKind::Recursion { cycle } => {
-            assert!(cycle.iter().any(|n| n == "f"), "cycle should contain f: {cycle:?}");
+            assert!(
+                cycle.iter().any(|n| n == "f"),
+                "cycle should contain f: {cycle:?}"
+            );
         },
         _ => unreachable!(),
     }
@@ -93,7 +94,10 @@ void main() {
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
     assert_eq!(
-        r.errors.iter().filter(|d| matches!(d.kind, WebGlDiagnosticKind::Recursion { .. })).count(),
+        r.errors
+            .iter()
+            .filter(|d| matches!(d.kind, WebGlDiagnosticKind::Recursion { .. }))
+            .count(),
         0
     );
 }
@@ -108,7 +112,10 @@ void main() {
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
     assert_eq!(
-        r.errors.iter().filter(|d| matches!(d.kind, WebGlDiagnosticKind::Recursion { .. })).count(),
+        r.errors
+            .iter()
+            .filter(|d| matches!(d.kind, WebGlDiagnosticKind::Recursion { .. }))
+            .count(),
         0
     );
 }
@@ -126,7 +133,10 @@ void main() {
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
     assert_eq!(
-        r.errors.iter().filter(|d| matches!(d.kind, WebGlDiagnosticKind::DiscardOutsideFragment { .. })).count(),
+        r.errors
+            .iter()
+            .filter(|d| matches!(d.kind, WebGlDiagnosticKind::DiscardOutsideFragment { .. }))
+            .count(),
         0
     );
 }
@@ -174,7 +184,10 @@ void main() {
     assert_eq!(bad.len(), 1);
     match &bad[0].kind {
         WebGlDiagnosticKind::DiscardOutsideFragment { function } => {
-            assert_eq!(function, "abort_path", "the function holding the discard, not main");
+            assert_eq!(
+                function, "abort_path",
+                "the function holding the discard, not main"
+            );
         },
         _ => unreachable!(),
     }
@@ -205,7 +218,10 @@ fn main_with_non_void_return_emits_error() {
         .collect();
     assert_eq!(bad.len(), 1);
     match &bad[0].kind {
-        WebGlDiagnosticKind::MainBadSignature { return_ty, param_count } => {
+        WebGlDiagnosticKind::MainBadSignature {
+            return_ty,
+            param_count,
+        } => {
             assert_eq!(*return_ty, TypeKind::Float);
             assert_eq!(*param_count, 0);
         },
@@ -224,7 +240,10 @@ fn main_with_params_emits_error() {
         .collect();
     assert_eq!(bad.len(), 1);
     match &bad[0].kind {
-        WebGlDiagnosticKind::MainBadSignature { return_ty, param_count } => {
+        WebGlDiagnosticKind::MainBadSignature {
+            return_ty,
+            param_count,
+        } => {
             assert_eq!(*return_ty, TypeKind::Void);
             assert_eq!(*param_count, 1);
         },
@@ -237,12 +256,18 @@ fn void_main_void_is_accepted() {
     let src = "void main(void) {}";
     let r = validate_src(src, ShaderStage::Fragment);
     assert_eq!(
-        r.errors.iter().filter(|d| matches!(d.kind, WebGlDiagnosticKind::MainBadSignature { .. })).count(),
+        r.errors
+            .iter()
+            .filter(|d| matches!(d.kind, WebGlDiagnosticKind::MainBadSignature { .. }))
+            .count(),
         0,
         "`void main(void)` should be accepted alongside `void main()`"
     );
     assert_eq!(
-        r.errors.iter().filter(|d| matches!(d.kind, WebGlDiagnosticKind::MainNotDefined)).count(),
+        r.errors
+            .iter()
+            .filter(|d| matches!(d.kind, WebGlDiagnosticKind::MainNotDefined))
+            .count(),
         0
     );
 }
@@ -262,7 +287,10 @@ void main() {
     let lines: Vec<&str> = r.info_log.lines().collect();
     let first = lines[0];
     assert!(first.starts_with("ERROR: 0:"), "got: {first}");
-    assert!(first.contains("discard"), "message should mention discard: {first}");
+    assert!(
+        first.contains("discard"),
+        "message should mention discard: {first}"
+    );
 }
 
 #[test]

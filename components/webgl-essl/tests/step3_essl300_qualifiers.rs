@@ -65,7 +65,10 @@ fn directive_after_code_is_rejected_by_lexer() {
     // reaches the lexer, which has no rule for `#` and errors.
     let src = "void helper() {}\n#version 300 es\nvoid main() {}\n";
     let result = parse_source(src);
-    assert!(result.is_err(), "stray `#version` after code should be a lex error");
+    assert!(
+        result.is_err(),
+        "stray `#version` after code should be a lex error"
+    );
 }
 
 #[test]

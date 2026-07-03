@@ -8,16 +8,24 @@ its residual spec-fidelity gaps so they stay live, prioritized by what that
 measurement actually found (a verbose `custom-elements --engine boa` run,
 156 failing/errored files categorized below) rather than by guesswork.
 
-## Highest-yield: `adoptedCallback` (unimplemented)
+## Highest-yield: `adoptedCallback` (minimal core landed 2026-07-02)
 
-`custom-elements/adopted-callback.html` (142 subtests) and
-`custom-elements/registries/adoption.window.html` (36 subtests) both fail
-outright — grepping `bootstrap.js` turns up no `adoptedCallback` wiring at
-all. 178 subtests behind one callback, same shape as the
-connected/disconnected/attributeChanged reactions I3 already landed
-(`enqueueCustomElementReaction` + the microtask-scheduled flush). Cheapest,
-highest-yield item here — same "small mechanism, big return" shape I1 was for
-the whole plan.
+The outright "no wiring at all" gap is closed. `bootstrap.js` now tracks
+per-node `ownerDocument`, updates it on cross-document insertion and
+`Document.adoptNode`, and enqueues `adoptedCallback(oldDocument, newDocument)`
+through the same microtask reaction queue already used for
+connected/disconnected/attributeChanged. Focused Boa/Nova runtime tests cover:
+
+- detached custom element insertion into another document,
+- connected cross-document moves (`disconnected` -> `adopted` -> `connected`),
+- `Document.adoptNode` for detached and connected elements,
+- ancestor moves carrying adopted custom-element descendants.
+
+What remains from the old bucket is the broader registry/shadow-root adoption
+surface. The local WPT path is `custom-elements/registries/adoption.window.js`
+now, and its remaining failures depend on missing Shadow DOM /
+`customElementRegistry` support rather than on `adoptedCallback` still being
+absent.
 
 ## New gap this measurement surfaced: form-associated custom elements / `ElementInternals`
 
@@ -37,17 +45,28 @@ rather than folding into a quick fix here.
   foreign-content and `document.write` variants). Spec requires the parser to
   construct custom elements synchronously during tree construction, not just
   upgrade them after the fact.
-- **Construction failure states** — `HTMLElement-constructor*`,
-  `customized-built-in-constructor-exceptions`,
-  `htmlconstructor/newtarget*`, `microtasks-and-constructors`,
-  `perform-microtask-checkpoint-before-construction`, `registries/Construct.html`,
-  `constructor-reentry-with-different-definition`. About a dozen files
-  exercising the `NewTarget` / prototype-swizzling / reentrancy edge cases the
-  spec's "constructing an element" algorithm is fussy about.
-- **Fuller custom-element name validation + registry edge cases** —
-  `CustomElementRegistry.html` (42/92 today) and
-  `CustomElementRegistry-getName.html` carry the remaining validation-ordering
-  and error-shape gaps in the registry API surface.
+- **Construction failure states** — the direct HTML-constructor core landed on
+  2026-07-02: interface constructors now consult the registry's constructor
+  table, `new HTMLElement()` and unregistered/wrong-base constructors throw
+  `TypeError`, registered autonomous/customized constructors mint real elements,
+  and `Reflect.construct(HTMLElement, [], PlainCtor)` now uses the registered
+  custom-element definition instead of only the upgrade-time construction
+  stack. What still remains in the old bucket is the harder failure/reporting
+  side: `Document-createElement*` fallback-to-unknown behavior, returned-value
+  validation, exact proxy-`NewTarget` / prototype-access-count fidelity,
+  parser-time construction failures, and reentrancy corners like
+  `constructor-reentry-with-different-definition`.
+- **Fuller custom-element registry semantics** — the contained validation /
+  ordering slice is now landed: valid-name checks reject uppercase + reserved
+  names, `whenDefined` keeps one pending promise per unresolved valid name and
+  rejects invalid names, `getName` type-checks its argument, `define` enforces
+  an element-definition-running flag, and constructor/prototype property access
+  follows the WPT-observed order (`prototype`, callback probes,
+  `observedAttributes` when needed, then `disabledFeatures` /
+  `formAssociated`). What still remains in `CustomElementRegistry.html`,
+  `CustomElementRegistry-getName.html`, and `registries/Construct.html` is the
+  larger constructor-failure / `NewTarget` / shadow-registry side, not the
+  small API-contract holes.
 - **Fuller spec reaction-stack semantics** — no single failing file isolates
   this; it's the general rigor gap behind the reaction queue being a flat
   array today rather than the spec's backup-element-queue stack. Lower
@@ -62,12 +81,10 @@ plan's "Shadow DOM / slotting beyond what custom-elements reactions strictly
 need" non-goal. Don't re-litigate; re-open only if a shadow-DOM plan lands
 first and wants to claim them.
 
-## Smaller nit, already known
+## Smaller nit, landed 2026-07-02
 
 `HTMLVideoElement` and `HTMLAudioElement` (`components/script-runtime-api/dom/html_interfaces.rs`)
-both declare `parent: "HTMLElement"` directly and duplicate
-`src`/`crossOrigin`/`preload`/`autoplay`/`loop`/`controls` instead of
-inheriting them from a shared `HTMLMediaElement` entry. Works today (the
-duplication is functionally harmless), but `instanceof HTMLMediaElement` is
-false for both, which idlharness tests will catch. Trivial fix whenever
-someone's back in that file for another interface.
+now inherit from a shared `HTMLMediaElement` entry instead of each duplicating
+the common reflected surface under `HTMLElement`. `instanceof HTMLMediaElement`
+is now true for both audio and video, which closes the idlharness-visible
+inheritance hole that used to sit here.

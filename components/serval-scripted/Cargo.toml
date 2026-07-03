@@ -32,7 +32,7 @@ scripted-nova = ["dep:script-engine-nova"]
 
 [dependencies]
 serval-scripted-dom = { path = "../serval-scripted-dom" }
-layout-dom-api = { path = "../shared/layout-dom" }
+layout-dom-api = { path = "../shared/layout-dom", features = ["capture"] }
 serval-layout = { path = "../serval-layout", optional = true }
 serval-render = { path = "../serval-render", optional = true }
 serval-static-dom = { path = "../serval-static-dom" }
@@ -40,9 +40,12 @@ serval-extract = { path = "../serval-extract" }
 script-runtime-api = { path = "../script-runtime-api" }
 netrender = { workspace = true, optional = true }
 encoding_rs = { workspace = true }
+postcard = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 sha2 = { workspace = true }
 base64 = { workspace = true }
 url = { workspace = true }
+engine_observables_api = { workspace = true }
 # Engine-neutral scripting contract (the native-callback + host-data surface).
 script-engine-api = { path = "../script-engine-api" }
 

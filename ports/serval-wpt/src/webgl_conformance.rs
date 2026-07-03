@@ -27,7 +27,7 @@ use webgl_wgpu::{
     WebGlUniformLocation,
 };
 
-use crate::harness::{run_test_with_webgl, DiskLoader, Engine, HarnessOutcome};
+use crate::harness::{DiskLoader, Engine, HarnessOutcome, run_test_with_webgl};
 
 // GLenum subset the bridge decodes.
 const GL_NO_ERROR: u32 = 0x0000;
@@ -89,9 +89,12 @@ struct WgpuWebGl {
 impl WgpuWebGl {
     fn new(width: u32, height: u32) -> Self {
         let (device, queue) = shared_device();
-        let canvas =
-            WebGlCanvas::from_wgpu_handles(device, queue, WebGlCanvasDescriptor::new(width, height))
-                .expect("canvas");
+        let canvas = WebGlCanvas::from_wgpu_handles(
+            device,
+            queue,
+            WebGlCanvasDescriptor::new(width, height),
+        )
+        .expect("canvas");
         let context = WebGlContext::from_canvas(canvas);
         let mut caps = HashSet::new();
         caps.insert(GL_DITHER);
@@ -166,12 +169,16 @@ impl WebGlHandler for WgpuWebGl {
         id
     }
     fn bind_buffer(&mut self, target: u32, buffer: Option<u64>) {
-        let Some(target) = Self::buffer_target(target) else { return };
+        let Some(target) = Self::buffer_target(target) else {
+            return;
+        };
         let resolved = buffer.and_then(|id| self.buffers.borrow().get(&id).copied());
         self.context.borrow_mut().bind_buffer(target, resolved);
     }
     fn buffer_data_f32(&mut self, target: u32, data: &[f32], _usage: u32) {
-        let Some(target) = Self::buffer_target(target) else { return };
+        let Some(target) = Self::buffer_target(target) else {
+            return;
+        };
         self.context
             .borrow_mut()
             .buffer_data_f32(target, data, BufferUsage::StaticDraw);
@@ -189,21 +196,29 @@ impl WebGlHandler for WgpuWebGl {
         id
     }
     fn shader_source(&mut self, shader: u64, source: &str) {
-        let Some(&shader_id) = self.shaders.borrow().get(&shader) else { return };
+        let Some(&shader_id) = self.shaders.borrow().get(&shader) else {
+            return;
+        };
         self.context.borrow_mut().shader_source(shader_id, source);
     }
     fn compile_shader(&mut self, shader: u64) {
-        let Some(&shader_id) = self.shaders.borrow().get(&shader) else { return };
+        let Some(&shader_id) = self.shaders.borrow().get(&shader) else {
+            return;
+        };
         self.context.borrow_mut().compile_shader(shader_id);
     }
     fn get_shader_compile_status(&mut self, shader: u64) -> bool {
-        let Some(&shader_id) = self.shaders.borrow().get(&shader) else { return false };
+        let Some(&shader_id) = self.shaders.borrow().get(&shader) else {
+            return false;
+        };
         self.context
             .borrow_mut()
             .get_shader_compile_status(shader_id)
     }
     fn get_shader_info_log(&mut self, shader: u64) -> String {
-        let Some(&shader_id) = self.shaders.borrow().get(&shader) else { return String::new() };
+        let Some(&shader_id) = self.shaders.borrow().get(&shader) else {
+            return String::new();
+        };
         self.context
             .borrow_mut()
             .get_shader_info_log(shader_id)
@@ -217,22 +232,34 @@ impl WebGlHandler for WgpuWebGl {
         id
     }
     fn attach_shader(&mut self, program: u64, shader: u64) {
-        let Some(&program_id) = self.programs.borrow().get(&program) else { return };
-        let Some(&shader_id) = self.shaders.borrow().get(&shader) else { return };
-        self.context.borrow_mut().attach_shader(program_id, shader_id);
+        let Some(&program_id) = self.programs.borrow().get(&program) else {
+            return;
+        };
+        let Some(&shader_id) = self.shaders.borrow().get(&shader) else {
+            return;
+        };
+        self.context
+            .borrow_mut()
+            .attach_shader(program_id, shader_id);
     }
     fn link_program(&mut self, program: u64) {
-        let Some(&program_id) = self.programs.borrow().get(&program) else { return };
+        let Some(&program_id) = self.programs.borrow().get(&program) else {
+            return;
+        };
         self.context.borrow_mut().link_program(program_id);
     }
     fn get_program_link_status(&mut self, program: u64) -> bool {
-        let Some(&program_id) = self.programs.borrow().get(&program) else { return false };
+        let Some(&program_id) = self.programs.borrow().get(&program) else {
+            return false;
+        };
         self.context
             .borrow_mut()
             .get_program_link_status(program_id)
     }
     fn get_program_info_log(&mut self, program: u64) -> String {
-        let Some(&program_id) = self.programs.borrow().get(&program) else { return String::new() };
+        let Some(&program_id) = self.programs.borrow().get(&program) else {
+            return String::new();
+        };
         self.context
             .borrow_mut()
             .get_program_info_log(program_id)
@@ -244,13 +271,17 @@ impl WebGlHandler for WgpuWebGl {
     }
 
     fn get_attrib_location(&mut self, program: u64, name: &str) -> i32 {
-        let Some(&program_id) = self.programs.borrow().get(&program) else { return -1 };
+        let Some(&program_id) = self.programs.borrow().get(&program) else {
+            return -1;
+        };
         self.context
             .borrow_mut()
             .get_attrib_location(program_id, name)
     }
     fn get_uniform_location(&mut self, program: u64, name: &str) -> i32 {
-        let Some(&program_id) = self.programs.borrow().get(&program) else { return -1 };
+        let Some(&program_id) = self.programs.borrow().get(&program) else {
+            return -1;
+        };
         let Some(loc) = self
             .context
             .borrow_mut()
@@ -425,11 +456,9 @@ mod tests {
         let mut rt = Runtime::<BoaEngine>::new().expect("runtime");
         rt.set_webgl_factory(webgl_factory());
 
-        let mut step = |rt: &mut Runtime<BoaEngine>, label: &str, src: &str| {
-            match rt.eval(src) {
-                Ok(_) => println!("OK   {label}"),
-                Err(e) => println!("FAIL {label}: {e:?}"),
-            }
+        let mut step = |rt: &mut Runtime<BoaEngine>, label: &str, src: &str| match rt.eval(src) {
+            Ok(_) => println!("OK   {label}"),
+            Err(e) => println!("FAIL {label}: {e:?}"),
         };
         step(&mut rt, "testharness.js", &testharness);
         step(&mut rt, "setup", "setup({ output: false });");
@@ -446,12 +475,35 @@ mod tests {
             debug('ctx ok: ' + (gl != null));
             "#,
         );
-        step(&mut rt, "setupTexturedQuad", "var program = wtu.setupTexturedQuad(gl);");
-        step(&mut rt, "glErrorShouldBe", "wtu.glErrorShouldBe(gl, gl.NO_ERROR, 'setup');");
-        step(&mut rt, "checkCanvas", "wtu.checkCanvas(gl, [0,0,0,0], 'cleared');");
-        step(&mut rt, "clear-white", "gl.clearColor(1,1,1,1); gl.clear(gl.COLOR_BUFFER_BIT); wtu.checkCanvas(gl, [255,255,255,255], 'white');");
-        step(&mut rt, "colorMask", "gl.colorMask(false,false,false,true); gl.clearColor(1,1,1,1); gl.clear(gl.COLOR_BUFFER_BIT); wtu.checkCanvas(gl, [0,0,0,255], 'masked');");
-        step(&mut rt, "texImage2D+draw", r#"
+        step(
+            &mut rt,
+            "setupTexturedQuad",
+            "var program = wtu.setupTexturedQuad(gl);",
+        );
+        step(
+            &mut rt,
+            "glErrorShouldBe",
+            "wtu.glErrorShouldBe(gl, gl.NO_ERROR, 'setup');",
+        );
+        step(
+            &mut rt,
+            "checkCanvas",
+            "wtu.checkCanvas(gl, [0,0,0,0], 'cleared');",
+        );
+        step(
+            &mut rt,
+            "clear-white",
+            "gl.clearColor(1,1,1,1); gl.clear(gl.COLOR_BUFFER_BIT); wtu.checkCanvas(gl, [255,255,255,255], 'white');",
+        );
+        step(
+            &mut rt,
+            "colorMask",
+            "gl.colorMask(false,false,false,true); gl.clearColor(1,1,1,1); gl.clear(gl.COLOR_BUFFER_BIT); wtu.checkCanvas(gl, [0,0,0,255], 'masked');",
+        );
+        step(
+            &mut rt,
+            "texImage2D+draw",
+            r#"
             var tex = gl.createTexture();
             gl.bindTexture(gl.TEXTURE_2D, tex);
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128,128,128,192]));
@@ -459,7 +511,8 @@ mod tests {
             gl.colorMask(true,true,true,true);
             gl.drawArrays(gl.TRIANGLES, 0, 6);
             wtu.checkCanvas(gl, [128,128,128,192], 'drawn');
-        "#);
+        "#,
+        );
     }
 
     #[test]
@@ -483,10 +536,10 @@ mod tests {
                     failures.len(),
                     failures
                 );
-            }
+            },
             HarnessOutcome::Threw(msg) => {
                 panic!("gl-clear threw before reporting: {msg}");
-            }
+            },
         }
     }
 }

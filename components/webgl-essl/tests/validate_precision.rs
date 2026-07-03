@@ -21,9 +21,7 @@ fn precision_missing(r: &webgl_essl::validate::ValidationResult) -> Vec<(String,
     r.errors
         .iter()
         .filter_map(|d| match &d.kind {
-            WebGlDiagnosticKind::PrecisionMissingForFloat { name, ty } => {
-                Some((name.clone(), *ty))
-            },
+            WebGlDiagnosticKind::PrecisionMissingForFloat { name, ty } => Some((name.clone(), *ty)),
             _ => None,
         })
         .collect()
@@ -41,7 +39,11 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert!(precision_missing(&r).is_empty(), "got {:?}", precision_missing(&r));
+    assert!(
+        precision_missing(&r).is_empty(),
+        "got {:?}",
+        precision_missing(&r)
+    );
 }
 
 #[test]
@@ -53,7 +55,11 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert!(precision_missing(&r).is_empty(), "got {:?}", precision_missing(&r));
+    assert!(
+        precision_missing(&r).is_empty(),
+        "got {:?}",
+        precision_missing(&r)
+    );
 }
 
 #[test]
@@ -66,7 +72,11 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Vertex);
-    assert!(precision_missing(&r).is_empty(), "got {:?}", precision_missing(&r));
+    assert!(
+        precision_missing(&r).is_empty(),
+        "got {:?}",
+        precision_missing(&r)
+    );
 }
 
 #[test]
@@ -83,7 +93,11 @@ void main() {
     let r = validate_src(src, ShaderStage::Fragment);
     // gl_FragColor itself does not declare a precision, but it is a
     // builtin not a user decl. Same for the const-vec4 expression.
-    assert!(precision_missing(&r).is_empty(), "got {:?}", precision_missing(&r));
+    assert!(
+        precision_missing(&r).is_empty(),
+        "got {:?}",
+        precision_missing(&r)
+    );
 }
 
 // ---------- rejected shapes -------------------------------------------
@@ -196,5 +210,8 @@ void main() {
         .iter()
         .find(|l| l.contains("u_color"))
         .expect("a line should mention u_color");
-    assert!(precision_line.contains("precision"), "got: {precision_line}");
+    assert!(
+        precision_line.contains("precision"),
+        "got: {precision_line}"
+    );
 }

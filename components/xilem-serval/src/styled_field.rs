@@ -21,9 +21,9 @@
 
 use std::ops::Range;
 
-use crate::controls::{edit, edit_multiline, TextInput};
+use crate::controls::{TextInput, edit, edit_multiline};
 use crate::pod::ServalElement;
-use crate::{el, on_key, AnyView, KeyEvent, ServalCtx};
+use crate::{AnyView, KeyEvent, ServalCtx, el, on_key};
 
 /// A styled run over the field text: a byte `range` painted with a CSS `class`
 /// (`"syntax-keyword"`) the host's stylesheet themes. Ranges may overlap and nest
@@ -73,7 +73,13 @@ fn flatten(len: usize, styles: &[StyleRange]) -> Vec<(Range<usize>, Option<Strin
 
 /// Emit the `runs` clipped to `[lo, hi)` over `text`: a styled run as a
 /// `<span class="…">`, an unstyled run as a bare text node.
-fn emit(kids: &mut Vec<FieldChild>, text: &str, runs: &[(Range<usize>, Option<String>)], lo: usize, hi: usize) {
+fn emit(
+    kids: &mut Vec<FieldChild>,
+    text: &str,
+    runs: &[(Range<usize>, Option<String>)],
+    lo: usize,
+    hi: usize,
+) {
     for (r, class) in runs {
         let start = r.start.max(lo);
         let end = r.end.min(hi);
@@ -155,8 +161,14 @@ mod tests {
     fn flatten_innermost_wins() {
         // Outer 0..10 "a" with inner 2..5 "b": the inner range overrides.
         let styles = vec![
-            StyleRange { range: 0..10, class: "a".into() },
-            StyleRange { range: 2..5, class: "b".into() },
+            StyleRange {
+                range: 0..10,
+                class: "a".into(),
+            },
+            StyleRange {
+                range: 2..5,
+                class: "b".into(),
+            },
         ];
         assert_eq!(
             flatten(10, &styles),
@@ -170,7 +182,10 @@ mod tests {
 
     #[test]
     fn flatten_drops_out_of_range_styles() {
-        let styles = vec![StyleRange { range: 3..99, class: "x".into() }];
+        let styles = vec![StyleRange {
+            range: 3..99,
+            class: "x".into(),
+        }];
         // end past len is filtered, leaving a plain run.
         assert_eq!(flatten(4, &styles), vec![(0..4, None)]);
     }

@@ -137,11 +137,7 @@ impl UniformKind {
         match self {
             Self::Float32 | Self::Int => 4,
             Self::Float32x2 => 8,
-            Self::Float32x3
-            | Self::Float32x4
-            | Self::Matrix2
-            | Self::Matrix3
-            | Self::Matrix4 => 16,
+            Self::Float32x3 | Self::Float32x4 | Self::Matrix2 | Self::Matrix3 | Self::Matrix4 => 16,
             Self::Sampler2D | Self::SamplerCube => 0,
         }
     }

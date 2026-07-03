@@ -135,7 +135,10 @@ void main() {
     assert_eq!(c.precision_decl, 0);
     assert_eq!(c.global_decl, 4, "a_position, a_color, v_color, u_scale");
     assert_eq!(c.function_def, 1);
-    assert_eq!(c.block, 3, "main body + then-branch block + else-branch block");
+    assert_eq!(
+        c.block, 3,
+        "main body + then-branch block + else-branch block"
+    );
     // 7 visit_stmt calls: local decl `scaled`, the `if`, the `then` Stmt::Block
     // wrapper, the assign inside it, the `else` Stmt::Block wrapper, the
     // assign inside it, the `gl_Position` assign. `Stmt::Block(b)` is a
@@ -238,5 +241,8 @@ void main() { gl_FragColor = vec4(helper(0.5)); }
     walk_translation_unit(&mut p, &tu);
     assert!(p.function_stack.is_empty(), "stack returns to empty");
     assert_eq!(p.deepest_function_stack, 1, "no nested functions in ESSL");
-    assert!(p.saw_function_in_path, "exprs visited under a function ancestor");
+    assert!(
+        p.saw_function_in_path,
+        "exprs visited under a function ancestor"
+    );
 }

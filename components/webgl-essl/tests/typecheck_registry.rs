@@ -15,9 +15,15 @@ fn check_clean(src: &str) -> webgl_essl::check::CheckResult {
     let tu = parse_source(src).unwrap_or_else(|e| panic!("parse: {}", e.display(src)));
     let r = check(&tu);
     if !r.diagnostics.is_empty() {
-        let rendered: Vec<String> =
-            r.diagnostics.iter().map(|d| format!("{}", d.display(src))).collect();
-        panic!("expected zero diagnostics, got: {}\n--- source ---\n{src}", rendered.join("; "));
+        let rendered: Vec<String> = r
+            .diagnostics
+            .iter()
+            .map(|d| format!("{}", d.display(src)))
+            .collect();
+        panic!(
+            "expected zero diagnostics, got: {}\n--- source ---\n{src}",
+            rendered.join("; ")
+        );
     }
     r
 }
@@ -229,7 +235,11 @@ fn sin_int_emits_signature_mismatch() {
         .iter()
         .filter(|d| matches!(d.kind, TypeDiagnosticKind::CallSignatureMismatch { .. }))
         .collect();
-    assert_eq!(mismatches.len(), 1, "sin(int) should not match any overload");
+    assert_eq!(
+        mismatches.len(),
+        1,
+        "sin(int) should not match any overload"
+    );
 }
 
 #[test]
@@ -301,7 +311,11 @@ void main() {
         .iter()
         .filter(|d| matches!(d.kind, TypeDiagnosticKind::CallSignatureMismatch { .. }))
         .collect();
-    assert_eq!(mismatches.len(), 1, "user helper called with 2 args, accepts 1");
+    assert_eq!(
+        mismatches.len(),
+        1,
+        "user helper called with 2 args, accepts 1"
+    );
 }
 
 #[test]

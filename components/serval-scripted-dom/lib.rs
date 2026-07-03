@@ -19,6 +19,7 @@
 
 #![deny(unsafe_code)]
 
+use engine_observables_api::{DomArenaStats, DomNodeKindStats};
 use layout_dom_api::{
     AttributeView, DomMutation, LayoutDom, LayoutDomMut, LocalName, Namespace, NodeKind, QualName,
 };
@@ -97,7 +98,11 @@ impl std::hash::Hasher for FnvHasher {
         self.0
     }
     fn write(&mut self, bytes: &[u8]) {
-        let mut h = if self.0 == 0 { 0xcbf2_9ce4_8422_2325 } else { self.0 };
+        let mut h = if self.0 == 0 {
+            0xcbf2_9ce4_8422_2325
+        } else {
+            self.0
+        };
         for &b in bytes {
             h ^= b as u64;
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
@@ -289,6 +294,18 @@ impl ScriptedDom {
         Some(id.0)
     }
 
+    /// Normalize `id` for capture/replay: strip any debug doc-tag fence and return
+    /// the bare arena index the recorder writes.
+    pub fn capture_node_id(&self, id: NodeId) -> u64 {
+        self.index(id) as u64
+    }
+
+    /// Re-mint a captured bare arena index against this document, restoring this
+    /// document's tag on a fenced build.
+    pub fn remint_node_id(&self, raw: u64) -> NodeId {
+        self.pack(usize::try_from(raw).expect("captured node id must fit in usize"))
+    }
+
     /// DOM `removeChild`: orphan `child` from its parent but keep it (and its
     /// subtree) alive and re-insertable, recording a [`DomMutation::Removed`].
     /// Unlike [`LayoutDomMut::remove`](layout_dom_api::LayoutDomMut::remove), which
@@ -298,7 +315,10 @@ impl ScriptedDom {
         let former_parent = self.node(child).parent;
         self.detach(child);
         if let Some(former_parent) = former_parent {
-            self.mutations.push(DomMutation::Removed { node: child, former_parent });
+            self.mutations.push(DomMutation::Removed {
+                node: child,
+                former_parent,
+            });
         }
     }
 
@@ -324,13 +344,63 @@ impl ScriptedDom {
         self.push(Node::new(NodeKind::DocumentFragment))
     }
 
+    /// Rebuild a fresh document from serialized document children (the same
+    /// shape `inner_html(document())` emits for capture).
+    pub fn from_serialized_document(html: &str) -> Self {
+        let src = StaticDocument::parse(html);
+        let mut dom = Self::new();
+        let children: Vec<StaticNodeId> = src.dom_children(src.document()).collect();
+        for child in children {
+            let copied = dom.copy_fragment_node(&src, child);
+            dom.attach_silent(dom.root, copied);
+        }
+        dom.mutations.clear();
+        dom
+    }
+
+    /// Import exactly one serialized subtree as a detached node.
+    pub fn import_serialized_subtree(&mut self, html: &str) -> Result<NodeId, String> {
+        let fragment = StaticDocument::parse(html);
+        let mut candidates = if let Some(body) = Self::fragment_body(&fragment) {
+            let body_children: Vec<StaticNodeId> = fragment.dom_children(body).collect();
+            if !body_children.is_empty() {
+                body_children
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        if candidates.is_empty() {
+            candidates = fragment
+                .dom_children(fragment.document())
+                .filter(|&child| {
+                    !fragment
+                        .element_name(child)
+                        .is_some_and(|q| q.local == LocalName::from("html"))
+                })
+                .collect();
+        }
+        if candidates.len() != 1 {
+            return Err(format!(
+                "serialized subtree must produce exactly one top-level node, got {}",
+                candidates.len()
+            ));
+        }
+        Ok(self.copy_fragment_node(&fragment, candidates[0]))
+    }
+
     fn node(&self, id: NodeId) -> &Node {
-        self.nodes.get(&self.index(id)).expect("NodeId refers to a live node")
+        self.nodes
+            .get(&self.index(id))
+            .expect("NodeId refers to a live node")
     }
 
     fn node_mut(&mut self, id: NodeId) -> &mut Node {
         let i = self.index(id);
-        self.nodes.get_mut(&i).expect("NodeId refers to a live node")
+        self.nodes
+            .get_mut(&i)
+            .expect("NodeId refers to a live node")
     }
 
     fn push(&mut self, node: Node) -> NodeId {
@@ -396,7 +466,11 @@ impl ScriptedDom {
             // This node's neighbours (parent + children) as owned ids, dropping
             // the store borrow before recursing.
             let neighbours: Vec<NodeId> = match self.nodes.get(&v) {
-                Some(node) => node.parent.into_iter().chain(node.children.iter().copied()).collect(),
+                Some(node) => node
+                    .parent
+                    .into_iter()
+                    .chain(node.children.iter().copied())
+                    .collect(),
                 None => continue,
             };
             for nbr in neighbours {
@@ -415,6 +489,44 @@ impl ScriptedDom {
     /// regression signal for the bounded-memory churn test.
     pub fn live_node_count(&self) -> usize {
         self.nodes.len()
+    }
+
+    /// Cheap live counts plus a rough byte estimate for the DOM arena.
+    pub fn stats(&self) -> DomArenaStats {
+        let mut node_kinds = DomNodeKindStats::default();
+        let mut attribute_count = 0usize;
+        let mut estimated_bytes = std::mem::size_of::<Self>()
+            + self.nodes.capacity() * (std::mem::size_of::<usize>() + std::mem::size_of::<Node>())
+            + self.mutations.capacity() * std::mem::size_of::<DomMutation<NodeId>>();
+
+        for node in self.nodes.values() {
+            match node.kind {
+                NodeKind::Document => node_kinds.documents += 1,
+                NodeKind::DocumentFragment => node_kinds.document_fragments += 1,
+                NodeKind::Doctype => node_kinds.doctypes += 1,
+                NodeKind::Element => node_kinds.elements += 1,
+                NodeKind::Text => node_kinds.text += 1,
+                NodeKind::Comment => node_kinds.comments += 1,
+                NodeKind::ProcessingInstruction => node_kinds.processing_instructions += 1,
+            }
+
+            attribute_count += node.attrs.len();
+            estimated_bytes += node.attrs.capacity() * std::mem::size_of::<(QualName, String)>();
+            estimated_bytes += node.children.capacity() * std::mem::size_of::<NodeId>();
+            estimated_bytes += node.name.as_ref().map_or(0, qual_name_bytes);
+            estimated_bytes += node.text.as_ref().map_or(0, String::capacity);
+            for (name, value) in &node.attrs {
+                estimated_bytes += qual_name_bytes(name);
+                estimated_bytes += value.capacity();
+            }
+        }
+
+        DomArenaStats {
+            live_nodes: self.nodes.len(),
+            node_kinds,
+            attribute_count,
+            estimated_bytes,
+        }
     }
 
     /// Mark `id`'s store key live (if it resolves to a live node here) and queue
@@ -450,12 +562,12 @@ impl ScriptedDom {
                     node.attrs.push((attr.name.clone(), attr.value.to_owned()));
                 }
                 self.push(node)
-            }
+            },
             kind @ (NodeKind::Text | NodeKind::Comment) => {
                 let mut node = Node::new(kind);
                 node.text = src.text(sid).map(str::to_owned);
                 self.push(node)
-            }
+            },
             other => self.push(Node::new(other)),
         };
         let children: Vec<StaticNodeId> = src.dom_children(sid).collect();
@@ -469,9 +581,20 @@ impl ScriptedDom {
     /// The `<body>` element of a `parse_document`-parsed fragment, if present.
     fn fragment_body(doc: &StaticDocument) -> Option<StaticNodeId> {
         let html = doc.document_element()?;
-        doc.dom_children(html)
-            .find(|&c| doc.element_name(c).is_some_and(|q| q.local == LocalName::from("body")))
+        doc.dom_children(html).find(|&c| {
+            doc.element_name(c)
+                .is_some_and(|q| q.local == LocalName::from("body"))
+        })
     }
+}
+
+fn qual_name_bytes(name: &QualName) -> usize {
+    name.ns.as_ref().len()
+        + name.local.as_ref().len()
+        + name
+            .prefix
+            .as_ref()
+            .map_or(0, |prefix| prefix.as_ref().len())
 }
 
 impl LayoutDom for ScriptedDom {
@@ -486,7 +609,8 @@ impl LayoutDom for ScriptedDom {
     /// (attached or orphaned-but-kept); a dropped or collected node has no entry.
     /// Never panics, unlike the read accessors.
     fn is_live(&self, id: NodeId) -> bool {
-        self.try_index(id).is_some_and(|v| self.nodes.contains_key(&v))
+        self.try_index(id)
+            .is_some_and(|v| self.nodes.contains_key(&v))
     }
 
     fn parent(&self, id: NodeId) -> Option<NodeId> {
@@ -561,8 +685,10 @@ impl LayoutDomMut for ScriptedDom {
         self.detach(child);
         self.node_mut(child).parent = Some(parent);
         self.node_mut(parent).children.push(child);
-        self.mutations
-            .push(DomMutation::Inserted { node: child, parent });
+        self.mutations.push(DomMutation::Inserted {
+            node: child,
+            parent,
+        });
     }
 
     fn insert_before(&mut self, parent: NodeId, child: NodeId, reference: Option<NodeId>) {
@@ -571,16 +697,16 @@ impl LayoutDomMut for ScriptedDom {
         // Resolve the insertion index *after* detaching (so a move within the
         // same parent reflects the post-detach positions). A missing or
         // non-child reference falls back to append.
-        let idx = reference.and_then(|r| {
-            self.node(parent).children.iter().position(|&c| c == r)
-        });
+        let idx = reference.and_then(|r| self.node(parent).children.iter().position(|&c| c == r));
         let kids = &mut self.node_mut(parent).children;
         match idx {
             Some(i) => kids.insert(i, child),
             None => kids.push(child),
         }
-        self.mutations
-            .push(DomMutation::Inserted { node: child, parent });
+        self.mutations.push(DomMutation::Inserted {
+            node: child,
+            parent,
+        });
     }
 
     fn remove(&mut self, node: NodeId) {
@@ -672,6 +798,7 @@ impl LayoutDomMut for ScriptedDom {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use layout_dom_api::CapturedMutation;
 
     fn qual(local: &str) -> QualName {
         QualName::new(None, Namespace::from(""), LocalName::from(local))
@@ -722,7 +849,10 @@ mod tests {
 
         let kids: Vec<_> = dom.dom_children(div).collect();
         assert_eq!(kids.len(), 2);
-        assert_eq!(dom.element_name(kids[0]).unwrap().local, LocalName::from("p"));
+        assert_eq!(
+            dom.element_name(kids[0]).unwrap().local,
+            LocalName::from("p")
+        );
         assert_eq!(
             dom.element_name(kids[1]).unwrap().local,
             LocalName::from("span")
@@ -734,7 +864,10 @@ mod tests {
 
         let mut muts = Vec::new();
         dom.drain_mutations(&mut muts);
-        assert!(matches!(muts.as_slice(), [DomMutation::SubtreeReplaced { .. }]));
+        assert!(matches!(
+            muts.as_slice(),
+            [DomMutation::SubtreeReplaced { .. }]
+        ));
     }
 
     #[test]
@@ -759,10 +892,7 @@ mod tests {
 
         let mut muts = Vec::new();
         dom.drain_mutations(&mut muts);
-        assert!(matches!(
-            muts.as_slice(),
-            [DomMutation::Removed { .. }]
-        ));
+        assert!(matches!(muts.as_slice(), [DomMutation::Removed { .. }]));
     }
 
     #[test]
@@ -791,15 +921,19 @@ mod tests {
         let orphan = dom.create_element(qual("orphan"));
         let e = dom.create_element(qual("e"));
         dom.insert_before(root, e, Some(orphan));
-        assert_eq!(dom.dom_children(root).collect::<Vec<_>>(), vec![a, b, c, d, e]);
+        assert_eq!(
+            dom.dom_children(root).collect::<Vec<_>>(),
+            vec![a, b, c, d, e]
+        );
 
         // Each insert recorded exactly one Inserted under root.
         let mut muts = Vec::new();
         dom.drain_mutations(&mut muts);
         assert_eq!(muts.len(), 3);
-        assert!(muts.iter().all(
-            |m| matches!(m, DomMutation::Inserted { parent, .. } if *parent == root)
-        ));
+        assert!(
+            muts.iter()
+                .all(|m| matches!(m, DomMutation::Inserted { parent, .. } if *parent == root))
+        );
     }
 
     #[test]
@@ -830,6 +964,63 @@ mod tests {
         let mut again = Vec::new();
         dom.drain_mutations(&mut again);
         assert!(again.is_empty());
+    }
+
+    #[test]
+    fn drained_mutations_round_trip_through_captured_postcard() {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let div = dom.create_element(qual("div"));
+        dom.append_child(root, div);
+        let mut drained = Vec::new();
+        dom.drain_mutations(&mut drained); // clear the insert
+
+        dom.set_attribute(div, qual("id"), "main");
+        dom.remove_attribute(div, qual("id"));
+
+        let mut muts = Vec::new();
+        dom.drain_mutations(&mut muts);
+        let captured: Vec<_> = muts
+            .iter()
+            .map(|m| CapturedMutation::capture(m, |id| dom.capture_node_id(*id)))
+            .collect();
+        let bytes = postcard::to_stdvec(&captured).expect("serialize captured mutations");
+        let decoded: Vec<CapturedMutation> =
+            postcard::from_bytes(&bytes).expect("decode captured mutations");
+        let replayed: Vec<_> = decoded
+            .into_iter()
+            .map(|m| m.replay(|raw| dom.remint_node_id(raw)))
+            .collect();
+
+        assert_eq!(replayed, muts);
+    }
+
+    #[test]
+    fn stats_count_node_kinds_attributes_and_bytes() {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let html = dom.create_element(qual("html"));
+        let body = dom.create_element(qual("body"));
+        let text = dom.create_text("hello");
+        let comment = dom.create_comment("note");
+        let frag = dom.create_fragment();
+        dom.append_child(root, html);
+        dom.append_child(html, body);
+        dom.append_child(body, text);
+        dom.append_child(body, comment);
+        dom.append_child(body, frag);
+        dom.set_attribute(body, qual("class"), "main");
+        dom.set_attribute(body, qual("data-x"), "1");
+
+        let stats = dom.stats();
+        assert_eq!(stats.live_nodes, 6);
+        assert_eq!(stats.node_kinds.documents, 1);
+        assert_eq!(stats.node_kinds.elements, 2);
+        assert_eq!(stats.node_kinds.text, 1);
+        assert_eq!(stats.node_kinds.comments, 1);
+        assert_eq!(stats.node_kinds.document_fragments, 1);
+        assert_eq!(stats.attribute_count, 2);
+        assert!(stats.estimated_bytes >= std::mem::size_of::<ScriptedDom>());
     }
 
     // --- G0: the document fence ---------------------------------------------
@@ -871,6 +1062,20 @@ mod tests {
         let b = ScriptedDom::new();
         // Roots share the arena index (0) but differ in the tagged high bits.
         assert_ne!(a.document().raw(), b.document().raw());
+    }
+
+    #[test]
+    fn captured_node_id_remints_for_another_document() {
+        let a = ScriptedDom::new();
+        let b = ScriptedDom::new();
+        let captured = a.capture_node_id(a.document());
+        let reminted = b.remint_node_id(captured);
+        assert!(b.is_live(reminted));
+        #[cfg(all(debug_assertions, target_pointer_width = "64"))]
+        {
+            assert!(!b.is_live(a.document()));
+            assert_ne!(a.document(), reminted);
+        }
     }
 
     // --- G2: the dangle contract (is_live) ----------------------------------
@@ -1006,7 +1211,10 @@ mod tests {
         // Monotonic ids kept climbing, but the store is back to baseline — bounded.
         assert!(dom.next_id > 4000, "ids are monotonic (no reuse)");
         assert_eq!(dom.live_node_count(), baseline, "store plateaus, not grows");
-        assert!(peak < baseline + 32, "peak stays tiny — only one subtree at a time");
+        assert!(
+            peak < baseline + 32,
+            "peak stays tiny — only one subtree at a time"
+        );
     }
 
     /// A quiet document (no further mutations) still reaps orphans on an idle

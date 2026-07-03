@@ -36,7 +36,10 @@ pub struct SelectState {
 impl SelectState {
     /// A closed select with `selected` chosen.
     pub fn new(selected: usize) -> Self {
-        Self { selected, open: false }
+        Self {
+            selected,
+            open: false,
+        }
     }
 
     /// The chosen option's label from `options`, or `""` if out of range.

@@ -49,7 +49,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(r14_not_constant_count(&r), 0, "literal init should pass: {:#?}", r.errors);
+    assert_eq!(
+        r14_not_constant_count(&r),
+        0,
+        "literal init should pass: {:#?}",
+        r.errors
+    );
     assert_eq!(r14_without_init_count(&r), 0);
 }
 
@@ -63,7 +68,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(r14_not_constant_count(&r), 0, "constant arithmetic should pass: {:#?}", r.errors);
+    assert_eq!(
+        r14_not_constant_count(&r),
+        0,
+        "constant arithmetic should pass: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -76,7 +86,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(r14_not_constant_count(&r), 0, "-literal should pass: {:#?}", r.errors);
+    assert_eq!(
+        r14_not_constant_count(&r),
+        0,
+        "-literal should pass: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -92,7 +107,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(r14_not_constant_count(&r), 1, "uniform init should fail: {:#?}", r.errors);
+    assert_eq!(
+        r14_not_constant_count(&r),
+        1,
+        "uniform init should fail: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -138,7 +158,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(r15_count(&r), 1, "assignment to const should fail R15: {:#?}", r.errors);
+    assert_eq!(
+        r15_count(&r),
+        1,
+        "assignment to const should fail R15: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -152,7 +177,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(r15_count(&r), 0, "assignment to non-const should pass: {:#?}", r.errors);
+    assert_eq!(
+        r15_count(&r),
+        0,
+        "assignment to non-const should pass: {:#?}",
+        r.errors
+    );
 }
 
 #[test]

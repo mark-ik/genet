@@ -883,7 +883,11 @@ impl ActualRecord {
         }
     }
 
-    fn with_reason(test: &TestCase, status: &'static str, reason: impl Into<String>) -> ActualRecord {
+    fn with_reason(
+        test: &TestCase,
+        status: &'static str,
+        reason: impl Into<String>,
+    ) -> ActualRecord {
         ActualRecord {
             test: test.name().to_string(),
             status,
@@ -1305,8 +1309,8 @@ fn run_262_async<E: ScriptEngine>(
             .ok()
             .and_then(|v| rt.value_to_string(&v).ok())
             .unwrap_or_default();
-        let passed = log.contains("Test262:AsyncTestComplete")
-            && !log.contains("Test262:AsyncTestFailure");
+        let passed =
+            log.contains("Test262:AsyncTestComplete") && !log.contains("Test262:AsyncTestFailure");
         !passed // threw-style: true = did not pass
     }));
     let threw = match outcome {
@@ -1741,7 +1745,11 @@ fn testharness(tests: &[TestCase], args: &Args) {
                     Some(t) => t,
                     None => {
                         errored += 1;
-                        actuals.push(ActualRecord::with_reason(test, "error", "fetch-load-failed"));
+                        actuals.push(ActualRecord::with_reason(
+                            test,
+                            "error",
+                            "fetch-load-failed",
+                        ));
                         println!("ERROR fetch   {}", test.name());
                         continue;
                     },
@@ -2433,7 +2441,10 @@ mod tests {
             reason: Some("xhtml".into()),
         }];
         let err = check_expectations(&path, &actual).expect_err("changed reason is unexpected");
-        assert!(err.contains("expected skip (worker-only), got skip (xhtml)"), "{err}");
+        assert!(
+            err.contains("expected skip (worker-only), got skip (xhtml)"),
+            "{err}"
+        );
         let _ = fs::remove_file(path);
     }
 }

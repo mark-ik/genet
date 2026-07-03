@@ -72,7 +72,7 @@ mod windowed {
     use netrender::external_texture::ExternalTexturePlacement;
     use netrender::{ColorLoad, NetrenderOptions};
     use pelt_core::tile::TileTree;
-    use serval_winit_host::{wheel_delta_from_winit, SurfaceHost};
+    use serval_winit_host::{SurfaceHost, wheel_delta_from_winit};
     use winit::application::ApplicationHandler;
     use winit::dpi::PhysicalSize;
     use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -133,14 +133,21 @@ mod windowed {
             self.shell.resize(win_w, win_h);
             let frame = self.shell.frame();
 
-            let Some(host) = self.host.as_ref() else { return };
+            let Some(host) = self.host.as_ref() else {
+                return;
+            };
             // The frame (tab bars + content backgrounds) is the bottom layer; each
             // tile's document composites over its content rect.
             let (_ft, frame_view) = host.rasterize(
                 &frame.frame_scene,
                 win_w,
                 win_h,
-                ColorLoad::Clear(wgpu::Color { r: 0.13, g: 0.13, b: 0.16, a: 1.0 }),
+                ColorLoad::Clear(wgpu::Color {
+                    r: 0.13,
+                    g: 0.13,
+                    b: 0.16,
+                    a: 1.0,
+                }),
             );
             let tile_layers: Vec<(wgpu::Texture, wgpu::TextureView, Rect)> = frame
                 .tiles
@@ -154,7 +161,9 @@ mod windowed {
                 .collect();
 
             let Some(swap) = host.acquire() else { return };
-            let target = swap.texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let target = swap
+                .texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
             let renderer = host.renderer();
             renderer.compose_external_texture(
                 &frame_view,
@@ -178,8 +187,12 @@ mod windowed {
             // only its box shows. `_gt` holds the texture alive until present.
             if let Some(ghost) = frame.ghost.as_ref() {
                 let (gw, gh) = (ghost.rect.2.max(1.0) as u32, ghost.rect.3.max(1.0) as u32);
-                let (_gt, gview) =
-                    host.rasterize(&ghost.scene, gw, gh, ColorLoad::Clear(wgpu::Color::TRANSPARENT));
+                let (_gt, gview) = host.rasterize(
+                    &ghost.scene,
+                    gw,
+                    gh,
+                    ColorLoad::Clear(wgpu::Color::TRANSPARENT),
+                );
                 renderer.compose_external_texture(
                     &gview,
                     &target,
@@ -218,7 +231,7 @@ mod windowed {
                     eprintln!("[pelt-tiles] could not create window: {err}");
                     event_loop.exit();
                     return;
-                }
+                },
             };
             let size = window.inner_size();
             self.width = size.width.max(1);
@@ -235,7 +248,7 @@ mod windowed {
                     eprintln!("[pelt-tiles] {err}");
                     event_loop.exit();
                     return;
-                }
+                },
             }
             window.request_redraw();
             self.window = Some(window);
@@ -260,12 +273,15 @@ mod windowed {
                     }
                     self.shell.resize(self.width, self.height);
                     self.request_redraw();
-                }
+                },
                 WindowEvent::CursorMoved { position, .. } => {
-                    if self.shell.pointer_move(position.x as f32, position.y as f32) {
+                    if self
+                        .shell
+                        .pointer_move(position.x as f32, position.y as f32)
+                    {
                         self.request_redraw();
                     }
-                }
+                },
                 WindowEvent::MouseInput { state, button, .. } => {
                     if button != MouseButton::Left {
                         return;
@@ -277,15 +293,15 @@ mod windowed {
                     if changed {
                         self.request_redraw();
                     }
-                }
+                },
                 WindowEvent::MouseWheel { delta, .. } => {
                     let (dx, dy) = wheel_delta_from_winit(delta);
                     if self.shell.wheel(dx, dy) {
                         self.request_redraw();
                     }
-                }
+                },
                 WindowEvent::RedrawRequested => self.render(),
-                _ => {}
+                _ => {},
             }
         }
     }

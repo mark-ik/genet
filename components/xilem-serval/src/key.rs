@@ -34,9 +34,7 @@
 use core::marker::PhantomData;
 
 use serval_scripted_dom::NodeId;
-use xilem_core::{
-    MessageCtx, MessageResult, Mut, View, ViewId, ViewMarker, ViewPathTracker,
-};
+use xilem_core::{MessageCtx, MessageResult, Mut, View, ViewId, ViewMarker, ViewPathTracker};
 
 use crate::pod::ServalElement;
 use crate::{ElementView, OptionalAction, ServalCtx};
@@ -129,12 +127,20 @@ pub struct KeyEvent {
 impl KeyEvent {
     /// A key event with no modifiers.
     pub fn new(key: Key) -> Self {
-        Self { key, mods: Modifiers::default(), prop: crate::Propagation::new() }
+        Self {
+            key,
+            mods: Modifiers::default(),
+            prop: crate::Propagation::new(),
+        }
     }
 
     /// A key event with explicit modifiers.
     pub fn with_mods(key: Key, mods: Modifiers) -> Self {
-        Self { key, mods, prop: crate::Propagation::new() }
+        Self {
+            key,
+            mods,
+            prop: crate::Propagation::new(),
+        }
     }
 
     /// Stop the event reaching later nodes
@@ -246,7 +252,11 @@ where
 
     type Element = ServalElement;
 
-    fn build(&self, ctx: &mut ServalCtx, app_state: &mut State) -> (Self::Element, Self::ViewState) {
+    fn build(
+        &self,
+        ctx: &mut ServalCtx,
+        app_state: &mut State,
+    ) -> (Self::Element, Self::ViewState) {
         // Push our own id so the captured `view_path()` (and the message path the
         // runner routes) ends in `ON_KEY_ID` — mirrors `OnClick::build`.
         ctx.with_id(ON_KEY_ID, |ctx| {

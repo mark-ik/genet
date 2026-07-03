@@ -24,7 +24,11 @@ void main() {
 "#;
     let r = compile(src, ShaderStage::Fragment).expect("compile");
     assert!(r.wgsl.contains("vec4"));
-    assert!(r.info_log.is_empty(), "no errors expected, got: {}", r.info_log);
+    assert!(
+        r.info_log.is_empty(),
+        "no errors expected, got: {}",
+        r.info_log
+    );
 }
 
 #[test]
@@ -95,7 +99,11 @@ void main() {
 "#;
     match compile(src, ShaderStage::Fragment) {
         Err(CompileError::Validate(r)) => {
-            assert!(r.errors.iter().any(|d| matches!(d.kind, WebGlDiagnosticKind::Recursion { .. })));
+            assert!(
+                r.errors
+                    .iter()
+                    .any(|d| matches!(d.kind, WebGlDiagnosticKind::Recursion { .. }))
+            );
         },
         other => panic!("expected CompileError::Validate, got {other:?}"),
     }
@@ -127,7 +135,11 @@ fn validate_error_info_log_uses_one_based_line_numbers() {
     let src = "void main() {\n    if (true) discard;\n    gl_Position = vec4(0.0);\n}\n";
     match compile(src, ShaderStage::Vertex) {
         Err(CompileError::Validate(r)) => {
-            let line: &str = r.info_log.lines().find(|l| l.contains("discard")).expect("a line");
+            let line: &str = r
+                .info_log
+                .lines()
+                .find(|l| l.contains("discard"))
+                .expect("a line");
             // Should be `ERROR: 0:2: ...` (the discard is on line 2,
             // not line 0).
             assert!(
@@ -145,7 +157,11 @@ fn validate_error_line_number_advances_with_actual_lines() {
     let src = "void main() {\n\n\n    discard;\n}\n";
     match compile(src, ShaderStage::Vertex) {
         Err(CompileError::Validate(r)) => {
-            let line: &str = r.info_log.lines().find(|l| l.contains("discard")).expect("a line");
+            let line: &str = r
+                .info_log
+                .lines()
+                .find(|l| l.contains("discard"))
+                .expect("a line");
             // The discard is on line 4 now.
             assert!(line.contains("0:4:"), "expected 0:4:, got: {line}");
         },

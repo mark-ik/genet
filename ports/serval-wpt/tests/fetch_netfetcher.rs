@@ -1,7 +1,6 @@
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/. */
-
 //! End-to-end proof of the `fetch()` -> netfetcher binding, against an offline
 //! mock server: JS `fetch(url)` -> the runtime's FetchHandler seam -> netfetcher
 //! -> real HTTP (mockito) -> a resolved `Response`. Gated on the `netfetch`
@@ -28,7 +27,10 @@ struct NetFetchHandler {
 impl NetFetchHandler {
     fn new() -> Self {
         Self {
-            rt: tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap(),
+            rt: tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap(),
         }
     }
 }
@@ -67,7 +69,11 @@ impl FetchHandler for NetFetchHandler {
                 netfetcher::ResponseType::Error => "error",
             }
             .to_owned();
-            let url = resp.url_list.last().map(|u| u.to_string()).unwrap_or_default();
+            let url = resp
+                .url_list
+                .last()
+                .map(|u| u.to_string())
+                .unwrap_or_default();
             let redirected = resp.url_list.len() > 1;
             let body = resp.bytes().await.map(|b| b.to_vec()).unwrap_or_default();
             FetchOutcome {
@@ -86,7 +92,9 @@ impl FetchHandler for NetFetchHandler {
 
 fn read(rt: &mut Runtime<BoaEngine>, expr: &str) -> String {
     let v = rt.eval(expr).expect("eval");
-    rt.engine_mut().value_to_string(&v).expect("value_to_string")
+    rt.engine_mut()
+        .value_to_string(&v)
+        .expect("value_to_string")
 }
 
 #[test]

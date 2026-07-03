@@ -64,7 +64,9 @@ struct ReflectorCache<'gc> {
 
 impl<'gc> Singleton<'gc> for ReflectorCache<'gc> {
     fn create(ctx: Context<'gc>) -> Self {
-        ReflectorCache { map: Gc::new(&ctx, RefLock::new(HashMap::new())) }
+        ReflectorCache {
+            map: Gc::new(&ctx, RefLock::new(HashMap::new())),
+        }
     }
 }
 
@@ -183,15 +185,21 @@ impl CallCx for PiccoloCallCx<'_> {
         let cache = ctx.singleton::<Rootable![ReflectorCache<'_>]>();
         // Cache hit *and still alive*: return the same userdata so the reflectors
         // compare equal in Lua. A dead weak (script dropped it) falls through.
-        if let Some(inner) =
-            cache.map.borrow().get(&data).and_then(|weak| weak.upgrade(&ctx))
+        if let Some(inner) = cache
+            .map
+            .borrow()
+            .get(&data)
+            .and_then(|weak| weak.upgrade(&ctx))
         {
             let ud = UserData::from_inner(inner);
             return Ok(ctx.stash(Value::UserData(ud)));
         }
         // Miss/dead: mint once, cache a *weak* handle, return the userdata.
         let ud = UserData::new_static(&ctx, data);
-        cache.map.borrow_mut(&ctx).insert(data, Gc::downgrade(ud.into_inner()));
+        cache
+            .map
+            .borrow_mut(&ctx)
+            .insert(data, Gc::downgrade(ud.into_inner()));
         Ok(ctx.stash(Value::UserData(ud)))
     }
 
@@ -223,13 +231,25 @@ impl CallCx for PiccoloCallCx<'_> {
 /// settled before the `await` returns/raises immediately.
 fn install_await(ctx: Context<'_>, slot: Rc<HostSlot>) {
     let await_cb = Callback::from_fn(&ctx, move |ctx, exec, mut stack| {
-        let arg0 = if stack.is_empty() { Value::Nil } else { stack[0] };
+        let arg0 = if stack.is_empty() {
+            Value::Nil
+        } else {
+            stack[0]
+        };
         let token = match arg0 {
             Value::UserData(ud) => match ud.downcast_static::<PromiseTokenData>() {
                 Ok(p) => p.0,
-                Err(_) => return Err("await: argument is not a host promise".into_value(ctx).into()),
+                Err(_) => {
+                    return Err("await: argument is not a host promise"
+                        .into_value(ctx)
+                        .into());
+                },
             },
-            _ => return Err("await: argument is not a host promise".into_value(ctx).into()),
+            _ => {
+                return Err("await: argument is not a host promise"
+                    .into_value(ctx)
+                    .into());
+            },
         };
         stack.clear();
         // Settle-before-await: hand back (or raise) the stored outcome now.
@@ -244,8 +264,13 @@ fn install_await(ctx: Context<'_>, slot: Rc<HostSlot>) {
         }
         // Park the current executor under this token, then yield it out to the
         // host (which resumes it on settle, driven by `pump`).
-        slot.waiters.borrow_mut().insert(token, ctx.stash(exec.executor()));
-        Ok(CallbackReturn::Yield { to_thread: None, then: None })
+        slot.waiters
+            .borrow_mut()
+            .insert(token, ctx.stash(exec.executor()));
+        Ok(CallbackReturn::Yield {
+            to_thread: None,
+            then: None,
+        })
     });
     ctx.set_global("await", await_cb);
 }
@@ -274,7 +299,10 @@ impl ScriptEngine for PiccoloEngine {
     type CallCx<'a> = PiccoloCallCx<'a>;
 
     fn new() -> Result<Self, Self::Error> {
-        let mut engine = Self { lua: Lua::full(), slot: Rc::new(HostSlot::new()) };
+        let mut engine = Self {
+            lua: Lua::full(),
+            slot: Rc::new(HostSlot::new()),
+        };
         let slot = engine.slot.clone();
         engine.lua.enter(|ctx| install_await(ctx, slot));
         Ok(engine)
@@ -293,11 +321,7 @@ impl ScriptEngine for PiccoloEngine {
         self.take_first(&executor)
     }
 
-    fn eval_bounded(
-        &mut self,
-        source: &str,
-        budget: Budget,
-    ) -> Result<Self::Value, Self::Error> {
+    fn eval_bounded(&mut self, source: &str, budget: Budget) -> Result<Self::Value, Self::Error> {
         let src = source.as_bytes().to_vec();
         let executor: StashedExecutor = self
             .lua
@@ -377,7 +401,11 @@ impl ScriptEngine for PiccoloEngine {
                 let args: Vec<StashedValue> =
                     (0..stack.len()).map(|i| ctx.stash(stack[i])).collect();
                 stack.clear();
-                let mut cx = PiccoloCallCx { ctx, slot: slot.clone(), args };
+                let mut cx = PiccoloCallCx {
+                    ctx,
+                    slot: slot.clone(),
+                    args,
+                };
                 match F::call(&mut cx) {
                     Ok(ret) => {
                         let v = ctx.fetch(&ret);
@@ -518,7 +546,10 @@ mod tests {
         let mut engine = PiccoloEngine::new().unwrap();
         // A terminating loop well under the cap completes normally.
         let v = engine
-            .eval_bounded("local s = 0 for i = 1, 100 do s = s + i end return s", Budget::Steps(1000))
+            .eval_bounded(
+                "local s = 0 for i = 1, 100 do s = s + i end return s",
+                Budget::Steps(1000),
+            )
             .unwrap();
         assert_eq!(engine.value_to_string(&v).unwrap(), "5050");
     }
@@ -534,7 +565,9 @@ mod tests {
             "a runaway script must error, got: {err}"
         );
         // The engine is still usable after stopping a runaway.
-        let v = engine.eval_bounded("return 1 + 1", Budget::Steps(100)).unwrap();
+        let v = engine
+            .eval_bounded("return 1 + 1", Budget::Steps(100))
+            .unwrap();
         assert_eq!(engine.value_to_string(&v).unwrap(), "2");
     }
 

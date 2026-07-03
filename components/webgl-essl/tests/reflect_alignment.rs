@@ -34,7 +34,11 @@ void main() {
     let r = reflect_from(src, ShaderStage::Vertex);
     assert_eq!(
         r.inputs,
-        vec![InputBinding { name: "a_position".into(), kind: TypeKind::Vec2, location: 0 }]
+        vec![InputBinding {
+            name: "a_position".into(),
+            kind: TypeKind::Vec2,
+            location: 0
+        }]
     );
     assert!(r.outputs.is_empty());
     assert!(r.uniforms.is_empty());

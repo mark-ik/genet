@@ -73,7 +73,12 @@ impl Parser {
         loop {
             let (name, name_span) = self.expect_ident("field name")?;
             let field_span = ty.span.merge(name_span);
-            fields.push(StructField { ty: ty.clone(), name, name_span, span: field_span });
+            fields.push(StructField {
+                ty: ty.clone(),
+                name,
+                name_span,
+                span: field_span,
+            });
             match self.peek_kind() {
                 Some(TokenKind::Punct(Punct::Comma)) => {
                     self.bump();
@@ -85,13 +90,18 @@ impl Parser {
                 },
                 Some(k) => {
                     return Err(Error::new(
-                        ErrorKind::Expected { wanted: "`,` or `;`", got: k.label() },
+                        ErrorKind::Expected {
+                            wanted: "`,` or `;`",
+                            got: k.label(),
+                        },
                         self.peek_span(),
                     ));
                 },
                 None => {
                     return Err(Error::new(
-                        ErrorKind::UnexpectedEof { wanted: "`,` or `;`" },
+                        ErrorKind::UnexpectedEof {
+                            wanted: "`,` or `;`",
+                        },
                         self.peek_span(),
                     ));
                 },
@@ -101,24 +111,31 @@ impl Parser {
 
     fn precision_decl(&mut self, kw_span: Span) -> Result<ExternalDecl, Error> {
         let q = match self.peek_kind() {
-            Some(TokenKind::Keyword(k)) => PrecisionQualifier::from_keyword(*k).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::Expected {
-                        wanted: "precision qualifier",
-                        got: self.peek_kind().unwrap().label(),
-                    },
-                    self.peek_span(),
-                )
-            })?,
+            Some(TokenKind::Keyword(k)) => {
+                PrecisionQualifier::from_keyword(*k).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::Expected {
+                            wanted: "precision qualifier",
+                            got: self.peek_kind().unwrap().label(),
+                        },
+                        self.peek_span(),
+                    )
+                })?
+            },
             Some(k) => {
                 return Err(Error::new(
-                    ErrorKind::Expected { wanted: "precision qualifier", got: k.label() },
+                    ErrorKind::Expected {
+                        wanted: "precision qualifier",
+                        got: k.label(),
+                    },
                     self.peek_span(),
                 ));
             },
             None => {
                 return Err(Error::new(
-                    ErrorKind::UnexpectedEof { wanted: "precision qualifier" },
+                    ErrorKind::UnexpectedEof {
+                        wanted: "precision qualifier",
+                    },
                     self.peek_span(),
                 ));
             },
@@ -147,9 +164,7 @@ impl Parser {
             Some(TokenKind::Keyword(Keyword::Const)) => {
                 Some((StorageQualifier::Const, self.peek_span()))
             },
-            Some(TokenKind::Keyword(Keyword::In)) => {
-                Some((StorageQualifier::In, self.peek_span()))
-            },
+            Some(TokenKind::Keyword(Keyword::In)) => Some((StorageQualifier::In, self.peek_span())),
             Some(TokenKind::Keyword(Keyword::Out)) => {
                 Some((StorageQualifier::Out, self.peek_span()))
             },
@@ -166,10 +181,7 @@ impl Parser {
         }
     }
 
-    fn global_decl(
-        &mut self,
-        storage: (StorageQualifier, Span),
-    ) -> Result<ExternalDecl, Error> {
+    fn global_decl(&mut self, storage: (StorageQualifier, Span)) -> Result<ExternalDecl, Error> {
         let (sq, start_span) = storage;
         self.bump();
         let precision = self.maybe_precision_qualifier();
@@ -211,7 +223,9 @@ impl Parser {
                 self.peek_span(),
             )),
             None => Err(Error::new(
-                ErrorKind::UnexpectedEof { wanted: "`(` or `;`" },
+                ErrorKind::UnexpectedEof {
+                    wanted: "`(` or `;`",
+                },
                 self.peek_span(),
             )),
         }
@@ -256,7 +270,11 @@ impl Parser {
             let ty = self.type_spec()?;
             let (name, name_span) = self.expect_ident("parameter name")?;
             let ty_span = ty.span;
-            params.push(Param { ty, name, span: ty_span.merge(name_span) });
+            params.push(Param {
+                ty,
+                name,
+                span: ty_span.merge(name_span),
+            });
             match self.peek_kind() {
                 Some(TokenKind::Punct(Punct::Comma)) => {
                     self.bump();
@@ -265,13 +283,18 @@ impl Parser {
                 Some(TokenKind::Punct(Punct::RParen)) => break,
                 Some(k) => {
                     return Err(Error::new(
-                        ErrorKind::Expected { wanted: "`,` or `)`", got: k.label() },
+                        ErrorKind::Expected {
+                            wanted: "`,` or `)`",
+                            got: k.label(),
+                        },
                         self.peek_span(),
                     ));
                 },
                 None => {
                     return Err(Error::new(
-                        ErrorKind::UnexpectedEof { wanted: "`,` or `)`" },
+                        ErrorKind::UnexpectedEof {
+                            wanted: "`,` or `)`",
+                        },
                         self.peek_span(),
                     ));
                 },
@@ -303,7 +326,10 @@ impl Parser {
                     Ok(TypeSpec { kind: tk, span })
                 } else {
                     Err(Error::new(
-                        ErrorKind::Expected { wanted: "type", got: self.peek_kind().unwrap().label() },
+                        ErrorKind::Expected {
+                            wanted: "type",
+                            got: self.peek_kind().unwrap().label(),
+                        },
                         self.peek_span(),
                     ))
                 }
@@ -314,7 +340,10 @@ impl Parser {
                 if let Some(&idx) = self.struct_indices.get(name) {
                     let span = self.peek_span();
                     self.bump();
-                    Ok(TypeSpec { kind: TypeKind::Struct(idx), span })
+                    Ok(TypeSpec {
+                        kind: TypeKind::Struct(idx),
+                        span,
+                    })
                 } else {
                     Err(Error::new(
                         ErrorKind::Expected {
@@ -326,7 +355,10 @@ impl Parser {
                 }
             },
             Some(k) => Err(Error::new(
-                ErrorKind::Expected { wanted: "type", got: k.label() },
+                ErrorKind::Expected {
+                    wanted: "type",
+                    got: k.label(),
+                },
                 self.peek_span(),
             )),
             None => Err(Error::new(

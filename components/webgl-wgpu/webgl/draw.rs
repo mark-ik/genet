@@ -84,15 +84,14 @@ impl WebGlContext {
         let sampler_texture_units = program.sampler_texture_units.clone();
 
         let max_vertex_index = (first as u64 + count as u64).saturating_sub(1);
-        let (attribute_layouts, resolutions) = match self
-            .resolve_attribute_pipeline_inputs(&reflection, max_vertex_index)
-        {
-            Ok(v) => v,
-            Err(error) => {
-                self.record_error(error);
-                return;
-            },
-        };
+        let (attribute_layouts, resolutions) =
+            match self.resolve_attribute_pipeline_inputs(&reflection, max_vertex_index) {
+                Ok(v) => v,
+                Err(error) => {
+                    self.record_error(error);
+                    return;
+                },
+            };
         let depth_state = if self.depth_test_enabled && self.canvas.has_depth() {
             Some(self.depth_func)
         } else {
@@ -124,15 +123,14 @@ impl WebGlContext {
         // pipeline-cache slot mutably. Each sampler that has a
         // bound texture-unit + texture contributes one
         // (image_binding, sampler_binding, &view) row.
-        let sampler_texture_ids = match self
-            .resolve_sampler_texture_ids(&reflection, &sampler_texture_units)
-        {
-            Ok(v) => v,
-            Err(error) => {
-                self.record_error(error);
-                return;
-            },
-        };
+        let sampler_texture_ids =
+            match self.resolve_sampler_texture_ids(&reflection, &sampler_texture_units) {
+                Ok(v) => v,
+                Err(error) => {
+                    self.record_error(error);
+                    return;
+                },
+            };
 
         let needs_pipeline = self.programs.get(&program_id).map_or(true, |program| {
             !program.pipelines.contains_key(&pipeline_key)
@@ -299,15 +297,14 @@ impl WebGlContext {
         };
         let max_vertex_index = index_slice.iter().copied().max().unwrap_or(0) as u64;
 
-        let (attribute_layouts, resolutions) = match self
-            .resolve_attribute_pipeline_inputs(&reflection, max_vertex_index)
-        {
-            Ok(v) => v,
-            Err(error) => {
-                self.record_error(error);
-                return;
-            },
-        };
+        let (attribute_layouts, resolutions) =
+            match self.resolve_attribute_pipeline_inputs(&reflection, max_vertex_index) {
+                Ok(v) => v,
+                Err(error) => {
+                    self.record_error(error);
+                    return;
+                },
+            };
         let depth_state = if self.depth_test_enabled && self.canvas.has_depth() {
             Some(self.depth_func)
         } else {
@@ -335,15 +332,14 @@ impl WebGlContext {
             return;
         };
 
-        let sampler_texture_ids = match self
-            .resolve_sampler_texture_ids(&reflection, &sampler_texture_units)
-        {
-            Ok(v) => v,
-            Err(error) => {
-                self.record_error(error);
-                return;
-            },
-        };
+        let sampler_texture_ids =
+            match self.resolve_sampler_texture_ids(&reflection, &sampler_texture_units) {
+                Ok(v) => v,
+                Err(error) => {
+                    self.record_error(error);
+                    return;
+                },
+            };
 
         let needs_pipeline = self.programs.get(&program_id).map_or(true, |program| {
             !program.pipelines.contains_key(&pipeline_key)

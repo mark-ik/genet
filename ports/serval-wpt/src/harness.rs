@@ -166,10 +166,22 @@ pub fn run_test_with_webgl(
 
     match engine {
         Engine::Boa => run_with::<script_engine_boa::BoaEngine>(
-            testharness_js, &test_src, &doc, base_url, handler, completion, webgl,
+            testharness_js,
+            &test_src,
+            &doc,
+            base_url,
+            handler,
+            completion,
+            webgl,
         ),
         Engine::Nova => run_with::<script_engine_nova::NovaEngine>(
-            testharness_js, &test_src, &doc, base_url, handler, completion, webgl,
+            testharness_js,
+            &test_src,
+            &doc,
+            base_url,
+            handler,
+            completion,
+            webgl,
         ),
     }
 }
@@ -294,7 +306,8 @@ fn run_loaded_with<E: ScriptEngine>(
         return HarnessOutcome::Threw(truncate(&format!("{e:?}"), 200));
     }
     let start = Instant::now();
-    let elapsed_ms = |start: Instant| (Instant::now().saturating_duration_since(start)).as_millis() as f64;
+    let elapsed_ms =
+        |start: Instant| (Instant::now().saturating_duration_since(start)).as_millis() as f64;
     rt.run_microtasks();
     loop {
         if elapsed_ms(start) >= DRIVE_DEADLINE.as_millis() as f64 {
@@ -325,13 +338,16 @@ fn run_loaded_with<E: ScriptEngine>(
             }
             if pending > 0 {
                 // Wake on a completion or after the slice (whichever first).
-                cs.wait(Duration::from_millis(wait_ms.ceil() as u64), &mut |c| match c {
-                    FetchCompletion::StartStream(id, o) => rt.start_stream(id, o),
-                    FetchCompletion::Chunk(id, b) => rt.push_chunk(id, &b),
-                    FetchCompletion::Close(id) => rt.close_stream(id),
-                    FetchCompletion::Error(id) => rt.error_stream(id),
-                    FetchCompletion::Fail(id, m) => rt.fail_fetch(id, &m),
-                });
+                cs.wait(
+                    Duration::from_millis(wait_ms.ceil() as u64),
+                    &mut |c| match c {
+                        FetchCompletion::StartStream(id, o) => rt.start_stream(id, o),
+                        FetchCompletion::Chunk(id, b) => rt.push_chunk(id, &b),
+                        FetchCompletion::Close(id) => rt.close_stream(id),
+                        FetchCompletion::Error(id) => rt.error_stream(id),
+                        FetchCompletion::Fail(id, m) => rt.fail_fetch(id, &m),
+                    },
+                );
             } else if wait_ms > 0.0 {
                 // Only timers are outstanding: sleep until the soonest is due.
                 std::thread::sleep(Duration::from_millis(wait_ms.ceil() as u64));
@@ -350,14 +366,17 @@ fn collect_scripts<D: LayoutDom>(
     loader: &dyn ScriptSrcLoader,
     out: &mut Vec<String>,
 ) {
-    if dom.element_name(node).is_some_and(|q| q.local.as_ref() == "script") {
+    if dom
+        .element_name(node)
+        .is_some_and(|q| q.local.as_ref() == "script")
+    {
         match dom.attribute(node, &Namespace::default(), &LocalName::from("src")) {
             Some(src) if !is_harness_src(src) => {
                 if let Some(text) = loader.load_script(src) {
                     out.push(text);
                 }
-            }
-            Some(_) => {} // the harness / report hook: the host surface supplies these
+            },
+            Some(_) => {}, // the harness / report hook: the host surface supplies these
             None => {
                 let mut text = String::new();
                 for child in dom.dom_children(node) {
@@ -368,7 +387,7 @@ fn collect_scripts<D: LayoutDom>(
                 if !text.trim().is_empty() {
                     out.push(text);
                 }
-            }
+            },
         }
     }
     for child in dom.dom_children(node) {
@@ -501,7 +520,7 @@ pub fn bench(tests_root: &str) {
         Err(_) => {
             eprintln!("bench: testharness.js not found under {tests_root}/resources");
             std::process::exit(2);
-        }
+        },
     };
     let n = 50;
 
@@ -523,10 +542,21 @@ pub fn bench(tests_root: &str) {
     // (c) a full run_test on a trivial inline testharness test.
     let html = "<!doctype html><script src=/resources/testharness.js></script>\
                 <script>test(function(){ assert_true(true); }, 'x');</script>";
-    let loader = DiskLoader { base_dir: root, tests_root: root };
+    let loader = DiskLoader {
+        base_dir: root,
+        tests_root: root,
+    };
     let t = Instant::now();
     for _ in 0..n {
-        let _ = run_test(&testharness_js, html, &loader, None, None, None, Engine::Boa);
+        let _ = run_test(
+            &testharness_js,
+            html,
+            &loader,
+            None,
+            None,
+            None,
+            Engine::Boa,
+        );
     }
     let run_ms = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
 
@@ -534,16 +564,29 @@ pub fn bench(tests_root: &str) {
     // without the `tests` singleton leaking results across them? If a re-eval
     // resets cleanly, a pooled-Runtime (re-eval harness per test) is safe.
     let mut rt = Runtime::<BoaEngine>::new().expect("new");
-    let r1 = rt.run_testharness(&testharness_js, "test(function(){ assert_true(true); }, 'a');");
-    let r2 = rt.run_testharness(&testharness_js, "test(function(){ assert_true(true); }, 'b');");
+    let r1 = rt.run_testharness(
+        &testharness_js,
+        "test(function(){ assert_true(true); }, 'a');",
+    );
+    let r2 = rt.run_testharness(
+        &testharness_js,
+        "test(function(){ assert_true(true); }, 'b');",
+    );
     let leak = match (&r1, &r2) {
-        (Ok(a), Ok(b)) => format!("run1={} subtests, run2={} subtests (want 1 and 1; >1 = leak)", a.len(), b.len()),
+        (Ok(a), Ok(b)) => format!(
+            "run1={} subtests, run2={} subtests (want 1 and 1; >1 = leak)",
+            a.len(),
+            b.len()
+        ),
         _ => "a run errored".to_string(),
     };
 
     println!("bench (Boa, {n} iters, ms/iter):");
     println!("  (a) Runtime::new()                  {new_ms:8.2}");
-    println!("  (b) new() + eval(testharness.js)    {new_harness_ms:8.2}  (harness eval = {:.2})", new_harness_ms - new_ms);
+    println!(
+        "  (b) new() + eval(testharness.js)    {new_harness_ms:8.2}  (harness eval = {:.2})",
+        new_harness_ms - new_ms
+    );
     println!("  (c) full run_test (trivial test)    {run_ms:8.2}");
     println!("  (d) reuse isolation: {leak}");
     println!(
@@ -552,6 +595,7 @@ pub fn bench(tests_root: &str) {
          `tests` singleton accumulates across re-evals (see (d)) — so realm-reuse is\n\
          incorrect without a reset. Correct amortization needs a post-(harness-eval)\n\
          snapshot cloned per test (a fresh `tests` each time): the GcAgent::clone path.",
-        new_harness_ms - new_ms, new_ms,
+        new_harness_ms - new_ms,
+        new_ms,
     );
 }

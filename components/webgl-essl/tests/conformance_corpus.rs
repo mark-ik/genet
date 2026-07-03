@@ -16,7 +16,10 @@ use webgl_essl::parse_source;
 
 fn parse_ok(label: &str, src: &str) {
     if let Err(e) = parse_source(src) {
-        panic!("{label}: parse failed: {}\n--- source ---\n{src}", e.display(src));
+        panic!(
+            "{label}: parse failed: {}\n--- source ---\n{src}",
+            e.display(src)
+        );
     }
 }
 

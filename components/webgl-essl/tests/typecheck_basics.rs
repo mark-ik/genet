@@ -14,9 +14,15 @@ fn check_clean(src: &str) -> webgl_essl::check::CheckResult {
     let tu = parse_source(src).unwrap_or_else(|e| panic!("parse: {}", e.display(src)));
     let r = check(&tu);
     if !r.diagnostics.is_empty() {
-        let rendered: Vec<String> =
-            r.diagnostics.iter().map(|d| format!("{}", d.display(src))).collect();
-        panic!("expected zero diagnostics, got: {}\n--- source ---\n{src}", rendered.join("; "));
+        let rendered: Vec<String> = r
+            .diagnostics
+            .iter()
+            .map(|d| format!("{}", d.display(src)))
+            .collect();
+        panic!(
+            "expected zero diagnostics, got: {}\n--- source ---\n{src}",
+            rendered.join("; ")
+        );
     }
     r
 }
@@ -219,7 +225,11 @@ void main() {
 }
 "#;
     let r = check(&parse_source(src).unwrap());
-    assert_eq!(r.diagnostics.len(), 1, "inside should be unknown after the if block");
+    assert_eq!(
+        r.diagnostics.len(),
+        1,
+        "inside should be unknown after the if block"
+    );
     match &r.diagnostics[0].kind {
         TypeDiagnosticKind::UnknownIdentifier { name } => assert_eq!(name, "inside"),
         other => panic!("expected UnknownIdentifier, got {other:?}"),
@@ -254,7 +264,10 @@ fn unknown_ident_diagnostic_carries_name_and_span() {
     // Span points at the identifier reference, not the declaration.
     let rendered = format!("{}", d.display(src));
     assert!(rendered.contains("unknown_var"), "rendered: {rendered}");
-    assert!(rendered.contains("unknown identifier"), "rendered: {rendered}");
+    assert!(
+        rendered.contains("unknown identifier"),
+        "rendered: {rendered}"
+    );
 }
 
 // ---------- scope teardown ---------------------------------------------

@@ -97,7 +97,11 @@ pub fn render_png_scrolled(
 
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("pelt headless png target"),
-        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -112,11 +116,17 @@ pub fn render_png_scrolled(
         format: Some(wgpu::TextureFormat::Rgba8Unorm),
         ..Default::default()
     });
-    renderer.render_vello(&scene, &view, netrender::ColorLoad::Clear(wgpu::Color::WHITE));
+    renderer.render_vello(
+        &scene,
+        &view,
+        netrender::ColorLoad::Clear(wgpu::Color::WHITE),
+    );
 
     // Readback is tightly-packed width*height*4 RGBA8 (no row padding), so it feeds
     // `RgbaImage::from_raw` directly.
-    let bytes = renderer.wgpu_device.read_rgba8_texture(&target, width, height);
+    let bytes = renderer
+        .wgpu_device
+        .read_rgba8_texture(&target, width, height);
     let img = image::RgbaImage::from_raw(width, height, bytes)
         .ok_or_else(|| "readback byte length did not match width*height*4".to_string())?;
     let mut png = Vec::new();
@@ -139,7 +149,10 @@ pub struct Fuzz {
 #[cfg(feature = "png-reftest")]
 impl Default for Fuzz {
     fn default() -> Self {
-        Self { max_channel_delta: 2, max_diff_fraction: 0.001 }
+        Self {
+            max_channel_delta: 2,
+            max_diff_fraction: 0.001,
+        }
     }
 }
 
@@ -151,8 +164,14 @@ fn read_fuzz_sidecar(path: &Path) -> Fuzz {
     };
     let mut parts = text.split_whitespace();
     Fuzz {
-        max_channel_delta: parts.next().and_then(|s| s.parse().ok()).unwrap_or(default.max_channel_delta),
-        max_diff_fraction: parts.next().and_then(|s| s.parse().ok()).unwrap_or(default.max_diff_fraction),
+        max_channel_delta: parts
+            .next()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(default.max_channel_delta),
+        max_diff_fraction: parts
+            .next()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(default.max_diff_fraction),
     }
 }
 
@@ -167,14 +186,22 @@ pub fn png_within_fuzz(expected_png: &[u8], got_png: &[u8], fuzz: Fuzz) -> Resul
         .map_err(|e| format!("decode got png: {e}"))?
         .to_rgba8();
     if exp.dimensions() != got.dimensions() {
-        return Err(format!("png size {:?} != expected {:?}", got.dimensions(), exp.dimensions()));
+        return Err(format!(
+            "png size {:?} != expected {:?}",
+            got.dimensions(),
+            exp.dimensions()
+        ));
     }
     let total = (exp.width() as u64 * exp.height() as u64).max(1) as f64;
     let over = exp
         .pixels()
         .zip(got.pixels())
         .filter(|(a, b)| {
-            a.0.iter().zip(b.0.iter()).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0)
+            a.0.iter()
+                .zip(b.0.iter())
+                .map(|(x, y)| x.abs_diff(*y))
+                .max()
+                .unwrap_or(0)
                 > fuzz.max_channel_delta
         })
         .count();
@@ -229,7 +256,11 @@ pub enum Outcome {
     Pass,
     /// Snapshot differed: the 1-based line number of the first difference, and both
     /// sides' text for a named diff.
-    Fail { first_diff_line: usize, expected: String, got: String },
+    Fail {
+        first_diff_line: usize,
+        expected: String,
+        got: String,
+    },
     /// The scene snapshot matched but the optional rasterized `name.png` differed
     /// beyond its fuzz tolerance (only reachable under `png-reftest`). Carries the
     /// pixel-diff detail.
@@ -273,29 +304,31 @@ pub fn run_reftests(
         // viewport-family scroll cases snapshot a scrolled scene.
         let scroll = read_scroll_sidecar(&html.with_extension("scroll"));
         #[allow(unused_mut)]
-        let mut outcome = match render_snapshot_scrolled(
-            &html.to_string_lossy(),
-            width,
-            height,
-            scroll,
-        ) {
-            Err(e) => Outcome::Error(e),
-            Ok(got) if bless => match std::fs::write(&scene_path, &got) {
-                Ok(()) => Outcome::Pass,
-                Err(e) => Outcome::Error(format!("could not write {}: {e}", scene_path.display())),
-            },
-            Ok(got) => match std::fs::read_to_string(&scene_path) {
-                Err(_) => Outcome::Error(format!(
-                    "no snapshot at {} — run with --bless to create it",
-                    scene_path.display()
-                )),
-                Ok(expected) if expected == got => Outcome::Pass,
-                Ok(expected) => {
-                    let first_diff_line = first_diff_line(&expected, &got);
-                    Outcome::Fail { first_diff_line, expected, got }
-                }
-            },
-        };
+        let mut outcome =
+            match render_snapshot_scrolled(&html.to_string_lossy(), width, height, scroll) {
+                Err(e) => Outcome::Error(e),
+                Ok(got) if bless => match std::fs::write(&scene_path, &got) {
+                    Ok(()) => Outcome::Pass,
+                    Err(e) => {
+                        Outcome::Error(format!("could not write {}: {e}", scene_path.display()))
+                    },
+                },
+                Ok(got) => match std::fs::read_to_string(&scene_path) {
+                    Err(_) => Outcome::Error(format!(
+                        "no snapshot at {} — run with --bless to create it",
+                        scene_path.display()
+                    )),
+                    Ok(expected) if expected == got => Outcome::Pass,
+                    Ok(expected) => {
+                        let first_diff_line = first_diff_line(&expected, &got);
+                        Outcome::Fail {
+                            first_diff_line,
+                            expected,
+                            got,
+                        }
+                    },
+                },
+            };
 
         // Rasterized-PNG lane (additive): the `.scene` is primary; a `name.png` is
         // compared only when present, under a fuzz threshold (the GPU-rendered PNG can
@@ -320,7 +353,9 @@ pub fn run_reftests(
                                 Err(detail) => Outcome::PngFail { detail },
                             }
                         },
-                        Err(e) => Outcome::Error(format!("could not read {}: {e}", png_path.display())),
+                        Err(e) => {
+                            Outcome::Error(format!("could not read {}: {e}", png_path.display()))
+                        },
                     },
                     Err(e) => Outcome::Error(format!("png render failed: {e}")),
                 };
@@ -380,8 +415,12 @@ mod tests {
     fn layout_change_changes_snapshot() {
         let one = render_snapshot("data:text/html,<p>one</p>", DEFAULT_WIDTH, DEFAULT_HEIGHT)
             .expect("renders");
-        let two = render_snapshot("data:text/html,<p>two words</p>", DEFAULT_WIDTH, DEFAULT_HEIGHT)
-            .expect("renders");
+        let two = render_snapshot(
+            "data:text/html,<p>two words</p>",
+            DEFAULT_WIDTH,
+            DEFAULT_HEIGHT,
+        )
+        .expect("renders");
         assert_ne!(one, two, "different content renders to different snapshots");
         assert!(first_diff_line(&one, &two) >= 1, "a diff line is named");
     }
@@ -391,10 +430,20 @@ mod tests {
     #[cfg(feature = "png-reftest")]
     #[test]
     fn render_png_produces_a_valid_image() {
-        let png = render_png("data:text/html,<h1>Hello</h1><p>pixels</p>", DEFAULT_WIDTH, DEFAULT_HEIGHT)
-            .expect("renders a png");
-        let img = image::load_from_memory(&png).expect("decodes as png").to_rgba8();
-        assert_eq!(img.dimensions(), (DEFAULT_WIDTH, DEFAULT_HEIGHT), "png is the viewport size");
+        let png = render_png(
+            "data:text/html,<h1>Hello</h1><p>pixels</p>",
+            DEFAULT_WIDTH,
+            DEFAULT_HEIGHT,
+        )
+        .expect("renders a png");
+        let img = image::load_from_memory(&png)
+            .expect("decodes as png")
+            .to_rgba8();
+        assert_eq!(
+            img.dimensions(),
+            (DEFAULT_WIDTH, DEFAULT_HEIGHT),
+            "png is the viewport size"
+        );
     }
 
     /// The fuzz comparison tolerates sub-threshold jitter but catches a real color
@@ -405,14 +454,21 @@ mod tests {
         let encode = |rgba: [u8; 4]| {
             let img = image::RgbaImage::from_pixel(8, 8, image::Rgba(rgba));
             let mut png = Vec::new();
-            img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+            img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .unwrap();
             png
         };
         let base = encode([100, 100, 100, 255]);
         let jitter = encode([101, 101, 101, 255]); // per-channel delta 1 <= 2 (default)
         let different = encode([200, 100, 100, 255]); // delta 100 on every pixel
         let fuzz = Fuzz::default();
-        assert!(png_within_fuzz(&base, &jitter, fuzz).is_ok(), "1-level jitter is within fuzz");
-        assert!(png_within_fuzz(&base, &different, fuzz).is_err(), "a real color diff is caught");
+        assert!(
+            png_within_fuzz(&base, &jitter, fuzz).is_ok(),
+            "1-level jitter is within fuzz"
+        );
+        assert!(
+            png_within_fuzz(&base, &different, fuzz).is_err(),
+            "a real color diff is caught"
+        );
     }
 }

@@ -100,9 +100,8 @@ fn canonical_fragment_accepts_float_precision_variants() {
         let fragment = format!(
             "precision {precision} float; void main() {{ gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0); }}"
         );
-        let translated =
-            translate_canonical_essl_pair(CANONICAL_TRIANGLE_VERTEX_SHADER, &fragment)
-                .expect("precision variant translates");
+        let translated = translate_canonical_essl_pair(CANONICAL_TRIANGLE_VERTEX_SHADER, &fragment)
+            .expect("precision variant translates");
         assert_eq!(translated.reflection.fragment_float_precision, expected);
     }
 }
@@ -156,9 +155,8 @@ void main() {
 }
 "#;
 
-    let translated =
-        translate_canonical_essl_pair(CANONICAL_TRIANGLE_VERTEX_SHADER, fragment)
-            .expect("uniform color translates");
+    let translated = translate_canonical_essl_pair(CANONICAL_TRIANGLE_VERTEX_SHADER, fragment)
+        .expect("uniform color translates");
 
     assert!(translated.fragment_wgsl.contains("@group(0)"));
     assert!(translated.fragment_wgsl.contains("@binding(0)"));
@@ -234,9 +232,8 @@ void main() {
 }
 "#;
 
-    let translated =
-        translate_canonical_essl_pair(vertex, CANONICAL_TRIANGLE_FRAGMENT_SHADER)
-            .expect("renamed vertex translates");
+    let translated = translate_canonical_essl_pair(vertex, CANONICAL_TRIANGLE_FRAGMENT_SHADER)
+        .expect("renamed vertex translates");
 
     assert_eq!(translated.reflection.position_attribute.name, "position");
     assert_eq!(translated.reflection.position_attribute.location, 0);
@@ -307,9 +304,8 @@ void main() {
     gl_FragColor = vec4(0.5);
 }
 "#;
-    let translated =
-        translate_canonical_essl_pair(CANONICAL_TRIANGLE_VERTEX_SHADER, fragment)
-            .expect("scalar-broadcast fragment translates");
+    let translated = translate_canonical_essl_pair(CANONICAL_TRIANGLE_VERTEX_SHADER, fragment)
+        .expect("scalar-broadcast fragment translates");
     assert!(translated.fragment_wgsl.contains("@location(0)"));
 }
 
@@ -328,9 +324,8 @@ void main() {
     gl_FragColor = tinted(vec4(1.0));
 }
 "#;
-    let translated =
-        translate_canonical_essl_pair(CANONICAL_TRIANGLE_VERTEX_SHADER, fragment)
-            .expect("user-function fragment translates");
+    let translated = translate_canonical_essl_pair(CANONICAL_TRIANGLE_VERTEX_SHADER, fragment)
+        .expect("user-function fragment translates");
     assert!(translated.fragment_wgsl.contains("@binding(0)"));
 }
 
@@ -383,9 +378,8 @@ void main() {
     gl_FragColor = vec4(u_color.rgb, 1.0);
 }
 "#;
-    let translated =
-        translate_canonical_essl_pair(CANONICAL_TRIANGLE_VERTEX_SHADER, fragment)
-            .expect("swizzle+constructor fragment translates");
+    let translated = translate_canonical_essl_pair(CANONICAL_TRIANGLE_VERTEX_SHADER, fragment)
+        .expect("swizzle+constructor fragment translates");
     assert!(translated.fragment_wgsl.contains("@location(0)"));
 }
 
@@ -404,9 +398,8 @@ void main() {
     gl_FragColor = u_color * u_brightness;
 }
 "#;
-    let translated =
-        translate_canonical_essl_pair(CANONICAL_TRIANGLE_VERTEX_SHADER, fragment)
-            .expect("multi-uniform fragment translates");
+    let translated = translate_canonical_essl_pair(CANONICAL_TRIANGLE_VERTEX_SHADER, fragment)
+        .expect("multi-uniform fragment translates");
     assert_eq!(
         translated.reflection.fragment_color_uniform,
         Some(UniformReflection {
@@ -433,8 +426,7 @@ void main() {
     gl_FragColor = mix(u_a, u_b, 0.5);
 }
 "#;
-    let translated =
-        translate_canonical_essl_pair(CANONICAL_TRIANGLE_VERTEX_SHADER, fragment)
-            .expect("built-in function fragment translates");
+    let translated = translate_canonical_essl_pair(CANONICAL_TRIANGLE_VERTEX_SHADER, fragment)
+        .expect("built-in function fragment translates");
     assert!(translated.fragment_wgsl.contains("@location(0)"));
 }

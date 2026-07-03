@@ -220,7 +220,8 @@ fn walk_metadata<D: LayoutDom>(dom: &D, id: D::NodeId, md: &mut Metadata) {
 /// token `token` — `rel` is a token list (`"stylesheet preload"`, `"canonical"`).
 fn rel_has<D: LayoutDom>(dom: &D, id: D::NodeId, token: &str) -> bool {
     attr(dom, id, "rel").is_some_and(|rel| {
-        rel.split_whitespace().any(|t| t.eq_ignore_ascii_case(token))
+        rel.split_whitespace()
+            .any(|t| t.eq_ignore_ascii_case(token))
     })
 }
 
@@ -264,15 +265,30 @@ fn collect_visible_text<D: LayoutDom>(dom: &D, id: D::NodeId, out: &mut String) 
 /// Positive class/id signals: an element whose `class`/`id` contains one of these is
 /// likely the article body (readability.js's positive lexicon, trimmed).
 const POSITIVE_HINTS: &[&str] = &[
-    "article", "body", "content", "entry", "main", "page", "post", "text", "blog",
-    "story", "column", "prose",
+    "article", "body", "content", "entry", "main", "page", "post", "text", "blog", "story",
+    "column", "prose",
 ];
 
 /// Negative class/id signals: chrome, boilerplate, furniture. An element matching one
 /// is penalized as unlikely to be the article body.
 const NEGATIVE_HINTS: &[&str] = &[
-    "nav", "menu", "header", "footer", "sidebar", "comment", "ads", "banner", "sponsor",
-    "social", "share", "related", "promo", "masthead", "widget", "byline", "breadcrumb",
+    "nav",
+    "menu",
+    "header",
+    "footer",
+    "sidebar",
+    "comment",
+    "ads",
+    "banner",
+    "sponsor",
+    "social",
+    "share",
+    "related",
+    "promo",
+    "masthead",
+    "widget",
+    "byline",
+    "breadcrumb",
 ];
 
 /// The page's **reader-mode article body**: locate the main content block and return
@@ -315,7 +331,10 @@ fn score_candidates<D: LayoutDom>(dom: &D, id: D::NodeId, best: &mut Option<(i32
 
 /// The block-level containers that can be the article root.
 fn is_candidate_block<D: LayoutDom>(dom: &D, id: D::NodeId) -> bool {
-    matches!(local_name(dom, id), Some("div" | "section" | "article" | "td"))
+    matches!(
+        local_name(dom, id),
+        Some("div" | "section" | "article" | "td")
+    )
 }
 
 /// A block's readability score: a tag bonus, the class/id signal, and paragraph
@@ -449,8 +468,19 @@ mod tests {
              </body></html>",
         );
         let links = extract_links(&doc);
-        assert_eq!(links.len(), 2, "two href anchors; the named anchor is skipped: {links:?}");
-        assert_eq!(links[0], Link { href: "/one".into(), text: "First".into(), rel: None });
+        assert_eq!(
+            links.len(),
+            2,
+            "two href anchors; the named anchor is skipped: {links:?}"
+        );
+        assert_eq!(
+            links[0],
+            Link {
+                href: "/one".into(),
+                text: "First".into(),
+                rel: None
+            }
+        );
         assert_eq!(
             links[1],
             Link {
@@ -514,10 +544,19 @@ mod tests {
         assert_eq!(
             extract_headings(&doc),
             vec![
-                Heading { level: 1, text: "Title".into() },
-                Heading { level: 2, text: "Section one".into() },
+                Heading {
+                    level: 1,
+                    text: "Title".into()
+                },
+                Heading {
+                    level: 2,
+                    text: "Section one".into()
+                },
                 // the empty <h3> is skipped
-                Heading { level: 2, text: "Section two".into() },
+                Heading {
+                    level: 2,
+                    text: "Section two".into()
+                },
             ],
         );
     }
@@ -539,7 +578,10 @@ mod tests {
             md.open_graph,
             vec![
                 ("title".to_string(), "Things".to_string()),
-                ("image".to_string(), "https://example.com/og.png".to_string()),
+                (
+                    "image".to_string(),
+                    "https://example.com/og.png".to_string()
+                ),
             ],
         );
     }
@@ -547,9 +589,8 @@ mod tests {
     #[test]
     fn canonical_rel_is_a_token_list() {
         // `rel` is a space-separated token list; `canonical` need not be the only token.
-        let doc = StaticDocument::parse(
-            "<head><link rel=\"alternate canonical\" href=\"/c\"></head>",
-        );
+        let doc =
+            StaticDocument::parse("<head><link rel=\"alternate canonical\" href=\"/c\"></head>");
         assert_eq!(extract_metadata(&doc).canonical.as_deref(), Some("/c"));
     }
 
@@ -596,13 +637,22 @@ mod tests {
              </body>",
         );
         let main = extract_main_text(&doc).expect("an article body");
-        assert!(main.contains("first paragraph of the real article body"), "{main}");
+        assert!(
+            main.contains("first paragraph of the real article body"),
+            "{main}"
+        );
         assert!(main.contains("second paragraph"), "{main}");
         // Chrome outside the landmark, and an aside *inside* it, are all dropped.
         assert!(!main.contains("Menu Junk"), "nav dropped: {main}");
         assert!(!main.contains("Footer Junk"), "footer dropped: {main}");
-        assert!(!main.contains("Boilerplate Banner"), "header dropped: {main}");
-        assert!(!main.contains("aside promo junk"), "inline aside dropped: {main}");
+        assert!(
+            !main.contains("Boilerplate Banner"),
+            "header dropped: {main}"
+        );
+        assert!(
+            !main.contains("aside promo junk"),
+            "inline aside dropped: {main}"
+        );
     }
 
     #[test]
@@ -620,10 +670,22 @@ mod tests {
              </body>",
         );
         let main = extract_main_text(&doc).expect("an article body");
-        assert!(main.contains("genuine article body paragraph one"), "{main}");
-        assert!(main.contains("Paragraph two of the genuine article"), "{main}");
-        assert!(!main.contains("Ads and promo"), "sidebar lost to scoring: {main}");
-        assert!(!main.contains("footer junk"), "inline footer dropped: {main}");
+        assert!(
+            main.contains("genuine article body paragraph one"),
+            "{main}"
+        );
+        assert!(
+            main.contains("Paragraph two of the genuine article"),
+            "{main}"
+        );
+        assert!(
+            !main.contains("Ads and promo"),
+            "sidebar lost to scoring: {main}"
+        );
+        assert!(
+            !main.contains("footer junk"),
+            "inline footer dropped: {main}"
+        );
     }
 
     #[test]

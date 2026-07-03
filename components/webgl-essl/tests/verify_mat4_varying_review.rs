@@ -7,10 +7,10 @@
 //! the commit's review note so a future refactor can't quietly
 //! invalidate them.
 
+use webgl_essl::CompileError;
 use webgl_essl::compile;
 use webgl_essl::parse_source;
 use webgl_essl::validate::{ShaderStage, WebGlDiagnosticKind, validate};
-use webgl_essl::CompileError;
 
 // =====================================================================
 // Claim 1: column-split consumes one Location per matrix column. A
@@ -55,10 +55,12 @@ fn r13_mat4_plus_four_vec4_varyings_exactly_at_the_limit() {
                }\n";
     let tu = parse_source(src).unwrap_or_else(|e| panic!("parse: {}", e.display(src)));
     let r = validate(&tu, src, ShaderStage::Vertex);
-    let r13_varying = r.errors.iter().any(|d| matches!(
-        &d.kind,
-        WebGlDiagnosticKind::PackingLimitExceeded { class, .. } if *class == "varying"
-    ));
+    let r13_varying = r.errors.iter().any(|d| {
+        matches!(
+            &d.kind,
+            WebGlDiagnosticKind::PackingLimitExceeded { class, .. } if *class == "varying"
+        )
+    });
     assert!(
         !r13_varying,
         "8 slots should be exactly at limit, not over: {:#?}",

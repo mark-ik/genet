@@ -13,5 +13,9 @@ description = "Profile-neutral DOM trait consumed by serval-layout and other rea
 name = "layout_dom_api"
 path = "lib.rs"
 
+[features]
+capture = ["dep:serde"]
+
 [dependencies]
 markup5ever = { workspace = true }
+serde = { workspace = true, features = ["derive"], optional = true }

@@ -14,7 +14,8 @@ name = "serval_scripted_dom"
 path = "lib.rs"
 
 [dependencies]
-layout-dom-api = { path = "../shared/layout-dom" }
+engine_observables_api = { workspace = true }
+layout-dom-api = { path = "../shared/layout-dom", features = ["capture"] }
 markup5ever = { workspace = true }
 # The HTML serializer (the `serialize` fn + `SerializeOpts` + void-element/escaping
 # logic) lives in html5ever; markup5ever only carries the `Serialize`/`Serializer`
@@ -23,3 +24,6 @@ html5ever = { workspace = true }
 # Reused for `set_inner_html` fragment parsing: parse via StaticDocument (a LayoutDom),
 # then walk it into the mutable arena. Avoids a second TreeSink impl.
 serval-static-dom = { path = "../serval-static-dom" }
+
+[dev-dependencies]
+postcard = { workspace = true }

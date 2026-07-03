@@ -35,7 +35,7 @@ use rspirv::spirv::{
 };
 
 use crate::ast::{
-    AssignOp, BinOp, Expr, ExternalDecl, ForInit, FunctionDef, StorageQualifier, Stmt,
+    AssignOp, BinOp, Expr, ExternalDecl, ForInit, FunctionDef, Stmt, StorageQualifier,
     TranslationUnit, TypeKind, UnaryOp,
 };
 use crate::span::Span;
@@ -44,7 +44,9 @@ use crate::validate::ShaderStage;
 #[derive(Debug)]
 pub enum LoweringError {
     NoMain,
-    UnsupportedShape { what: String },
+    UnsupportedShape {
+        what: String,
+    },
     SpirvBuild(String),
     NagaParse(String),
     NagaValidate(String),
@@ -226,7 +228,6 @@ fn find_main(tu: &TranslationUnit) -> Result<&FunctionDef, LoweringError> {
         })
         .ok_or(LoweringError::NoMain)
 }
-
 
 // ---------- SPIR-V emission -------------------------------------------
 
@@ -483,37 +484,22 @@ fn build_spirv(
 
     // Inputs: vertex attributes always; fragment varyings under
     // ShaderStage::Fragment.
-    let inputs = register_inputs(&mut b, tu, stage, type_float, type_vec2, type_vec3, type_vec4);
+    let inputs = register_inputs(
+        &mut b, tu, stage, type_float, type_vec2, type_vec3, type_vec4,
+    );
 
     // Outputs: under ShaderStage::Vertex, varyings become Output
     // variables decorated with sequential Locations. Fragment shaders
     // use the single gl_FragColor output and don't register varyings
     // here.
     let outputs = register_varying_outputs(
-        &mut b,
-        tu,
-        stage,
-        type_float,
-        type_vec2,
-        type_vec3,
-        type_vec4,
+        &mut b, tu, stage, type_float, type_vec2, type_vec3, type_vec4,
     );
 
     // Uniforms wrapped in a single Block-decorated struct.
     let (uniforms, uniform_block_var) = register_uniforms(
-        &mut b,
-        tu,
-        type_float,
-        type_int,
-        type_vec2,
-        type_vec3,
-        type_vec4,
-        type_ivec2,
-        type_ivec3,
-        type_ivec4,
-        type_mat2,
-        type_mat3,
-        type_mat4,
+        &mut b, tu, type_float, type_int, type_vec2, type_vec3, type_vec4, type_ivec2, type_ivec3,
+        type_ivec4, type_mat2, type_mat3, type_mat4,
     );
 
     // Sampler uniforms live in their own `UniformConstant`
@@ -522,13 +508,7 @@ fn build_spirv(
     // variables (image + sampler) decorated with consecutive
     // bindings starting at 1 (Binding 0 is the uniform block
     // when present).
-    let samplers = register_samplers(
-        &mut b,
-        tu,
-        type_image_2d,
-        type_image_cube,
-        type_sampler,
-    );
+    let samplers = register_samplers(&mut b, tu, type_image_2d, type_image_cube, type_sampler);
 
     // Detect ESSL 3.00 fragment shaders that declare their own
     // `out` outputs. In that mode the `gl_FragColor` builtin is
@@ -547,14 +527,16 @@ fn build_spirv(
     // vec4 in the cases this module handles). For ESSL 3.00
     // fragments with user-declared `out` outputs the primary is
     // skipped entirely.
-    let primary_output: Option<Word> = if stage == ShaderStage::Vertex
-        || !has_user_fragment_outs
-    {
+    let primary_output: Option<Word> = if stage == ShaderStage::Vertex || !has_user_fragment_outs {
         let ptr_output = b.type_pointer(None, StorageClass::Output, type_vec4);
         let var = b.variable(ptr_output, None, StorageClass::Output, None);
         match stage {
             ShaderStage::Vertex => {
-                b.decorate(var, Decoration::BuiltIn, [Operand::BuiltIn(BuiltIn::Position)]);
+                b.decorate(
+                    var,
+                    Decoration::BuiltIn,
+                    [Operand::BuiltIn(BuiltIn::Position)],
+                );
             },
             ShaderStage::Fragment => {
                 b.decorate(var, Decoration::Location, [Operand::LiteralBit32(0)]);
@@ -655,11 +637,17 @@ fn build_spirv(
         .b
         .begin_function(type_void, None, FunctionControl::NONE, fn_type)
         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
-    ctx.b.begin_block(None).map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    ctx.b
+        .begin_block(None)
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
 
     lower_main_body(&mut ctx, main, stage, primary_output)?;
-    ctx.b.ret().map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
-    ctx.b.end_function().map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    ctx.b
+        .ret()
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
+    ctx.b
+        .end_function()
+        .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
 
     // Entry-point interface: every input and every output variable
     // the shader exposes. Uniforms are bound via DescriptorSet and
@@ -682,9 +670,11 @@ fn build_spirv(
     if let Some(p) = primary_output {
         interface.push(p);
     }
-    ctx.b.entry_point(execution_model, main_fn, "main", interface);
+    ctx.b
+        .entry_point(execution_model, main_fn, "main", interface);
     if stage == ShaderStage::Fragment {
-        ctx.b.execution_mode(main_fn, ExecutionMode::OriginUpperLeft, []);
+        ctx.b
+            .execution_mode(main_fn, ExecutionMode::OriginUpperLeft, []);
     }
 
     Ok(ctx.b.module())
@@ -709,10 +699,9 @@ fn register_varying_outputs(
     for d in &tu.decls {
         let ExternalDecl::Global(g) = d else { continue };
         let qualifies = match stage {
-            ShaderStage::Vertex => matches!(
-                g.storage,
-                StorageQualifier::Varying | StorageQualifier::Out
-            ),
+            ShaderStage::Vertex => {
+                matches!(g.storage, StorageQualifier::Varying | StorageQualifier::Out)
+            },
             ShaderStage::Fragment => g.storage == StorageQualifier::Out,
         };
         if !qualifies {
@@ -833,15 +822,18 @@ fn allocate_local(ctx: &mut Ctx, d: &crate::ast::LocalDecl) -> Result<(), Loweri
         return Ok(());
     }
     let ptr_ty = function_ptr_for(ctx, d.ty.kind)?;
-    let pointee_type = spv_type_for_kind(ctx, d.ty.kind).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
+    let pointee_type =
+        spv_type_for_kind(ctx, d.ty.kind).ok_or_else(|| LoweringError::UnsupportedShape {
             what: format!("local `{}` type {:?} is not lowered", d.name, d.ty.kind),
-        }
-    })?;
+        })?;
     let var = ctx.b.variable(ptr_ty, None, StorageClass::Function, None);
     ctx.locals.insert(
         d.span,
-        LocalBinding { var, pointee_type, kind: d.ty.kind },
+        LocalBinding {
+            var,
+            pointee_type,
+            kind: d.ty.kind,
+        },
     );
     Ok(())
 }
@@ -863,29 +855,23 @@ fn lookup_local(ctx: &Ctx, name: &str) -> Option<LocalBinding> {
 /// entry-point body, providing the special-case routing for
 /// `gl_Position` / `gl_FragColor` writes. `None` when lowering a
 /// user function body.
-fn lower_stmt(
-    ctx: &mut Ctx,
-    stmt: &Stmt,
-    main_ctx: Option<&MainCtx>,
-) -> Result<(), LoweringError> {
+fn lower_stmt(ctx: &mut Ctx, stmt: &Stmt, main_ctx: Option<&MainCtx>) -> Result<(), LoweringError> {
     match stmt {
         Stmt::Decl(d) => {
             // Pre-pass allocated the OpVariable; register the
             // name -> decl-span mapping in the current lexical
             // scope so subsequent Ident lookups in this scope
             // resolve here, then emit the initializer OpStore.
-            let binding = *ctx.locals.get(&d.span).ok_or_else(|| {
-                LoweringError::UnsupportedShape {
-                    what: format!("local `{}` was not pre-allocated", d.name),
-                }
-            })?;
+            let binding =
+                *ctx.locals
+                    .get(&d.span)
+                    .ok_or_else(|| LoweringError::UnsupportedShape {
+                        what: format!("local `{}` was not pre-allocated", d.name),
+                    })?;
             ctx.scope_stack
                 .last_mut()
                 .ok_or_else(|| LoweringError::UnsupportedShape {
-                    what: format!(
-                        "local `{}` declared outside any lexical scope",
-                        d.name
-                    ),
+                    what: format!("local `{}` declared outside any lexical scope", d.name),
                 })?
                 .insert(d.name.clone(), d.span);
             if let Some(init) = &d.init {
@@ -906,9 +892,7 @@ fn lower_stmt(
                     return lower_lhs_matrix_index_assignment(ctx, base, index, rhs);
                 }
                 let bin_op = compound_op_to_bin(op);
-                return lower_lhs_matrix_index_compound_assignment(
-                    ctx, base, index, bin_op, rhs,
-                );
+                return lower_lhs_matrix_index_compound_assignment(ctx, base, index, bin_op, rhs);
             }
             // LHS Member: struct base → field access via
             // OpAccessChain; vector base → swizzle. Compound
@@ -1060,22 +1044,24 @@ fn lower_stmt(
             Ok(())
         },
         Stmt::Break { .. } => {
-            let target = *ctx.break_targets.last().ok_or_else(|| {
-                LoweringError::UnsupportedShape {
-                    what: "`break;` outside of a loop or switch is not lowered".into(),
-                }
-            })?;
+            let target =
+                *ctx.break_targets
+                    .last()
+                    .ok_or_else(|| LoweringError::UnsupportedShape {
+                        what: "`break;` outside of a loop or switch is not lowered".into(),
+                    })?;
             ctx.b
                 .branch(target)
                 .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
             Ok(())
         },
         Stmt::Continue { .. } => {
-            let target = *ctx.continue_targets.last().ok_or_else(|| {
-                LoweringError::UnsupportedShape {
-                    what: "`continue;` outside of a loop is not lowered".into(),
-                }
-            })?;
+            let target =
+                *ctx.continue_targets
+                    .last()
+                    .ok_or_else(|| LoweringError::UnsupportedShape {
+                        what: "`continue;` outside of a loop is not lowered".into(),
+                    })?;
             ctx.b
                 .branch(target)
                 .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
@@ -1099,11 +1085,17 @@ fn lower_stmt(
             ctx.scope_stack.pop();
             walk_result
         },
-        Stmt::If { cond, then, else_, .. } => {
+        Stmt::If {
+            cond, then, else_, ..
+        } => {
             let cond_id = lower_expr(ctx, cond)?;
             let merge_label = ctx.b.id();
             let then_label = ctx.b.id();
-            let else_label = if else_.is_some() { ctx.b.id() } else { merge_label };
+            let else_label = if else_.is_some() {
+                ctx.b.id()
+            } else {
+                merge_label
+            };
             ctx.b
                 .selection_merge(merge_label, SelectionControl::NONE)
                 .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
@@ -1145,7 +1137,13 @@ fn lower_stmt(
                 .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
             Ok(())
         },
-        Stmt::For { init, cond, step, body, .. } => {
+        Stmt::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
             // For-init introduces a new lexical scope: the loop
             // variable is visible in cond / step / body but not
             // outside the loop. Two nested loops can each declare
@@ -1156,10 +1154,7 @@ fn lower_stmt(
                     ForInit::Decl(d) => {
                         let binding = *ctx.locals.get(&d.span).ok_or_else(|| {
                             LoweringError::UnsupportedShape {
-                                what: format!(
-                                    "for-init local `{}` not pre-allocated",
-                                    d.name
-                                ),
+                                what: format!("for-init local `{}` not pre-allocated", d.name),
                             }
                         })?;
                         ctx.scope_stack
@@ -1170,9 +1165,7 @@ fn lower_stmt(
                             let value = lower_expr(ctx, init_expr)?;
                             ctx.b
                                 .store(binding.var, value, None, [])
-                                .map_err(|e| {
-                                    LoweringError::SpirvBuild(format!("{e:?}"))
-                                })?;
+                                .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
                         }
                     },
                     ForInit::Expr(e) => {
@@ -1185,11 +1178,11 @@ fn lower_stmt(
             ctx.scope_stack.pop();
             result
         },
-        Stmt::While { cond, body, .. } => {
-            emit_loop_cfg(ctx, Some(cond), None, body, main_ctx)
-        },
+        Stmt::While { cond, body, .. } => emit_loop_cfg(ctx, Some(cond), None, body, main_ctx),
         Stmt::Do { body, cond, .. } => emit_do_while_cfg(ctx, body, cond, main_ctx),
-        Stmt::Switch { discriminant, body, .. } => emit_switch_cfg(ctx, discriminant, body, main_ctx),
+        Stmt::Switch {
+            discriminant, body, ..
+        } => emit_switch_cfg(ctx, discriminant, body, main_ctx),
         _ => Err(LoweringError::UnsupportedShape {
             what: "stmt shape not lowered".into(),
         }),
@@ -1232,10 +1225,18 @@ fn emit_switch_cfg(
                         });
                     },
                 };
-                segments.push(Segment { value: Some(v), label: ctx.b.id(), stmts: Vec::new() });
+                segments.push(Segment {
+                    value: Some(v),
+                    label: ctx.b.id(),
+                    stmts: Vec::new(),
+                });
             },
             Stmt::Default { .. } => {
-                segments.push(Segment { value: None, label: ctx.b.id(), stmts: Vec::new() });
+                segments.push(Segment {
+                    value: None,
+                    label: ctx.b.id(),
+                    stmts: Vec::new(),
+                });
             },
             other => {
                 if let Some(seg) = segments.last_mut() {
@@ -1253,10 +1254,7 @@ fn emit_switch_cfg(
         .unwrap_or(merge_label);
     let case_pairs: Vec<(Operand, Word)> = segments
         .iter()
-        .filter_map(|s| {
-            s.value
-                .map(|v| (Operand::LiteralBit32(v as u32), s.label))
-        })
+        .filter_map(|s| s.value.map(|v| (Operand::LiteralBit32(v as u32), s.label)))
         .collect();
 
     ctx.b
@@ -1460,7 +1458,9 @@ fn emit_loop_cfg(
 fn emit_user_functions(ctx: &mut Ctx, tu: &TranslationUnit) -> Result<(), LoweringError> {
     let mut prototypes: Vec<(&FunctionDef, FnPrototype)> = Vec::new();
     for d in &tu.decls {
-        let ExternalDecl::Function(f) = d else { continue };
+        let ExternalDecl::Function(f) = d else {
+            continue;
+        };
         if f.name == "main" {
             continue;
         }
@@ -1493,34 +1493,28 @@ struct FnPrototype {
     param_types_spv: Vec<Word>,
 }
 
-fn build_user_fn_prototype(
-    ctx: &mut Ctx,
-    f: &FunctionDef,
-) -> Result<FnPrototype, LoweringError> {
+fn build_user_fn_prototype(ctx: &mut Ctx, f: &FunctionDef) -> Result<FnPrototype, LoweringError> {
     let return_kind = f.return_ty.kind;
     let return_ty = if return_kind == TypeKind::Void {
         ctx.type_void
     } else {
-        spv_type_for_kind(ctx, return_kind).ok_or_else(|| {
-            LoweringError::UnsupportedShape {
-                what: format!(
-                    "function `{}` return type {return_kind:?} is not lowered",
-                    f.name
-                ),
-            }
+        spv_type_for_kind(ctx, return_kind).ok_or_else(|| LoweringError::UnsupportedShape {
+            what: format!(
+                "function `{}` return type {return_kind:?} is not lowered",
+                f.name
+            ),
         })?
     };
     let mut param_types_spv: Vec<Word> = Vec::new();
     let mut param_kinds: Vec<TypeKind> = Vec::new();
     for p in &f.params {
-        let pt = spv_type_for_kind(ctx, p.ty.kind).ok_or_else(|| {
-            LoweringError::UnsupportedShape {
+        let pt =
+            spv_type_for_kind(ctx, p.ty.kind).ok_or_else(|| LoweringError::UnsupportedShape {
                 what: format!(
                     "function `{}` parameter `{}` type {:?} is not lowered",
                     f.name, p.name, p.ty.kind,
                 ),
-            }
-        })?;
+            })?;
         param_types_spv.push(pt);
         param_kinds.push(p.ty.kind);
     }
@@ -1556,7 +1550,13 @@ fn emit_user_function_body(
             .b
             .function_parameter(*pt)
             .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
-        fn_params.insert(p.name.clone(), FnParamBinding { value_id: pid, kind: p.ty.kind });
+        fn_params.insert(
+            p.name.clone(),
+            FnParamBinding {
+                value_id: pid,
+                kind: p.ty.kind,
+            },
+        );
     }
 
     ctx.b
@@ -1628,14 +1628,15 @@ fn last_stmt_is_return(stmts: &[Stmt]) -> bool {
 /// else-branches both terminate.
 fn stmt_definitely_terminates(s: &Stmt) -> bool {
     match s {
-        Stmt::Return { .. }
-        | Stmt::Discard { .. }
-        | Stmt::Break { .. }
-        | Stmt::Continue { .. } => true,
-        Stmt::Block(b) => b.stmts.last().is_some_and(stmt_definitely_terminates),
-        Stmt::If { then, else_: Some(else_), .. } => {
-            stmt_definitely_terminates(then) && stmt_definitely_terminates(else_)
+        Stmt::Return { .. } | Stmt::Discard { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => {
+            true
         },
+        Stmt::Block(b) => b.stmts.last().is_some_and(stmt_definitely_terminates),
+        Stmt::If {
+            then,
+            else_: Some(else_),
+            ..
+        } => stmt_definitely_terminates(then) && stmt_definitely_terminates(else_),
         _ => false,
     }
 }
@@ -1660,25 +1661,39 @@ fn register_samplers(
             continue;
         }
         let (image_type, sampled_image_type, kind) = match g.ty.kind {
-            TypeKind::Sampler2D => {
-                (type_image_2d, type_sampled_image_2d, TypeKind::Sampler2D)
-            },
-            TypeKind::SamplerCube => {
-                (type_image_cube, type_sampled_image_cube, TypeKind::SamplerCube)
-            },
+            TypeKind::Sampler2D => (type_image_2d, type_sampled_image_2d, TypeKind::Sampler2D),
+            TypeKind::SamplerCube => (
+                type_image_cube,
+                type_sampled_image_cube,
+                TypeKind::SamplerCube,
+            ),
             _ => continue,
         };
         let ptr_image = b.type_pointer(None, StorageClass::UniformConstant, image_type);
         let image_var = b.variable(ptr_image, None, StorageClass::UniformConstant, None);
-        b.decorate(image_var, Decoration::DescriptorSet, [Operand::LiteralBit32(0)]);
-        b.decorate(image_var, Decoration::Binding, [Operand::LiteralBit32(binding)]);
+        b.decorate(
+            image_var,
+            Decoration::DescriptorSet,
+            [Operand::LiteralBit32(0)],
+        );
+        b.decorate(
+            image_var,
+            Decoration::Binding,
+            [Operand::LiteralBit32(binding)],
+        );
         binding += 1;
-        let ptr_sampler =
-            b.type_pointer(None, StorageClass::UniformConstant, type_sampler);
-        let sampler_var =
-            b.variable(ptr_sampler, None, StorageClass::UniformConstant, None);
-        b.decorate(sampler_var, Decoration::DescriptorSet, [Operand::LiteralBit32(0)]);
-        b.decorate(sampler_var, Decoration::Binding, [Operand::LiteralBit32(binding)]);
+        let ptr_sampler = b.type_pointer(None, StorageClass::UniformConstant, type_sampler);
+        let sampler_var = b.variable(ptr_sampler, None, StorageClass::UniformConstant, None);
+        b.decorate(
+            sampler_var,
+            Decoration::DescriptorSet,
+            [Operand::LiteralBit32(0)],
+        );
+        b.decorate(
+            sampler_var,
+            Decoration::Binding,
+            [Operand::LiteralBit32(binding)],
+        );
         binding += 1;
         samplers.insert(
             g.name.clone(),
@@ -1782,7 +1797,14 @@ fn register_uniforms(
     b.decorate(var, Decoration::Binding, [Operand::LiteralBit32(0)]);
     let mut map = HashMap::new();
     for (i, (name, kind, pointee, _, _)) in uniforms.into_iter().enumerate() {
-        map.insert(name, UniformBinding { member_index: i as u32, pointee_type: pointee, kind });
+        map.insert(
+            name,
+            UniformBinding {
+                member_index: i as u32,
+                pointee_type: pointee,
+                kind,
+            },
+        );
     }
     (map, Some(var))
 }
@@ -1808,10 +1830,9 @@ fn register_inputs(
                 g.storage,
                 StorageQualifier::Attribute | StorageQualifier::In
             ),
-            ShaderStage::Fragment => matches!(
-                g.storage,
-                StorageQualifier::Varying | StorageQualifier::In
-            ),
+            ShaderStage::Fragment => {
+                matches!(g.storage, StorageQualifier::Varying | StorageQualifier::In)
+            },
         };
         if !is_input {
             continue;
@@ -1843,7 +1864,11 @@ fn register_inputs(
         }
         inputs.insert(
             g.name.clone(),
-            InputBinding { vars, pointee_type: column_type, kind },
+            InputBinding {
+                vars,
+                pointee_type: column_type,
+                kind,
+            },
         );
     }
     inputs
@@ -2029,14 +2054,18 @@ fn compound_via_chain(
         .b
         .load(chain_pointee, None, chain, None, [])
         .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
-    let rhs_kind = classify_arg_kind(ctx, rhs).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
-            what: "could not classify rhs of compound assign".into(),
-        }
+    let rhs_kind = classify_arg_kind(ctx, rhs).ok_or_else(|| LoweringError::UnsupportedShape {
+        what: "could not classify rhs of compound assign".into(),
     })?;
     let rhs_val = lower_expr(ctx, rhs)?;
     let result = emit_binary_on_values(
-        ctx, bin_op, current, leaf_kind, rhs_val, rhs_kind, chain_pointee,
+        ctx,
+        bin_op,
+        current,
+        leaf_kind,
+        rhs_val,
+        rhs_kind,
+        chain_pointee,
     )?;
     ctx.b
         .store(chain, result, None, [])
@@ -2085,27 +2114,26 @@ fn lower_lhs_swizzle_compound_assignment(
             what: format!("compound LHS-swizzle target `{base_name}` is not a writable variable"),
         }
     })?;
-    let base_size = vector_size_of(target.kind).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
-            what: format!("compound LHS-swizzle target type {:?} is not a vector", target.kind),
-        }
+    let base_size = vector_size_of(target.kind).ok_or_else(|| LoweringError::UnsupportedShape {
+        what: format!(
+            "compound LHS-swizzle target type {:?} is not a vector",
+            target.kind
+        ),
     })?;
-    let indices = parse_swizzle_indices(field, base_size).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
-            what: format!("invalid compound LHS swizzle `.{field}` on {:?}", target.kind),
-        }
-    })?;
+    let indices =
+        parse_swizzle_indices(field, base_size).ok_or_else(|| LoweringError::UnsupportedShape {
+            what: format!(
+                "invalid compound LHS swizzle `.{field}` on {:?}",
+                target.kind
+            ),
+        })?;
     if indices.len() != 1 {
         return Err(LoweringError::UnsupportedShape {
-            what: format!(
-                "multi-component compound LHS swizzle `.{field}` is not yet lowered"
-            ),
+            what: format!("multi-component compound LHS swizzle `.{field}` is not yet lowered"),
         });
     }
     let component_idx = indices[0] as i32;
-    let ptr_to_float = ctx
-        .b
-        .type_pointer(None, target.storage, ctx.type_float);
+    let ptr_to_float = ctx.b.type_pointer(None, target.storage, ctx.type_float);
     let idx_const = int_constant(ctx, component_idx);
     let chain = ctx
         .b
@@ -2140,13 +2168,13 @@ fn lower_lhs_matrix_index_compound_assignment(
             });
         },
     };
-    let out = ctx.outputs.get(name).cloned().ok_or_else(|| {
-        LoweringError::UnsupportedShape {
-            what: format!(
-                "compound matrix-index LHS target `{name}` is not a column-split output"
-            ),
-        }
-    })?;
+    let out = ctx
+        .outputs
+        .get(name)
+        .cloned()
+        .ok_or_else(|| LoweringError::UnsupportedShape {
+            what: format!("compound matrix-index LHS target `{name}` is not a column-split output"),
+        })?;
     if out.vars.len() <= 1 || idx_value >= out.vars.len() {
         return Err(LoweringError::UnsupportedShape {
             what: format!(
@@ -2172,11 +2200,7 @@ fn lower_lhs_matrix_index_compound_assignment(
 /// Build an N×N identity-shaped matrix with `scalar` on the
 /// diagonal and zeros elsewhere — the ESSL §5.4.2 single-scalar
 /// matrix constructor.
-fn lower_diagonal_matrix(
-    ctx: &mut Ctx,
-    scalar: Word,
-    n: usize,
-) -> Result<Word, LoweringError> {
+fn lower_diagonal_matrix(ctx: &mut Ctx, scalar: Word, n: usize) -> Result<Word, LoweringError> {
     let (col_ty, mat_ty) = match n {
         2 => (ctx.type_vec2, ctx.type_mat2),
         3 => (ctx.type_vec3, ctx.type_mat3),
@@ -2227,7 +2251,11 @@ fn build_struct_access_chain(
     let mut current = base;
     let root_name = loop {
         match current {
-            Expr::Member { base: inner_base, field: inner_field, .. } => {
+            Expr::Member {
+                base: inner_base,
+                field: inner_field,
+                ..
+            } => {
                 let inner_kind = classify_arg_kind(ctx, inner_base).ok_or_else(|| {
                     LoweringError::UnsupportedShape {
                         what: "nested struct access base has unknown type".into(),
@@ -2237,9 +2265,7 @@ fn build_struct_access_chain(
                     TypeKind::Struct(i) => i,
                     other => {
                         return Err(LoweringError::UnsupportedShape {
-                            what: format!(
-                                "nested member access on non-struct base type {other:?}"
-                            ),
+                            what: format!("nested member access on non-struct base type {other:?}"),
                         });
                     },
                 };
@@ -2254,10 +2280,8 @@ fn build_struct_access_chain(
             },
         }
     };
-    let local = lookup_local(ctx, root_name).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
-            what: format!("struct base `{root_name}` is not a function-scope local"),
-        }
+    let local = lookup_local(ctx, root_name).ok_or_else(|| LoweringError::UnsupportedShape {
+        what: format!("struct base `{root_name}` is not a function-scope local"),
     })?;
     // Path is inside-out; reverse to outermost-first for the
     // access chain (`s.inner.x` → indices [inner_idx, x_idx]).
@@ -2272,23 +2296,19 @@ fn build_struct_access_chain(
             .ok_or_else(|| LoweringError::UnsupportedShape {
                 what: format!("struct index {parent_struct_idx} not in registry"),
             })?;
-        let (member_idx, field_kind) =
-            info.fields.get(field_name).copied().ok_or_else(|| {
-                LoweringError::UnsupportedShape {
-                    what: format!("struct field `{field_name}` not found"),
-                }
-            })?;
+        let (member_idx, field_kind) = info.fields.get(field_name).copied().ok_or_else(|| {
+            LoweringError::UnsupportedShape {
+                what: format!("struct field `{field_name}` not found"),
+            }
+        })?;
         indices.push(int_constant(ctx, member_idx as i32));
         leaf_kind = field_kind;
     }
-    let leaf_ty = spv_type_for_kind(ctx, leaf_kind).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
+    let leaf_ty =
+        spv_type_for_kind(ctx, leaf_kind).ok_or_else(|| LoweringError::UnsupportedShape {
             what: format!("leaf field type {leaf_kind:?} not lowered"),
-        }
-    })?;
-    let ptr_to_leaf = ctx
-        .b
-        .type_pointer(None, StorageClass::Function, leaf_ty);
+        })?;
+    let ptr_to_leaf = ctx.b.type_pointer(None, StorageClass::Function, leaf_ty);
     let chain = ctx
         .b
         .access_chain(ptr_to_leaf, None, local.var, indices)
@@ -2339,11 +2359,7 @@ struct LhsTarget {
     storage: StorageClass,
 }
 
-fn resolve_lhs_target(
-    ctx: &Ctx,
-    name: &str,
-    main_ctx: Option<&MainCtx>,
-) -> Option<LhsTarget> {
+fn resolve_lhs_target(ctx: &Ctx, name: &str, main_ctx: Option<&MainCtx>) -> Option<LhsTarget> {
     if let Some(local) = lookup_local(ctx, name) {
         return Some(LhsTarget {
             var: local.var,
@@ -2410,16 +2426,13 @@ fn lower_lhs_swizzle_assignment(
             what: format!("LHS-swizzle target `{base_name}` is not a writable variable"),
         }
     })?;
-    let base_size = vector_size_of(target.kind).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
-            what: format!("LHS-swizzle target type {:?} is not a vector", target.kind),
-        }
+    let base_size = vector_size_of(target.kind).ok_or_else(|| LoweringError::UnsupportedShape {
+        what: format!("LHS-swizzle target type {:?} is not a vector", target.kind),
     })?;
-    let indices = parse_swizzle_indices(field, base_size).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
+    let indices =
+        parse_swizzle_indices(field, base_size).ok_or_else(|| LoweringError::UnsupportedShape {
             what: format!("invalid LHS swizzle `.{field}` on {:?}", target.kind),
-        }
-    })?;
+        })?;
     // ESSL §5.5 forbids repeated components on the LHS — each
     // target component can only be assigned once.
     let mut seen = [false; 4];
@@ -2436,9 +2449,7 @@ fn lower_lhs_swizzle_assignment(
         // Single-component LHS: cheaper via OpAccessChain to the
         // component pointer + OpStore.
         let component_idx = indices[0] as i32;
-        let ptr_to_float = ctx
-            .b
-            .type_pointer(None, target.storage, ctx.type_float);
+        let ptr_to_float = ctx.b.type_pointer(None, target.storage, ctx.type_float);
         let idx_const = int_constant(ctx, component_idx);
         let chain = ctx
             .b
@@ -2454,11 +2465,10 @@ fn lower_lhs_swizzle_assignment(
     // OpVectorShuffle component indices in [0, base_size) refer
     // to vector_1 (old); indices in [base_size, base_size + rhs)
     // refer to vector_2 (the new values from rhs).
-    let base_value_ty = spv_type_for_kind(ctx, target.kind).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
+    let base_value_ty =
+        spv_type_for_kind(ctx, target.kind).ok_or_else(|| LoweringError::UnsupportedShape {
             what: format!("LHS-swizzle target {:?} has no SPIR-V type", target.kind),
-        }
-    })?;
+        })?;
     let old = ctx
         .b
         .load(base_value_ty, None, target.var, None, [])
@@ -2487,22 +2497,19 @@ fn lower_vector_relational(
     args: &[Expr],
     call_span: Span,
 ) -> Result<Word, LoweringError> {
-    let result_kind = ctx.types.get(&call_span).copied().ok_or_else(|| {
-        LoweringError::UnsupportedShape {
-            what: format!("§8.6 `{callee}` has no typecheck result"),
-        }
-    })?;
-    let result_ty = spv_type_for_kind(ctx, result_kind).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
+    let result_kind =
+        ctx.types
+            .get(&call_span)
+            .copied()
+            .ok_or_else(|| LoweringError::UnsupportedShape {
+                what: format!("§8.6 `{callee}` has no typecheck result"),
+            })?;
+    let result_ty =
+        spv_type_for_kind(ctx, result_kind).ok_or_else(|| LoweringError::UnsupportedShape {
             what: format!("§8.6 `{callee}` returns {result_kind:?} which is not lowered"),
-        }
-    })?;
+        })?;
     match callee {
-        "lessThan"
-        | "lessThanEqual"
-        | "greaterThan"
-        | "greaterThanEqual"
-        | "equal"
+        "lessThan" | "lessThanEqual" | "greaterThan" | "greaterThanEqual" | "equal"
         | "notEqual" => {
             if args.len() != 2 {
                 return Err(LoweringError::UnsupportedShape {
@@ -2525,24 +2532,14 @@ fn lower_vector_relational(
             let r = match (callee, is_int_vec) {
                 ("lessThan", false) => ctx.b.f_ord_less_than(result_ty, None, lhs, rhs),
                 ("lessThan", true) => ctx.b.s_less_than(result_ty, None, lhs, rhs),
-                ("lessThanEqual", false) => {
-                    ctx.b.f_ord_less_than_equal(result_ty, None, lhs, rhs)
-                },
-                ("lessThanEqual", true) => {
-                    ctx.b.s_less_than_equal(result_ty, None, lhs, rhs)
-                },
-                ("greaterThan", false) => {
-                    ctx.b.f_ord_greater_than(result_ty, None, lhs, rhs)
-                },
-                ("greaterThan", true) => {
-                    ctx.b.s_greater_than(result_ty, None, lhs, rhs)
-                },
+                ("lessThanEqual", false) => ctx.b.f_ord_less_than_equal(result_ty, None, lhs, rhs),
+                ("lessThanEqual", true) => ctx.b.s_less_than_equal(result_ty, None, lhs, rhs),
+                ("greaterThan", false) => ctx.b.f_ord_greater_than(result_ty, None, lhs, rhs),
+                ("greaterThan", true) => ctx.b.s_greater_than(result_ty, None, lhs, rhs),
                 ("greaterThanEqual", false) => {
                     ctx.b.f_ord_greater_than_equal(result_ty, None, lhs, rhs)
                 },
-                ("greaterThanEqual", true) => {
-                    ctx.b.s_greater_than_equal(result_ty, None, lhs, rhs)
-                },
+                ("greaterThanEqual", true) => ctx.b.s_greater_than_equal(result_ty, None, lhs, rhs),
                 ("equal", false) => ctx.b.f_ord_equal(result_ty, None, lhs, rhs),
                 ("equal", true) => ctx.b.i_equal(result_ty, None, lhs, rhs),
                 ("notEqual", false) => ctx.b.f_ord_not_equal(result_ty, None, lhs, rhs),
@@ -2590,11 +2587,13 @@ fn lower_outer_product_expansion(
 ) -> Result<Word, LoweringError> {
     let c = lower_expr(ctx, &args[0])?;
     let r = lower_expr(ctx, &args[1])?;
-    let result_kind = ctx.types.get(&call_span).copied().ok_or_else(|| {
-        LoweringError::UnsupportedShape {
-            what: "outerProduct has no typecheck result".into(),
-        }
-    })?;
+    let result_kind =
+        ctx.types
+            .get(&call_span)
+            .copied()
+            .ok_or_else(|| LoweringError::UnsupportedShape {
+                what: "outerProduct has no typecheck result".into(),
+            })?;
     let (column_kind, n) = match result_kind {
         TypeKind::Mat2 => (TypeKind::Vec2, 2usize),
         TypeKind::Mat3 => (TypeKind::Vec3, 3),
@@ -2637,11 +2636,13 @@ fn lower_matrix_comp_mult(
 ) -> Result<Word, LoweringError> {
     let a = lower_expr(ctx, &args[0])?;
     let b = lower_expr(ctx, &args[1])?;
-    let result_kind = ctx.types.get(&call_span).copied().ok_or_else(|| {
-        LoweringError::UnsupportedShape {
-            what: "matrixCompMult has no typecheck result".into(),
-        }
-    })?;
+    let result_kind =
+        ctx.types
+            .get(&call_span)
+            .copied()
+            .ok_or_else(|| LoweringError::UnsupportedShape {
+                what: "matrixCompMult has no typecheck result".into(),
+            })?;
     let (column_kind, n) = match result_kind {
         TypeKind::Mat2 => (TypeKind::Vec2, 2usize),
         TypeKind::Mat3 => (TypeKind::Vec3, 3),
@@ -2690,16 +2691,17 @@ fn lower_mod_expansion(
             what: format!("`mod` expects 2 args, got {}", args.len()),
         });
     }
-    let result_kind = ctx.types.get(&call_span).copied().ok_or_else(|| {
-        LoweringError::UnsupportedShape {
-            what: "`mod` has no typecheck result kind".into(),
-        }
-    })?;
-    let result_ty = spv_type_for_kind(ctx, result_kind).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
+    let result_kind =
+        ctx.types
+            .get(&call_span)
+            .copied()
+            .ok_or_else(|| LoweringError::UnsupportedShape {
+                what: "`mod` has no typecheck result kind".into(),
+            })?;
+    let result_ty =
+        spv_type_for_kind(ctx, result_kind).ok_or_else(|| LoweringError::UnsupportedShape {
             what: format!("`mod` returns {result_kind:?} which is not lowered"),
-        }
-    })?;
+        })?;
     let x = lower_expr(ctx, &args[0])?;
     let mut y = lower_expr(ctx, &args[1])?;
     // Splat scalar y to vector result.
@@ -2796,10 +2798,8 @@ fn function_ptr_for(ctx: &mut Ctx, kind: TypeKind) -> Result<Word, LoweringError
     if let Some(&w) = ctx.function_ptr_types.get(&kind) {
         return Ok(w);
     }
-    let value_ty = spv_type_for_kind(ctx, kind).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
-            what: format!("function-scope pointer to {kind:?} is not lowered"),
-        }
+    let value_ty = spv_type_for_kind(ctx, kind).ok_or_else(|| LoweringError::UnsupportedShape {
+        what: format!("function-scope pointer to {kind:?} is not lowered"),
     })?;
     let ptr = ctx.b.type_pointer(None, StorageClass::Function, value_ty);
     ctx.function_ptr_types.insert(kind, ptr);
@@ -2817,9 +2817,9 @@ fn int_constant(ctx: &mut Ctx, value: i32) -> Word {
 
 fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
     match expr {
-        Expr::FloatLit { value, .. } => {
-            Ok(ctx.b.constant_bit32(ctx.type_float, (*value as f32).to_bits()))
-        },
+        Expr::FloatLit { value, .. } => Ok(ctx
+            .b
+            .constant_bit32(ctx.type_float, (*value as f32).to_bits())),
         Expr::IntLit { value, span } => {
             // Choose the constant's type from the typecheck. ESSL
             // assigns Int to IntLit; the historical Float-promotion
@@ -2829,9 +2829,9 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
             let kind = ctx.types.get(span).copied().unwrap_or(TypeKind::Int);
             match kind {
                 TypeKind::Int => Ok(ctx.b.constant_bit32(ctx.type_int, *value as u32)),
-                TypeKind::Float => {
-                    Ok(ctx.b.constant_bit32(ctx.type_float, (*value as f32).to_bits()))
-                },
+                TypeKind::Float => Ok(ctx
+                    .b
+                    .constant_bit32(ctx.type_float, (*value as f32).to_bits())),
                 _ => Err(LoweringError::UnsupportedShape {
                     what: format!("int literal in {kind:?} context is not lowered"),
                 }),
@@ -2882,9 +2882,7 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                 }
                 let result_ty = spv_type_for_kind(ctx, kind).ok_or_else(|| {
                     LoweringError::UnsupportedShape {
-                        what: format!(
-                            "input `{name}` of type {kind:?} has no SPIR-V matrix type"
-                        ),
+                        what: format!("input `{name}` of type {kind:?} has no SPIR-V matrix type"),
                     }
                 })?;
                 return ctx
@@ -2963,12 +2961,7 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))?;
                 return ctx
                     .b
-                    .sampled_image(
-                        sampler.sampled_image_type,
-                        None,
-                        image_val,
-                        sampler_val,
-                    )
+                    .sampled_image(sampler.sampled_image_type, None, image_val, sampler_val)
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
             }
             if let Some(binding) = ctx.uniforms.get(name) {
@@ -2991,11 +2984,15 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
             }
             Err(LoweringError::UnsupportedShape {
-                what: format!("identifier `{name}` is not a registered input, uniform, or function parameter"),
+                what: format!(
+                    "identifier `{name}` is not a registered input, uniform, or function parameter"
+                ),
             })
         },
         Expr::Binary { op, lhs, rhs, span } => lower_binary(ctx, *op, lhs, rhs, *span),
-        Expr::Call { callee, args, span, .. } => {
+        Expr::Call {
+            callee, args, span, ..
+        } => {
             // ESSL §8 built-ins (sin/cos/dot/...) dispatch first.
             // Most map to GLSL.std.450 OpExtInst; `dot` is the one
             // that uses a core SPIR-V opcode (OpDot). User-defined
@@ -3146,7 +3143,9 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                 })?;
                 let result_ty = spv_type_for_kind(ctx, result_kind).ok_or_else(|| {
                     LoweringError::UnsupportedShape {
-                        what: format!("built-in `{callee}` returns {result_kind:?} which is not lowered"),
+                        what: format!(
+                            "built-in `{callee}` returns {result_kind:?} which is not lowered"
+                        ),
                     }
                 })?;
                 // Lower each arg, splatting scalars into the result
@@ -3171,8 +3170,7 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                     arg_ids.push(id);
                 }
                 let set_id = glsl_std_450_id(ctx);
-                let operands: Vec<Operand> =
-                    arg_ids.iter().map(|w| Operand::IdRef(*w)).collect();
+                let operands: Vec<Operand> = arg_ids.iter().map(|w| Operand::IdRef(*w)).collect();
                 return ctx
                     .b
                     .ext_inst(result_ty, None, set_id, opcode, operands)
@@ -3193,9 +3191,7 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                 let overload = ctx
                     .user_fns
                     .get(callee)
-                    .and_then(|sigs| {
-                        sigs.iter().find(|s| s.param_types == arg_kinds).cloned()
-                    })
+                    .and_then(|sigs| sigs.iter().find(|s| s.param_types == arg_kinds).cloned())
                     .ok_or_else(|| LoweringError::UnsupportedShape {
                         what: format!(
                             "no overload of `{callee}` matches argument types {arg_kinds:?}"
@@ -3211,7 +3207,9 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                 } else {
                     spv_type_for_kind(ctx, result_kind).ok_or_else(|| {
                         LoweringError::UnsupportedShape {
-                            what: format!("call `{callee}` returns {result_kind:?} which is not lowered"),
+                            what: format!(
+                                "call `{callee}` returns {result_kind:?} which is not lowered"
+                            ),
                         }
                     })?
                 };
@@ -3248,9 +3246,7 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                     _ => unreachable!(),
                 };
                 let scalar_kind = classify_arg_kind(ctx, &args[0]);
-                if scalar_kind == Some(TypeKind::Float)
-                    || matches!(&args[0], Expr::IntLit { .. })
-                {
+                if scalar_kind == Some(TypeKind::Float) || matches!(&args[0], Expr::IntLit { .. }) {
                     let scalar = lower_expr(ctx, &args[0])?;
                     return lower_diagonal_matrix(ctx, scalar, n);
                 }
@@ -3267,7 +3263,9 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                 "bvec4" => (ctx.type_bvec4, 4usize),
                 other => {
                     return Err(LoweringError::UnsupportedShape {
-                        what: format!("call `{other}` is not a constructor or registered user function"),
+                        what: format!(
+                            "call `{other}` is not a constructor or registered user function"
+                        ),
                     });
                 },
             };
@@ -3276,11 +3274,10 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
             // n constituents, so we lower once and replicate.
             if args.len() == 1 {
                 let single_kind = classify_arg_kind(ctx, &args[0]);
-                if single_kind == Some(TypeKind::Float)
-                    || matches!(&args[0], Expr::IntLit { .. })
-                {
+                if single_kind == Some(TypeKind::Float) || matches!(&args[0], Expr::IntLit { .. }) {
                     let v = lower_expr(ctx, &args[0])?;
-                    let constituents: Vec<Word> = std::iter::repeat(v).take(component_count).collect();
+                    let constituents: Vec<Word> =
+                        std::iter::repeat(v).take(component_count).collect();
                     return ctx
                         .b
                         .composite_construct(result_ty, None, constituents)
@@ -3299,7 +3296,9 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                 .composite_construct(result_ty, None, constituents)
                 .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")))
         },
-        Expr::Member { base, field, span, .. } => {
+        Expr::Member {
+            base, field, span, ..
+        } => {
             // Dispatch on the base kind: struct base → field
             // lookup via OpAccessChain + OpLoad; vector base →
             // swizzle (existing path).
@@ -3336,12 +3335,10 @@ fn lower_expr(ctx: &mut Ctx, expr: &Expr) -> Result<Word, LoweringError> {
                     });
                 },
             };
-            let local = lookup_local(ctx, name).ok_or_else(|| {
-                LoweringError::UnsupportedShape {
-                    what: format!(
-                        "expression-context assignment target `{name}` is not a writable local"
-                    ),
-                }
+            let local = lookup_local(ctx, name).ok_or_else(|| LoweringError::UnsupportedShape {
+                what: format!(
+                    "expression-context assignment target `{name}` is not a writable local"
+                ),
             })?;
             ctx.b
                 .store(local.var, new_value, None, [])
@@ -3363,22 +3360,17 @@ fn lower_unary(ctx: &mut Ctx, op: UnaryOp, expr: &Expr) -> Result<Word, Lowering
     match op {
         UnaryOp::Pos => lower_expr(ctx, expr),
         UnaryOp::Neg => {
-            let kind = classify_arg_kind(ctx, expr).ok_or_else(|| {
-                LoweringError::UnsupportedShape {
+            let kind =
+                classify_arg_kind(ctx, expr).ok_or_else(|| LoweringError::UnsupportedShape {
                     what: "could not classify unary `-` operand".into(),
-                }
-            })?;
+                })?;
             let id = lower_expr(ctx, expr)?;
-            let ty = spv_type_for_kind(ctx, kind).ok_or_else(|| {
-                LoweringError::UnsupportedShape {
+            let ty =
+                spv_type_for_kind(ctx, kind).ok_or_else(|| LoweringError::UnsupportedShape {
                     what: format!("unary `-` result type {kind:?} is not lowered"),
-                }
-            })?;
+                })?;
             match kind {
-                TypeKind::Int
-                | TypeKind::Ivec2
-                | TypeKind::Ivec3
-                | TypeKind::Ivec4 => ctx
+                TypeKind::Int | TypeKind::Ivec2 | TypeKind::Ivec3 | TypeKind::Ivec4 => ctx
                     .b
                     .s_negate(ty, None, id)
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}"))),
@@ -3407,10 +3399,8 @@ fn lower_unary(ctx: &mut Ctx, op: UnaryOp, expr: &Expr) -> Result<Word, Lowering
                     });
                 },
             };
-            let local = lookup_local(ctx, name).ok_or_else(|| {
-                LoweringError::UnsupportedShape {
-                    what: format!("++/-- on non-local `{name}` is not lowered"),
-                }
+            let local = lookup_local(ctx, name).ok_or_else(|| LoweringError::UnsupportedShape {
+                what: format!("++/-- on non-local `{name}` is not lowered"),
             })?;
             let pointee = local.pointee_type;
             let var = local.var;
@@ -3478,11 +3468,10 @@ fn store_to_output(
             });
         },
     };
-    let column_ty = spv_type_for_kind(ctx, column_kind).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
+    let column_ty =
+        spv_type_for_kind(ctx, column_kind).ok_or_else(|| LoweringError::UnsupportedShape {
             what: format!("column type {column_kind:?} for output `{name}` is not lowered"),
-        }
-    })?;
+        })?;
     for (idx, col_var) in out.vars.iter().enumerate() {
         let col_val = ctx
             .b
@@ -3522,18 +3511,16 @@ fn lower_lhs_matrix_index_assignment(
             });
         },
     };
-    let out = ctx.outputs.get(name).cloned().ok_or_else(|| {
-        LoweringError::UnsupportedShape {
-            what: format!(
-                "matrix-index LHS target `{name}` is not a column-split output"
-            ),
-        }
-    })?;
+    let out = ctx
+        .outputs
+        .get(name)
+        .cloned()
+        .ok_or_else(|| LoweringError::UnsupportedShape {
+            what: format!("matrix-index LHS target `{name}` is not a column-split output"),
+        })?;
     if out.vars.len() <= 1 {
         return Err(LoweringError::UnsupportedShape {
-            what: format!(
-                "matrix-index LHS target `{name}` is not a column-split matrix"
-            ),
+            what: format!("matrix-index LHS target `{name}` is not a column-split matrix"),
         });
     }
     if idx_value >= out.vars.len() {
@@ -3560,16 +3547,11 @@ fn lower_lhs_matrix_index_assignment(
 /// input/output, the lookup skips the assemble step and loads
 /// the column variable directly. Otherwise the matrix value is
 /// produced first and `OpCompositeExtract` picks the column.
-fn lower_index_rhs(
-    ctx: &mut Ctx,
-    base: &Expr,
-    index: &Expr,
-) -> Result<Word, LoweringError> {
-    let base_kind = classify_arg_kind(ctx, base).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
+fn lower_index_rhs(ctx: &mut Ctx, base: &Expr, index: &Expr) -> Result<Word, LoweringError> {
+    let base_kind =
+        classify_arg_kind(ctx, base).ok_or_else(|| LoweringError::UnsupportedShape {
             what: "matrix index base type unknown".into(),
-        }
-    })?;
+        })?;
     let column_kind = match base_kind {
         TypeKind::Mat2 => TypeKind::Vec2,
         TypeKind::Mat3 => TypeKind::Vec3,
@@ -3580,11 +3562,10 @@ fn lower_index_rhs(
             });
         },
     };
-    let col_ty = spv_type_for_kind(ctx, column_kind).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
+    let col_ty =
+        spv_type_for_kind(ctx, column_kind).ok_or_else(|| LoweringError::UnsupportedShape {
             what: format!("column type {column_kind:?} for matrix index is not lowered"),
-        }
-    })?;
+        })?;
     let idx_value = match index {
         Expr::IntLit { value, .. } => *value as u32,
         _ => {
@@ -3633,9 +3614,10 @@ fn lower_swizzle(
     span: Span,
 ) -> Result<Word, LoweringError> {
     let base_id = lower_expr(ctx, base)?;
-    let base_kind = classify_arg_kind(ctx, base).ok_or_else(|| {
-        LoweringError::UnsupportedShape { what: "swizzle base type unknown".into() }
-    })?;
+    let base_kind =
+        classify_arg_kind(ctx, base).ok_or_else(|| LoweringError::UnsupportedShape {
+            what: "swizzle base type unknown".into(),
+        })?;
     let base_size = match base_kind {
         TypeKind::Vec2 | TypeKind::Bvec2 | TypeKind::Ivec2 => 2u32,
         TypeKind::Vec3 | TypeKind::Bvec3 | TypeKind::Ivec3 => 3,
@@ -3646,11 +3628,10 @@ fn lower_swizzle(
             });
         },
     };
-    let indices = parse_swizzle_indices(field, base_size).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
+    let indices =
+        parse_swizzle_indices(field, base_size).ok_or_else(|| LoweringError::UnsupportedShape {
             what: format!("invalid swizzle `.{field}` on {base_kind:?}"),
-        }
-    })?;
+        })?;
     let result_kind = ctx.types.get(&span).copied().unwrap_or_else(|| {
         match indices.len() {
             1 => TypeKind::Float,
@@ -3660,11 +3641,10 @@ fn lower_swizzle(
             _ => TypeKind::Float, // unreachable from parse_swizzle_indices
         }
     });
-    let result_ty = spv_type_for_kind(ctx, result_kind).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
+    let result_ty =
+        spv_type_for_kind(ctx, result_kind).ok_or_else(|| LoweringError::UnsupportedShape {
             what: format!("swizzle result type {result_kind:?} not lowered"),
-        }
-    })?;
+        })?;
     if indices.len() == 1 {
         // Single-component access: OpCompositeExtract result_ty base [idx].
         ctx.b
@@ -3736,14 +3716,12 @@ fn lower_binary(
     rhs: &Expr,
     span: Span,
 ) -> Result<Word, LoweringError> {
-    let lhs_kind =
-        classify_arg_kind(ctx, lhs).ok_or_else(|| LoweringError::UnsupportedShape {
-            what: format!("could not classify lhs of binary `{op:?}`"),
-        })?;
-    let rhs_kind =
-        classify_arg_kind(ctx, rhs).ok_or_else(|| LoweringError::UnsupportedShape {
-            what: format!("could not classify rhs of binary `{op:?}`"),
-        })?;
+    let lhs_kind = classify_arg_kind(ctx, lhs).ok_or_else(|| LoweringError::UnsupportedShape {
+        what: format!("could not classify lhs of binary `{op:?}`"),
+    })?;
+    let rhs_kind = classify_arg_kind(ctx, rhs).ok_or_else(|| LoweringError::UnsupportedShape {
+        what: format!("could not classify rhs of binary `{op:?}`"),
+    })?;
     let result_kind = ctx.types.get(&span).copied().or_else(|| {
         // Fall back to a structural rule if typecheck did not annotate
         // (e.g. when no diagnostics were emitted but the span did not
@@ -3765,11 +3743,10 @@ fn lower_binary(
     let result_kind = result_kind.ok_or_else(|| LoweringError::UnsupportedShape {
         what: format!("could not infer result type for `{lhs_kind:?} {op:?} {rhs_kind:?}`"),
     })?;
-    let result_ty = spv_type_for_kind(ctx, result_kind).ok_or_else(|| {
-        LoweringError::UnsupportedShape {
+    let result_ty =
+        spv_type_for_kind(ctx, result_kind).ok_or_else(|| LoweringError::UnsupportedShape {
             what: format!("result type {result_kind:?} not representable in SPIR-V emitter"),
-        }
-    })?;
+        })?;
 
     let lhs_id = lower_expr(ctx, lhs)?;
     let rhs_id = lower_expr(ctx, rhs)?;
@@ -3846,17 +3823,13 @@ fn lower_binary(
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
             }
             // mat_n * float -> OpMatrixTimesScalar.
-            if matches!(lhs_kind, TypeKind::Mat2 | TypeKind::Mat3 | TypeKind::Mat4)
-                && scalar_rhs
-            {
+            if matches!(lhs_kind, TypeKind::Mat2 | TypeKind::Mat3 | TypeKind::Mat4) && scalar_rhs {
                 return ctx
                     .b
                     .matrix_times_scalar(result_ty, None, lhs_id, rhs_id)
                     .map_err(|e| LoweringError::SpirvBuild(format!("{e:?}")));
             }
-            if scalar_lhs
-                && matches!(rhs_kind, TypeKind::Mat2 | TypeKind::Mat3 | TypeKind::Mat4)
-            {
+            if scalar_lhs && matches!(rhs_kind, TypeKind::Mat2 | TypeKind::Mat3 | TypeKind::Mat4) {
                 return ctx
                     .b
                     .matrix_times_scalar(result_ty, None, rhs_id, lhs_id)
@@ -3888,7 +3861,9 @@ fn lower_binary(
                 BinOp::Lt => ctx.b.f_ord_less_than(bool_ty, None, lhs_id, rhs_id),
                 BinOp::Le => ctx.b.f_ord_less_than_equal(bool_ty, None, lhs_id, rhs_id),
                 BinOp::Gt => ctx.b.f_ord_greater_than(bool_ty, None, lhs_id, rhs_id),
-                BinOp::Ge => ctx.b.f_ord_greater_than_equal(bool_ty, None, lhs_id, rhs_id),
+                BinOp::Ge => ctx
+                    .b
+                    .f_ord_greater_than_equal(bool_ty, None, lhs_id, rhs_id),
                 BinOp::Eq => ctx.b.f_ord_equal(bool_ty, None, lhs_id, rhs_id),
                 BinOp::Ne => ctx.b.f_ord_not_equal(bool_ty, None, lhs_id, rhs_id),
                 _ => unreachable!(),
@@ -3911,7 +3886,9 @@ fn lower_binary(
             BinOp::Lt => ctx.b.s_less_than(ctx.type_bool, None, lhs_id, rhs_id),
             BinOp::Le => ctx.b.s_less_than_equal(ctx.type_bool, None, lhs_id, rhs_id),
             BinOp::Gt => ctx.b.s_greater_than(ctx.type_bool, None, lhs_id, rhs_id),
-            BinOp::Ge => ctx.b.s_greater_than_equal(ctx.type_bool, None, lhs_id, rhs_id),
+            BinOp::Ge => ctx
+                .b
+                .s_greater_than_equal(ctx.type_bool, None, lhs_id, rhs_id),
             BinOp::Eq => ctx.b.i_equal(ctx.type_bool, None, lhs_id, rhs_id),
             BinOp::Ne => ctx.b.i_not_equal(ctx.type_bool, None, lhs_id, rhs_id),
             _ => {
@@ -3925,8 +3902,14 @@ fn lower_binary(
     // Integer-vector arithmetic. ivec_n + / - / * / / ivec_n
     // emits component-wise i_add / i_sub / i_mul / s_div on the
     // vector operands. ivec_n * int splats the scalar.
-    let ivec_lhs = matches!(lhs_kind, TypeKind::Ivec2 | TypeKind::Ivec3 | TypeKind::Ivec4);
-    let ivec_rhs = matches!(rhs_kind, TypeKind::Ivec2 | TypeKind::Ivec3 | TypeKind::Ivec4);
+    let ivec_lhs = matches!(
+        lhs_kind,
+        TypeKind::Ivec2 | TypeKind::Ivec3 | TypeKind::Ivec4
+    );
+    let ivec_rhs = matches!(
+        rhs_kind,
+        TypeKind::Ivec2 | TypeKind::Ivec3 | TypeKind::Ivec4
+    );
     if (ivec_lhs && ivec_rhs && lhs_kind == rhs_kind)
         || (ivec_lhs && rhs_kind == TypeKind::Int)
         || (ivec_rhs && lhs_kind == TypeKind::Int)

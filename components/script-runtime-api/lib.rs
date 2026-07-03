@@ -144,6 +144,10 @@ pub struct HostState {
     /// carries (`_ctx`). Each `__webgl_*` sink routes to one of these by its
     /// leading context-id argument. Grows by one per `getContext('webgl')`.
     pub webgl_contexts: Vec<Box<dyn WebGlHandler>>,
+    /// Protocol trace marks emitted through native sinks while JS is still
+    /// running. [`Runtime`] drains these after each engine boundary so they land
+    /// in the deterministic NDJSON stream with stable sequence numbers.
+    pending_trace: Vec<PendingTraceEvent>,
 }
 
 /// Shared handle to the runtime's [`HostState`]. The host reads it after running
@@ -158,6 +162,13 @@ pub struct Runtime<E: ScriptEngine> {
     host: SharedHost,
     scheduler_trace: Vec<SchedulerTraceEvent>,
     next_trace_seq: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingTraceEvent {
+    boundary: String,
+    phase: String,
+    detail: Option<String>,
 }
 
 /// One deterministic scheduler trace event, exportable as NDJSON for E4 trace
@@ -207,6 +218,7 @@ impl<E: ScriptEngine> Runtime<E> {
         // callers choose when to perform the next microtask checkpoint.
         self.trace_scheduler("eval", "start", None);
         let result = self.engine.eval(source);
+        self.flush_host_trace_events();
         self.trace_scheduler("eval", if result.is_ok() { "end" } else { "error" }, None);
         result
     }
@@ -261,6 +273,7 @@ impl<E: ScriptEngine> Runtime<E> {
         // Backend boundary: the VM owns the queue, budget behavior, and kept-object cleanup.
         self.trace_scheduler("pump_microtasks", "start", None);
         self.engine.pump_microtasks();
+        self.flush_host_trace_events();
         self.trace_scheduler("pump_microtasks", "end", None);
     }
 
@@ -290,10 +303,12 @@ impl<E: ScriptEngine> Runtime<E> {
         )) {
             Ok(value) => value,
             Err(error) => {
+                self.flush_host_trace_events();
                 self.trace_scheduler("dispatch_event", "error", None);
                 return Err(error);
             },
         };
+        self.flush_host_trace_events();
         let proceed = self
             .engine
             .value_to_string(&v)
@@ -381,6 +396,7 @@ impl<E: ScriptEngine> Runtime<E> {
     /// test gets a fresh harness heap without re-evaluating the harness source.
     pub fn load_testharness(&mut self, harness_src: &str) -> Result<(), E::Error> {
         self.engine.eval(harness_src)?;
+        self.flush_host_trace_events();
         harness::install_bridge(&mut self.engine)
     }
 
@@ -389,8 +405,10 @@ impl<E: ScriptEngine> Runtime<E> {
     pub fn run_loaded_testharness(&mut self, test_src: &str) -> Result<Vec<TestResult>, E::Error> {
         self.host.borrow_mut().results.clear();
         self.engine.eval(test_src)?;
+        self.flush_host_trace_events();
         self.engine
             .eval("window.dispatchEvent(new Event('load'));")?;
+        self.flush_host_trace_events();
         self.run_event_loop(1000)?;
         Ok(self.host.borrow().results.clone())
     }
@@ -413,8 +431,10 @@ impl<E: ScriptEngine> Runtime<E> {
     pub fn begin_loaded_testharness(&mut self, test_src: &str) -> Result<(), E::Error> {
         self.host.borrow_mut().results.clear();
         self.engine.eval(test_src)?;
+        self.flush_host_trace_events();
         self.engine
             .eval("window.dispatchEvent(new Event('load'));")?;
+        self.flush_host_trace_events();
         Ok(())
     }
 
@@ -453,10 +473,12 @@ impl<E: ScriptEngine> Runtime<E> {
         let v = match self.engine.eval(&expr) {
             Ok(value) => value,
             Err(error) => {
+                self.flush_host_trace_events();
                 self.trace_scheduler("timer_task", "error", None);
                 return Err(error);
             },
         };
+        self.flush_host_trace_events();
         let s = self.engine.value_to_string(&v)?;
         let fired = s.parse().unwrap_or(0);
         if fired > 0 {
@@ -663,13 +685,15 @@ impl<E: ScriptEngine> Runtime<E> {
 
     /// Deterministic scheduler trace events captured since runtime creation or the
     /// last clear.
-    pub fn scheduler_trace(&self) -> &[SchedulerTraceEvent] {
+    pub fn scheduler_trace(&mut self) -> &[SchedulerTraceEvent] {
+        self.flush_host_trace_events();
         &self.scheduler_trace
     }
 
     /// Export the scheduler trace as newline-delimited JSON for E4 trace-data
     /// generation.
-    pub fn scheduler_trace_ndjson(&self) -> String {
+    pub fn scheduler_trace_ndjson(&mut self) -> String {
+        self.flush_host_trace_events();
         let mut out = String::new();
         for event in &self.scheduler_trace {
             event.push_ndjson_line(&mut out);
@@ -682,6 +706,7 @@ impl<E: ScriptEngine> Runtime<E> {
     pub fn clear_scheduler_trace(&mut self) {
         self.scheduler_trace.clear();
         self.next_trace_seq = 0;
+        self.host.borrow_mut().pending_trace.clear();
     }
 
     fn trace_scheduler(&mut self, boundary: &str, phase: &str, detail: Option<String>) {
@@ -692,6 +717,16 @@ impl<E: ScriptEngine> Runtime<E> {
             phase: phase.to_string(),
             detail,
         });
+    }
+
+    fn flush_host_trace_events(&mut self) {
+        let pending = {
+            let mut host = self.host.borrow_mut();
+            std::mem::take(&mut host.pending_trace)
+        };
+        for event in pending {
+            self.trace_scheduler(&event.boundary, &event.phase, event.detail);
+        }
     }
 }
 
@@ -751,6 +786,7 @@ fn install_host_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error>
     // postMessage (async 'message' delivery to the global) + minimal location /
     // navigator stubs the harness reads at load. Depends on the event loop +
     // EventTarget above.
+    engine.set_function::<TraceProtocol>("__traceProtocol", 3)?;
     engine.eval(SHELL_GLOBALS_BOOTSTRAP)?;
 
     // `document` + the Node/Element construction surface, bound to the `ScriptedDom`
@@ -1084,6 +1120,34 @@ fn record_console<E: ScriptEngine>(cx: &mut E::CallCx<'_>) -> Result<E::Value, E
     Ok(cx.undefined())
 }
 
+fn trace_arg<E: ScriptEngine>(cx: &mut E::CallCx<'_>, i: usize) -> Result<String, E::Error> {
+    let value = cx.arg(i);
+    cx.value_to_string(&value)
+}
+
+struct TraceProtocol;
+impl<E: ScriptEngine> NativeFn<E> for TraceProtocol {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let boundary = trace_arg::<E>(cx, 0)?;
+        let phase = trace_arg::<E>(cx, 1)?;
+        let detail = trace_arg::<E>(cx, 2)?;
+        if let Some(data) = cx.host_data() {
+            if let Some(host) = data.downcast_ref::<RefCell<HostState>>() {
+                host.borrow_mut().pending_trace.push(PendingTraceEvent {
+                    boundary,
+                    phase,
+                    detail: if detail == "undefined" {
+                        None
+                    } else {
+                        Some(detail)
+                    },
+                });
+            }
+        }
+        Ok(cx.undefined())
+    }
+}
+
 struct ConsoleLog;
 impl<E: ScriptEngine> NativeFn<E> for ConsoleLog {
     fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
@@ -1216,10 +1280,16 @@ const SCROLL_BOOTSTRAP: &str = r#"
 /// event loop, so a `postMessage` only arrives after `run_event_loop`.
 const SHELL_GLOBALS_BOOTSTRAP: &str = r#"
 (function() {
+  var nextMessageId = 1;
   globalThis.postMessage = function(data) {
     var event = new Event('message');
+    var id = String(nextMessageId++);
     event.data = data;
-    setTimeout(function() { dispatchEvent(event); }, 0);
+    __traceProtocol('post_message', 'enqueue', id);
+    setTimeout(function() {
+      __traceProtocol('post_message', 'deliver', id);
+      dispatchEvent(event);
+    }, 0);
   };
   // A top-level window: parent/top are itself, no opener. testharness walks
   // `while (w != w.parent)`, so a self-referential parent terminates the walk.
@@ -1451,8 +1521,72 @@ mod tests {
             "run_timers boundary missing from NDJSON: {ndjson}"
         );
         assert!(
-            ndjson.lines().all(|line| line.starts_with(r#"{"seq":"#)),
+            ndjson.lines().all(|line| line.starts_with("{\"seq\":")),
             "each line is one trace object: {ndjson}"
+        );
+    }
+
+    /// E4 protocol witness: `postMessage` records one enqueue mark during the
+    /// calling script, one delivery mark during the later event-loop task, and
+    /// delivery stays async.
+    fn post_message_trace_ndjson_works<E: ScriptEngine>() {
+        let mut rt = Runtime::<E>::new().expect("runtime");
+
+        rt.eval(
+            "self.addEventListener('message', function(e){ console.log('msg:' + e.data); });\
+             self.postMessage('hi');",
+        )
+        .expect("postMessage script");
+
+        assert!(rt.host().borrow().console.is_empty(), "delivery is async");
+        rt.run_event_loop(10).expect("loop");
+        assert_eq!(rt.host().borrow().console, vec!["msg:hi"]);
+
+        let trace = rt.scheduler_trace();
+        let enqueue_idx = trace
+            .iter()
+            .position(|event| event.boundary == "post_message" && event.phase == "enqueue")
+            .expect("postMessage enqueue trace");
+        let deliver_idx = trace
+            .iter()
+            .position(|event| event.boundary == "post_message" && event.phase == "deliver")
+            .expect("postMessage deliver trace");
+        let loop_start_idx = trace
+            .iter()
+            .position(|event| event.boundary == "run_event_loop" && event.phase == "start")
+            .expect("run_event_loop start");
+        let loop_end_idx = trace
+            .iter()
+            .position(|event| event.boundary == "run_event_loop" && event.phase == "end")
+            .expect("run_event_loop end");
+        let timer_idx = trace
+            .iter()
+            .position(|event| event.boundary == "timer_task" && event.phase == "performed")
+            .expect("timer task");
+
+        assert!(
+            enqueue_idx < deliver_idx,
+            "delivery must follow enqueue: {trace:?}"
+        );
+        assert!(
+            loop_start_idx < deliver_idx && deliver_idx < timer_idx && timer_idx < loop_end_idx,
+            "delivery must happen during the later event-loop task: {trace:?}"
+        );
+
+        let enqueue = &trace[enqueue_idx];
+        let deliver = &trace[deliver_idx];
+        assert_eq!(
+            enqueue.detail, deliver.detail,
+            "enqueue and deliver must carry the same message id: {trace:?}"
+        );
+
+        let ndjson = rt.scheduler_trace_ndjson();
+        assert!(
+            ndjson
+                .lines()
+                .any(|line| line.contains(r#""boundary":"post_message""#)
+                    && line.contains(r#""phase":"deliver""#)),
+            "postMessage delivery missing from NDJSON: {ndjson}"
         );
     }
 
@@ -1728,10 +1862,21 @@ mod tests {
         scheduler_trace_ndjson_works::<script_engine_boa::BoaEngine>();
     }
 
+    #[test]
+    fn post_message_trace_ndjson_on_boa() {
+        post_message_trace_ndjson_works::<script_engine_boa::BoaEngine>();
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn scheduler_trace_ndjson_on_nova() {
         scheduler_trace_ndjson_works::<script_engine_nova::NovaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn post_message_trace_ndjson_on_nova() {
+        post_message_trace_ndjson_works::<script_engine_nova::NovaEngine>();
     }
 
     #[test]

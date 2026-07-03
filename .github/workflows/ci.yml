@@ -24,10 +24,11 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - name: Scheduler trace TLA witness
+      - name: TLA witnesses
         run: |
           curl -L -o "$RUNNER_TEMP/tla2tools.jar" https://github.com/tlaplus/tlaplus/releases/latest/download/tla2tools.jar
           python3 support/ci/check_scheduler_trace_tla.py --tla-tools-jar "$RUNNER_TEMP/tla2tools.jar"
+          python3 support/ci/check_post_message_trace_tla.py --tla-tools-jar "$RUNNER_TEMP/tla2tools.jar"
       - name: Workspace check
         run: cargo check --workspace --all-targets
       - name: Workspace tests

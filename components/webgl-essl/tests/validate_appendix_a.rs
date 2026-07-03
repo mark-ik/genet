@@ -24,9 +24,7 @@ fn for_loop_issues(r: &webgl_essl::validate::ValidationResult) -> Vec<&'static s
         .collect()
 }
 
-fn reserved_diagnostics(
-    r: &webgl_essl::validate::ValidationResult,
-) -> Vec<(String, &'static str)> {
+fn reserved_diagnostics(r: &webgl_essl::validate::ValidationResult) -> Vec<(String, &'static str)> {
     r.errors
         .iter()
         .filter_map(|d| match &d.kind {
@@ -52,7 +50,11 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Vertex);
-    assert!(for_loop_issues(&r).is_empty(), "got {:?}", for_loop_issues(&r));
+    assert!(
+        for_loop_issues(&r).is_empty(),
+        "got {:?}",
+        for_loop_issues(&r)
+    );
 }
 
 #[test]
@@ -67,7 +69,11 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Vertex);
-    assert!(for_loop_issues(&r).is_empty(), "got {:?}", for_loop_issues(&r));
+    assert!(
+        for_loop_issues(&r).is_empty(),
+        "got {:?}",
+        for_loop_issues(&r)
+    );
 }
 
 #[test]
@@ -192,7 +198,11 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Vertex);
-    assert!(for_loop_issues(&r).is_empty(), "got {:?}", for_loop_issues(&r));
+    assert!(
+        for_loop_issues(&r).is_empty(),
+        "got {:?}",
+        for_loop_issues(&r)
+    );
 }
 
 // ---------- R5: reserved identifier prefixes ---------------------------
@@ -207,7 +217,11 @@ void main() {
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
     let reserved = reserved_diagnostics(&r);
-    assert!(reserved.iter().any(|(n, reason)| n == "gl_MyColor" && reason.contains("gl_")));
+    assert!(
+        reserved
+            .iter()
+            .any(|(n, reason)| n == "gl_MyColor" && reason.contains("gl_"))
+    );
 }
 
 #[test]
@@ -234,7 +248,9 @@ void main() {
     let r = validate_src(src, ShaderStage::Fragment);
     let reserved = reserved_diagnostics(&r);
     assert!(
-        reserved.iter().any(|(n, reason)| n == "my__cap" && reason.contains("__")),
+        reserved
+            .iter()
+            .any(|(n, reason)| n == "my__cap" && reason.contains("__")),
         "got {reserved:?}"
     );
 }
@@ -250,7 +266,9 @@ void main() {
     let r = validate_src(src, ShaderStage::Fragment);
     let reserved = reserved_diagnostics(&r);
     assert!(
-        reserved.iter().any(|(n, reason)| n == "_webgl_internal" && reason.contains("_webgl_"))
+        reserved
+            .iter()
+            .any(|(n, reason)| n == "_webgl_internal" && reason.contains("_webgl_"))
     );
 }
 

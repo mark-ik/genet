@@ -47,6 +47,9 @@ use std::cell::RefCell;
 #[cfg(feature = "render")]
 use std::rc::Rc;
 
+use engine_observables_api::DomArenaStats;
+#[cfg(feature = "render")]
+use engine_observables_api::LayoutBatchStats;
 use script_engine_api::ScriptEngine;
 #[cfg(feature = "render")]
 use script_runtime_api::ComputedStyleHandler;
@@ -60,6 +63,7 @@ use serval_scripted_dom::NodeId;
 use serval_static_dom::{StaticDocument, StaticNodeId};
 
 use crate::ResourceFetcher;
+use crate::capture::DomCaptureRecorder;
 
 /// Shared handle to the most recently laid-out frame, so the `getComputedStyle`
 /// bridge can read computed values off it. `None` before the first frame.
@@ -119,6 +123,7 @@ pub struct ScriptedDocument<E: ScriptEngine> {
     /// so script reads computed values off the most recent cascade.
     #[cfg(feature = "render")]
     layout: RetainedLayout,
+    capture: Option<DomCaptureRecorder>,
 }
 
 impl<E: ScriptEngine> ScriptedDocument<E> {
@@ -200,6 +205,8 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
             sheets.extend(inline_stylesheets(&doc));
             sheets
         };
+        #[cfg(not(feature = "render"))]
+        let sheets: Vec<String> = Vec::new();
 
         let mut rt = Runtime::<E>::new().map_err(|e| format!("script runtime init: {e:?}"))?;
         // The computed-style seam: a bridge over the most recent rendered frame's
@@ -227,6 +234,11 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         // The parsed body becomes the live DOM, so script querying it (document.body,
         // getElementById, querySelector) sees the page's elements.
         rt.load_dom(&doc);
+        let mut capture = {
+            let mut host = rt.host().borrow_mut();
+            DomCaptureRecorder::from_env(&mut host.dom, &sheets)
+                .map_err(|e| format!("dom capture init: {e}"))?
+        };
 
         // Run scripts by the classic-script timing model. Parser-blocking pass:
         // inline (run now) and classic external with no async/defer (fetch + run now),
@@ -296,6 +308,12 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
             }
         }
         rt.run_microtasks();
+        if let Some(recorder) = capture.as_mut() {
+            let mut host = rt.host().borrow_mut();
+            recorder
+                .record_pending(&mut host.dom)
+                .map_err(|e| format!("dom capture write: {e}"))?;
+        }
 
         Ok(Self {
             rt,
@@ -311,6 +329,7 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
             pending_fragment: None,
             #[cfg(feature = "render")]
             layout,
+            capture,
         })
     }
 
@@ -323,6 +342,7 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
     pub fn pump(&mut self, now_ms: f64) -> (usize, usize) {
         self.rt.run_timers(64, now_ms);
         self.rt.run_microtasks();
+        self.flush_dom_capture();
         self.rt.collect_garbage()
     }
 
@@ -333,6 +353,7 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
             .eval(source)
             .map_err(|e| format!("script evaluation: {e:?}"))?;
         self.rt.run_microtasks();
+        self.flush_dom_capture();
         Ok(())
     }
 
@@ -347,6 +368,7 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         {
             Some(_) => {
                 self.rt.run_microtasks();
+                self.flush_dom_capture();
                 Ok(())
             },
             None => Err("selected script engine does not support modules".to_string()),
@@ -355,9 +377,12 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
 
     /// Dispatch an event at a raw DOM node id and settle listener microtasks.
     pub fn dispatch_event(&mut self, raw_node_id: usize, event_type: &str) -> Result<bool, String> {
-        self.rt
+        let proceed = self
+            .rt
             .dispatch_event(raw_node_id, event_type)
-            .map_err(|e| format!("event dispatch: {e:?}"))
+            .map_err(|e| format!("event dispatch: {e:?}"))?;
+        self.flush_dom_capture();
+        Ok(proceed)
     }
 
     /// Serialize the live document root's children for backend-neutral comparison.
@@ -505,6 +530,7 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
             Some(node) => self.rt.dispatch_event(node.raw(), "click").unwrap_or(true),
             None => true,
         };
+        self.flush_dom_capture();
         if !proceed {
             return false;
         }
@@ -545,6 +571,21 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         self.rt.host().borrow().dom.live_node_count()
     }
 
+    /// Cheap live counts plus a rough byte estimate for the current DOM arena.
+    pub fn dom_stats(&self) -> DomArenaStats {
+        self.rt.host().borrow().dom.stats()
+    }
+
+    /// Cheap counters for the retained layout session's most recent batch, if a
+    /// frame has been laid out.
+    #[cfg(feature = "render")]
+    pub fn last_layout_batch_stats(&self) -> Option<LayoutBatchStats> {
+        self.layout
+            .borrow()
+            .as_ref()
+            .map(IncrementalLayout::last_batch_stats)
+    }
+
     /// The `console.log` / `console.error` output the page's script produced, in call
     /// order (for tests and a future devtools surface).
     pub fn console(&self) -> Vec<String> {
@@ -562,6 +603,20 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
     pub fn extract(&self) -> serval_extract::PageExtract {
         let host = self.rt.host().borrow();
         serval_extract::extract(&host.dom)
+    }
+
+    fn flush_dom_capture(&mut self) {
+        let Some(mut recorder) = self.capture.take() else {
+            return;
+        };
+        let result = {
+            let mut host = self.rt.host().borrow_mut();
+            recorder.record_pending(&mut host.dom)
+        };
+        match result {
+            Ok(_) => self.capture = Some(recorder),
+            Err(err) => eprintln!("[pelt-scripted] dom capture disabled: {err}"),
+        }
     }
 }
 
@@ -921,6 +976,7 @@ fn eval_module_reporting<E: ScriptEngine>(
 #[cfg(all(test, feature = "render"))]
 mod tests {
     use super::*;
+    use engine_observables_api::LayoutApplyKind;
     use script_engine_boa::BoaEngine;
 
     /// A page whose inline script injects a `<p>` with text: the rendered scene gains
@@ -996,11 +1052,70 @@ mod tests {
         // A boxed anchor harvests both its text-line rect and its border-box rect (see
         // `link_harvest`'s own `block_anchor_harvests_its_box`), so assert on content
         // rather than count: every rect carries the href, with positive area.
-        assert!(!links.is_empty(), "the script-injected link harvested at least one rect");
+        assert!(
+            !links.is_empty(),
+            "the script-injected link harvested at least one rect"
+        );
         for (href, rect) in &links {
             assert_eq!(href, "https://example.test/");
-            assert!(rect[2] > rect[0] && rect[3] > rect[1], "positive-area rect: {rect:?}");
+            assert!(
+                rect[2] > rect[0] && rect[3] > rect[1],
+                "positive-area rect: {rect:?}"
+            );
         }
+    }
+
+    /// The cheap DOM and retained-layout stats surfaces are readable from the
+    /// scripted host: DOM stats reflect the live arena immediately, and the
+    /// first laid-out frame leaves a retained batch record behind.
+    fn dom_and_layout_stats_surface<E: ScriptEngine>() {
+        let html = "<body><p class='a'>hello</p></body>";
+        let mut doc = ScriptedDocument::<E>::parse(html).expect("runtime inits");
+
+        let dom_stats = doc.dom_stats();
+        assert_eq!(
+            dom_stats.live_nodes,
+            doc.live_node_count(),
+            "DOM stats should report the live arena node count"
+        );
+        assert!(
+            dom_stats.node_kinds.elements >= 3,
+            "html/body/p should exist"
+        );
+        assert!(
+            dom_stats.node_kinds.text >= 1,
+            "the paragraph text should exist"
+        );
+        assert!(
+            dom_stats.attribute_count >= 1,
+            "the class attribute should count"
+        );
+        assert!(
+            dom_stats.estimated_bytes > 0,
+            "DOM stats should estimate bytes"
+        );
+
+        assert!(
+            doc.last_layout_batch_stats().is_none(),
+            "no retained layout exists before the first frame"
+        );
+        let _ = doc.frame(400, 300);
+        let layout_stats = doc
+            .last_layout_batch_stats()
+            .expect("the first frame should retain layout stats");
+        assert_eq!(
+            layout_stats.applied,
+            LayoutApplyKind::Unchanged,
+            "the first retained session has not applied a mutation batch yet"
+        );
+        assert!(
+            layout_stats.fragment_count > 0,
+            "frame should populate fragments"
+        );
+        assert!(
+            layout_stats.box_tree_nodes.is_some(),
+            "fresh full layout keeps the retained box-tree side-table valid"
+        );
     }
 
     /// The GC tick reaps a node the script orphaned and dropped its only reference to:
@@ -1724,6 +1839,10 @@ mod tests {
     #[test]
     fn mutation_renders_on_boa() {
         mutation_renders::<BoaEngine>();
+    }
+    #[test]
+    fn dom_and_layout_stats_surface_on_boa() {
+        dom_and_layout_stats_surface::<BoaEngine>();
     }
     #[test]
     fn get_computed_style_reads_cascade_on_boa() {

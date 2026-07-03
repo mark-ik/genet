@@ -34,7 +34,12 @@ fn r18_count(r: &webgl_essl::validate::ValidationResult) -> usize {
 fn r19_count(r: &webgl_essl::validate::ValidationResult) -> usize {
     r.errors
         .iter()
-        .filter(|d| matches!(d.kind, WebGlDiagnosticKind::AttributeInFragmentShader { .. }))
+        .filter(|d| {
+            matches!(
+                d.kind,
+                WebGlDiagnosticKind::AttributeInFragmentShader { .. }
+            )
+        })
         .count()
 }
 
@@ -53,7 +58,11 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert!(r17_count(&r) >= 1, "float -> int return should fire R17: {:#?}", r.errors);
+    assert!(
+        r17_count(&r) >= 1,
+        "float -> int return should fire R17: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -68,7 +77,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(r17_count(&r), 0, "matching types should pass R17: {:#?}", r.errors);
+    assert_eq!(
+        r17_count(&r),
+        0,
+        "matching types should pass R17: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -99,7 +113,11 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert!(r18_count(&r) >= 1, "redefined helper should fire R18: {:#?}", r.errors);
+    assert!(
+        r18_count(&r) >= 1,
+        "redefined helper should fire R18: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -114,7 +132,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(r18_count(&r), 0, "different param types should pass R18: {:#?}", r.errors);
+    assert_eq!(
+        r18_count(&r),
+        0,
+        "different param types should pass R18: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -143,7 +166,11 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert!(r19_count(&r) >= 1, "attribute in fragment should fire R19: {:#?}", r.errors);
+    assert!(
+        r19_count(&r) >= 1,
+        "attribute in fragment should fire R19: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -155,7 +182,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Vertex);
-    assert_eq!(r19_count(&r), 0, "attribute in vertex should pass R19: {:#?}", r.errors);
+    assert_eq!(
+        r19_count(&r),
+        0,
+        "attribute in vertex should pass R19: {:#?}",
+        r.errors
+    );
 }
 
 #[test]

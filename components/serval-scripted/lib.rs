@@ -27,6 +27,7 @@ use script_engine_api::ScriptEngine;
 use serval_layout::{FragmentPlane, render};
 use serval_scripted_dom::{NodeId, ScriptedDom};
 
+mod capture;
 mod document;
 
 pub use document::{ScriptedDocument, ScriptedEngine};

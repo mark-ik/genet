@@ -13,9 +13,8 @@ use webgl_essl::compile;
 use webgl_essl::validate::ShaderStage;
 
 fn frag_switch(body: &str) -> String {
-    let src = format!(
-        "precision mediump float;\nuniform int sel;\nvoid main() {{\n    {body}\n}}\n"
-    );
+    let src =
+        format!("precision mediump float;\nuniform int sel;\nvoid main() {{\n    {body}\n}}\n");
     compile(&src, ShaderStage::Fragment)
         .unwrap_or_else(|e| panic!("compile: {e:?}\n--- src ---\n{src}"))
         .wgsl
@@ -106,9 +105,7 @@ void main() {
 
 #[test]
 fn empty_switch_lowers() {
-    let wgsl = frag_switch(
-        "gl_FragColor = vec4(0.0);\n    switch (sel) {}",
-    );
+    let wgsl = frag_switch("gl_FragColor = vec4(0.0);\n    switch (sel) {}");
     assert!(wgsl.contains("vec4"));
 }
 

@@ -24,8 +24,7 @@ pub struct Signature {
 
 impl Signature {
     pub fn matches(&self, args: &[TypeKind]) -> bool {
-        self.params.len() == args.len()
-            && self.params.iter().zip(args).all(|(p, a)| p == a)
+        self.params.len() == args.len() && self.params.iter().zip(args).all(|(p, a)| p == a)
     }
 }
 
@@ -81,7 +80,9 @@ fn populate(r: &mut Registry) {
     let vec_t: &[TypeKind] = &[Float, Vec2, Vec3, Vec4];
 
     // §8.1 Angle and Trigonometry. Each is T -> T over vec_t.
-    for name in ["radians", "degrees", "sin", "cos", "tan", "asin", "acos", "atan"] {
+    for name in [
+        "radians", "degrees", "sin", "cos", "tan", "asin", "acos", "atan",
+    ] {
         for &t in vec_t {
             r.register(name, vec![t], t);
         }

@@ -18,19 +18,19 @@ use std::rc::Rc;
 use dpi::PhysicalSize;
 use embedder_traits::ViewportDetails;
 use euclid::{Scale, Size2D};
-use netrender::{boot, create_netrender_instance, NetrenderOptions};
+use netrender::{NetrenderOptions, boot, create_netrender_instance};
 use paint::Paint;
 use paint_api::display_list::{AxesScrollSensitivity, PaintDisplayListInfo, ScrollType};
 use paint_api::wgpu_readback::read_texture_to_image;
 use paint_list_api::{DeviceIntSize, PaintEnvelope};
-use paint_types::units::{DeviceIntRect, LayoutSize};
 use paint_types::PipelineId;
-use servo_base::id::{PainterId, PipelineNamespace, PipelineNamespaceId, WebViewId};
+use paint_types::units::{DeviceIntRect, LayoutSize};
 use serval_layout::{
-    emit_paint_list_with_layouts, inline_stylesheets, layout, linked_stylesheets, run_cascade,
     BackgroundImagePlane, ImagePlane, LocalFileImageLoader, ResourceResolver, StylePlane,
+    emit_paint_list_with_layouts, inline_stylesheets, layout, linked_stylesheets, run_cascade,
 };
 use serval_static_dom::StaticDocument;
+use servo_base::id::{PainterId, PipelineNamespace, PipelineNamespaceId, WebViewId};
 
 pub type Image = image::ImageBuffer<image::Rgba<u8>, Vec<u8>>;
 
@@ -67,7 +67,13 @@ impl Renderer {
         paint.borrow().install_renderer(painter_id, renderer);
         let webview_id = WebViewId::new(painter_id);
 
-        Ok(Self { device, queue, paint, painter_id, webview_id })
+        Ok(Self {
+            device,
+            queue,
+            paint,
+            painter_id,
+            webview_id,
+        })
     }
 
     /// Render `html` to an image at `width` x `height`, resolving the

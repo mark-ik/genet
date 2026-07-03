@@ -58,7 +58,10 @@ impl fmt::Display for ErrorDisplay<'_> {
                 write!(f, "{line}:{col}: expected {wanted}, got {got}")
             },
             ErrorKind::UnexpectedEof { wanted } => {
-                write!(f, "{line}:{col}: unexpected end of input, expected {wanted}")
+                write!(
+                    f,
+                    "{line}:{col}: unexpected end of input, expected {wanted}"
+                )
             },
             ErrorKind::Unsupported { what } => {
                 write!(f, "{line}:{col}: spike does not yet support {what}")

@@ -16,9 +16,15 @@ fn check_clean(src: &str) -> webgl_essl::check::CheckResult {
     let tu = parse_source(src).unwrap_or_else(|e| panic!("parse: {}", e.display(src)));
     let r = check(&tu);
     if !r.diagnostics.is_empty() {
-        let rendered: Vec<String> =
-            r.diagnostics.iter().map(|d| format!("{}", d.display(src))).collect();
-        panic!("expected zero diagnostics, got: {}\n--- source ---\n{src}", rendered.join("; "));
+        let rendered: Vec<String> = r
+            .diagnostics
+            .iter()
+            .map(|d| format!("{}", d.display(src)))
+            .collect();
+        panic!(
+            "expected zero diagnostics, got: {}\n--- source ---\n{src}",
+            rendered.join("; ")
+        );
     }
     r
 }
@@ -69,7 +75,11 @@ fn shift_lower_precedence_than_additive() {
     let rhs = assign_rhs(first_body_stmt(&tu));
     // (1 + 2) << 3 means top-level is Shl with left child Add.
     match rhs {
-        Expr::Binary { op: BinOp::Shl, lhs, .. } => match lhs.as_ref() {
+        Expr::Binary {
+            op: BinOp::Shl,
+            lhs,
+            ..
+        } => match lhs.as_ref() {
             Expr::Binary { op: BinOp::Add, .. } => {},
             other => panic!("expected Add under Shl.lhs, got {other:?}"),
         },
@@ -105,8 +115,14 @@ fn bitwise_and_binds_tighter_than_or() {
     let rhs = assign_rhs(first_body_stmt(&tu));
     // 1 | (2 & 3): top-level BitOr with right child BitAnd.
     match rhs {
-        Expr::Binary { op: BinOp::BitOr, rhs, .. } => match rhs.as_ref() {
-            Expr::Binary { op: BinOp::BitAnd, .. } => {},
+        Expr::Binary {
+            op: BinOp::BitOr,
+            rhs,
+            ..
+        } => match rhs.as_ref() {
+            Expr::Binary {
+                op: BinOp::BitAnd, ..
+            } => {},
             other => panic!("expected BitAnd under BitOr.rhs, got {other:?}"),
         },
         other => panic!("expected BitOr top-level, got {other:?}"),
@@ -120,9 +136,19 @@ fn bitwise_xor_between_or_and_and() {
     let tu = parse_source(src).unwrap();
     let rhs = assign_rhs(first_body_stmt(&tu));
     match rhs {
-        Expr::Binary { op: BinOp::BitOr, rhs, .. } => match rhs.as_ref() {
-            Expr::Binary { op: BinOp::BitXor, rhs, .. } => match rhs.as_ref() {
-                Expr::Binary { op: BinOp::BitAnd, .. } => {},
+        Expr::Binary {
+            op: BinOp::BitOr,
+            rhs,
+            ..
+        } => match rhs.as_ref() {
+            Expr::Binary {
+                op: BinOp::BitXor,
+                rhs,
+                ..
+            } => match rhs.as_ref() {
+                Expr::Binary {
+                    op: BinOp::BitAnd, ..
+                } => {},
                 other => panic!("expected BitAnd under BitXor.rhs, got {other:?}"),
             },
             other => panic!("expected BitXor under BitOr.rhs, got {other:?}"),
@@ -147,7 +173,10 @@ fn bit_not_parses_as_unary_with_bit_not_op() {
     let tu = parse_source(src).unwrap();
     let rhs = assign_rhs(first_body_stmt(&tu));
     match rhs {
-        Expr::Unary { op: UnaryOp::BitNot, .. } => {},
+        Expr::Unary {
+            op: UnaryOp::BitNot,
+            ..
+        } => {},
         other => panic!("expected Unary BitNot, got {other:?}"),
     }
 }

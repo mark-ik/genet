@@ -31,7 +31,12 @@ fn reserved_count(r: &webgl_essl::validate::ValidationResult) -> usize {
 fn missing_return_count(r: &webgl_essl::validate::ValidationResult) -> usize {
     r.errors
         .iter()
-        .filter(|d| matches!(d.kind, WebGlDiagnosticKind::MissingReturnInNonVoidFunction { .. }))
+        .filter(|d| {
+            matches!(
+                d.kind,
+                WebGlDiagnosticKind::MissingReturnInNonVoidFunction { .. }
+            )
+        })
         .count()
 }
 
@@ -47,7 +52,11 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert!(reserved_count(&r) >= 1, "`goto` should be reserved: {:#?}", r.errors);
+    assert!(
+        reserved_count(&r) >= 1,
+        "`goto` should be reserved: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -86,7 +95,10 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert!(reserved_count(&r) >= 1, "`sampler1D` (no WebGL counterpart) should be reserved");
+    assert!(
+        reserved_count(&r) >= 1,
+        "`sampler1D` (no WebGL counterpart) should be reserved"
+    );
 }
 
 #[test]
@@ -99,7 +111,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(reserved_count(&r), 0, "`t` should not be reserved: {:#?}", r.errors);
+    assert_eq!(
+        reserved_count(&r),
+        0,
+        "`t` should not be reserved: {:#?}",
+        r.errors
+    );
 }
 
 // ---------- R16: missing return in non-void function -----------------
@@ -116,7 +133,11 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert!(missing_return_count(&r) >= 1, "missing return should fire R16: {:#?}", r.errors);
+    assert!(
+        missing_return_count(&r) >= 1,
+        "missing return should fire R16: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -131,7 +152,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(missing_return_count(&r), 0, "return should pass R16: {:#?}", r.errors);
+    assert_eq!(
+        missing_return_count(&r),
+        0,
+        "return should pass R16: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -145,7 +171,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(missing_return_count(&r), 0, "void noop should pass R16: {:#?}", r.errors);
+    assert_eq!(
+        missing_return_count(&r),
+        0,
+        "void noop should pass R16: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -164,7 +195,12 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert_eq!(missing_return_count(&r), 0, "if/else both returning should pass: {:#?}", r.errors);
+    assert_eq!(
+        missing_return_count(&r),
+        0,
+        "if/else both returning should pass: {:#?}",
+        r.errors
+    );
 }
 
 #[test]
@@ -183,5 +219,8 @@ void main() {
 }
 "#;
     let r = validate_src(src, ShaderStage::Fragment);
-    assert!(missing_return_count(&r) >= 1, "incomplete path should fire R16");
+    assert!(
+        missing_return_count(&r) >= 1,
+        "incomplete path should fire R16"
+    );
 }

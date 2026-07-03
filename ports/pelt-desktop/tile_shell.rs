@@ -130,7 +130,12 @@ impl TileShell {
             .tiles
             .iter()
             .map(|t| (t.tile, t.rect))
-            .chain(frame.external_tiles.iter().map(|(tile, rect, _)| (*tile, *rect)))
+            .chain(
+                frame
+                    .external_tiles
+                    .iter()
+                    .map(|(tile, rect, _)| (*tile, *rect)),
+            )
             .collect();
         if let Some(drag) = self.tab_drag.as_ref() {
             if drag.moved {
@@ -138,7 +143,12 @@ impl TileShell {
                     let (gw, gh) = (170u32, 30u32);
                     let scene = self.surface.ghost_scene(&title, gw, gh);
                     // Offset so the ghost trails just below-right of the cursor hotspot.
-                    let rect = (self.cursor.0 - 12.0, self.cursor.1 - 14.0, gw as f32, gh as f32);
+                    let rect = (
+                        self.cursor.0 - 12.0,
+                        self.cursor.1 - 14.0,
+                        gw as f32,
+                        gh as f32,
+                    );
                     frame.ghost = Some(GhostLayer { rect, scene });
                 }
             }
@@ -176,10 +186,22 @@ impl TileShell {
         self.cursor = (x, y);
         let mut redraw = false;
         let drag = self.divider_drag.as_ref().map(|d| {
-            (d.path.clone(), d.index, d.horizontal, d.extent, d.start, d.init_first, d.pair_total)
+            (
+                d.path.clone(),
+                d.index,
+                d.horizontal,
+                d.extent,
+                d.start,
+                d.init_first,
+                d.pair_total,
+            )
         });
         if let Some((path, index, horizontal, extent, start, init_first, total)) = drag {
-            let delta = if horizontal { self.cursor.0 - start.0 } else { self.cursor.1 - start.1 };
+            let delta = if horizontal {
+                self.cursor.0 - start.0
+            } else {
+                self.cursor.1 - start.1
+            };
             let frac_delta = if extent > 0.0 { delta / extent } else { 0.0 };
             let new_first = (init_first + frac_delta).clamp(0.05 * total, 0.95 * total);
             if let Some(mut fracs) = self.surface.fractions_at(&path) {
@@ -189,8 +211,10 @@ impl TileShell {
                     if self.host_authoritative {
                         // Report the resize; the host applies it to its arrangement
                         // and re-projects. Do not mutate the surface tree here.
-                        self.surface
-                            .queue_event(TileEvent::DividerMoved { split: path, fractions: fracs });
+                        self.surface.queue_event(TileEvent::DividerMoved {
+                            split: path,
+                            fractions: fracs,
+                        });
                     } else {
                         self.surface.set_divider_fractions(&path, fracs);
                     }
@@ -237,11 +261,16 @@ impl TileShell {
             return self.surface.click_tile(tile, local.0, local.1);
         }
         if let Some(tile) = self.surface.tab_at(x, y, w, h) {
-            self.tab_drag = Some(TabDrag { tile, start: self.cursor, moved: false });
+            self.tab_drag = Some(TabDrag {
+                tile,
+                start: self.cursor,
+                moved: false,
+            });
             return false;
         }
         if let Some(node) = self.surface.hit_test_frame(x, y, w, h) {
-            self.surface.dispatch_click(node, PointerClick::at(self.cursor));
+            self.surface
+                .dispatch_click(node, PointerClick::at(self.cursor));
             // The click queued a gesture (e.g. a close ×). Standalone pelt applies it
             // here; a host-authoritative shell leaves it for `take_events` so the host
             // applies it to its arrangement and re-projects.
@@ -253,8 +282,9 @@ impl TileShell {
     }
 
     /// Release the pointer. Ends a divider drag; a moved tab drag drops (splitting the
-    /// target pane on its nearest edge), an unmoved one activates the tab. Returns
-    /// whether a redraw is needed.
+    /// target pane on its nearest edge, merging into a tab bar, or reporting an outside
+    /// drop in host-authority mode), an unmoved one activates the tab. Returns whether
+    /// a redraw is needed.
     pub fn pointer_up(&mut self) -> bool {
         self.divider_drag = None;
         if let Some(drag) = self.tab_drag.take() {
@@ -263,16 +293,22 @@ impl TileShell {
                     if self.host_authoritative {
                         // Report the drop; the host applies it to its arrangement and
                         // re-projects. Do not mutate the surface tree here.
-                        self.surface
-                            .queue_event(TileEvent::Dragged { tile: drag.tile, to });
+                        self.surface.queue_event(TileEvent::Dragged {
+                            tile: drag.tile,
+                            to,
+                        });
                     } else {
                         self.surface.drag_tile(drag.tile, to);
                     }
                 }
             } else {
                 let (w, h) = (self.width, self.height);
-                if let Some(node) = self.surface.hit_test_frame(drag.start.0, drag.start.1, w, h) {
-                    self.surface.dispatch_click(node, PointerClick::at(drag.start));
+                if let Some(node) = self
+                    .surface
+                    .hit_test_frame(drag.start.0, drag.start.1, w, h)
+                {
+                    self.surface
+                        .dispatch_click(node, PointerClick::at(drag.start));
                     // An unmoved press is a tab activate. Standalone pelt applies it; a
                     // host-authoritative shell leaves it for `take_events`.
                     if !self.host_authoritative {
@@ -305,19 +341,30 @@ impl TileShell {
 
     /// Resolve a tab drop at the cursor. Over a tab bar, the dragged tile merges into
     /// that stack (`DropTarget::Stack`); over another tile's content, it splits that
-    /// pane on the nearest edge (`DropTarget::Edge`). `None` over no tile, or over the
-    /// dragged tile's own content.
+    /// pane on the nearest edge (`DropTarget::Edge`). In host-authority mode, a drop
+    /// over no tile resolves to `DropTarget::Outside` so the embedding host can tear
+    /// the tile out; standalone pelt ignores that case. `None` over the dragged tile's
+    /// own content.
     fn resolve_drop(&self, dragged: TileId) -> Option<DropTarget> {
         let (x, y) = self.cursor;
         let (w, h) = (self.width, self.height);
         if let Some((stack, index)) = self.surface.tabbar_at(x, y, w, h) {
             return Some(DropTarget::Stack { stack, index });
         }
-        let (tile, rect) = self.tile_rects.iter().find(|(_, r)| in_rect(self.cursor, *r))?;
+        let Some((tile, rect)) = self
+            .tile_rects
+            .iter()
+            .find(|(_, r)| in_rect(self.cursor, *r))
+        else {
+            return self.host_authoritative.then_some(DropTarget::Outside);
+        };
         if *tile == dragged {
             return None;
         }
-        Some(DropTarget::Edge { tile: *tile, edge: nearest_edge(self.cursor, *rect) })
+        Some(DropTarget::Edge {
+            tile: *tile,
+            edge: nearest_edge(self.cursor, *rect),
+        })
     }
 }
 
@@ -385,7 +432,11 @@ mod tests {
 
         // Tile 1 left the stack and split the right pane: left=[2], right=[3 | 1].
         let ids: Vec<u64> = shell.tree().tiles().iter().map(|t| t.id.0).collect();
-        assert_eq!(ids, vec![2, 3, 1], "the drag built a new split layout: {ids:?}");
+        assert_eq!(
+            ids,
+            vec![2, 3, 1],
+            "the drag built a new split layout: {ids:?}"
+        );
     }
 
     /// In host-authority mode the same driven tab-drag and divider-drag are *reported*
@@ -415,12 +466,19 @@ mod tests {
         shell.pointer_move(770.0, 300.0);
         shell.pointer_up();
         let after: Vec<u64> = shell.tree().tiles().iter().map(|t| t.id.0).collect();
-        assert_eq!(before, after, "host-authority mode must not mutate the surface tree");
+        assert_eq!(
+            before, after,
+            "host-authority mode must not mutate the surface tree"
+        );
         let events = shell.take_events();
         assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, TileEvent::Dragged { tile: TileId(1), .. })),
+            events.iter().any(|e| matches!(
+                e,
+                TileEvent::Dragged {
+                    tile: TileId(1),
+                    ..
+                }
+            )),
             "the drag is reported as a Dragged event: {events:?}"
         );
 
@@ -459,13 +517,18 @@ mod tests {
         shell.pointer_down();
         shell.pointer_up();
         if let TileTree::Stack(s) = shell.tree() {
-            assert_eq!(s.active, 0, "host-authority mode does not change the active tab locally");
+            assert_eq!(
+                s.active, 0,
+                "host-authority mode does not change the active tab locally"
+            );
         } else {
             panic!("expected a stack");
         }
         let events = shell.take_events();
         assert!(
-            events.iter().any(|e| matches!(e, TileEvent::Activated(TileId(2)))),
+            events
+                .iter()
+                .any(|e| matches!(e, TileEvent::Activated(TileId(2)))),
             "the unmoved tab click is reported as Activated: {events:?}"
         );
     }
@@ -504,9 +567,52 @@ mod tests {
         assert!(
             events.iter().any(|e| matches!(
                 e,
-                TileEvent::Dragged { tile: TileId(1), to: DropTarget::Edge { tile: TileId(3), .. } }
+                TileEvent::Dragged {
+                    tile: TileId(1),
+                    to: DropTarget::Edge {
+                        tile: TileId(3),
+                        ..
+                    }
+                }
             )),
             "dragging onto an external tile resolves an Edge drop: {events:?}"
+        );
+    }
+
+    /// In host-authority mode, dragging a tab past the workbench surface reports an
+    /// outside drop instead of silently vanishing, so the embedding host can tear the
+    /// tile into its own window.
+    #[test]
+    fn host_authority_drag_outside_reports_outside() {
+        let tree = TileTree::split(
+            SplitAxis::Row,
+            vec![
+                TileBranch::new(
+                    0.5,
+                    TileTree::stack(vec![doc_tile(1, "<p>1</p>"), doc_tile(2, "<p>2</p>")], 0),
+                ),
+                TileBranch::new(0.5, TileTree::single(doc_tile(3, "<p>3</p>"))),
+            ],
+        );
+        let mut shell = TileShell::new_host_authoritative(tree);
+        shell.resize(800, 600);
+        let _ = shell.frame();
+
+        shell.pointer_move(20.0, 14.0);
+        shell.pointer_down();
+        shell.pointer_move(980.0, 300.0);
+        shell.pointer_up();
+
+        let events = shell.take_events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                TileEvent::Dragged {
+                    tile: TileId(1),
+                    to: DropTarget::Outside,
+                }
+            )),
+            "dragging past the surface reports Outside: {events:?}"
         );
     }
 
@@ -539,17 +645,21 @@ mod tests {
         // Tile 1 merged into the right stack: left collapses to [2], right is [3, 1] —
         // still a 2-way split, no new split from the drop.
         let ids: Vec<u64> = shell.tree().tiles().iter().map(|t| t.id.0).collect();
-        assert_eq!(ids, vec![2, 3, 1], "tile 1 merged into the right stack: {ids:?}");
+        assert_eq!(
+            ids,
+            vec![2, 3, 1],
+            "tile 1 merged into the right stack: {ids:?}"
+        );
         match shell.tree() {
             TileTree::Split { children, .. } => {
                 assert_eq!(children.len(), 2, "still a 2-way split, not a fresh split");
                 match &children[1].tree {
                     TileTree::Stack(s) => {
                         assert_eq!(s.tabs.len(), 2, "the right stack now holds two tabs");
-                    }
+                    },
                     _ => panic!("the right child should be a stack"),
                 }
-            }
+            },
             _ => panic!("expected the row split to survive"),
         }
     }
@@ -597,11 +707,20 @@ mod tests {
         shell.pointer_down();
         // The move past the threshold must signal a redraw, or the windowed shell never
         // re-frames and the ghost never paints (the bug this guards).
-        assert!(shell.pointer_move(x + 60.0, 200.0), "a moving tab drag asks for a redraw");
-        assert!(shell.frame().ghost.is_some(), "a moving tab drag shows a ghost");
+        assert!(
+            shell.pointer_move(x + 60.0, 200.0),
+            "a moving tab drag asks for a redraw"
+        );
+        assert!(
+            shell.frame().ghost.is_some(),
+            "a moving tab drag shows a ghost"
+        );
         // Release ends the drag; the ghost clears.
         shell.pointer_up();
-        assert!(shell.frame().ghost.is_none(), "the ghost clears after release");
+        assert!(
+            shell.frame().ghost.is_none(),
+            "the ghost clears after release"
+        );
     }
 
     /// Inspecting a tile returns its content's structural report — the observe surface
@@ -616,7 +735,9 @@ mod tests {
         let mut shell = TileShell::new(tree);
         shell.resize(800, 600);
         let _ = shell.frame();
-        let report = shell.inspect_tile(TileId(1)).expect("tile 1 has a document");
+        let report = shell
+            .inspect_tile(TileId(1))
+            .expect("tile 1 has a document");
         assert_eq!(report.title.as_deref(), Some("Demo"));
         assert_eq!(report.headings, vec!["Head"]);
         assert_eq!(report.links, vec!["/x"]);

@@ -760,16 +760,28 @@ const HTML_INTERFACES: &[HtmlInterface] = &[
         members: &[],
     },
     HtmlInterface {
-        name: "HTMLVideoElement",
+        name: "HTMLMediaElement",
         parent: "HTMLElement",
-        tags: &["video"],
+        tags: &[],
         reflected: &[
             attr!("src", "u"),
-            attr!("crossOrigin", enum ["anonymous", "use-credentials"], attr = "crossorigin"),
+            attr!(
+                "crossOrigin",
+                enum ["anonymous", "use-credentials"],
+                attr = "crossorigin"
+            ),
             attr!("preload", enum ["none", "metadata", "auto"]),
             attr!("autoplay", "b"),
             attr!("loop", "b"),
             attr!("controls", "b"),
+        ],
+        members: &[],
+    },
+    HtmlInterface {
+        name: "HTMLVideoElement",
+        parent: "HTMLMediaElement",
+        tags: &["video"],
+        reflected: &[
             attr!("poster", "u"),
             attr!("playsInline", "b", attr = "playsinline"),
             attr!("width", "ul", missing = "0"),
@@ -779,16 +791,9 @@ const HTML_INTERFACES: &[HtmlInterface] = &[
     },
     HtmlInterface {
         name: "HTMLAudioElement",
-        parent: "HTMLElement",
+        parent: "HTMLMediaElement",
         tags: &["audio"],
-        reflected: &[
-            attr!("src", "u"),
-            attr!("crossOrigin", enum ["anonymous", "use-credentials"], attr = "crossorigin"),
-            attr!("preload", enum ["none", "metadata", "auto"]),
-            attr!("autoplay", "b"),
-            attr!("loop", "b"),
-            attr!("controls", "b"),
-        ],
+        reflected: &[],
         members: &[],
     },
     HtmlInterface {
