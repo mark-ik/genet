@@ -12,11 +12,9 @@
 //! the `ScriptedDom`.
 
 use crate::pod::ServalElement;
-use crate::{DomHandle, ServalCtx, ServalChildrenSplice, attr_qual, html_qual};
+use crate::{DomHandle, ServalChildrenSplice, ServalCtx, attr_qual, html_qual};
 use layout_dom_api::LayoutDomMut;
-use xilem_core::{
-    AppendVec, MessageCtx, MessageResult, Mut, View, ViewMarker, ViewSequence,
-};
+use xilem_core::{AppendVec, MessageCtx, MessageResult, Mut, View, ViewMarker, ViewSequence};
 
 /// Re-export alias so callers can name the backend element type as
 /// `xilem_serval::Element`, matching `xilem_web`'s convention of an element
@@ -141,7 +139,11 @@ where
 
     type ViewState = ElementState<Seq::SeqState>;
 
-    fn build(&self, ctx: &mut ServalCtx, app_state: &mut State) -> (Self::Element, Self::ViewState) {
+    fn build(
+        &self,
+        ctx: &mut ServalCtx,
+        app_state: &mut State,
+    ) -> (Self::Element, Self::ViewState) {
         let dom = ctx.dom();
         let node = dom.borrow_mut().create_element(html_qual(&self.name));
 

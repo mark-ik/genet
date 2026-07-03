@@ -20,8 +20,8 @@ mod field;
 mod text_input;
 mod toggle;
 
-pub(crate) use field::{edit, edit_multiline};
 pub use button::button;
 pub use field::{TextField, text_field, text_field_typed, textarea, textarea_typed};
+pub(crate) use field::{edit, edit_multiline};
 pub use text_input::TextInput;
 pub use toggle::{Checkbox, checkbox, checkbox_typed, toggle};

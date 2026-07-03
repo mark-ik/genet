@@ -48,7 +48,9 @@ impl Propagation {
     /// A fresh propagation state (nothing stopped or prevented). One per
     /// dispatch; the event's clones share it.
     pub fn new() -> Self {
-        Self { flags: Rc::new(Cell::new(Flags::default())) }
+        Self {
+            flags: Rc::new(Cell::new(Flags::default())),
+        }
     }
 
     /// Stop the event reaching any *later* node in the propagation path. The

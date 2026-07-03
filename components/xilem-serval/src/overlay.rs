@@ -146,16 +146,16 @@ pub fn anchor_point_clamped(
     let placement = match placement {
         Placement::RightOf if anchor_point(trigger, popup, Placement::RightOf).0 + pw > bx1 => {
             Placement::LeftOf
-        }
+        },
         Placement::LeftOf if anchor_point(trigger, popup, Placement::LeftOf).0 < bx0 => {
             Placement::RightOf
-        }
+        },
         Placement::Below if anchor_point(trigger, popup, Placement::Below).1 + ph > by1 => {
             Placement::Above
-        }
+        },
         Placement::Above if anchor_point(trigger, popup, Placement::Above).1 < by0 => {
             Placement::Below
-        }
+        },
         p => p,
     };
     let (x, y) = anchor_point(trigger, popup, placement);
@@ -179,13 +179,25 @@ mod tests {
         let popup = (40.0, 30.0);
 
         // Below: same left, top at the trigger's bottom (50 + 20).
-        assert_eq!(anchor_point(trigger, popup, Placement::Below), (100.0, 70.0));
+        assert_eq!(
+            anchor_point(trigger, popup, Placement::Below),
+            (100.0, 70.0)
+        );
         // Above: same left, bottom at the trigger's top → top = 50 - popup.h.
-        assert_eq!(anchor_point(trigger, popup, Placement::Above), (100.0, 20.0));
+        assert_eq!(
+            anchor_point(trigger, popup, Placement::Above),
+            (100.0, 20.0)
+        );
         // RightOf: same top, left at the trigger's right (100 + 80).
-        assert_eq!(anchor_point(trigger, popup, Placement::RightOf), (180.0, 50.0));
+        assert_eq!(
+            anchor_point(trigger, popup, Placement::RightOf),
+            (180.0, 50.0)
+        );
         // LeftOf: same top, right at the trigger's left → left = 100 - popup.w.
-        assert_eq!(anchor_point(trigger, popup, Placement::LeftOf), (60.0, 50.0));
+        assert_eq!(
+            anchor_point(trigger, popup, Placement::LeftOf),
+            (60.0, 50.0)
+        );
     }
 
     /// `anchor_point_clamped` keeps the chosen side when it fits, flips to the opposite side
@@ -207,8 +219,16 @@ mod tests {
         );
         // A LeftOf that runs off the left edge clamps back to x0 (flip to RightOf first, then clamp).
         let near_left = (10.0, 50.0, 20.0, 20.0); // LeftOf x = 10 - 40 = -30 < 0
-        let (x, _) = anchor_point_clamped(near_left, popup, Placement::LeftOf, (0.0, 0.0, 300.0, 300.0));
-        assert!(x >= 0.0, "the popup is clamped on-screen, not run off the left edge");
+        let (x, _) = anchor_point_clamped(
+            near_left,
+            popup,
+            Placement::LeftOf,
+            (0.0, 0.0, 300.0, 300.0),
+        );
+        assert!(
+            x >= 0.0,
+            "the popup is clamped on-screen, not run off the left edge"
+        );
     }
 
     /// Below/RightOf ignore the popup size, so an unmeasured `(0, 0)` popup

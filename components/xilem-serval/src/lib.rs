@@ -62,6 +62,7 @@ mod element;
 mod event;
 mod focusable;
 mod key;
+mod keyed;
 mod optional_action;
 mod overlay;
 mod pod;
@@ -82,30 +83,31 @@ mod tests;
 
 pub use context::ServalCtx;
 pub use controls::{
-    button, checkbox, checkbox_typed, text_field, text_field_typed, textarea, textarea_typed,
-    toggle, Checkbox, TextField, TextInput,
+    Checkbox, TextField, TextInput, button, checkbox, checkbox_typed, text_field, text_field_typed,
+    textarea, textarea_typed, toggle,
 };
-pub use styled_field::{styled_text_field, styled_textarea, FieldChild, StyleRange};
 pub use element::{El, Element, ElementView, el};
 pub use event::{OnClick, OnClickState, PointerClick, clickable, on_click};
 pub use focusable::{Focusable, FocusableState, focusable};
 pub use key::{Key, KeyEvent, Modifiers, NamedKey, OnKey, OnKeyState, on_key};
+pub use keyed::Keyed;
 pub use optional_action::{Action, OptionalAction};
-pub use overlay::{anchor_point, anchor_point_clamped, overlay_at, overlay_rect, Placement};
-pub use pointer::{on_pointer, OnPointer, PointerEvent, PointerPhase};
-pub use propagation::Propagation;
-pub use radio::{radio_group, RadioGroup};
-pub use select::{select, SelectState};
-pub use slider::{slider, Slider};
+pub use overlay::{Placement, anchor_point, anchor_point_clamped, overlay_at, overlay_rect};
 pub use pod::{ServalElement, ServalElementMut};
+pub use pointer::{OnPointer, PointerEvent, PointerPhase, on_pointer};
+pub use propagation::Propagation;
+pub use radio::{RadioGroup, radio_group};
 pub use runner::ServalAppRunner;
+pub use select::{SelectState, select};
+pub use slider::{Slider, slider};
 pub use splice::ServalChildrenSplice;
+pub use styled_field::{FieldChild, StyleRange, styled_text_field, styled_textarea};
 // Per-tag element-view helpers: `div`, `span`, `p`, `input`, `label`, `a`,
 // `h1`/`h2`/`h3`, `ul`/`ol`/`li`. (No `button` here — `controls::button` is the
 // button view, with a handler.)
 pub use tags::*;
 pub use text::text;
-pub use wheel::{on_wheel, OnWheel, WheelEvent};
+pub use wheel::{OnWheel, WheelEvent, on_wheel};
 
 // The generic, backend-agnostic composition vocabulary from `xilem_core`. These
 // views are parametric over any `Context: ViewPathTracker`, so they work over
@@ -114,7 +116,7 @@ pub use wheel::{on_wheel, OnWheel, WheelEvent};
 // `View`/`MessageResult` core traits come along so `impl View<…, ServalCtx, …>`
 // return types and the action path can be named from this crate alone.
 pub use xilem_core::{
-    lens, map_action, map_message_result, map_state, memoize, AnyView, Lens, MessageResult, View,
+    AnyView, Lens, MessageResult, View, lens, map_action, map_message_result, map_state, memoize,
 };
 
 /// The HTML namespace. serval views build elements in this namespace, matching

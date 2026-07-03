@@ -49,7 +49,7 @@ pub(crate) fn edit(input: &mut TextInput, ev: KeyEvent) {
     match ev.key {
         Key::Character(ref s) if (ev.mods.ctrl || ev.mods.meta) && s.eq_ignore_ascii_case("a") => {
             input.select_all()
-        }
+        },
         Key::Character(s) => input.insert_str(&s),
         Key::Named(NamedKey::Space) => input.insert_str(" "),
         Key::Named(NamedKey::Backspace) if word => input.delete_word_left(),
@@ -84,7 +84,7 @@ pub(crate) fn edit_multiline(input: &mut TextInput, ev: KeyEvent) {
     match ev.key {
         Key::Character(ref s) if (ev.mods.ctrl || ev.mods.meta) && s.eq_ignore_ascii_case("a") => {
             input.select_all()
-        }
+        },
         Key::Character(s) => input.insert_str(&s),
         Key::Named(NamedKey::Space) => input.insert_str(" "),
         Key::Named(NamedKey::Enter) => input.insert_str("\n"),
@@ -127,7 +127,10 @@ pub type TextField = OnKey<
 /// with no styles (the plain case); [`styled_textarea`](crate::styled_textarea) is
 /// the same body with highlight classes, so the plain and styled fields share one
 /// implementation.
-fn field_body(tag: &str, input: &TextInput) -> El<Vec<crate::styled_field::FieldChild>, TextInput, ()> {
+fn field_body(
+    tag: &str,
+    input: &TextInput,
+) -> El<Vec<crate::styled_field::FieldChild>, TextInput, ()> {
     el::<_, TextInput, ()>(tag, crate::styled_field::field_children(input, &[]))
 }
 
@@ -158,7 +161,9 @@ fn build_text_field(input: &TextInput) -> TextField {
 /// whatever the cascade resolves. It carries no browser `<input>` value
 /// semantics — its text is just its content, diffed like any other text on
 /// rebuild.
-pub fn text_field(input: &TextInput) -> impl View<TextInput, (), ServalCtx, Element = ServalElement> + use<> {
+pub fn text_field(
+    input: &TextInput,
+) -> impl View<TextInput, (), ServalCtx, Element = ServalElement> + use<> {
     build_text_field(input)
 }
 
@@ -191,7 +196,9 @@ fn build_textarea(input: &TextInput) -> TextField {
 /// Lines are `\n`-delimited in the buffer; up/down navigate those hard lines with a
 /// sticky goal column. (Soft-wrap visual-line navigation needs the layout — the
 /// separate `serval_layout::caret_byte_vertical` path a host can wire instead.)
-pub fn textarea(input: &TextInput) -> impl View<TextInput, (), ServalCtx, Element = ServalElement> + use<> {
+pub fn textarea(
+    input: &TextInput,
+) -> impl View<TextInput, (), ServalCtx, Element = ServalElement> + use<> {
     build_textarea(input)
 }
 
@@ -218,7 +225,12 @@ mod tests {
         KeyEvent::with_mods(Key::Named(k), mods)
     }
 
-    const CTRL: Modifiers = Modifiers { shift: false, ctrl: true, alt: false, meta: false };
+    const CTRL: Modifiers = Modifiers {
+        shift: false,
+        ctrl: true,
+        alt: false,
+        meta: false,
+    };
 
     #[test]
     fn ctrl_arrow_routes_to_word_motion() {

@@ -23,7 +23,9 @@ pub struct Slider {
 impl Slider {
     /// A slider at `value` (clamped to `0.0..=1.0`).
     pub fn new(value: f32) -> Self {
-        Self { value: value.clamp(0.0, 1.0) }
+        Self {
+            value: value.clamp(0.0, 1.0),
+        }
     }
 }
 

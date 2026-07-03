@@ -25,9 +25,7 @@
 use core::marker::PhantomData;
 
 use serval_scripted_dom::NodeId;
-use xilem_core::{
-    MessageCtx, MessageResult, Mut, View, ViewId, ViewMarker, ViewPathTracker,
-};
+use xilem_core::{MessageCtx, MessageResult, Mut, View, ViewId, ViewMarker, ViewPathTracker};
 
 use crate::pod::ServalElement;
 use crate::{El, ElementView, Focusable, OptionalAction, ServalCtx, focusable};
@@ -57,7 +55,10 @@ pub struct PointerClick {
 impl PointerClick {
     /// A click at `local` (element-local coords) with fresh propagation state.
     pub fn at(local: (f32, f32)) -> Self {
-        Self { local, prop: crate::Propagation::new() }
+        Self {
+            local,
+            prop: crate::Propagation::new(),
+        }
     }
 
     /// Stop the event reaching later nodes in the propagation path
@@ -148,10 +149,7 @@ impl<Seq, State, Action, F> OnClick<El<Seq, State, Action>, State, Action, F> {
 /// `Action`, or `Option<Action>`); a returned action becomes a
 /// [`MessageResult::Action`]. The runner rebuilds the view tree afterwards so
 /// any state change reaches the DOM.
-pub fn on_click<V, State, Action, OA, F>(
-    child: V,
-    handler: F,
-) -> OnClick<V, State, Action, F>
+pub fn on_click<V, State, Action, OA, F>(child: V, handler: F) -> OnClick<V, State, Action, F>
 where
     State: 'static,
     Action: 'static,
@@ -215,7 +213,11 @@ where
 
     type Element = ServalElement;
 
-    fn build(&self, ctx: &mut ServalCtx, app_state: &mut State) -> (Self::Element, Self::ViewState) {
+    fn build(
+        &self,
+        ctx: &mut ServalCtx,
+        app_state: &mut State,
+    ) -> (Self::Element, Self::ViewState) {
         // Push our own id so the captured `view_path()` (and the message path
         // the runner routes) ends in `ON_CLICK_ID` — mirrors `OnEvent::build`.
         ctx.with_id(ON_CLICK_ID, |ctx| {
