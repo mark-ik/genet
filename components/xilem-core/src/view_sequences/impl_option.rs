@@ -70,7 +70,7 @@ where
                     inner: Some(inner),
                     generation,
                 }
-            }
+            },
             None => OptionSeqState {
                 inner: None,
                 generation,
@@ -98,13 +98,13 @@ where
         match (self, prev.as_ref().zip(seq_state.inner.as_mut())) {
             (None, None) => {
                 // Nothing to do, there is no corresponding element
-            }
+            },
             (Some(seq), Some((prev, inner_state))) => {
                 // Perform a normal rebuild
                 ctx.with_id(ViewId::new(seq_state.generation), |ctx| {
                     seq.seq_rebuild(prev, inner_state, ctx, elements, app_state);
                 });
-            }
+            },
             (Some(seq), None) => {
                 // The sequence is newly re-added, build the inner sequence
                 // We don't increment the generation here, as that was already done in the below case
@@ -112,7 +112,7 @@ where
                     elements.with_scratch(|elements| seq.seq_build(ctx, elements, app_state))
                 });
                 seq_state.inner = Some(inner_state);
-            }
+            },
             (None, Some((prev, inner_state))) => {
                 // Run teardown with the old path
                 ctx.with_id(ViewId::new(seq_state.generation), |ctx| {
@@ -128,7 +128,7 @@ where
                 // If would overflow, wrap to zero. Would need async message sent
                 // to view *exactly* `u64::MAX` versions of the view ago, which is implausible
                 seq_state.generation = seq_state.generation.wrapping_add(1);
-            }
+            },
         }
     }
 
