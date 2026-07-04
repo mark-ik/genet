@@ -218,6 +218,15 @@ pub struct TextRange<N> {
     pub focus_offset: usize,
 }
 
+/// A selected DOM text span: the ordered range, its highlight rects in absolute
+/// scene coordinates, and a plain-text export suitable for copy.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextSelection<N> {
+    pub range: TextRange<N>,
+    pub rects: Vec<CaretRect>,
+    pub text: String,
+}
+
 /// The highlight rectangles for a selection `range` that may span several inline
 /// leaves (across block boundaries), in absolute (scene) coordinates — the
 /// multi-node generalisation of [`selection_rects`]. Empty when the range is
@@ -272,6 +281,82 @@ where
         ));
     }
     rects
+}
+
+/// The highlight rects plus plain text for a selection `range` that may span
+/// several inline leaves. Returns `None` when the range is collapsed or neither
+/// endpoint resolves to a laid-out text leaf.
+pub fn text_selection<D>(
+    dom: &D,
+    range: TextRange<D::NodeId>,
+    built: &BoxTree<D::NodeId>,
+    text_ctx: &TextMeasureCtx,
+    fragments: &FragmentPlane<D::NodeId>,
+) -> Option<TextSelection<D::NodeId>>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut leaves: Vec<D::NodeId> = Vec::new();
+    collect_text_leaves(dom, built, text_ctx, dom.document(), &mut leaves);
+
+    let pos = |n: D::NodeId| leaves.iter().position(|&l| l == n);
+    let (Some(ai), Some(fi)) = (pos(range.anchor_node), pos(range.focus_node)) else {
+        return None;
+    };
+    let ((si, soff), (ei, eoff)) =
+        if ai < fi || (ai == fi && range.anchor_offset <= range.focus_offset) {
+            ((ai, range.anchor_offset), (fi, range.focus_offset))
+        } else {
+            ((fi, range.focus_offset), (ai, range.anchor_offset))
+        };
+    if si == ei && soff == eoff {
+        return None;
+    }
+
+    let ordered = TextRange {
+        anchor_node: leaves[si],
+        anchor_offset: soff,
+        focus_node: leaves[ei],
+        focus_offset: eoff,
+    };
+    let rects = range_rects(dom, ordered, built, text_ctx, fragments);
+    if rects.is_empty() {
+        return None;
+    }
+
+    let mut text = String::new();
+    let mut prev_leaf = None;
+    for i in si..=ei {
+        let leaf = leaves[i];
+        let Some(full) = leaf_text(leaf, built) else {
+            continue;
+        };
+        let start = if i == si { soff.min(full.len()) } else { 0 };
+        let end = if i == ei {
+            eoff.min(full.len())
+        } else {
+            full.len()
+        };
+        if start >= end {
+            continue;
+        }
+        if let Some(prev) = prev_leaf {
+            if block_ancestor(dom, prev) != block_ancestor(dom, leaf) {
+                text.push('\n');
+            }
+        }
+        if let Some(slice) = full.get(start..end) {
+            text.push_str(slice);
+        }
+        prev_leaf = Some(leaf);
+    }
+
+    Some(TextSelection {
+        range: ordered,
+        rects,
+        text,
+    })
 }
 
 /// Every occurrence of `needle` in the document's laid-out text, as highlight rects
@@ -350,6 +435,68 @@ pub(crate) fn collect_text_leaves<D>(
     for child in dom.dom_children(node) {
         collect_text_leaves(dom, built, text_ctx, child, out);
     }
+}
+
+fn leaf_text<N>(leaf: N, built: &BoxTree<N>) -> Option<String>
+where
+    N: Copy + Eq + Hash,
+{
+    let taffy_id = built.node_map.get(&leaf)?;
+    let content = built.get_node_context(*taffy_id)?;
+    Some(content.runs.iter().map(|r| r.text.as_str()).collect())
+}
+
+fn block_ancestor<D>(dom: &D, node: D::NodeId) -> D::NodeId
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut cur = Some(node);
+    while let Some(id) = cur {
+        if let Some(name) = dom.element_name(id) {
+            if !is_inline_name(name.local.as_ref()) {
+                return id;
+            }
+        }
+        cur = dom.parent(id);
+    }
+    node
+}
+
+fn is_inline_name(name: &str) -> bool {
+    matches!(
+        name,
+        "a" | "abbr"
+            | "b"
+            | "bdi"
+            | "bdo"
+            | "cite"
+            | "code"
+            | "data"
+            | "del"
+            | "dfn"
+            | "em"
+            | "i"
+            | "ins"
+            | "kbd"
+            | "label"
+            | "mark"
+            | "q"
+            | "rp"
+            | "rt"
+            | "ruby"
+            | "s"
+            | "samp"
+            | "small"
+            | "span"
+            | "strong"
+            | "sub"
+            | "sup"
+            | "time"
+            | "u"
+            | "var"
+            | "wbr"
+    )
 }
 
 /// The caret byte after moving `delta` visual lines (−1 = up, +1 = down) from

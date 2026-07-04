@@ -12,7 +12,7 @@ use fonts::{
     Font, FontData, FontDescriptor, FontIdentifier, FontTemplate, FontTemplateRef,
     PlatformFontMethods, ShapingFlags, ShapingOptions,
 };
-use icu_locid::subtags::Language;
+use icu_locale_core::subtags::Language;
 use servo_url::ServoUrl;
 use style::computed_values::font_optical_sizing::T as FontOpticalSizing;
 use style::properties::longhands::font_variant_caps::computed_value::T as FontVariantCaps;
@@ -78,7 +78,7 @@ fn test_font_can_do_fast_shaping() {
         letter_spacing: None,
         word_spacing: None,
         script: Script::Latin,
-        language: Language::UND,
+        language: Language::UNKNOWN,
         flags: ShapingFlags::empty(),
     };
     assert!(!dejavu_sans.can_do_fast_shaping("WAVE", &shaping_options));
@@ -89,7 +89,7 @@ fn test_font_can_do_fast_shaping() {
         letter_spacing: None,
         word_spacing: None,
         script: Script::Cherokee,
-        language: Language::UND,
+        language: Language::UNKNOWN,
         flags: ShapingFlags::empty(),
     };
     assert!(!dejavu_sans.can_do_fast_shaping("WAVE", &shaping_options));
@@ -100,7 +100,7 @@ fn test_font_can_do_fast_shaping() {
         letter_spacing: None,
         word_spacing: None,
         script: Script::Latin,
-        language: Language::UND,
+        language: Language::UNKNOWN,
         flags: ShapingFlags::RTL_FLAG,
     };
     assert!(!dejavu_sans.can_do_fast_shaping("WAVE", &shaping_options));

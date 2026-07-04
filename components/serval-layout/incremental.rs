@@ -26,6 +26,7 @@ use engine_observables_api::{
 };
 use layout_dom_api::{DomMutation, LayoutDom};
 use paint_list_api::DeviceIntSize;
+use rustc_hash::FxHashSet;
 use style::selector_parser::RestyleDamage;
 use style::stylist::Stylist;
 
@@ -36,7 +37,10 @@ use crate::cascade::{
 use crate::fragment::FragmentPlane;
 use crate::image_decode::{BackgroundImagePlane, ImagePlane};
 use crate::invalidate::{classify, coalesce};
-use crate::paint_emit::{ScrollOffsets, ServalPaintList, emit_paint_list_scrolled};
+use crate::paint_emit::{
+    ScrollOffsets, ServalPaintList, emit_paint_list_scrolled,
+    emit_paint_list_scrolled_excluding_subtrees, emit_subtree_paint_list_scrolled,
+};
 use crate::serval_lane::ServalLaneView;
 use crate::style::StylePlane;
 use crate::subtree::SubtreeView;
@@ -955,6 +959,76 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             &merged,
             viewport,
             self.viewport.scroll,
+        )
+    }
+
+    /// Emit the current layout while skipping any subtree whose root id appears in
+    /// `skipped_subtrees`. This is the retained-session half of coarse shell
+    /// partitioning: a host can emit a chrome base without the high-churn pane
+    /// roots, then emit those roots separately from the same retained layout.
+    pub fn emit_paint_list_excluding_subtrees<D>(
+        &self,
+        dom: &D,
+        scroll_offsets: &ScrollOffsets<Id>,
+        skipped_subtrees: &FxHashSet<Id>,
+        viewport: DeviceIntSize,
+    ) -> ServalPaintList
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        debug_assert!(
+            self.paint_side_valid,
+            "emit_paint_list_excluding_subtrees after a structural splice: the box-tree \
+             side-table is stale (relayout first). Attribute-only hosts never hit this.",
+        );
+        let bg_images = BackgroundImagePlane::new();
+        let merged = self.merged_scroll(scroll_offsets);
+        emit_paint_list_scrolled_excluding_subtrees(
+            dom,
+            &self.styles,
+            &self.fragments,
+            &self.built,
+            &self.text_ctx,
+            &self.images,
+            &bg_images,
+            &merged,
+            skipped_subtrees,
+            viewport,
+            self.viewport.scroll,
+        )
+    }
+
+    /// Emit one subtree rooted at `root` into a local coordinate space whose origin
+    /// is the root's own border-box top-left. This is the retained-session emit
+    /// primitive the shell-partition path uses for high-churn pane roots.
+    pub fn emit_subtree_paint_list<D>(
+        &self,
+        dom: &D,
+        root: Id,
+        scroll_offsets: &ScrollOffsets<Id>,
+        viewport: DeviceIntSize,
+    ) -> Option<ServalPaintList>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        debug_assert!(
+            self.paint_side_valid,
+            "emit_subtree_paint_list after a structural splice: the box-tree side-table \
+             is stale (relayout first). Attribute-only hosts never hit this.",
+        );
+        let bg_images = BackgroundImagePlane::new();
+        let merged = self.merged_scroll(scroll_offsets);
+        emit_subtree_paint_list_scrolled(
+            dom,
+            root,
+            &self.styles,
+            &self.fragments,
+            &self.built,
+            &self.text_ctx,
+            &self.images,
+            &bg_images,
+            &merged,
+            viewport,
         )
     }
 

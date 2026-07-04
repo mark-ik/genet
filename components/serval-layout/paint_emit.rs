@@ -49,7 +49,7 @@ use paint_list_api::{
     RectItem, RepeatMode, RepeatingImageItem, TextOptions, TextRunItem, TransformSpec,
 };
 use parley::PositionedLayoutItem;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 
 use servo_arc::Arc as ServoArc;
@@ -330,6 +330,11 @@ pub(crate) struct Emitter<'a, NodeId: Copy + Eq + Hash> {
     /// document does not scroll (the default the public entry points pass until the
     /// host wires the offset).
     viewport_scroll: (f32, f32),
+    /// Whole subtrees keyed by their source DOM id that this emit pass must skip.
+    /// Used by shell partitioning: a host can paint the base document without the
+    /// high-churn pane roots, then emit those pane roots separately off the same
+    /// retained layout.
+    skipped_subtrees: Option<&'a FxHashSet<NodeId>>,
 }
 
 impl<NodeId: Copy + Eq + Hash> Emitter<'_, NodeId> {
@@ -382,6 +387,9 @@ where
         &no_scroll,
         viewport,
         (0.0, 0.0),
+        (0.0, 0.0),
+        constructed.root_arena(),
+        None,
     )
 }
 
@@ -422,6 +430,9 @@ where
         // document use `emit_paint_list_scrolled`. `(0,0)` reproduces today's
         // behavior exactly (no wrap, no fixed counter).
         (0.0, 0.0),
+        (0.0, 0.0),
+        constructed.root_arena(),
+        None,
     )
 }
 
@@ -460,7 +471,99 @@ where
         scroll_offsets,
         viewport,
         viewport_scroll,
+        (0.0, 0.0),
+        constructed.root_arena(),
+        None,
     )
+}
+
+/// Like [`emit_paint_list_scrolled`] but skips any subtree whose root DOM node id
+/// appears in `skipped_subtrees`. Intended for coarse retained shell partitioning:
+/// emit the shell base without the churn-heavy pane roots, then emit those roots
+/// separately from the same retained layout.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_paint_list_scrolled_excluding_subtrees<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    constructed: &BoxTree<D::NodeId>,
+    text_ctx: &TextMeasureCtx,
+    images: &ImagePlane<D::NodeId>,
+    bg_images: &BackgroundImagePlane<D::NodeId>,
+    scroll_offsets: &ScrollOffsets<D::NodeId>,
+    skipped_subtrees: &FxHashSet<D::NodeId>,
+    viewport: DeviceIntSize,
+    viewport_scroll: (f32, f32),
+) -> ServalPaintList
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    emit_inner(
+        dom,
+        styles,
+        fragments,
+        constructed,
+        Some(text_ctx),
+        images,
+        bg_images,
+        scroll_offsets,
+        viewport,
+        viewport_scroll,
+        (0.0, 0.0),
+        constructed.root_arena(),
+        Some(skipped_subtrees),
+    )
+}
+
+/// Emit one subtree rooted at `root` into a local coordinate space whose origin is
+/// the subtree root's own border-box top-left. This is the companion to
+/// [`emit_paint_list_scrolled_excluding_subtrees`] for shell partitioning: a host
+/// emits the base shell without a pane root, then emits that pane root separately and
+/// composites it at the root's laid-out rect.
+///
+/// Boundary: this is for roots that can be composited back as an axis-aligned
+/// rectangle. Ancestor transforms above `root` are intentionally not re-applied here;
+/// callers should use it for top-level pane roots such as Meerkat's shell children,
+/// not arbitrary transformed descendants.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_subtree_paint_list_scrolled<D>(
+    dom: &D,
+    root: D::NodeId,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    constructed: &BoxTree<D::NodeId>,
+    text_ctx: &TextMeasureCtx,
+    images: &ImagePlane<D::NodeId>,
+    bg_images: &BackgroundImagePlane<D::NodeId>,
+    scroll_offsets: &ScrollOffsets<D::NodeId>,
+    viewport: DeviceIntSize,
+) -> Option<ServalPaintList>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let arena = constructed.arena_of(root)?;
+    let root_layout = constructed.node(arena).final_layout;
+    Some(emit_inner(
+        dom,
+        styles,
+        fragments,
+        constructed,
+        Some(text_ctx),
+        images,
+        bg_images,
+        scroll_offsets,
+        viewport,
+        (0.0, 0.0),
+        // `walk` folds the context root's own `final_layout.location` into its first
+        // push when `is_root`, so local subtree emit must cancel that offset back out.
+        // Descendants then paint in the root-local coordinate space the host will
+        // composite at the pane's laid-out rect.
+        (-root_layout.location.x, -root_layout.location.y),
+        arena,
+        None,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -475,6 +578,9 @@ fn emit_inner<D>(
     scroll_offsets: &FxHashMap<D::NodeId, (f32, f32)>,
     viewport: DeviceIntSize,
     viewport_scroll: (f32, f32),
+    root_origin: (f32, f32),
+    root_arena: usize,
+    skipped_subtrees: Option<&FxHashSet<D::NodeId>>,
 ) -> ServalPaintList
 where
     D: LayoutDom,
@@ -490,6 +596,7 @@ where
         images: ImageCollector::default(),
         canvas_bg_source: None,
         viewport_scroll,
+        skipped_subtrees,
     };
     // CSS Backgrounds-3 §root-background: the root element's background (or, when
     // the root is transparent, the body's) is painted over the *entire* canvas,
@@ -526,8 +633,8 @@ where
         &mut emitter,
         constructed,
         text_ctx,
-        constructed.root_arena(),
-        (0.0, 0.0),
+        root_arena,
+        root_origin,
         &mut commands,
     );
     if document_scrolled {
@@ -646,6 +753,15 @@ pub(crate) fn walk<Id>(
 {
     let node = tree.node(arena);
     let cv: &ComputedValues = &node.style;
+    let dom_id = node.source.dom_id();
+
+    if em
+        .skipped_subtrees
+        .is_some_and(|skipped| skipped.contains(&dom_id))
+        && !is_root
+    {
+        return;
+    }
 
     // A positioned / z-index descendant is lifted out of this context's in-flow
     // walk into a stacking layer (recorded with its parent's absolute origin +
@@ -680,7 +796,6 @@ pub(crate) fn walk<Id>(
     // identity come off the box node, not a DOM lookup. `dom_id` keys the
     // remaining DOM-keyed concerns (scroll / images / canvas-bg).
     let l = node.final_layout;
-    let dom_id = node.source.dom_id();
     let is_anon = node.source.is_anonymous();
     let taffy_id = tree.arena_node_id(arena);
 
@@ -3502,9 +3617,134 @@ mod tests {
             &FxHashMap::default(),
             DeviceIntSize::new(800, 600),
             scroll,
+            (0.0, 0.0),
+            built.root_arena(),
+            None,
         )
         .commands()
         .to_vec()
+    }
+
+    fn has_rect_rgb(plist: &ServalPaintList, rgb: (f32, f32, f32)) -> bool {
+        plist.commands().iter().any(|cmd| {
+            matches!(cmd, PaintCmd::DrawRect(rect)
+                if (rect.color.r - rgb.0).abs() < 0.05
+                    && (rect.color.g - rgb.1).abs() < 0.05
+                    && (rect.color.b - rgb.2).abs() < 0.05)
+        })
+    }
+
+    fn first_push_origin(plist: &ServalPaintList) -> Option<(f32, f32)> {
+        plist.commands().iter().find_map(|cmd| match cmd {
+            PaintCmd::PushTransform(spec) => Some((spec.origin.x, spec.origin.y)),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn emit_excluding_subtrees_skips_the_named_root() {
+        let document = StaticDocument::parse(
+            "<html><body><div class='keep'></div><div class='skip'></div></body></html>",
+        );
+        let sheet = concat!(
+            "html, body { display:block; margin:0; padding:0; background:transparent; }",
+            ".keep, .skip { display:block; width:120px; height:40px; }",
+            ".keep { background: rgb(255, 0, 0); }",
+            ".skip { background: rgb(0, 0, 255); }",
+        );
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[sheet],
+            None,
+        );
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let skip = document
+            .first_with_class(document.document(), "skip")
+            .expect(".skip root");
+        let mut skipped = FxHashSet::default();
+        skipped.insert(skip);
+
+        let plist = emit_paint_list_scrolled_excluding_subtrees(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &FxHashMap::default(),
+            &skipped,
+            DeviceIntSize::new(800, 600),
+            (0.0, 0.0),
+        );
+
+        assert!(
+            has_rect_rgb(&plist, (1.0, 0.0, 0.0)),
+            "the kept subtree still paints its red rect"
+        );
+        assert!(
+            !has_rect_rgb(&plist, (0.0, 0.0, 1.0)),
+            "the skipped subtree's blue rect is absent from the base paint list"
+        );
+    }
+
+    #[test]
+    fn emit_subtree_localizes_the_root_origin() {
+        let document = StaticDocument::parse(
+            "<html><body><div class='pane'><div class='inner'></div></div></body></html>",
+        );
+        let sheet = concat!(
+            "html, body { display:block; margin:0; padding:0; position:relative; }",
+            ".pane { position:absolute; left:120px; top:80px; width:90px; height:50px; ",
+            "background: rgb(255, 0, 0); }",
+            ".inner { display:block; width:30px; height:20px; background: rgb(0, 0, 255); }",
+        );
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[sheet],
+            None,
+        );
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let pane = document
+            .first_with_class(document.document(), "pane")
+            .expect(".pane root");
+        let plist = emit_subtree_paint_list_scrolled(
+            &document,
+            pane,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &FxHashMap::default(),
+            DeviceIntSize::new(90, 50),
+        )
+        .expect("subtree paint list");
+
+        assert_eq!(
+            first_push_origin(&plist),
+            Some((0.0, 0.0)),
+            "the subtree root paints in its own local coordinate space"
+        );
+        assert!(
+            has_rect_rgb(&plist, (1.0, 0.0, 0.0)) && has_rect_rgb(&plist, (0.0, 0.0, 1.0)),
+            "the subtree emit still includes the root and its descendant content"
+        );
     }
 
     fn data_uri_png(width: u32, height: u32) -> String {

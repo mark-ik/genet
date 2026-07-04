@@ -236,6 +236,13 @@ impl<Id: Copy + Eq + Hash> BoxTree<Id> {
         self.root
     }
 
+    /// The arena index for the real box keyed by DOM node `id`, if that node has a
+    /// box in `node_map`. Used by retained subtree paint emit to re-enter the
+    /// already-built box tree at a host-selected pane root.
+    pub(crate) fn arena_of(&self, id: Id) -> Option<usize> {
+        self.node_map.get(&id).copied().map(idx)
+    }
+
     /// The box node at arena index `arena`.
     pub(crate) fn node(&self, arena: usize) -> &BoxNode<Id> {
         &self.nodes[arena]

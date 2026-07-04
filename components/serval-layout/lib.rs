@@ -58,8 +58,8 @@ pub use adapter::NodeRef;
 pub use adapter_stylo::StyleNodeRef;
 pub use box_tree::{BoxTree, build_box_tree, layout_via_box_tree};
 pub use caret::{
-    CaretRect, TextRange, caret_byte_at_point, caret_byte_vertical, caret_color, caret_rect,
-    find_text_rects, range_rects, selection_rects, selection_style,
+    CaretRect, TextRange, TextSelection, caret_byte_at_point, caret_byte_vertical, caret_color,
+    caret_rect, find_text_rects, range_rects, selection_rects, selection_style, text_selection,
 };
 pub use cascade::{
     RestyleOutcome, apply_interaction, restyle_for_interaction, restyle_structural,
@@ -79,7 +79,8 @@ pub use invalidate::{Invalidation, classify, coalesce};
 pub use layout::layout;
 pub use paint_emit::{
     SCROLLBAR_COLOR, SCROLLBAR_WIDTH, ScrollOffsets, ServalPaintList, emit_paint_list,
-    emit_paint_list_scrolled, emit_paint_list_with_layouts, push_scrollbars,
+    emit_paint_list_scrolled, emit_paint_list_scrolled_excluding_subtrees,
+    emit_paint_list_with_layouts, emit_subtree_paint_list_scrolled, push_scrollbars,
 };
 pub use serval_lane::{
     ServalLaneView, absolute_origin, accumulate_origins, accumulate_painted_origins,
@@ -94,6 +95,7 @@ pub use text_measure::{
 };
 pub use viewport::{ScrollKey, Viewport, document_scroll_range};
 
+use engine_observables_api::{FragmentQuery, Point};
 use layout_dom_api::LayoutDom;
 use std::hash::Hash;
 
@@ -343,6 +345,88 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> ContentLayout<Id> {
             })
             .collect()
     }
+
+    /// A point-drag text selection off the retained layout: resolve the anchor and
+    /// focus scene points through the current content scroll, map them to leaf/byte
+    /// positions, then return the highlight rects and plain text span. `None` when
+    /// either endpoint misses laid-out text or the drag collapses to an empty span.
+    pub fn select_text<D>(
+        &self,
+        dom: &D,
+        anchor: (f32, f32),
+        focus: (f32, f32),
+        scroll_offsets: &ScrollOffsets<Id>,
+    ) -> Option<TextSelection<Id>>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let anchor = self.text_position_at_point(dom, anchor.0, anchor.1, scroll_offsets)?;
+        let focus = self.text_position_at_point(dom, focus.0, focus.1, scroll_offsets)?;
+        text_selection(
+            dom,
+            TextRange {
+                anchor_node: anchor.0,
+                anchor_offset: anchor.1,
+                focus_node: focus.0,
+                focus_offset: focus.1,
+            },
+            &self.built,
+            &self.text_ctx,
+            &self.fragments,
+        )
+    }
+
+    fn text_position_at_point<D>(
+        &self,
+        dom: &D,
+        x: f32,
+        y: f32,
+        scroll_offsets: &ScrollOffsets<Id>,
+    ) -> Option<(Id, usize)>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let view = ServalLaneView::new(dom, &self.styles, &self.fragments)
+            .with_scroll_offsets(scroll_offsets);
+        let hit = view.hit_test(Point::new(x, y))?;
+        let node = view.find_by_source_id(hit.source_node)?;
+        let node = self.inline_hit_at(node, hit.local_point).unwrap_or(node);
+        let leaf = self.text_leaf(dom, node)?;
+        let byte = caret_byte_at_point(
+            dom,
+            leaf,
+            x,
+            y,
+            &self.built,
+            &self.text_ctx,
+            &self.fragments,
+        )?;
+        Some((leaf, byte))
+    }
+
+    fn text_leaf<D>(&self, dom: &D, mut node: Id) -> Option<Id>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        loop {
+            if let Some(taffy_id) = self.built.node_map.get(&node) {
+                if self.text_ctx.layouts.contains_key(taffy_id) {
+                    return Some(node);
+                }
+            }
+            node = dom.parent(node)?;
+        }
+    }
+
+    fn inline_hit_at(&self, node: Id, local: Point) -> Option<Id> {
+        let taffy_id = self.built.node_map.get(&node)?;
+        let layout = self.text_ctx.layouts.get(taffy_id)?;
+        let sources = self.built.inline_sources(node)?;
+        let frame = self.fragments.rect_of(node)?;
+        let cx = local.x - (frame.border.left + frame.padding.left);
+        let cy = local.y - (frame.border.top + frame.padding.top);
+        crate::inline_hit::inline_source_at(layout, sources, cx, cy)
+    }
 }
 
 /// Lay out at `(width, height)` (so `@media` / sizing cascade at the real viewport),
@@ -409,4 +493,37 @@ where
     // decodes backgrounds, which find ignores: a negligible extra decode for one fewer
     // code path.
     lay_out_content(dom, stylesheets, loader, width, height).find(dom, needle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serval_static_dom::StaticDocument;
+
+    #[test]
+    fn retained_content_layout_select_text_spans_two_blocks() {
+        let doc = StaticDocument::parse(
+            "<body style='margin:0'><p style='margin:0'>alpha beta</p><p style='margin:0'>gamma delta</p></body>",
+        );
+        let layout = lay_out_content(&doc, &[], &NoImageLoader, 420, 200);
+        let alpha = layout.find(&doc, "alpha")[0][0];
+        let gamma = layout.find(&doc, "gamma")[0][0];
+        let start = (alpha[0] + 1.0, (alpha[1] + alpha[3]) * 0.5);
+        let end = (gamma[2] - 1.0, (gamma[1] + gamma[3]) * 0.5);
+        let selection = layout
+            .select_text(&doc, start, end, &ScrollOffsets::default())
+            .expect("selection across both paragraphs");
+        assert!(
+            selection.text.contains("alpha"),
+            "selection should include the first paragraph"
+        );
+        assert!(
+            selection.text.contains("gam"),
+            "selection should include the second paragraph"
+        );
+        assert!(
+            selection.rects.len() >= 2,
+            "selection should paint both paragraph spans"
+        );
+    }
 }
