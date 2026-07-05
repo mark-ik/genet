@@ -608,6 +608,16 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         let _ = self.dispatch_event(doc, "visibilitychange");
     }
 
+    /// Whether the document is currently hidden (Page Visibility).
+    pub fn is_hidden(&self) -> bool {
+        self.hidden
+    }
+
+    /// Whether the document is currently frozen (Page Lifecycle).
+    pub fn is_frozen(&self) -> bool {
+        self.frozen
+    }
+
     /// Page Lifecycle freeze: dispatch `freeze` (listeners get a last turn to
     /// persist state, per spec), then stop running tasks until
     /// [`resume`](Self::resume). Idempotent.
