@@ -124,6 +124,15 @@ pub struct ScriptedDocument<E: ScriptEngine> {
     #[cfg(feature = "render")]
     layout: RetainedLayout,
     capture: Option<DomCaptureRecorder>,
+    /// Page Visibility state (W3C adoption plan P1): `true` = the document is
+    /// not being presented (an unfocused preview card). Hidden documents get
+    /// their timer pump throttled to the spec-licensed 1s clamp; a
+    /// `visibilitychange` event fires on each flip.
+    hidden: bool,
+    /// Page Lifecycle frozen state: no tasks run at all until `resume`.
+    frozen: bool,
+    /// Virtual-clock stamp of the last hidden-state timer pump (the 1s clamp).
+    last_hidden_pump_ms: f64,
 }
 
 impl<E: ScriptEngine> ScriptedDocument<E> {
@@ -330,6 +339,9 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
             #[cfg(feature = "render")]
             layout,
             capture,
+            hidden: false,
+            frozen: false,
+            last_hidden_pump_ms: f64::NAN,
         })
     }
 
@@ -340,6 +352,25 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
     /// a long-lived document churning nodes under `setInterval` is collected here,
     /// not at an explicit one-off call.
     pub fn pump(&mut self, now_ms: f64) -> (usize, usize) {
+        // Page Lifecycle: a frozen document runs no tasks at all. Page
+        // Visibility: a hidden one pumps timers at most once per second (the
+        // HTML-spec-licensed clamp for hidden documents), so a background
+        // page's interval loop stops driving per-frame work.
+        if self.frozen {
+            return (0, 0);
+        }
+        if self.hidden {
+            // The clamp window anchors at the first pump after hiding (NaN
+            // sentinel set by `set_hidden`), so hiding never grants an
+            // immediate bonus tick.
+            if self.last_hidden_pump_ms.is_nan() || now_ms - self.last_hidden_pump_ms < 1000.0 {
+                if self.last_hidden_pump_ms.is_nan() {
+                    self.last_hidden_pump_ms = now_ms;
+                }
+                return (0, 0);
+            }
+            self.last_hidden_pump_ms = now_ms;
+        }
         self.rt.run_timers(64, now_ms);
         self.rt.run_microtasks();
         self.flush_dom_capture();
@@ -556,7 +587,48 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
     /// shell should keep requesting frames. `setInterval` re-arms each fire, so a
     /// churning soak page stays animated; a quiescent page lets the loop idle.
     pub fn has_pending_work(&mut self) -> bool {
-        self.rt.next_timer_delay().is_some()
+        !self.frozen && self.rt.next_timer_delay().is_some()
+    }
+
+    /// Set Page Visibility (W3C adoption plan P1). The host calls this as a
+    /// card gains/loses presentation (focused card visible, preview hidden);
+    /// each flip dispatches `visibilitychange` at the document per spec. The
+    /// JS-visible `document.visibilityState`/`document.hidden` properties are
+    /// an engine-side follow-up; the observable contract here is the event
+    /// plus the hidden timer clamp in [`pump`](Self::pump).
+    pub fn set_hidden(&mut self, hidden: bool) {
+        if self.hidden == hidden {
+            return;
+        }
+        self.hidden = hidden;
+        if hidden {
+            self.last_hidden_pump_ms = f64::NAN;
+        }
+        let doc = self.rt.host().borrow().dom.document().raw();
+        let _ = self.dispatch_event(doc, "visibilitychange");
+    }
+
+    /// Page Lifecycle freeze: dispatch `freeze` (listeners get a last turn to
+    /// persist state, per spec), then stop running tasks until
+    /// [`resume`](Self::resume). Idempotent.
+    pub fn freeze(&mut self) {
+        if self.frozen {
+            return;
+        }
+        let doc = self.rt.host().borrow().dom.document().raw();
+        let _ = self.dispatch_event(doc, "freeze");
+        self.frozen = true;
+    }
+
+    /// Page Lifecycle resume: leave the frozen state and dispatch `resume`.
+    /// Idempotent.
+    pub fn resume(&mut self) {
+        if !self.frozen {
+            return;
+        }
+        self.frozen = false;
+        let doc = self.rt.host().borrow().dom.document().raw();
+        let _ = self.dispatch_event(doc, "resume");
     }
 
     /// The current document scroll offset in device px.
@@ -1147,6 +1219,79 @@ mod tests {
             "collect_garbage reaped at least the orphan (got {collected})"
         );
         let _ = unpinned;
+    }
+
+    /// Page Visibility + Page Lifecycle (W3C adoption plan P1): a hidden
+    /// document's interval loop clamps to at most one pump per second, a frozen
+    /// one runs nothing, resume + visible restores frame cadence, and each
+    /// visibility flip fires `visibilitychange` at the document (observed here
+    /// by a page listener counting into an attribute).
+    fn hidden_clamps_timers_frozen_stops_them<E: ScriptEngine>() {
+        let html = "<body><div id='c' data-ticks='0' data-vis='0'></div><script>            var c = document.getElementById('c');            var ticks = 0;            setInterval(function(){ ticks++; c.setAttribute('data-ticks', String(ticks)); }, 16);            var vis = 0;            document.addEventListener('visibilitychange', function(){                vis++; c.setAttribute('data-vis', String(vis));            });            </script></body>";
+        let mut doc = ScriptedDocument::<E>::parse(html).expect("runtime inits");
+        let _ = doc.frame(400, 300);
+        // Read the counters back through the serialized snapshot (no direct
+        // attribute query surface on ScriptedDom; the snapshot is exact).
+        fn attr_u32<E: ScriptEngine>(doc: &ScriptedDocument<E>, name: &str) -> u32 {
+            let snap = doc.dom_snapshot();
+            let pat = format!("{name}=\"");
+            snap.find(&pat)
+                .map(|i| {
+                    let rest = &snap[i + pat.len()..];
+                    let end = rest.find('"').unwrap_or(0);
+                    rest[..end].parse().unwrap_or(0)
+                })
+                .unwrap_or(0)
+        }
+        let ticks = |doc: &ScriptedDocument<E>| attr_u32(doc, "data-ticks");
+        let vis_count = |doc: &ScriptedDocument<E>| attr_u32(doc, "data-vis");
+        let mut now = 0.0;
+        for _ in 0..10 {
+            now += 16.0;
+            doc.pump(now);
+        }
+        let visible_ticks = ticks(&doc);
+        assert!(visible_ticks >= 5, "visible interval runs at frame cadence");
+
+        doc.set_hidden(true);
+        assert_eq!(vis_count(&doc), 1, "visibilitychange fired on hide");
+        let hidden_start = ticks(&doc);
+        for _ in 0..30 {
+            now += 16.0;
+            doc.pump(now); // 480ms of hidden pumps, all inside the 1s clamp
+        }
+        assert_eq!(
+            ticks(&doc),
+            hidden_start,
+            "hidden pumps inside the clamp run no timers"
+        );
+        now += 1100.0;
+        doc.pump(now);
+        let after_clamp = ticks(&doc);
+        assert!(
+            after_clamp > hidden_start,
+            "the once-per-second hidden pump still advances timers"
+        );
+
+        doc.freeze();
+        for _ in 0..10 {
+            now += 1100.0;
+            doc.pump(now);
+        }
+        assert_eq!(ticks(&doc), after_clamp, "a frozen document runs nothing");
+        assert!(!doc.has_pending_work(), "frozen reports no pending work");
+
+        doc.resume();
+        doc.set_hidden(false);
+        assert_eq!(vis_count(&doc), 2, "visibilitychange fired on show");
+        for _ in 0..5 {
+            now += 16.0;
+            doc.pump(now);
+        }
+        assert!(
+            ticks(&doc) > after_clamp,
+            "visible again: the interval resumes at frame cadence"
+        );
     }
 
     /// The gc-arena soak (carve-out #2): a page that churns nodes under `setInterval`
@@ -1951,6 +2096,10 @@ mod tests {
     #[test]
     fn scripted_links_report_after_a_frame_on_boa() {
         scripted_links_report_after_a_frame::<BoaEngine>();
+    }
+    #[test]
+    fn hidden_clamps_timers_frozen_stops_them_on_boa() {
+        hidden_clamps_timers_frozen_stops_them::<BoaEngine>();
     }
     #[test]
     fn pump_collects_orphans_on_boa() {

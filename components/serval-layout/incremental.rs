@@ -1283,30 +1283,44 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         D: LayoutDom<NodeId = Id>,
     {
         let Some(prior_root) = self.fragments.rect_of(root).copied() else {
-            tracing::debug!(target: "serval_layout::splice", reason = "no-prior-fragment", "splice fallback");
+        tracing::debug!(target: "serval_layout::splice", reason = "no-prior-fragment", "splice fallback");
             return Err(());
         };
         // Lay out just this subtree (re-rooted) over the persistent styles,
         // keeping the scoped box tree + shaped text for the paint-side graft
         // below (they were built anyway; discarding them was what forced
         // hosts into a full session rebuild per structural batch). The
-        // scoped available space is the root's prior border-box size (the
-        // scoped ICB resolves an auto-width root to exactly the available
-        // width, margins applied as offsets — matching how the full tree
-        // sized it), not the whole viewport, which made every
-        // non-full-width subtree "change" outer size and fall back. A root
-        // whose size genuinely responds to context differently (explicit
-        // percentage width, content growth past the prior height) still
-        // lands in the size guard below and falls back.
+        // scoped available space is the root's prior CONTENT-box size: the
+        // scoped ICB resolves an auto-width root to content-box == available
+        // (margins as offsets, padding + border re-added on top), so handing
+        // it the prior border-box minus padding/border reproduces the full
+        // tree's sizing exactly — a padded root handed its border-box came
+        // out padding-wider and always fell back. Not the whole viewport
+        // either, which made every non-full-width subtree "change" outer
+        // size. A root whose size genuinely responds to context differently
+        // (explicit percentage width, content growth past the prior height)
+        // still lands in the size guard below and falls back.
+        let avail_w = (prior_root.size.width
+            - prior_root.padding.left
+            - prior_root.padding.right
+            - prior_root.border.left
+            - prior_root.border.right)
+            .max(1.0);
+        let avail_h = (prior_root.size.height
+            - prior_root.padding.top
+            - prior_root.padding.bottom
+            - prior_root.border.top
+            - prior_root.border.bottom)
+            .max(1.0);
         let (scoped, scoped_built, scoped_ctx) = scoped_layout(
             &SubtreeView::new(dom, root),
             &self.styles,
-            prior_root.size.width,
-            prior_root.size.height,
+            avail_w,
+            avail_h,
         );
         let scoped_boxes = scoped_built.node_count();
         let Some(scoped_root) = scoped.rect_of(root).copied() else {
-            tracing::debug!(target: "serval_layout::splice", reason = "no-scoped-fragment", "splice fallback");
+        tracing::debug!(target: "serval_layout::splice", reason = "no-scoped-fragment", "splice fallback");
             return Err(());
         };
         // Margin-collapse parity at the splice boundary. A `SubtreeView`-rooted
@@ -1317,7 +1331,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         // a root would mis-place every child by the lost collapse. (CSS 2.2
         // §8.3.1.)
         if splice_loses_margin_collapse(dom, &self.styles, &scoped, root) {
-            tracing::debug!(target: "serval_layout::splice", reason = "margin-collapse", "splice fallback");
+        tracing::debug!(target: "serval_layout::splice", reason = "margin-collapse", "splice fallback");
             return Err(());
         }
         // Outer size change → ancestors would reflow → escalate / fall back.
@@ -1346,7 +1360,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             scoped_ctx,
             &mut self.text_ctx,
         ) {
-            tracing::debug!(target: "serval_layout::splice", reason = "graft-bail", "splice fallback");
+        tracing::debug!(target: "serval_layout::splice", reason = "graft-bail", "splice fallback");
             return Err(());
         }
         // Splice the scoped subtree into the prior fragments. Fragment
@@ -2089,6 +2103,37 @@ mod tests {
         );
         assert!(layout.paint_ready());
         assert_emit_matches_fresh(&layout, &dom, SHEET, "removal splice");
+    }
+
+    /// A comment insert under a PADDED body splices: the scoped ICB sizes the
+    /// root's content-box to the available space, so the splice must hand it
+    /// the prior content-box (border-box minus padding/border), not the
+    /// border-box — the capture-replay parity suite caught the padded case
+    /// falling back to a full recompute.
+    #[test]
+    fn comment_insert_under_padded_root_splices() {
+        const SHEET: &[&str] = &[
+            "html, body, div, p { display: block; }",
+            "head, style, script, title, meta, link, base { display: none; }",
+            "body { padding: 8px; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let div = dom.create_element(html("div"));
+        dom.append_child(body, div);
+        let text = dom.create_text("hello");
+        dom.append_child(div, text);
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let _ = drain(&mut dom);
+        let note = dom.create_comment("note");
+        dom.insert_before(body, note, Some(div));
+        let muts = drain(&mut dom);
+        let applied = layout.apply(&dom, SHEET, &muts);
+        assert_eq!(applied, Applied::Spliced, "comment insert should splice");
     }
 
     /// Margin-collapse parity (fix B): a fixed-size, non-BFC subtree root
