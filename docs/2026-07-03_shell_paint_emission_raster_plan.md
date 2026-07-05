@@ -250,6 +250,16 @@ Two candidate fixes, in order:
    cards should not pump page scripts at full cadence (pause or slow scripts for unfocused
    cards). Product decision, Mark's call.
 
+**Fix 1 landed (2026-07-05)**: `Content::last_scene_sig` + suppression in `emit_scene` (gens +
+band + content height + serde_json-streamed scene hash through FxHasher). Receipts: one
+"identical band scene suppressed" event, then zero html-lane card re-rasters for the rest of the
+run; settled `cards_raster_us` 92,000-260,000 -> ~300. Fix 2 (script cadence) framing per W3C:
+the standard mechanism is Page Visibility (`visibilityState: "hidden"` for unfocused preview
+cards -> rAF stops per spec, HTML spec permits timer throttling) plus WICG Page Lifecycle
+`freeze` for a full pause; Permissions API covers capabilities, not scheduling, so "site
+permissions" is the Mere policy overlay (per-site never-throttle/throttle/freeze) driving those
+standard signals into serval-scripted.
+
 Next probe if 1 does not silence it: log actor-side WHAT triggered each re-render (script timer
 vs hydration pass vs host command) in the scripted-lane pump.
 
