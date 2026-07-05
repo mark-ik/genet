@@ -97,3 +97,13 @@ naming-only and can ride any settings pass.
 ## Progress
 
 - 2026-07-05: plan written from the fix-2 discussion; no code yet. P1 is the entry point.
+- 2026-07-05 (later): P1 core + host wiring landed. ScriptedDocument::set_hidden/freeze/resume
+  (hidden clamps the timer pump to 1/s anchored at the hide; frozen runs nothing;
+  visibilitychange/freeze/resume dispatch at the document; behavioral test in serval-scripted,
+  41/41). Meerkat: ContentCommand::SetLifecycle through the contract wire;
+  Constellation::apply_presentation sends it deduped from what the frame drew (presented cards
+  visible, other actives hidden; freeze reserved for the per-site policy). Bycatch: the splice's
+  scoped available space corrected to the prior CONTENT-box (padded roots always fell back;
+  caught by the capture-replay parity suite, regression test added). Remaining P1 tail: the
+  JS-visible document.visibilityState property (script-engine work) and the per-site
+  policy setting (never-throttle / throttle / freeze) in mere-domain settings. Next: P3.
