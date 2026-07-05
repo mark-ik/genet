@@ -107,3 +107,16 @@ naming-only and can ride any settings pass.
   caught by the capture-replay parity suite, regression test added). Remaining P1 tail: the
   JS-visible document.visibilityState property (script-engine work) and the per-site
   policy setting (never-throttle / throttle / freeze) in mere-domain settings. Next: P3.
+- 2026-07-05 (later still): P3 ENGINE half landed (serval-layout).
+  `IncrementalLayout::set_prefers_color_scheme` swaps the Stylist Device
+  (`cascade::set_stylist_color_scheme`: set_device + dirty origins + flush — the rule tree
+  survives, so the persistent plane's rule nodes stay valid), forces a root-subtree re-match
+  (a clean plane skips every element otherwise), then full layout. Test proves: light resolves
+  the base rule, dark resolves the `@media (prefers-color-scheme: dark)` override, flip-back
+  restores, retained element scroll survives, session stays emittable (238/238).
+  HOST half is gated on a THEME-MODEL DECISION, not code: meerkat's themes are a registry of N
+  palettes (plus user themes), and a theme switch also re-themes the orrery palette, document
+  palette, live actors, and host texture caches. The media path needs a designated light/dark
+  COUNTERPART pairing (bake exactly two palettes into the one fixed sheet; scheme flip = cheap
+  media re-evaluation; picking a different theme family = today's full rebuild). Whether themes
+  declare a counterpart (and whether the flip follows the OS scheme) is a product call — Mark's.
