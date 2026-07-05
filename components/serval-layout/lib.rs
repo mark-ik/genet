@@ -624,4 +624,77 @@ mod tests {
             "selection should paint both paragraph spans"
         );
     }
+
+    /// Overlay-roots P2 (find-in-page via the highlight slot): a highlight
+    /// registered on the content lane's retained `ContentLayout` paints into
+    /// `emit_band` — band-shifted, with zero DOM and no re-search — and clearing
+    /// it returns the band to its unhighlighted command shape.
+    #[test]
+    fn content_layout_emit_band_paints_registered_find_highlights() {
+        use highlights::HighlightStyle;
+        use paint_list_api::{ColorF, PaintCmd, PaintList};
+
+        let doc = StaticDocument::parse(
+            "<body style='margin:0'><p style='margin:0'>find the needle here and \
+             the needle there</p></body>",
+        );
+        let mut layout = lay_out_content(&doc, &[], &NoImageLoader, 600, 400);
+        let scroll = ScrollOffsets::default();
+
+        let (plain, _, _) = layout.emit_band(&doc, 0, 400, &scroll);
+        let plain_rects = plain
+            .commands()
+            .iter()
+            .filter(|c| matches!(c, PaintCmd::DrawRect(_)))
+            .count();
+
+        // Register both "needle" occurrences (the shape the actor's `Find` arm
+        // builds from `find_ranges`), then emit: two more fills appear, no search.
+        let color = ColorF { r: 1.0, g: 0.82, b: 0.2, a: 0.38 };
+        let ranges = layout.find_ranges(&doc, "needle");
+        assert_eq!(ranges.len(), 2, "two occurrences of the needle");
+        layout.set_highlight("find", ranges, HighlightStyle { color });
+
+        let (lit, _, _) = layout.emit_band(&doc, 0, 400, &scroll);
+        let lit_rects: Vec<_> = lit
+            .commands()
+            .iter()
+            .filter_map(|c| match c {
+                PaintCmd::DrawRect(r) if r.color == color => Some(r.placement.bounds),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lit_rects.len(), 2, "both matches paint a fill in-band");
+
+        // Band-shift: emitting a lower band moves the same highlight's fill up by
+        // the band delta (the fills track the content, not the viewport origin).
+        let top_y = lit_rects[0].min.y;
+        let (lower, _, _) = layout.emit_band(&doc, 40, 400, &scroll);
+        let lower_y = lower
+            .commands()
+            .iter()
+            .find_map(|c| match c {
+                PaintCmd::DrawRect(r) if r.color == color => Some(r.placement.bounds.min.y),
+                _ => None,
+            })
+            .expect("highlight present in the lower band");
+        assert!(
+            (lower_y - (top_y - 40.0)).abs() < 0.5,
+            "band-shift moves the fill up by the band delta: {lower_y} vs {}",
+            top_y - 40.0
+        );
+
+        // Clearing restores the plain band exactly.
+        layout.clear_highlight("find");
+        let (cleared, _, _) = layout.emit_band(&doc, 0, 400, &scroll);
+        assert_eq!(
+            cleared
+                .commands()
+                .iter()
+                .filter(|c| matches!(c, PaintCmd::DrawRect(_)))
+                .count(),
+            plain_rects,
+            "clear_highlight returns the band to its unhighlighted shape"
+        );
+    }
 }
