@@ -198,7 +198,7 @@ const DEFAULT_TILE_CSS: &str = "\
     .tile-split { width: 100%; height: 100%; } \
     .tile-branch { display: flex; } \
     .tile-stack { width: 100%; height: 100%; } \
-    .tile-tabbar { display: flex; align-items: stretch; height: 44px; padding: 0 2px; background: #33333a; } \
+    .tile-tabbar { display: flex; align-items: stretch; height: 44px; padding: 4px 2px 0 2px; background: #33333a; } \
     .tile-tab { display: flex; align-items: center; min-width: 0; padding: 8px 14px; font-size: 15px; line-height: 1.2; color: #cccccc; background: #2a2a30; margin-right: 3px; } \
     .tile-tab.active { color: #ffffff; background: #4a4a55; } \
     .tile-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } \
