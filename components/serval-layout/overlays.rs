@@ -34,10 +34,10 @@
 //!   `position-area` / `anchor()` insets and flipping slot in later without
 //!   changing this shape (a slot already carries its content's intrinsic size,
 //!   which is what flipping/overflow-avoidance needs).
-//! - Content is **fill-only** in the probe (backgrounds, borders — no text or
-//!   images), so the composed sublist needs no font/image side-table merge.
-//!   Text-bearing overlays (autofill chips) add that merge when P1's remote
-//!   runner lands real views; the seam is [`ServalPaintList::push_sublist`].
+//! - Content may carry **text and images** (P1): `push_sublist` merges the
+//!   satellite's font/image side-tables by key, so a real overlay (a link
+//!   preview, an autofill chip) composes. The satellite is produced by its own
+//!   isolated layout, so its glyphs and decoded images are self-contained.
 //! - Popover dismissal/nesting and true top-layer promotion semantics are the
 //!   host's concern in the probe; here "top layer" means paint-order-last.
 

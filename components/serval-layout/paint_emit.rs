@@ -154,19 +154,16 @@ impl ServalPaintList {
     /// Compose another paint list (a satellite subtree) at `origin` in this
     /// list's coordinate space: wrap `sub`'s commands in a single
     /// `PushTransform(origin)` / `PopTransform` so its local coordinates land at
-    /// `origin`. The overlay-roots "overlay slot" primitive — pushed *after* the
-    /// emit walk (identity transform), so the satellite paints in top-layer
-    /// order over every page stacking context.
+    /// `origin`, and merge its font/image side-tables so text and images in the
+    /// satellite resolve. The overlay-roots "overlay slot" primitive — pushed
+    /// *after* the emit walk (identity transform), so the satellite paints in
+    /// top-layer order over every page stacking context.
     ///
-    /// Fill-only in the probe: `sub` must carry no `DrawText` / `DrawImage`
-    /// (no font/image side-table indices to remap). Text-bearing overlays add
-    /// that index merge here when real views land.
+    /// The merge is index-free: `DrawText` / `DrawImage` reference resources by
+    /// **key** (`FontInstanceKey` / `ImageKey`), not by a Vec index, so the
+    /// satellite's commands stay valid verbatim; only unseen resources are
+    /// appended (dedup by key, since the same face may already be in this list).
     pub fn push_sublist(&mut self, origin: LayoutPoint, sub: &ServalPaintList) {
-        debug_assert!(
-            sub.fonts.is_empty() && sub.images.is_empty(),
-            "push_sublist is fill-only in the probe: a text/image satellite needs \
-             a font/image side-table merge (see overlays.rs)",
-        );
         self.commands.push(PaintCmd::PushTransform(TransformSpec {
             origin,
             transform: LayoutTransform::identity(),
@@ -174,6 +171,16 @@ impl ServalPaintList {
         }));
         self.commands.extend(sub.commands.iter().cloned());
         self.commands.push(PaintCmd::PopTransform);
+        for font in &sub.fonts {
+            if !self.fonts.iter().any(|f| f.key == font.key) {
+                self.fonts.push(font.clone());
+            }
+        }
+        for image in &sub.images {
+            if !self.images.iter().any(|i| i.key == image.key) {
+                self.images.push(image.clone());
+            }
+        }
     }
 }
 

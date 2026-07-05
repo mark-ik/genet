@@ -960,4 +960,67 @@ mod tests {
             "the page's `.card{{color:red}}` did not reach the isolated satellite"
         );
     }
+
+    /// Overlay-slot P1 (text-capable compose): a satellite carrying *text* (the
+    /// shape a real overlay — link preview, autofill chip, counter chip — takes)
+    /// composes into a page. Its `DrawText` commands and their font resource
+    /// survive the merge; the page's own text is untouched and both faces are
+    /// present in the merged side-table.
+    #[test]
+    fn text_satellite_composes_with_merged_font_table() {
+        use paint_list_api::{PaintCmd, PaintList};
+
+        let page = StaticDocument::parse(
+            "<body style='margin:0'><p style='margin:0'>page words</p></body>",
+        );
+        let mut layout = lay_out_content(&page, &[], &NoImageLoader, 600, 400);
+        let p = anchor_p(&page);
+        let scroll = ScrollOffsets::default();
+
+        let (plain, _, _) = layout.emit_band(&page, 0, 400, &scroll);
+        let page_text_cmds = plain
+            .commands()
+            .iter()
+            .filter(|c| matches!(c, PaintCmd::DrawText(_)))
+            .count();
+        assert!(page_text_cmds >= 1, "the page paints its own text");
+
+        let sat_doc = StaticDocument::parse("<div class='chip'>count: 7</div>");
+        let sat = lay_out_content(
+            &sat_doc,
+            &[".chip { display: block; width: 120px; height: 24px;                background-color: rgb(40, 40, 48); color: rgb(240, 240, 250) }"],
+            &NoImageLoader,
+            120,
+            24,
+        );
+        let (sat_list, _, _) = sat.emit_band(&sat_doc, 0, 24, &ScrollOffsets::default());
+        let sat_text_cmds = sat_list
+            .commands()
+            .iter()
+            .filter(|c| matches!(c, PaintCmd::DrawText(_)))
+            .count();
+        assert!(sat_text_cmds >= 1, "the satellite paints its own text");
+
+        layout.set_overlay("chip", p, sat_list);
+        let (lit, _, _) = layout.emit_band(&page, 0, 400, &scroll);
+
+        let composed_text = lit
+            .commands()
+            .iter()
+            .filter(|c| matches!(c, PaintCmd::DrawText(_)))
+            .count();
+        assert_eq!(
+            composed_text,
+            page_text_cmds + sat_text_cmds,
+            "the composed list carries both the page's and the satellite's text"
+        );
+        for cmd in lit.commands() {
+            if let PaintCmd::DrawText(run) = cmd {
+                assert!(
+                    lit.fonts().iter().any(|f| f.key == run.font_instance),
+                    "every composed glyph run's font resolves in the merged table"
+                );
+            }
+        }
+    }
 }
