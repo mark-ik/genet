@@ -166,7 +166,9 @@ pub(crate) fn bucket_z(cv: &ComputedValues) -> i32 {
 }
 
 /// Whether the box's `position` is anything other than `static`.
-fn is_positioned(cv: &ComputedValues) -> bool {
+/// (`pub(crate)`: the hit-test walk mirrors the positioned-on-top
+/// plane split with the same predicate.)
+pub(crate) fn is_positioned(cv: &ComputedValues) -> bool {
     use style::values::computed::PositionProperty;
     !matches!(cv.get_box().position, PositionProperty::Static)
 }

@@ -480,7 +480,21 @@ fn walk_for_hit<D>(
         None => local,
     };
 
-    for child in dom.dom_children(id) {
+    // Positioned children (`position != static`) paint in a higher plane
+    // than in-flow content (paint_stacking Tier 2 lifts them into layers on
+    // top), so the hit walk mirrors the split: in-flow children first, then
+    // positioned children — later writes to `out` win, so the top plane
+    // resolves the hit. This is the same tier of approximation the fixed-
+    // position note above records: within a plane DOM-later still wins, and
+    // negative-z layers (painted *behind* content) are not modeled. Found
+    // live by woodshed-serval S2: an open `select` overlay (absolute, early
+    // in the document) lost clicks to the in-flow sidebar behind it.
+    let (in_flow, positioned): (Vec<_>, Vec<_>) = dom.dom_children(id).partition(|&c| {
+        !primary_cv(styles, c)
+            .as_deref()
+            .is_some_and(crate::paint_stacking::is_positioned)
+    });
+    for child in in_flow.into_iter().chain(positioned) {
         walk_for_hit(
             dom,
             styles,
@@ -773,6 +787,48 @@ mod tests {
             hit.source_node.0, expected_opaque,
             "expected hit on <p> (opaque_id {expected_opaque}), got opaque_id {}",
             hit.source_node.0
+        );
+    }
+
+    /// A positioned overlay that is EARLIER in the document must win the hit
+    /// over in-flow content behind it that is later in the document — paint
+    /// lifts positioned boxes into a higher plane, and the hit walk mirrors
+    /// it. Regression: woodshed-serval S2's open `select` list (absolute, in
+    /// the header) lost clicks to the sidebar behind it.
+    #[test]
+    fn hit_test_prefers_positioned_overlay_over_later_in_flow_content() {
+        let document =
+            StaticDocument::parse("<html><body><aside>o</aside><p>u</p></body></html>");
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        crate::cascade::run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[
+                "body { margin: 0; padding: 0; } \
+                 aside { position: absolute; top: 0; left: 0; \
+                         width: 200px; height: 200px; } \
+                 p { display: block; width: 200px; height: 200px; \
+                     margin: 0; padding: 0; }",
+            ],
+            None,
+        );
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let view = ServalLaneView::new(&document, &styles, &fragments);
+
+        // (50, 50) is inside both the absolute <aside> overlay and the
+        // in-flow <p> behind it.
+        let hit = view.hit_test(Point::new(50.0, 50.0)).expect("hit something");
+        let aside = find_element(NodeRef::document(&document), local_name!("aside"))
+            .expect("<aside> exists");
+        let expected = document.opaque_id(aside.id());
+        assert_eq!(
+            hit.source_node.0, expected,
+            "the positioned overlay wins the hit over later in-flow content",
         );
     }
 
