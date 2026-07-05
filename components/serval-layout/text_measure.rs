@@ -401,6 +401,40 @@ impl TextMeasureCtx {
         self.float_bands.clear();
     }
 
+    /// Drop every cache entry keyed by one of `keys` — the arena ids of a box
+    /// subtree being replaced by a splice graft ([`BoxTree::graft_subtree`]
+    /// (crate::box_tree::BoxTree)), so the replaced boxes' shaped text does not
+    /// linger under keys a future graft could reuse.
+    pub(crate) fn purge_keys(&mut self, keys: &rustc_hash::FxHashSet<taffy::NodeId>) {
+        self.layouts.retain(|k, _| !keys.contains(k));
+        self.marker_layouts.retain(|k, _| !keys.contains(k));
+        self.ellipsis_layouts.retain(|k, _| !keys.contains(k));
+        self.inline_block_layouts.retain(|(k, _), _| !keys.contains(k));
+        self.float_bands.retain(|k, _| !keys.contains(k));
+    }
+
+    /// Absorb a scoped layout pass's shaped-text caches, re-keyed by `offset` —
+    /// the arena-index shift its box nodes received when grafted into the
+    /// session tree. The scoped pass shapes into its own context (its arena
+    /// indices would collide with the session's), so the session context adopts
+    /// the entries under the grafted keys.
+    pub(crate) fn absorb_remapped(&mut self, from: TextMeasureCtx, offset: usize) {
+        let shift = |k: taffy::NodeId| taffy::NodeId::from(u64::from(k) + offset as u64);
+        self.layouts
+            .extend(from.layouts.into_iter().map(|(k, v)| (shift(k), v)));
+        self.marker_layouts
+            .extend(from.marker_layouts.into_iter().map(|(k, v)| (shift(k), v)));
+        self.ellipsis_layouts
+            .extend(from.ellipsis_layouts.into_iter().map(|(k, v)| (shift(k), v)));
+        self.inline_block_layouts.extend(
+            from.inline_block_layouts
+                .into_iter()
+                .map(|((k, j), v)| ((shift(k), j), v)),
+        );
+        self.float_bands
+            .extend(from.float_bands.into_iter().map(|(k, v)| (shift(k), v)));
+    }
+
     /// Shape a list item's marker (a single run) into a one-line `Layout` and
     /// cache it under `taffy_id`, so paint can extract its glyphs and hang it to
     /// the left of the item's content box. No wrap (markers are one line).

@@ -60,7 +60,9 @@ pub enum Applied {
     Restyled,
     /// Structural batch, laid out **incrementally** — each affected
     /// subtree re-laid-out and spliced into the prior fragments at its
-    /// real position (outer size unchanged).
+    /// real position (outer size unchanged), with the scoped box tree +
+    /// shaped text grafted into the paint side-table so the session stays
+    /// emittable ([`BoxTree::graft_subtree`]).
     Spliced,
     /// Full cascade + layout — the conservative fallback (a spliced
     /// subtree's outer size changed, so ancestors would reflow, or a
@@ -230,6 +232,14 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     /// The current per-node fragment plane.
     pub fn fragments(&self) -> &FragmentPlane<Id> {
         &self.fragments
+    }
+
+    /// Whether the paint side-table (box tree + shaped text) matches the
+    /// fragments, i.e. the emit / hit-test / caret paths are valid. True after
+    /// every `apply` path since the splice graft landed; a host can assert on
+    /// it as the belt-and-braces check before trusting a retained session.
+    pub fn paint_ready(&self) -> bool {
+        self.paint_side_valid
     }
 
     /// Every `<a href>`'s hit rect(s) + href, in full-document px (unscrolled) — see
@@ -922,10 +932,10 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     /// refreshed at each full layout), so `<img>` content like the chrome favicons
     /// appears on the cheap path; CSS `background-image` is not planed here yet.
     ///
-    /// Requires the last [`apply`](Self::apply) to have been non-structural (a
-    /// structural splice updates fragments but not the box-tree side-table); the
-    /// pre-materialized-pool host that drives this only ever sends attribute-only
-    /// (transform) batches, so it never trips the assert.
+    /// Valid after every [`apply`](Self::apply) path: attribute-only batches
+    /// keep the box tree, and a structural splice grafts its scoped box tree +
+    /// shaped text into the side-table (`BoxTree::graft_subtree`), so the
+    /// session never leaves the emittable path.
     pub fn emit_paint_list<D>(
         &self,
         dom: &D,
@@ -1176,6 +1186,36 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         // Plan the affected subtree roots (shared by the partial cascade
         // and the layout splice).
         let invalidations: Vec<_> = mutations.iter().map(classify).collect();
+        // The splice graft edits the retained box tree in place; grafting onto
+        // an already-stale side-table would compound the damage, so heal with
+        // a full relayout instead. Unreachable for hosts honouring the
+        // emittable-path contract.
+        if !self.paint_side_valid {
+            let roots = coalesce(&invalidations, |id| dom.parent(id));
+            let outcome = restyle_structural(
+                dom,
+                &mut self.styles,
+                &self.stylist,
+                &roots.iter().map(|inv| inv.node()).collect::<Vec<_>>(),
+            );
+            self.last_damage = outcome.damage;
+            return self.full_relayout(
+                dom,
+                roots.len(),
+                outcome.restyled_elements,
+                outcome.damage,
+            );
+        }
+        // Lift non-element invalidation roots (a `CharacterDataChanged` roots at
+        // the TEXT node, which owns no fragment or box) to the nearest element
+        // ancestor: the text lives inside that element's inline context, so it
+        // is the real relayout scope. Without the lift, every text edit missed
+        // `rect_of(root)` below and fell back to a full relayout — the loaded
+        // shell's "one text mutation" frame.
+        let invalidations: Vec<_> = invalidations
+            .into_iter()
+            .map(|inv| inv.lifted_to(element_root(dom, inv.node())))
+            .collect();
         let roots = coalesce(&invalidations, |id| dom.parent(id));
         let root_ids: Vec<Id> = roots.iter().map(|inv| inv.node()).collect();
         let outcome = restyle_structural(dom, &mut self.styles, &self.stylist, &root_ids);
@@ -1190,87 +1230,32 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         let mut result = self.fragments.clone();
         let mut boxes_rebuilt = 0usize;
         for inv in &roots {
-            let root = inv.node();
-            let Some(prior_root) = self.fragments.rect_of(root).copied() else {
-                return self.full_relayout(
-                    dom,
-                    roots.len(),
-                    outcome.restyled_elements,
-                    outcome.damage,
-                );
-            };
-            // Lay out just this subtree (re-rooted) over the persistent styles.
-            let (scoped, scoped_boxes) = lay_out_with_box_count(
-                &SubtreeView::new(dom, root),
-                &self.styles,
-                self.width,
-                self.height,
-            );
-            let Some(scoped_root) = scoped.rect_of(root).copied() else {
-                return self.full_relayout(
-                    dom,
-                    roots.len(),
-                    outcome.restyled_elements,
-                    outcome.damage,
-                );
-            };
-            // Margin-collapse parity at the splice boundary. A `SubtreeView`-rooted
-            // scoped layout makes `root` the scoped ICB — a block formatting context
-            // — so its first/last in-flow child margins stop collapsing INTO it. In
-            // the full document a non-BFC `root` (e.g. `<body>`, a plain `<div>`) has
-            // those margins collapse through it, shifting its children. Splicing such
-            // a root would mis-place every child by the lost collapse, so fall back to
-            // a correct full relayout. (CSS 2.2 §8.3.1; for a shallow root like
-            // `<body>` the full relayout is barely more than the subtree layout.)
-            if splice_loses_margin_collapse(dom, &self.styles, &scoped, root) {
-                return self.full_relayout(
-                    dom,
-                    roots.len(),
-                    outcome.restyled_elements,
-                    outcome.damage,
-                );
+            // One attempt per root; a root whose splice can't be proven safe
+            // (outer size moved, a margin collapse crosses the seam, an
+            // anonymous wrapper at the boundary) falls the batch back to a
+            // full relayout. Ancestor-escalation retries were tried and
+            // measured a net LOSS (2026-07-04 headed receipts: a ladder of
+            // scoped layouts up a shrink-to-fit chain cost 90ms where the
+            // direct full relayout cost 20ms) — a shrink-to-fit root's size
+            // legitimately tracks its content, and its ancestors usually do
+            // too, so paying one scoped layout per hop rarely converges early.
+            match self.try_splice_at(dom, inv.node(), &mut result) {
+                Ok(boxes) => boxes_rebuilt += boxes,
+                Err(()) => {
+                    return self.full_relayout(
+                        dom,
+                        roots.len(),
+                        outcome.restyled_elements,
+                        outcome.damage,
+                    );
+                },
             }
-            // Outer size change → ancestors would reflow → full fallback.
-            if (scoped_root.size.width - prior_root.size.width).abs() >= 0.5
-                || (scoped_root.size.height - prior_root.size.height).abs() >= 0.5
-            {
-                return self.full_relayout(
-                    dom,
-                    roots.len(),
-                    outcome.restyled_elements,
-                    outcome.damage,
-                );
-            }
-            // Splice the scoped subtree into the prior fragments. Fragment
-            // locations are *parent-relative* (Taffy's `final_layout.location`;
-            // `caret::absolute_origin` walks to accumulate), so a descendant's
-            // scoped location — relative to its own parent inside the subtree — is
-            // already its real location: the size-preserving precondition + the
-            // margin-collapse guard above make the subtree's internal layout
-            // context-independent, so the scoped pass reproduces it exactly. Keep
-            // descendants as-is; only the root's own parent-relative location lives
-            // outside the subtree (the scoped pass put it at the scoped origin), so
-            // pin it to its prior value. (Translating descendants by the root delta
-            // would force them into absolute space, diverging from the full path
-            // whenever an ancestor carries an offset, e.g. the UA `body` margin.)
-            let mut subtree = Vec::new();
-            collect_subtree(dom, root, &mut subtree);
-            for node in subtree {
-                if let Some(layout) = scoped.rect_of(node) {
-                    let mut placed = *layout;
-                    if node == root {
-                        placed.location = prior_root.location;
-                    }
-                    result.insert(node, placed);
-                }
-            }
-            boxes_rebuilt += scoped_boxes;
         }
         self.fragments = result;
-        // The splice updates fragments but not the box-tree side-table, so a
-        // following emit_paint_list would mismatch — mark it stale (a relayout
-        // re-validates). Attribute-only hosts (the pool) never take this path.
-        self.paint_side_valid = false;
+        // The graft above kept the box-tree side-table + text caches in step
+        // with the spliced fragments, so the session stays on the emittable
+        // path — the point of the repair (a host no longer rebuilds its whole
+        // session because one text node changed).
         self.recompute_viewport(dom);
         AppliedBatch {
             applied: Applied::Spliced,
@@ -1278,8 +1263,120 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             restyled_elements: outcome.restyled_elements,
             boxes_rebuilt,
             damage: outcome.damage,
-            box_tree_valid: false,
+            box_tree_valid: true,
         }
+    }
+
+    /// One splice attempt at `root`: scoped layout at the root's prior size,
+    /// the safety guards, the fragment splice into `result`, and the
+    /// paint-side graft. `Err(())` leaves the session's own state untouched
+    /// (only `result` may carry fragment writes that a batch-level fallback
+    /// discards wholesale), so the caller can escalate to an ancestor or fall
+    /// back to a full relayout.
+    fn try_splice_at<D>(
+        &mut self,
+        dom: &D,
+        root: Id,
+        result: &mut FragmentPlane<Id>,
+    ) -> Result<usize, ()>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let Some(prior_root) = self.fragments.rect_of(root).copied() else {
+            tracing::debug!(target: "serval_layout::splice", reason = "no-prior-fragment", "splice fallback");
+            return Err(());
+        };
+        // Lay out just this subtree (re-rooted) over the persistent styles,
+        // keeping the scoped box tree + shaped text for the paint-side graft
+        // below (they were built anyway; discarding them was what forced
+        // hosts into a full session rebuild per structural batch). The
+        // scoped available space is the root's prior border-box size (the
+        // scoped ICB resolves an auto-width root to exactly the available
+        // width, margins applied as offsets — matching how the full tree
+        // sized it), not the whole viewport, which made every
+        // non-full-width subtree "change" outer size and fall back. A root
+        // whose size genuinely responds to context differently (explicit
+        // percentage width, content growth past the prior height) still
+        // lands in the size guard below and falls back.
+        let (scoped, scoped_built, scoped_ctx) = scoped_layout(
+            &SubtreeView::new(dom, root),
+            &self.styles,
+            prior_root.size.width,
+            prior_root.size.height,
+        );
+        let scoped_boxes = scoped_built.node_count();
+        let Some(scoped_root) = scoped.rect_of(root).copied() else {
+            tracing::debug!(target: "serval_layout::splice", reason = "no-scoped-fragment", "splice fallback");
+            return Err(());
+        };
+        // Margin-collapse parity at the splice boundary. A `SubtreeView`-rooted
+        // scoped layout makes `root` the scoped ICB — a block formatting context
+        // — so its first/last in-flow child margins stop collapsing INTO it. In
+        // the full document a non-BFC `root` (e.g. `<body>`, a plain `<div>`) has
+        // those margins collapse through it, shifting its children. Splicing such
+        // a root would mis-place every child by the lost collapse. (CSS 2.2
+        // §8.3.1.)
+        if splice_loses_margin_collapse(dom, &self.styles, &scoped, root) {
+            tracing::debug!(target: "serval_layout::splice", reason = "margin-collapse", "splice fallback");
+            return Err(());
+        }
+        // Outer size change → ancestors would reflow → escalate / fall back.
+        if (scoped_root.size.width - prior_root.size.width).abs() >= 0.5
+            || (scoped_root.size.height - prior_root.size.height).abs() >= 0.5
+        {
+            tracing::debug!(
+                target: "serval_layout::splice",
+                reason = "outer-size",
+                dw = scoped_root.size.width - prior_root.size.width,
+                dh = scoped_root.size.height - prior_root.size.height,
+                "splice fallback"
+            );
+            return Err(());
+        }
+        // Paint-side graft: splice the scoped box tree + shaped text into
+        // the retained side-table, so the session stays emittable (and
+        // hit-testable) through the splice. A boundary the graft can't
+        // prove safe (anonymous wrapper at the seam, root not directly
+        // boxed) escalates / falls back. Runs BEFORE the fragment writes so
+        // an `Err` leaves `result` untouched too.
+        if !self.built.graft_subtree(
+            dom.parent(root),
+            root,
+            scoped_built,
+            scoped_ctx,
+            &mut self.text_ctx,
+        ) {
+            tracing::debug!(target: "serval_layout::splice", reason = "graft-bail", "splice fallback");
+            return Err(());
+        }
+        // Splice the scoped subtree into the prior fragments. Fragment
+        // locations are *parent-relative* (Taffy's `final_layout.location`;
+        // `caret::absolute_origin` walks to accumulate), so a descendant's
+        // scoped location — relative to its own parent inside the subtree — is
+        // already its real location: the size-preserving precondition + the
+        // margin-collapse guard above make the subtree's internal layout
+        // context-independent, so the scoped pass reproduces it exactly. Keep
+        // descendants as-is; only the root's own parent-relative location lives
+        // outside the subtree (the scoped pass put it at the scoped origin), so
+        // pin it to its prior value. (Translating descendants by the root delta
+        // would force them into absolute space, diverging from the full path
+        // whenever an ancestor carries an offset, e.g. the UA `body` margin.)
+        let mut subtree = Vec::new();
+        collect_subtree(dom, root, &mut subtree);
+        for node in subtree {
+            if let Some(layout) = scoped.rect_of(node) {
+                let mut placed = *layout;
+                if node == root {
+                    placed.location = prior_root.location;
+                }
+                result.insert(node, placed);
+            }
+        }
+        // A spliced-in `<img>` needs its decode in the session plane (the
+        // plane otherwise refreshes only at full layout).
+        self.images
+            .merge_from(ImagePlane::decode_from_dom(&SubtreeView::new(dom, root)));
+        Ok(scoped_boxes)
     }
 
     /// Full layout over the current (already-cascaded) styles. The
@@ -1318,6 +1415,26 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
 }
 
 /// Pre-order subtree node ids rooted at `root`.
+/// The nearest self-or-ancestor ELEMENT of `node` — the splice root for an
+/// invalidation raised on a text node (which owns no fragment or box). Returns
+/// `node` unchanged when it is dead (a batch can mutate then remove a node) or
+/// has no element ancestor; the splice guards then take the full-relayout path.
+fn element_root<D: LayoutDom>(dom: &D, node: D::NodeId) -> D::NodeId {
+    let mut cur = node;
+    loop {
+        if !dom.is_live(cur) {
+            return node;
+        }
+        if matches!(dom.kind(cur), layout_dom_api::NodeKind::Element) {
+            return cur;
+        }
+        match dom.parent(cur) {
+            Some(p) => cur = p,
+            None => return node,
+        }
+    }
+}
+
 fn collect_subtree<D: LayoutDom>(dom: &D, root: D::NodeId, out: &mut Vec<D::NodeId>) {
     out.push(root);
     for child in dom.dom_children(root) {
@@ -1457,26 +1574,27 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash + Send + Sync,
 {
-    lay_out_with_box_count(dom, styles, width, height).0
+    scoped_layout(dom, styles, width, height).0
 }
 
-fn lay_out_with_box_count<D>(
+fn scoped_layout<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
     width: f32,
     height: f32,
-) -> (FragmentPlane<D::NodeId>, usize)
+) -> (FragmentPlane<D::NodeId>, BoxTree<D::NodeId>, TextMeasureCtx)
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash + Send + Sync,
 {
-    // Scoped-splice fallback path (fragments + cheap counts): a throwaway
-    // context is fine here; the session's persistent one rides the
-    // `full_layout` relayout paths.
+    // The scoped tree + shaped text feed the paint-side graft
+    // (`BoxTree::graft_subtree`), which is what keeps the session emittable
+    // through a splice. The context is per-splice (its own font discovery);
+    // the session's persistent one rides the `full_layout` relayout paths and
+    // absorbs these entries re-keyed.
     let mut text_ctx = TextMeasureCtx::new();
     let (fragments, built) = full_layout(dom, styles, width, height, &mut text_ctx);
-    let box_count = built.node_count();
-    (fragments, box_count)
+    (fragments, built, text_ctx)
 }
 
 /// Full layout into the session's retained `text_ctx` (reset per pass, font
@@ -1799,9 +1917,13 @@ mod tests {
             "structural splice must rebuild boxes"
         );
         assert_eq!(stats.fragment_count, layout.fragments().len());
-        assert_eq!(
-            stats.box_tree_nodes, None,
-            "structural splice invalidates the retained box-tree side-table"
+        assert!(
+            stats.box_tree_nodes.is_some(),
+            "the splice graft keeps the retained box-tree side-table valid"
+        );
+        assert!(
+            layout.paint_ready(),
+            "a spliced session stays on the emittable path"
         );
 
         // The new <p> matches a full cascade + layout of the mutated DOM.
@@ -1824,6 +1946,149 @@ mod tests {
             (spliced.size.height - full.size.height).abs() < 0.5,
             "spliced <p> height must match full"
         );
+    }
+
+    /// The splice graft's parity oracle: after `apply`, the retained session's
+    /// emit must match a FRESH session built over the same mutated DOM,
+    /// command-for-command. Font keys are process-stable (the global font
+    /// registry), so the streams compare exactly via their debug form.
+    fn assert_emit_matches_fresh(
+        layout: &IncrementalLayout<<ScriptedDom as LayoutDom>::NodeId>,
+        dom: &ScriptedDom,
+        sheet: &[&str],
+        what: &str,
+    ) {
+        use paint_list_api::PaintList;
+        let scroll = ScrollOffsets::default();
+        let dev = DeviceIntSize::new(W as i32, H as i32);
+        let retained = layout.emit_paint_list(dom, &scroll, dev);
+        let fresh_session = IncrementalLayout::new(dom, sheet, W, H);
+        let fresh = fresh_session.emit_paint_list(dom, &scroll, dev);
+        assert_eq!(
+            format!("{:?}", retained.commands()),
+            format!("{:?}", fresh.commands()),
+            "{what}: retained emit must match a fresh session's emit",
+        );
+    }
+
+    /// A text-only mutation (`CharacterDataChanged`) splices AND keeps the
+    /// session emittable: the grafted box tree + absorbed text cache carry the
+    /// NEW glyphs, and the whole emitted stream matches a fresh session. This
+    /// is the exact shape of the loaded-session motivating frame ("one shell
+    /// text mutation cost a full session rebuild").
+    #[test]
+    fn spliced_text_change_emits_new_glyphs_and_matches_fresh() {
+        use paint_list_api::{PaintCmd, PaintList};
+
+        const SHEET: &[&str] = &[
+            "body { height: 200px; overflow: hidden; margin: 0 } p { height: 20px; margin: 0 }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+        let text = dom.create_text("one");
+        dom.append_child(p, text);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let _ = drain(&mut dom);
+        let scroll = ScrollOffsets::default();
+        let dev = DeviceIntSize::new(W as i32, H as i32);
+        let glyph_count = |pl: &ServalPaintList| {
+            pl.commands()
+                .iter()
+                .filter_map(|c| match c {
+                    PaintCmd::DrawText(t) => Some(t.glyphs.len()),
+                    _ => None,
+                })
+                .sum::<usize>()
+        };
+        let before = layout.emit_paint_list(&dom, &scroll, dev);
+        assert!(glyph_count(&before) > 0, "initial emit carries glyphs");
+
+        dom.set_text(text, "two three");
+        let muts = drain(&mut dom);
+        assert_eq!(layout.apply(&dom, SHEET, &muts), Applied::Spliced);
+        assert!(layout.paint_ready(), "text splice keeps the session emittable");
+        let after = layout.emit_paint_list(&dom, &scroll, dev);
+        assert!(
+            glyph_count(&after) > glyph_count(&before),
+            "the emitted glyphs are the NEW text's (\"two three\" > \"one\"), not the stale cache",
+        );
+        assert_emit_matches_fresh(&layout, &dom, SHEET, "text splice");
+    }
+
+    /// An insert splice keeps emit AND hit-test valid: the grafted boxes
+    /// resolve the new element at its painted position, and the stream matches
+    /// a fresh session (palette rows / suggestion lists shape).
+    #[test]
+    fn spliced_insert_matches_fresh_and_hit_tests() {
+        const SHEET: &[&str] = &[
+            "body { height: 200px; overflow: hidden; margin: 0 } p { height: 20px; margin: 0 }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let first = dom.create_element(html("p"));
+        dom.append_child(body, first);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let _ = drain(&mut dom);
+        let second = dom.create_element(html("p"));
+        dom.append_child(body, second);
+        let muts = drain(&mut dom);
+        assert_eq!(layout.apply(&dom, SHEET, &muts), Applied::Spliced);
+        assert!(layout.paint_ready());
+        assert_emit_matches_fresh(&layout, &dom, SHEET, "insert splice");
+        // The inserted <p> sits below the first (y in 20..40); the retained
+        // session's hit-test resolves it through the grafted boxes.
+        let scroll = ScrollOffsets::default();
+        assert_eq!(
+            layout.hit_test(&dom, 5.0, 30.0, &scroll),
+            Some(second),
+            "hit-test resolves the spliced-in element",
+        );
+    }
+
+    /// A removal splice: the removed element's boxes, map entries, and shaped
+    /// text stop resolving, and emit matches a fresh session over the shrunken
+    /// DOM.
+    #[test]
+    fn spliced_removal_matches_fresh() {
+        const SHEET: &[&str] = &[
+            "body { height: 200px; overflow: hidden; margin: 0 } p { height: 20px; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let keep = dom.create_element(html("p"));
+        dom.append_child(body, keep);
+        let gone = dom.create_element(html("p"));
+        dom.append_child(body, gone);
+        let gone_text = dom.create_text("bye");
+        dom.append_child(gone, gone_text);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let _ = drain(&mut dom);
+        dom.remove(gone);
+        let muts = drain(&mut dom);
+        let applied = layout.apply(&dom, SHEET, &muts);
+        assert!(
+            matches!(applied, Applied::Spliced | Applied::FullRecompute),
+            "removal applies structurally: {applied:?}",
+        );
+        assert!(layout.paint_ready());
+        assert_emit_matches_fresh(&layout, &dom, SHEET, "removal splice");
     }
 
     /// Margin-collapse parity (fix B): a fixed-size, non-BFC subtree root

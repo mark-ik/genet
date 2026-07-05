@@ -164,6 +164,14 @@ impl<NodeId: Copy + Eq + Hash> ImagePlane<NodeId> {
         self.images.get(&id)
     }
 
+    /// Absorb `other`'s decoded images (splice repair: a grafted subtree's
+    /// fresh decodes join the session plane so a spliced-in `<img>` paints
+    /// without waiting for the next full relayout; colliding keys take the
+    /// new decode).
+    pub fn merge_from(&mut self, other: Self) {
+        self.images.extend(other.images);
+    }
+
     pub fn is_empty(&self) -> bool {
         self.images.is_empty()
     }

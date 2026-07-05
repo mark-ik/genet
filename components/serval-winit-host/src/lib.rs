@@ -144,6 +144,42 @@ impl RenderCore {
         self.rasterize_scaled(scene, w, h, clear, 1.0)
     }
 
+    /// Like [`rasterize`](Self::rasterize) but with a per-SURFACE tile cache:
+    /// `surface` names one retained surface (a shell partition, a canvas, one
+    /// content card) with any stable host-chosen id. A host that rasterizes
+    /// several surfaces through one core MUST key them — through the unkeyed
+    /// entry each render diffs its scene against whichever surface rendered
+    /// last, so every tile is dirty on every call (P4, shell paint plan
+    /// 2026-07-03: 234/234 tiles rebuilt per settled frame).
+    pub fn rasterize_for(
+        &self,
+        surface: u64,
+        scene: &Scene,
+        w: u32,
+        h: u32,
+        clear: ColorLoad,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        self.rasterize_scaled_for(surface, scene, w, h, clear, 1.0)
+    }
+
+    /// [`rasterize_scaled`](Self::rasterize_scaled) with a per-surface tile
+    /// cache — see [`rasterize_for`](Self::rasterize_for).
+    pub fn rasterize_scaled_for(
+        &self,
+        surface: u64,
+        scene: &Scene,
+        w: u32,
+        h: u32,
+        clear: ColorLoad,
+        scale: f32,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let (tex, view) = self.scene_target(w, h);
+        self.renderer
+            .render_vello_scaled_for(surface, scene, &view, clear, scale);
+        self.log_raster_spans(w, h);
+        (tex, view)
+    }
+
     /// Like [`rasterize`](Self::rasterize) but for a scene laid out in **logical**
     /// (DIP) coordinates: the texture is the physical `(w, h)` and `scale` is the
     /// device-pixel-ratio, so the logical scene is rasterized crisply at physical
@@ -157,6 +193,14 @@ impl RenderCore {
         clear: ColorLoad,
         scale: f32,
     ) -> (wgpu::Texture, wgpu::TextureView) {
+        let (tex, view) = self.scene_target(w, h);
+        self.renderer
+            .render_vello_scaled(scene, &view, clear, scale);
+        self.log_raster_spans(w, h);
+        (tex, view)
+    }
+
+    fn scene_target(&self, w: u32, h: u32) -> (wgpu::Texture, wgpu::TextureView) {
         let device = self.device();
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("serval-winit-host scene"),
@@ -179,9 +223,31 @@ impl RenderCore {
             format: Some(wgpu::TextureFormat::Rgba8Unorm),
             ..Default::default()
         });
-        self.renderer
-            .render_vello_scaled(scene, &view, clear, scale);
         (tex, view)
+    }
+
+    /// P3 raster attribution (shell paint plan 2026-07-03): surface the
+    /// rasterizer's per-phase spans + dirty-tile count per render call, so a
+    /// frame's raster cost decomposes without a debugger. Debug level; an idle
+    /// app renders no frames, so there is no idle log cost.
+    fn log_raster_spans(&self, w: u32, h: u32) {
+        if tracing::enabled!(target: "serval_winit_host::raster", tracing::Level::DEBUG) {
+            if let Some(t) = self.renderer.last_frame_timings() {
+                let us = |n: &str| t.span(n).map(|d| d.as_micros() as u64).unwrap_or(0);
+                tracing::debug!(
+                    target: "serval_winit_host::raster",
+                    w,
+                    h,
+                    total_us = t.total.as_micros() as u64,
+                    tile_invalidate_us = us("tile_invalidate"),
+                    dirty_tile_rebuild_us = us("dirty_tile_rebuild"),
+                    master_compose_us = us("master_compose"),
+                    vello_render_us = us("vello_render"),
+                    dirty_tiles = self.renderer.vello_last_dirty_count().unwrap_or(0),
+                    "raster spans"
+                );
+            }
+        }
     }
 }
 

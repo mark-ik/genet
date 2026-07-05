@@ -40,6 +40,18 @@ impl<Id: Copy> Invalidation<Id> {
         }
     }
 
+    /// The same invalidation scope re-rooted at `node`. Splice-root lifting: a
+    /// `CharacterDataChanged` roots at the TEXT node, which owns no fragment or
+    /// box, so the structural splice lifts it to the nearest element ancestor
+    /// (the inline context the text lays out in) before coalescing.
+    pub fn lifted_to(self, node: Id) -> Self {
+        match self {
+            Invalidation::RestyleSubtree(_) => Invalidation::RestyleSubtree(node),
+            Invalidation::RelayoutSubtree(_) => Invalidation::RelayoutSubtree(node),
+            Invalidation::RepaintNode(_) => Invalidation::RepaintNode(node),
+        }
+    }
+
     /// Whether recomputing this invalidation also recomputes the node's
     /// descendants (true for the subtree variants, false for a node-local repaint).
     fn covers_descendants(self) -> bool {

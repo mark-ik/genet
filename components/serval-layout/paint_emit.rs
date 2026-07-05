@@ -238,28 +238,103 @@ impl PaintList for ServalPaintList {
 struct FontCollector {
     fonts: Vec<FontResource>,
     by_blob: FxHashMap<u64, FontInstanceKey>,
-    next_idx: u32,
 }
+
+/// Process-global font registry, keyed by font-file content.
+///
+/// Two jobs (P0 receipts, shell paint emission plan 2026-07-03): the same face
+/// used to be `to_vec()`ed out of parley into EVERY emitted list — a per-frame
+/// multi-megabyte memcpy for a symbol/emoji face — and keys were minted 0,1,2…
+/// per list, so the renderer saw the "same" key carry different faces across
+/// lists and could never cache (the images side hit the identical poisoning
+/// and fixed it with globally-unique keys; this is the font twin). The registry
+/// copies each face once per process, wraps it in the `Arc` the resource type
+/// now carries, and mints its key from a global counter so key → bytes is
+/// stable for the whole process — the invariant the renderer's blob cache and
+/// any retained/spliced paint list both need.
+///
+/// Keys are CONTENT identity, not parley blob id: `FontContext::new()` runs
+/// per layout session, so the same system face surfaces under a fresh blob id
+/// after every session rebuild — a blob-id-keyed registry would pin a new copy
+/// of each face per rebuild. `by_blob_id` in front memoizes the (cheap) id →
+/// key step so the content hash is paid once per blob id, not once per emit.
+struct FontRegistry {
+    by_blob_id: FxHashMap<u64, FontInstanceKey>,
+    /// ([`font_content_id`], byte length, TTC index) → the shared resource.
+    by_content: FxHashMap<(u64, usize, u32), FontResource>,
+    by_key: FxHashMap<FontInstanceKey, FontResource>,
+}
+
+static FONT_REGISTRY: std::sync::Mutex<Option<FontRegistry>> = std::sync::Mutex::new(None);
+static NEXT_FONT_KEY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 impl FontCollector {
     /// Intern a parley `FontData`, returning the key the matching
-    /// `TextRunItem::font_instance` should carry. Adds a
-    /// [`FontResource`] (font bytes + index) on first sight of a blob.
+    /// `TextRunItem::font_instance` should carry. Adds the registry's shared
+    /// [`FontResource`] (an `Arc` bump, not a byte copy) on first sight of a
+    /// blob within this list.
     fn intern(&mut self, font: &parley::FontData) -> FontInstanceKey {
         let blob_id = font.data.id();
         if let Some(k) = self.by_blob.get(&blob_id) {
             return *k;
         }
-        let key = FontInstanceKey::new(SERVAL_FONT_NAMESPACE, self.next_idx);
-        self.next_idx += 1;
-        self.by_blob.insert(blob_id, key);
-        self.fonts.push(FontResource {
-            key,
-            data: font.data.data().to_vec(),
-            index: font.index,
+        let mut guard = FONT_REGISTRY.lock().expect("font registry poisoned");
+        let registry = guard.get_or_insert_with(|| FontRegistry {
+            by_blob_id: FxHashMap::default(),
+            by_content: FxHashMap::default(),
+            by_key: FxHashMap::default(),
         });
+        let key = match registry.by_blob_id.get(&blob_id) {
+            Some(k) => *k,
+            None => {
+                let bytes = font.data.data();
+                let content = (font_content_id(bytes), bytes.len(), font.index);
+                let resource = registry.by_content.entry(content).or_insert_with(|| {
+                    FontResource {
+                        key: FontInstanceKey::new(
+                            SERVAL_FONT_NAMESPACE,
+                            NEXT_FONT_KEY.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                        ),
+                        data: std::sync::Arc::new(bytes.to_vec()),
+                        index: font.index,
+                    }
+                });
+                let key = resource.key;
+                let resource = resource.clone();
+                registry.by_key.entry(key).or_insert(resource);
+                registry.by_blob_id.insert(blob_id, key);
+                key
+            },
+        };
+        let resource = registry.by_key[&key].clone();
+        drop(guard);
+        self.by_blob.insert(blob_id, key);
+        self.fonts.push(resource);
         key
     }
+}
+
+/// Content identity for a font file: FxHash over three 16KB windows (head /
+/// middle / tail), always paired with the exact byte length (and TTC index) in
+/// the registry key. Paid once per new parley blob id — a session rebuild
+/// re-surfaces every face under fresh blob ids, so this runs per rebuild and
+/// must stay cheap (a full-file hash of a multi-MB emoji face measured ~0.6s
+/// per rebuild frame in a debug build). Two real, different font files that
+/// agree on length AND all three windows do not occur in practice; a false
+/// merge would mis-render glyphs, never corrupt memory.
+fn font_content_id(bytes: &[u8]) -> u64 {
+    use std::hash::Hasher as _;
+    const WINDOW: usize = 16 * 1024;
+    let mut h = rustc_hash::FxHasher::default();
+    if bytes.len() <= 3 * WINDOW {
+        h.write(bytes);
+    } else {
+        let mid = bytes.len() / 2;
+        h.write(&bytes[..WINDOW]);
+        h.write(&bytes[mid - WINDOW / 2..mid + WINDOW / 2]);
+        h.write(&bytes[bytes.len() - WINDOW..]);
+    }
+    h.finish()
 }
 
 /// Collects `<img>` images into the paint list's image side-table,

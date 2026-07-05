@@ -29,7 +29,7 @@ use std::sync::OnceLock;
 
 use layout_dom_api::{LayoutDom, NodeKind};
 use parley::LayoutContext;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use servo_arc::Arc as ServoArc;
 use style::properties::ComputedValues;
 use style::properties::style_structs::Font;
@@ -284,6 +284,106 @@ impl<Id: Copy + Eq + Hash> BoxTree<Id> {
                 self.nodes[i].style = style_of(styles, id);
             }
         }
+    }
+
+    /// Splice repair: replace the box subtree rooted at DOM `root` with
+    /// `scoped`'s boxes (a `SubtreeView`-rooted layout of the same DOM subtree
+    /// over the freshly re-cascaded plane), keeping this tree — and with it the
+    /// session's `emit_paint_list` / hit-test / caret paths — valid through a
+    /// structural splice instead of forcing the host to rebuild the whole
+    /// session (P0 receipts: 34ms per structural batch, shell paint plan
+    /// 2026-07-03).
+    ///
+    /// Mechanics: this arena's Taffy ids ARE arena indices, so the scoped
+    /// nodes append at `base = nodes.len()` with every internal child index,
+    /// `node_map` entry, and shaped-text cache key shifted by `base`
+    /// ([`TextMeasureCtx::absorb_remapped`](crate::text_measure::TextMeasureCtx::absorb_remapped)).
+    /// The old subtree's nodes stay as unreachable orphans until the next full
+    /// layout (bounded: a relayout rebuilds the arena); its `node_map` /
+    /// `inline_sources` / text-cache entries are purged so nothing stale
+    /// resolves. The scoped root's `final_layout.location` is pinned to the old
+    /// root's, the same rule the fragment splice applies (its scoped location
+    /// is the scoped origin, not the real one).
+    ///
+    /// Returns `false` (leaving `self` untouched) when the boundary shape
+    /// prevents a safe graft, and the caller falls back to a full relayout:
+    /// `root` is the document root, either tree gives it no direct element box,
+    /// or its box is not a direct child of its DOM parent's box (it sits inside
+    /// an anonymous wrapper, whose shape the mutation may have changed — the
+    /// scoped pass cannot recompute a sibling-level wrapper).
+    pub(crate) fn graft_subtree(
+        &mut self,
+        dom_parent: Option<Id>,
+        root: Id,
+        mut scoped: BoxTree<Id>,
+        scoped_ctx: crate::text_measure::TextMeasureCtx,
+        into_ctx: &mut crate::text_measure::TextMeasureCtx,
+    ) -> bool {
+        let Some(old_root) = self.arena_of(root) else {
+            return false;
+        };
+        if old_root == self.root {
+            return false;
+        }
+        let Some(parent_arena) = dom_parent.and_then(|p| self.arena_of(p)) else {
+            return false;
+        };
+        let Some(slot) = self.nodes[parent_arena]
+            .children
+            .iter()
+            .position(|&c| c == old_root)
+        else {
+            return false;
+        };
+        // The scoped layout roots at the subtree element itself (a re-rooted
+        // `SubtreeView`), so its arena root must be `root`'s own box.
+        if scoped.arena_of(root) != Some(scoped.root) {
+            return false;
+        }
+
+        // The old subtree's arena indices: purge their DOM-keyed and
+        // text-cache entries so only the grafted boxes resolve.
+        let mut old_set: FxHashSet<usize> = FxHashSet::default();
+        let mut stack = vec![old_root];
+        while let Some(i) = stack.pop() {
+            if old_set.insert(i) {
+                stack.extend(self.nodes[i].children.iter().copied());
+            }
+        }
+        let old_keys: FxHashSet<NodeId> = old_set.iter().map(|&i| nid(i)).collect();
+        let old_dom: Vec<Id> = self
+            .node_map
+            .iter()
+            .filter(|(_, t)| old_set.contains(&idx(**t)))
+            .map(|(d, _)| *d)
+            .collect();
+        for d in &old_dom {
+            self.node_map.remove(d);
+            self.inline_sources.remove(d);
+        }
+        into_ctx.purge_keys(&old_keys);
+
+        // Graft: append the scoped nodes shifted by `base`, pin the root's
+        // location, and repoint the parent's child slot.
+        let base = self.nodes.len();
+        scoped.nodes[scoped.root].final_layout.location =
+            self.nodes[old_root].final_layout.location;
+        let scoped_root = scoped.root;
+        for mut node in scoped.nodes {
+            for c in &mut node.children {
+                *c += base;
+            }
+            self.nodes.push(node);
+        }
+        for (d, t) in scoped.node_map {
+            self.node_map.insert(d, nid(idx(t) + base));
+        }
+        for (d, s) in scoped.inline_sources {
+            self.inline_sources.insert(d, s);
+        }
+        self.nodes[parent_arena].children[slot] = base + scoped_root;
+        into_ctx.absorb_remapped(scoped_ctx, base);
+        true
     }
 
     /// Whether the box for DOM `id` is an anonymous box (paints no box

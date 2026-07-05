@@ -21,3 +21,5 @@ xilem-serval = { path = "../xilem-serval" }
 # Windowing + wgpu surface (workspace pins: winit 0.30 / wgpu 29).
 winit = { workspace = true }
 wgpu = { version = "29", default-features = false, features = ["std", "wgsl"] }
+# Host-neutral diagnostics facade (P3 raster spans); the app owns the subscriber.
+tracing = "0.1"
