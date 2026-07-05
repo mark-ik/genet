@@ -383,6 +383,29 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    find_text_ranges(dom, built, text_ctx, needle)
+        .into_iter()
+        .filter_map(|r| {
+            let rects = selection_rects(dom, r.node, r.start, r.end, built, text_ctx, fragments);
+            (!rects.is_empty()).then_some(rects)
+        })
+        .collect()
+}
+
+/// The range half of [`find_text_rects`]: every (case-insensitive) `needle`
+/// occurrence as a `(leaf, byte range)` — the shape the custom-highlight
+/// registry ([`crate::highlights::HighlightRange`]) registers directly, so
+/// find-in-page can paint engine-side instead of shipping per-match rects.
+pub fn find_text_ranges<D>(
+    dom: &D,
+    built: &BoxTree<D::NodeId>,
+    text_ctx: &TextMeasureCtx,
+    needle: &str,
+) -> Vec<crate::highlights::HighlightRange<D::NodeId>>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
     let needle_lc = needle.to_ascii_lowercase();
     if needle_lc.is_empty() {
         return Vec::new();
@@ -404,10 +427,11 @@ where
         while let Some(rel) = hay[from..].find(&needle_lc) {
             let start = from + rel;
             let end = start + needle_lc.len();
-            let rects = selection_rects(dom, leaf, start, end, built, text_ctx, fragments);
-            if !rects.is_empty() {
-                out.push(rects);
-            }
+            out.push(crate::highlights::HighlightRange {
+                node: leaf,
+                start,
+                end,
+            });
             from = end;
         }
     }
