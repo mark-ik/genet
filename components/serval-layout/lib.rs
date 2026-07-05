@@ -68,6 +68,7 @@ pub use cascade::{
 };
 pub use cell::ArcRefCell;
 pub use fragment::FragmentPlane;
+pub use highlights::{HighlightRange, HighlightStyle};
 pub use host_loader::{
     LocalFileImageLoader, ResourceResolver, inline_stylesheets, inline_stylesheets_from_source,
     linked_icon_href, linked_stylesheets, linked_stylesheets_with_loader,
@@ -75,7 +76,6 @@ pub use host_loader::{
 pub use image_decode::{
     BackgroundImagePlane, DecodedImage, ImageLoader, ImagePlane, NoImageLoader, decode_image_bytes,
 };
-pub use highlights::{HighlightRange, HighlightStyle};
 pub use incremental::{Applied, IncrementalLayout};
 pub use invalidate::{Invalidation, classify, coalesce};
 pub use layout::layout;
@@ -214,6 +214,13 @@ pub struct ContentLayout<Id: Copy + Eq + Hash> {
     text_ctx: TextMeasureCtx,
     width: u32,
     height: u32,
+    /// The content document's custom-highlight registry (css-highlight-api
+    /// subset; the overlay-roots "highlight slot"). Painted band-shifted by
+    /// [`emit_band`](Self::emit_band) after content emission, so registered
+    /// highlights (find-in-page) land in whichever band the host requests.
+    /// Registering touches no cascade/layout state: the next band re-emit
+    /// simply includes the fills.
+    highlights: highlights::HighlightRegistry<Id>,
 }
 
 /// Cascade + decode + lay out a static content `dom` at `(width, height)`, returning a
@@ -288,6 +295,7 @@ where
         text_ctx,
         width,
         height,
+        highlights: highlights::HighlightRegistry::new(),
     }
 }
 
@@ -318,7 +326,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> ContentLayout<Id> {
             &self.built,
             &self.text_ctx,
         );
-        let plist = emit_paint_list_scrolled(
+        let mut plist = emit_paint_list_scrolled(
             dom,
             &self.styles,
             &self.fragments,
@@ -330,7 +338,55 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> ContentLayout<Id> {
             paint_list_api::DeviceIntSize::new(self.width as i32, band_h.max(1) as i32),
             (0.0, band_y as f32),
         );
+        // Registered custom highlights (the overlay-roots highlight slot):
+        // derive each range's rects from the retained layout and band-shift
+        // them into this emit, in registry-name order (deterministic priority).
+        if !self.highlights.is_empty() {
+            for (ranges, style) in self.highlights.values() {
+                for r in ranges {
+                    for cr in caret::selection_rects(
+                        dom,
+                        r.node,
+                        r.start,
+                        r.end,
+                        &self.built,
+                        &self.text_ctx,
+                        &self.fragments,
+                    ) {
+                        plist.push_fill(
+                            cr.x,
+                            cr.y - band_y as f32,
+                            cr.width,
+                            cr.height,
+                            style.color,
+                        );
+                    }
+                }
+            }
+        }
         (plist, scroll_range, links)
+    }
+
+    /// Register (or replace) the named custom highlight: `ranges` paint with
+    /// `style` on every subsequent [`emit_band`](Self::emit_band)
+    /// (css-highlight-api subset; the overlay-roots highlight slot). Empty
+    /// `ranges` removes the name. Touches no cascade/layout state.
+    pub fn set_highlight(
+        &mut self,
+        name: &str,
+        ranges: Vec<highlights::HighlightRange<Id>>,
+        style: highlights::HighlightStyle,
+    ) {
+        if ranges.is_empty() {
+            self.highlights.remove(name);
+        } else {
+            self.highlights.insert(name.to_string(), (ranges, style));
+        }
+    }
+
+    /// Remove the named custom highlight (no-op when absent).
+    pub fn clear_highlight(&mut self, name: &str) {
+        self.highlights.remove(name);
     }
 
     /// Find-in-page off the retained layout: the highlight rects for every `needle`
@@ -350,6 +406,42 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> ContentLayout<Id> {
                     .collect()
             })
             .collect()
+    }
+
+    /// The range half of [`find`](Self::find): every `needle` occurrence as a
+    /// `(leaf, byte range)` — registered directly via
+    /// [`set_highlight`](Self::set_highlight), so find paints engine-side and
+    /// rects ship only as count/step/scroll metadata.
+    pub fn find_ranges<D>(&self, dom: &D, needle: &str) -> Vec<highlights::HighlightRange<Id>>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        caret::find_text_ranges(dom, &self.built, &self.text_ctx, needle)
+    }
+
+    /// The highlight rects for one found range (full-document px, unscrolled) —
+    /// the per-match metadata a `find_ranges` caller ships for match counting,
+    /// active-match stepping, and auto-scroll.
+    pub fn range_rects<D>(
+        &self,
+        dom: &D,
+        range: &highlights::HighlightRange<Id>,
+    ) -> Vec<[f32; 4]>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        caret::selection_rects(
+            dom,
+            range.node,
+            range.start,
+            range.end,
+            &self.built,
+            &self.text_ctx,
+            &self.fragments,
+        )
+        .into_iter()
+        .map(|r| [r.x, r.y, r.x + r.width, r.y + r.height])
+        .collect()
     }
 
     /// A point-drag text selection off the retained layout: resolve the anchor and
