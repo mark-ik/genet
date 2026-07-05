@@ -230,6 +230,33 @@ this plan already scoped out as separate meerkat-side work: find why a settled s
 re-emitting a changing card scene (`scene_version` churn), then (netrender-side, if still needed)
 bound invalidate for op-dense scenes.
 
+## Focused-card churn: identified (2026-07-05)
+
+The settled-session card re-raster source is pinned. The focused card is the Wikipedia page
+(HTML/serval scripted lane). Instrumented receipts: the host's scroll-band dedupe HOLDS (exactly
+two band re-commands per run, both initial), yet the content actor ships a fresh band scene every
+~7s cycle unprompted — `scene_version` climbs 1 per delivery forever, each costing a 90-260ms
+re-raster of the op-dense 378x1012 band. Mark's read matches: the page visibly reformats (basic
+layout, then the table of contents lands) — script/hydration reflow plus element loading. The
+problem is it never converges into silence.
+
+Two candidate fixes, in order:
+1. Actor-side identical-scene suppression at the `emit_scene` seam (`content/handlers.rs`, five
+   call sites, state on `Content`): fingerprint the outgoing band (the transfer path already
+   serializes every update — reuse that encoding for a sound fingerprint, not a weak op-count
+   hash) and skip the emit when it equals the last shipped one. No version bump, no host wake, no
+   raster. Catches reflow-that-converges. Harmless to real changes.
+2. If the page genuinely mutates forever (animated/scripted content), a policy lever: preview
+   cards should not pump page scripts at full cadence (pause or slow scripts for unfocused
+   cards). Product decision, Mark's call.
+
+Next probe if 1 does not silence it: log actor-side WHAT triggered each re-render (script timer
+vs hydration pass vs host command) in the scripted-lane pump.
+
+Also noted: the sibling card (`c9a4...`) loops a cheap no-op doc-lane re-attempt every frame
+(`version=0`, no packet, network actors disabled) — harmless cost, but the doc lane could cache
+the "no packet" outcome instead of re-deriving per frame.
+
 ## Progress
 
 - **2026-07-03**: plan written after the post-fix shell-partition runtime pass closed the biggest
