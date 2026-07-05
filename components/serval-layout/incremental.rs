@@ -166,6 +166,14 @@ pub struct IncrementalLayout<Id: Copy + Eq + Hash> {
     /// scrollers move while a host's explicit offsets (meerkat's panes) still apply.
     /// Empty until something scrolls, so existing callers are unchanged.
     element_scroll: ScrollOffsets<Id>,
+    /// The document's custom-highlight registry (css-highlight-api subset, the
+    /// overlay-roots "highlight slot"): name → (ranges, style), painted by
+    /// [`emit_paint_list`](Self::emit_paint_list) after content emission.
+    /// Ranges are static byte ranges; geometry derives at emit time through the
+    /// selection primitives, so registered highlights survive relayout. Setting
+    /// or clearing a highlight touches no style/layout state — repaint-only by
+    /// construction.
+    highlights: crate::highlights::HighlightRegistry<Id>,
     /// Aggregate `RestyleDamage` from the most recent attribute-only
     /// [`apply`](Self::apply). Lets callers/tests confirm which paint-tier bits
     /// a batch produced (e.g. a transform-only motion frame registers
@@ -225,6 +233,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             height,
             viewport,
             element_scroll: ScrollOffsets::default(),
+            highlights: crate::highlights::HighlightRegistry::new(),
             last_damage: RestyleDamage::empty(),
             last_batch_stats,
         }
@@ -861,7 +870,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     where
         D: LayoutDom<NodeId = Id>,
     {
-        let invalidations: Vec<_> = mutations.iter().map(classify).collect();
+        let invalidations: Vec<_> = mutations.iter().flat_map(classify).collect();
         coalesce(&invalidations, |id| dom.parent(id)).len()
     }
 
@@ -1006,7 +1015,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         // Paint at the session's document scroll (the viewport the host drives via
         // `set_viewport_scroll`); `(0,0)` until the host scrolls, so existing
         // consumers that never scroll the document are unchanged.
-        emit_paint_list_scrolled(
+        let mut plist = emit_paint_list_scrolled(
             dom,
             &self.styles,
             &self.fragments,
@@ -1017,7 +1026,9 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             &merged,
             viewport,
             self.viewport.scroll,
-        )
+        );
+        self.append_highlights(dom, &mut plist);
+        plist
     }
 
     /// Emit the current layout while skipping any subtree whose root id appears in
@@ -1196,6 +1207,61 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         )
     }
 
+    /// Register (or replace) the named custom highlight: `ranges` paint with
+    /// `style` on every subsequent emit (css-highlight-api subset; the
+    /// overlay-roots "highlight slot"). Ranges are static byte ranges into each
+    /// node's laid-out text; geometry re-derives at emit through the selection
+    /// primitives, so a registered highlight survives relayout without
+    /// re-registration. Touches no style/layout state: repaint-only.
+    pub fn set_highlight(
+        &mut self,
+        name: &str,
+        ranges: Vec<crate::highlights::HighlightRange<Id>>,
+        style: crate::highlights::HighlightStyle,
+    ) {
+        if ranges.is_empty() {
+            self.highlights.remove(name);
+        } else {
+            self.highlights.insert(name.to_string(), (ranges, style));
+        }
+    }
+
+    /// Remove the named custom highlight (no-op when absent).
+    pub fn clear_highlight(&mut self, name: &str) {
+        self.highlights.remove(name);
+    }
+
+    /// Append every registered highlight's fills to `plist`, in registry-name
+    /// order (deterministic priority; the spec's explicit `priority` slots in
+    /// later). Rects derive from the retained layout in document space and are
+    /// shifted into the emitted viewport by the session's document scroll, so
+    /// highlights land in the same band the content just emitted into.
+    fn append_highlights<D>(&self, dom: &D, plist: &mut ServalPaintList)
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        if self.highlights.is_empty() {
+            return;
+        }
+        let (sx, sy) = self.viewport.scroll;
+        for (ranges, style) in self.highlights.values() {
+            for r in ranges {
+                let rects = crate::caret::selection_rects(
+                    dom,
+                    r.node,
+                    r.start,
+                    r.end,
+                    &self.built,
+                    &self.text_ctx,
+                    &self.fragments,
+                );
+                for cr in &rects {
+                    plist.push_fill(cr.x - sx, cr.y - sy, cr.width, cr.height, style.color);
+                }
+            }
+        }
+    }
+
     /// The `::selection` background / foreground colors in effect at `node`
     /// (walking to the nearest ancestor that sets them), resolved from the
     /// session's retained [`StylePlane`] — `None` when no `::selection` rule
@@ -1232,8 +1298,9 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         D: LayoutDom<NodeId = Id>,
     {
         // Plan the affected subtree roots (shared by the partial cascade
-        // and the layout splice).
-        let invalidations: Vec<_> = mutations.iter().map(classify).collect();
+        // and the layout splice). A cross-parent `Moved` contributes both its
+        // source and target parents (moveBefore plan S1, conservative).
+        let invalidations: Vec<_> = mutations.iter().flat_map(classify).collect();
         // The splice graft edits the retained box tree in place; grafting onto
         // an already-stale side-table would compound the damage, so heal with
         // a full relayout instead. Unreachable for hosts honouring the
@@ -3331,4 +3398,158 @@ mod tests {
             "a pointer-events:auto descendant of a none box still hits",
         );
     }
+    /// Custom-highlight slot (overlay-roots P0): a registered highlight paints
+    /// its range's rects with zero DOM — and registering it changes no layout.
+    #[test]
+    fn registered_highlight_paints_range_with_zero_dom_and_no_reflow() {
+        use paint_list_api::{ColorF, PaintCmd, PaintList};
+
+        const SHEET: &[&str] = &["html,body,div,p{display:block;margin:0} p{width:400px}"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+        let text = dom.create_text("find the needle in this haystack");
+        dom.append_child(p, text);
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+
+        let scroll = ScrollOffsets::default();
+        let dev = DeviceIntSize::new(W as i32, H as i32);
+        let _ = drain(&mut dom);
+        let plain = layout.emit_paint_list(&dom, &scroll, dev);
+        let rects_before = plain
+            .commands()
+            .iter()
+            .filter(|c| matches!(c, PaintCmd::DrawRect(_)))
+            .count();
+        let frag_count = layout.fragments().len();
+        let p_rect = *layout.fragments().rect_of(p).expect("p rect");
+
+        // Register a highlight over "needle" (bytes 9..15 of the text node).
+        let color = ColorF { r: 1.0, g: 0.8, b: 0.2, a: 0.5 };
+        layout.set_highlight(
+            "find",
+            vec![crate::highlights::HighlightRange { node: p, start: 9, end: 15 }],
+            crate::highlights::HighlightStyle { color },
+        );
+        let lit = layout.emit_paint_list(&dom, &scroll, dev);
+        let highlight_rects: Vec<_> = lit
+            .commands()
+            .iter()
+            .filter_map(|c| match c {
+                PaintCmd::DrawRect(r) if r.color == color => Some(r),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !highlight_rects.is_empty(),
+            "the registered range paints at least one fill"
+        );
+        // Zero DOM, zero layout: registration produced no DOM mutations, and the
+        // fragment plane + the host paragraph's rect are untouched.
+        assert!(drain(&mut dom).is_empty(), "no DOM was mutated");
+        assert_eq!(layout.fragments().len(), frag_count, "no relayout happened");
+        assert_eq!(
+            *layout.fragments().rect_of(p).expect("p rect"),
+            p_rect,
+            "the highlighted paragraph did not move"
+        );
+        // The highlight sits within the paragraph's box horizontally, and is
+        // narrower than the full line (it covers one word, not the text).
+        let hb = highlight_rects[0].placement.bounds;
+        let hw = hb.max.x - hb.min.x;
+        assert!(hw > 0.0 && hw < 400.0, "one word, not the whole line: {hw}");
+        assert_eq!(
+            lit.commands()
+                .iter()
+                .filter(|c| matches!(c, PaintCmd::DrawRect(_)))
+                .count(),
+            rects_before + highlight_rects.len(),
+            "content emission is unchanged; only the highlight fills were appended"
+        );
+
+        // Clearing restores the plain emission exactly (command count parity).
+        layout.clear_highlight("find");
+        let cleared = layout.emit_paint_list(&dom, &scroll, dev);
+        assert_eq!(
+            cleared
+                .commands()
+                .iter()
+                .filter(|c| matches!(c, PaintCmd::DrawRect(_)))
+                .count(),
+            rects_before,
+            "clear_highlight returns emission to the unhighlighted shape"
+        );
+    }
+
+    /// The highlight's geometry re-derives at emit: after a relayout that moves
+    /// the highlighted text (viewport resize narrows the paragraph), the fills
+    /// follow the text with no re-registration.
+    #[test]
+    fn highlight_geometry_rederives_after_relayout() {
+        use paint_list_api::{ColorF, PaintCmd, PaintList};
+
+        const SHEET: &[&str] = &["html,body,div,p{display:block;margin:0}"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+        let text = dom.create_text("wrap wrap wrap wrap wrap wrap wrap wrap needle");
+        dom.append_child(p, text);
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let color = ColorF { r: 0.2, g: 0.6, b: 1.0, a: 0.5 };
+        // "needle" is the last 6 bytes.
+        let text_len = "wrap wrap wrap wrap wrap wrap wrap wrap needle".len();
+        layout.set_highlight(
+            "find",
+            vec![crate::highlights::HighlightRange {
+                node: p,
+                start: text_len - 6,
+                end: text_len,
+            }],
+            crate::highlights::HighlightStyle { color },
+        );
+        let scroll = ScrollOffsets::default();
+        let wide = layout.emit_paint_list(&dom, &scroll, DeviceIntSize::new(W as i32, H as i32));
+        let rect_at = |pl: &ServalPaintList| {
+            pl.commands()
+                .iter()
+                .find_map(|c| match c {
+                    PaintCmd::DrawRect(r) if r.color == color => Some(r.placement.bounds),
+                    _ => None,
+                })
+                .expect("highlight fill present")
+        };
+        let wide_rect = rect_at(&wide);
+
+        // Relayout at a narrow viewport: the long text wraps, "needle" moves down.
+        let mut narrow_layout = IncrementalLayout::new(&dom, SHEET, 120.0, H);
+        narrow_layout.set_highlight(
+            "find",
+            vec![crate::highlights::HighlightRange {
+                node: p,
+                start: text_len - 6,
+                end: text_len,
+            }],
+            crate::highlights::HighlightStyle { color },
+        );
+        let narrow =
+            narrow_layout.emit_paint_list(&dom, &scroll, DeviceIntSize::new(120, H as i32));
+        let narrow_rect = rect_at(&narrow);
+        assert!(
+            narrow_rect.min.y > wide_rect.min.y,
+            "after wrapping, the highlighted word's fill moved down: {:?} vs {:?}",
+            narrow_rect,
+            wide_rect
+        );
+    }
 }
+

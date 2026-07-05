@@ -36,6 +36,7 @@ mod computed_query;
 mod construct;
 mod font_metrics;
 mod fragment;
+mod highlights;
 mod host_loader;
 mod image_decode;
 mod incremental;
@@ -74,6 +75,7 @@ pub use host_loader::{
 pub use image_decode::{
     BackgroundImagePlane, DecodedImage, ImageLoader, ImagePlane, NoImageLoader, decode_image_bytes,
 };
+pub use highlights::{HighlightRange, HighlightStyle};
 pub use incremental::{Applied, IncrementalLayout};
 pub use invalidate::{Invalidation, classify, coalesce};
 pub use layout::layout;
