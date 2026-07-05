@@ -91,11 +91,18 @@ impl RenderCore {
             .create_surface(window)
             .map_err(|e| format!("create_surface failed: {e}"))?;
         let caps = surface.get_capabilities(&core.adapter);
+        // Prefer the NON-srgb surface format. The vello rasterizer writes
+        // display-referred (sRGB-encoded) bytes into the Rgba8Unorm layer
+        // textures and the compose pass samples them raw, so an sRGB
+        // backbuffer re-encodes and washes everything out (verified against
+        // the serval_web_smoke browser receipt, whose canvas surface is
+        // non-srgb and renders the same scene correctly; woodshed-serval on
+        // the old srgb pick showed the double-encode wash, 2026-07-05).
         let format = caps
             .formats
             .iter()
             .copied()
-            .find(wgpu::TextureFormat::is_srgb)
+            .find(|f| !f.is_srgb())
             .unwrap_or(caps.formats[0]);
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
