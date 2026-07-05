@@ -143,6 +143,14 @@ where
 /// 1.0x device-pixel ratio, the live skrifa `FontMetricsProvider`, default
 /// initial `ComputedValues`, and `Light` color-scheme preference.
 fn make_device(viewport: euclid::default::Size2D<f32>, quirks: QuirksMode) -> Device {
+    make_device_with_scheme(viewport, quirks, PrefersColorScheme::Light)
+}
+
+fn make_device_with_scheme(
+    viewport: euclid::default::Size2D<f32>,
+    quirks: QuirksMode,
+    scheme: PrefersColorScheme,
+) -> Device {
     Device::new(
         MediaType::screen(),
         quirks,
@@ -150,8 +158,37 @@ fn make_device(viewport: euclid::default::Size2D<f32>, quirks: QuirksMode) -> De
         euclid::Scale::new(1.0),
         Box::new(SkrifaFontMetricsProvider),
         ComputedValues::initial_values_with_font_override(Font::initial_values()),
-        PrefersColorScheme::Light,
+        scheme,
     )
+}
+
+/// Re-evaluate the Stylist's media queries under a new `prefers-color-scheme`
+/// (W3C adoption plan P3): swap the Device, mark the origins whose applicable
+/// rules changed dirty, and flush. The rule TREE is untouched — only rule
+/// applicability recomputes — so `StrongRuleNode`s held by a persistent
+/// `StylePlane` stay valid, which is what lets a theme flip restyle a live
+/// session instead of rebuilding it (the persistent-Stylist invariant).
+pub fn set_stylist_color_scheme(
+    stylist: &mut Stylist,
+    lock: &SharedRwLock,
+    viewport: euclid::default::Size2D<f32>,
+    quirks: QuirksMode,
+    dark: bool,
+) {
+    let scheme = if dark {
+        PrefersColorScheme::Dark
+    } else {
+        PrefersColorScheme::Light
+    };
+    let device = make_device_with_scheme(viewport, quirks, scheme);
+    let read = lock.read();
+    let guards = StylesheetGuards {
+        author: &read,
+        ua_or_user: &read,
+    };
+    let origins = stylist.set_device(device, &guards);
+    stylist.force_stylesheet_origins_dirty(origins);
+    stylist.flush(&guards);
 }
 
 /// Run Stylo's cascade over `dom`, populating `plane` with `ElementData`

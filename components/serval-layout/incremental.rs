@@ -33,6 +33,7 @@ use style::stylist::Stylist;
 use crate::box_tree::BoxTree;
 use crate::cascade::{
     build_stylist, restyle_structural, restyle_with_snapshots, run_cascade_with_stylist,
+    set_stylist_color_scheme,
 };
 use crate::fragment::FragmentPlane;
 use crate::image_decode::{BackgroundImagePlane, ImagePlane};
@@ -232,6 +233,53 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     /// The current per-node fragment plane.
     pub fn fragments(&self) -> &FragmentPlane<Id> {
         &self.fragments
+    }
+
+    /// Flip the session's `prefers-color-scheme` and restyle in place (W3C
+    /// adoption plan P3): the Device swaps, media applicability recomputes over
+    /// the PERSISTENT Stylist (the rule tree survives, so the plane's retained
+    /// rule nodes stay valid), then a full re-cascade + layout land the new
+    /// theme. This replaces the sheet-swap theme flip that forced a whole
+    /// session rebuild (fresh Stylist + cascade, ~34ms measured, plus lost
+    /// session state such as element scroll). Themes must be authored as
+    /// `@media (prefers-color-scheme: dark)` blocks in the ONE fixed sheet set.
+    pub fn set_prefers_color_scheme<D>(&mut self, dom: &D, dark: bool)
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let lock = self.styles.shared_lock().clone();
+        let quirks = crate::adapter_stylo::selectors_quirks_mode(dom.quirks_mode());
+        set_stylist_color_scheme(
+            &mut self.stylist,
+            &lock,
+            euclid::Size2D::new(self.width, self.height),
+            quirks,
+            dark,
+        );
+        // Force a full re-match: the persistent plane's elements are clean, so
+        // a plain cascade pass would skip them; hinting the root element's
+        // subtree (the structural-restyle idiom) makes every element re-match
+        // against the re-evaluated media rules.
+        let root_element = dom
+            .dom_children(dom.document())
+            .find(|&c| matches!(dom.kind(c), layout_dom_api::NodeKind::Element));
+        if let Some(root_element) = root_element {
+            let outcome =
+                restyle_structural(dom, &mut self.styles, &self.stylist, &[root_element]);
+            self.last_damage = outcome.damage;
+        }
+        let (fragments, built) = full_layout(
+            dom,
+            &self.styles,
+            self.width,
+            self.height,
+            &mut self.text_ctx,
+        );
+        self.fragments = fragments;
+        self.built = built;
+        self.paint_side_valid = true;
+        self.images = ImagePlane::decode_from_dom(dom);
+        self.recompute_viewport(dom);
     }
 
     /// Whether the paint side-table (box tree + shaped text) matches the
@@ -2103,6 +2151,58 @@ mod tests {
         );
         assert!(layout.paint_ready());
         assert_emit_matches_fresh(&layout, &dom, SHEET, "removal splice");
+    }
+
+    /// A theme flip is a media re-evaluation over the live session (W3C plan
+    /// P3), not a rebuild: with themes authored as
+    /// `@media (prefers-color-scheme: dark)` blocks in the one fixed sheet,
+    /// `set_prefers_color_scheme` recolors in place, keeps the session's
+    /// retained state (element scroll here), and leaves the session emittable.
+    #[test]
+    fn color_scheme_flip_restyles_in_place() {
+        const SHEET: &[&str] = &[
+            "body { height: 400px; overflow: hidden; margin: 0 }              div { height: 600px; overflow: scroll }              p { height: 20px; color: rgb(10, 20, 30); }              @media (prefers-color-scheme: dark) { p { color: rgb(200, 210, 220); } }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+        let text = dom.create_text("themed");
+        dom.append_child(p, text);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let _ = drain(&mut dom);
+        let light = color(&layout, p);
+        assert!(
+            (light[0] - 10.0 / 255.0).abs() < 0.01,
+            "light scheme resolves the base color: {light:?}"
+        );
+        // Retained session state that a rebuild would lose.
+        layout.set_element_scroll(ScrollOffsets::from_iter([(body, (0.0, 33.0))]));
+
+        layout.set_prefers_color_scheme(&dom, true);
+        let dark = color(&layout, p);
+        assert!(
+            (dark[0] - 200.0 / 255.0).abs() < 0.01,
+            "dark scheme resolves the @media override: {dark:?}"
+        );
+        assert!(layout.paint_ready(), "the flipped session stays emittable");
+        assert_eq!(
+            layout.element_scroll().get(&body),
+            Some(&(0.0, 33.0)),
+            "retained scroll survives the flip (a rebuild would drop it)"
+        );
+
+        layout.set_prefers_color_scheme(&dom, false);
+        let back = color(&layout, p);
+        assert!(
+            (back[0] - 10.0 / 255.0).abs() < 0.01,
+            "flipping back restores the base color: {back:?}"
+        );
     }
 
     /// A comment insert under a PADDED body splices: the scoped ICB sizes the

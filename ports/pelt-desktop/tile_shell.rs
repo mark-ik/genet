@@ -231,7 +231,11 @@ impl TileShell {
             }
         }
         if let Some(drag) = self.tab_drag.as_mut() {
-            if (self.cursor.0 - drag.start.0).abs() + (self.cursor.1 - drag.start.1).abs() > 6.0 {
+            // The drag-arm threshold is a physical-feel constant: scale it with the
+            // host's UI scale or a click on a 2x panel arms a drag at 3 logical px.
+            if (self.cursor.0 - drag.start.0).abs() + (self.cursor.1 - drag.start.1).abs()
+                > 6.0 * self.ui_scale
+            {
                 drag.moved = true;
             }
             // Repaint on every move of an armed tab drag so the ghost follows the
