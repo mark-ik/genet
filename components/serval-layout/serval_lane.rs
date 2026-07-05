@@ -198,6 +198,19 @@ where
         let (sx, sy) = self.viewport_scroll;
         let doc_point = Point::new(point.x + sx, point.y + sy);
         let mut hit: Option<FragmentHit<SourceNodeId>> = None;
+        // Positioned subtrees paint in layers ON TOP of in-flow content
+        // (paint_stacking lifts them out of document order), so the hit walk
+        // mirrors it: the in-flow walk skips positioned subtrees, deferring
+        // each with its accumulated (origin, point) mapping; the queue is
+        // then hit-tested to exhaustion, so positioned content overwrites
+        // in-flow hits, and positioned content nested inside positioned
+        // content lands later still (further on top). Approximations, same
+        // tier as the fixed-position note in `walk_for_hit`: layers keep
+        // document order (no z-index bucket sort) and negative-z layers
+        // (painted behind) are not modeled. Found live by woodshed-serval
+        // S2: an open `select` overlay in the header lost clicks to the
+        // sidebar subtree behind it.
+        let mut deferred: Vec<DeferredHitSubtree<D::NodeId>> = Vec::new();
         walk_for_hit(
             self.dom,
             self.styles,
@@ -208,7 +221,29 @@ where
             Point::new(0.0, 0.0),
             doc_point,
             &mut hit,
+            &mut deferred,
         );
+        let mut i = 0;
+        while i < deferred.len() {
+            let DeferredHitSubtree {
+                id,
+                parent_origin,
+                point,
+            } = deferred[i];
+            walk_for_hit(
+                self.dom,
+                self.styles,
+                self.fragments,
+                self.scroll_offsets,
+                self.viewport_scroll,
+                id,
+                parent_origin,
+                point,
+                &mut hit,
+                &mut deferred,
+            );
+            i += 1;
+        }
         hit
     }
 
@@ -382,6 +417,16 @@ fn affordance_label<D: LayoutDom>(dom: &D, id: D::NodeId, kind: AffordanceKind) 
 ///     is hit at its unscrolled screen position. The caller has already mapped the
 ///     incoming point by `+viewport_scroll` for the document at large.
 #[allow(clippy::too_many_arguments)]
+/// A positioned subtree captured during the in-flow hit walk, with the
+/// accumulated coordinate mapping it would have been visited under — the
+/// hit-test twin of paint's lifted layers.
+#[derive(Clone, Copy)]
+struct DeferredHitSubtree<Id> {
+    id: Id,
+    parent_origin: Point,
+    point: Point,
+}
+
 fn walk_for_hit<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
@@ -392,6 +437,7 @@ fn walk_for_hit<D>(
     parent_origin: Point,
     point: Point,
     out: &mut Option<FragmentHit<SourceNodeId>>,
+    deferred: &mut Vec<DeferredHitSubtree<D::NodeId>>,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -480,21 +526,24 @@ fn walk_for_hit<D>(
         None => local,
     };
 
-    // Positioned children (`position != static`) paint in a higher plane
-    // than in-flow content (paint_stacking Tier 2 lifts them into layers on
-    // top), so the hit walk mirrors the split: in-flow children first, then
-    // positioned children — later writes to `out` win, so the top plane
-    // resolves the hit. This is the same tier of approximation the fixed-
-    // position note above records: within a plane DOM-later still wins, and
-    // negative-z layers (painted *behind* content) are not modeled. Found
-    // live by woodshed-serval S2: an open `select` overlay (absolute, early
-    // in the document) lost clicks to the in-flow sidebar behind it.
-    let (in_flow, positioned): (Vec<_>, Vec<_>) = dom.dom_children(id).partition(|&c| {
-        !primary_cv(styles, c)
+    // Positioned children (`position != static`) paint in lifted layers ON
+    // TOP of all in-flow content (paint_stacking), across subtree
+    // boundaries — so the in-flow walk must not descend into them in
+    // document order. Defer each with its accumulated (origin, point)
+    // mapping; `hit_test` drains the queue after the in-flow walk, so the
+    // positioned plane overwrites in-flow hits.
+    for child in dom.dom_children(id) {
+        if primary_cv(styles, child)
             .as_deref()
             .is_some_and(crate::paint_stacking::is_positioned)
-    });
-    for child in in_flow.into_iter().chain(positioned) {
+        {
+            deferred.push(DeferredHitSubtree {
+                id: child,
+                parent_origin: origin,
+                point: child_point,
+            });
+            continue;
+        }
         walk_for_hit(
             dom,
             styles,
@@ -505,6 +554,7 @@ fn walk_for_hit<D>(
             origin,
             child_point,
             out,
+            deferred,
         );
     }
 }
@@ -829,6 +879,53 @@ mod tests {
         assert_eq!(
             hit.source_node.0, expected,
             "the positioned overlay wins the hit over later in-flow content",
+        );
+    }
+
+    /// The cross-subtree shape of the same bug (the woodshed-serval S2
+    /// failure exactly): the overlay is positioned INSIDE an early sibling
+    /// subtree (a header), and the in-flow content behind it lives in a
+    /// LATER sibling subtree. A per-level sibling reorder does not fix
+    /// this; the positioned subtree must be lifted over the whole in-flow
+    /// walk, the way paint lifts its layers.
+    #[test]
+    fn hit_test_prefers_positioned_overlay_across_subtrees() {
+        let document = StaticDocument::parse(
+            "<html><body><div><aside>o</aside></div><p>u</p></body></html>",
+        );
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        crate::cascade::run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[
+                "body { margin: 0; padding: 0; } \
+                 div { display: block; height: 30px; } \
+                 aside { position: absolute; top: 0; left: 0; \
+                         width: 200px; height: 200px; } \
+                 p { display: block; width: 200px; height: 200px; \
+                     margin: 0; padding: 0; }",
+            ],
+            None,
+        );
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let view = ServalLaneView::new(&document, &styles, &fragments);
+
+        // (50, 100) is inside the absolute <aside> (0,0..200,200) and inside
+        // the in-flow <p> behind it (which starts at y=30 after the header).
+        let hit = view
+            .hit_test(Point::new(50.0, 100.0))
+            .expect("hit something");
+        let aside = find_element(NodeRef::document(&document), local_name!("aside"))
+            .expect("<aside> exists");
+        let expected = document.opaque_id(aside.id());
+        assert_eq!(
+            hit.source_node.0, expected,
+            "the positioned overlay in the header wins over the later sibling subtree",
         );
     }
 
