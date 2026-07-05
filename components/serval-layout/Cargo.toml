@@ -70,6 +70,13 @@ stylo_taffy = { version = "0.3.0-alpha.5", features = ["floats"] }
 # diagnostics registry.
 tracing = "0.1"
 
+# std::time::Instant panics on wasm32-unknown-unknown ("time not implemented");
+# web-time is the drop-in Instant backed by performance.now() there and a
+# re-export of std on native. Only the diagnostics timer in lay_out_content
+# needs it (the SERVAL_LAYOUT_TIMING probes are env-gated, dead on wasm).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-time = "1"
+
 [dev-dependencies]
 base64 = { workspace = true }
 serde_json = { workspace = true }

@@ -91,7 +91,7 @@ pub use style::{StyleEntry, StylePlane};
 pub use subtree::{SubtreeView, render_subtree};
 pub use text_measure::{
     FontFamilySpec, GenericFamilyKind, InlineContent, InlineRun, TextMeasureCtx,
-    measure_inline_content,
+    measure_inline_content, register_host_font,
 };
 pub use viewport::{ScrollKey, Viewport, document_scroll_range};
 
@@ -236,7 +236,11 @@ where
     // viewport + resulting fragment count. DEBUG so it is quiet by default; the
     // consuming app raises the level. Hot per-load (and per scroll band via
     // `paint_list_band_from_layout_dom`) — may want sampling later.
-    let _layout_start = std::time::Instant::now();
+    #[cfg(not(target_arch = "wasm32"))]
+    use std::time::Instant;
+    #[cfg(target_arch = "wasm32")]
+    use web_time::Instant;
+    let _layout_start = Instant::now();
     let mut styles = StylePlane::new();
     run_cascade(
         dom,

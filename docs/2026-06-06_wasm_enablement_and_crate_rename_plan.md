@@ -233,6 +233,52 @@ crates) and can land incrementally ahead of it.
   analysis. Worktree `wasm-fonts-cut` holds it, uncommitted; the uuid gate is still
   the unconditional-`js` experiment (cfg-gate it to wasm for the landable form).
 
+## Browser-render smoke (added 2026-07-04)
+
+Driven from the Woodshed cross-platform question ("would Woodshed-on-xilem_serval
+render in a browser?"), a spike now exercises the full engine-core chain on
+`wasm32-unknown-unknown` at `examples/serval_web_smoke/` (standalone workspace,
+netrender_smoke pattern):
+
+- **Wasm-green on main, verified 2026-07-04:** `xilem-serval`,
+  `serval-scripted-dom`, `serval-layout` all `cargo check` clean for wasm32 with
+  zero errors — P1's result has landed and holds beyond serval-layout.
+- **netrender manifest half done** (netrender commit `6520d74ed`): wgpu backend
+  features are now per-target — native keeps dx12/metal/vulkan (identical
+  resolved set), wasm32 selects `webgpu`; pollster moved native-only beside the
+  blocking `boot()` wrappers. netrender + paint_list_render + netrender_text all
+  check green for wasm32. This closes the "add the wgpu webgpu feature" item
+  from the 2026-06-24 correction above.
+- **Host-font seam added** (`serval_layout::register_host_font`): host-supplied
+  TTF/OTF blobs register into every `TextMeasureCtx` under their own family
+  names and append to the `sans-serif` generic — the "wasm fonts come from the
+  host" hook. Harmless on native (fonts join system discovery).
+- The smoke builds a woodshed-flavored view tree through `ServalAppRunner`,
+  lays it out, emits a band, lowers via `translate_paint_cmd_stream`, and
+  presents through `boot_async` + a WebGPU canvas surface. It mirrors the
+  serval-workspace `[patch.crates-io]` entries (stylo/stylo_atoms git-rev,
+  taffy + sonic-rs vendored) because patches are per-workspace-root.
+
+**Receipt: PASS (2026-07-04).** The page renders in Chrome over WebGPU — pills
+nav, sidebar, rounded panels, note/root dots, Roboto text — captured via CDP
+screenshot. Two runtime walls fell on the way, both now fixed in the libraries:
+
+1. **`std::time::Instant` panics on wasm** ("time not implemented"): the
+   unconditional diagnostics timer in `lay_out_content` (serval-layout) and the
+   frame-profiling / per-frame-diagnostic timers in netrender. Fixed with
+   `web-time` (wasm-only dep; native untouched). The `SERVAL_LAYOUT_TIMING`
+   probes are env-gated and dead on wasm, left as-is.
+2. **Browser swapchains reject vello's storage-texture write**: the fine/compose
+   stages bind the render target as an `RGBA8Unorm` storage texture, but a
+   canvas swapchain view is RenderAttachment-only (and BGRA). Consumers must
+   rasterize into an intermediate `STORAGE_BINDING | TEXTURE_BINDING` texture
+   and blit (`wgpu::util::TextureBlitter`) — the meerkat shape, where scenes
+   never see the swapchain. The smoke does this; any future web shell must too.
+
+This was the first actual *execution* of serval-layout on wasm, not just a
+compile. Remaining for a real web embedding: a resize/rAF loop, input
+translation, and the smoke's `[patch]` mirror kept in sync.
+
 ## Forward direction + async granularity (added 2026-06-24, grand audit §6)
 
 **Implementation update (2026-06-24):** the Nova/wasm64 spike described below is

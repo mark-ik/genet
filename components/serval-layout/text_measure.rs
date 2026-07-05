@@ -24,6 +24,7 @@
 //! Cf. `docs/2026-05-17_serval_layout_planes_architecture.md`.
 
 use std::borrow::Cow;
+use std::sync::Mutex;
 
 use parley::{
     Alignment, AlignmentOptions, FontContext, FontFamily, FontStyle, FontWeight, GenericFamily,
@@ -333,6 +334,28 @@ impl Default for TextMeasureCtx {
     }
 }
 
+/// Host-supplied font blobs, registered into every subsequently built
+/// [`TextMeasureCtx`] and mapped onto the `sans-serif` generic family.
+///
+/// The seam for targets with no system font registry — on
+/// `wasm32-unknown-unknown` fontique's system backend is empty, so a
+/// browser/wasm host must supply at least one face this way before the
+/// first layout or all text measures to zero (wasm enablement plan,
+/// "wasm fonts come from the host"). Harmless on native: the fonts
+/// simply join system discovery.
+static HOST_FONTS: Mutex<Vec<parley::fontique::Blob<u8>>> = Mutex::new(Vec::new());
+
+/// Register a font (TTF/OTF bytes) for all future layout passes. The
+/// face keeps its self-declared family name (so `font-family: Roboto`
+/// resolves if the blob is Roboto) and is also appended to the
+/// `sans-serif` generic so unstyled / generic-family text finds it.
+pub fn register_host_font(bytes: Vec<u8>) {
+    HOST_FONTS
+        .lock()
+        .expect("HOST_FONTS poisoned")
+        .push(parley::fontique::Blob::from(bytes));
+}
+
 impl TextMeasureCtx {
     pub fn new() -> Self {
         let mut font_ctx = FontContext::new();
@@ -345,6 +368,15 @@ impl TextMeasureCtx {
         font_ctx
             .collection
             .register_fonts(parley::fontique::Blob::from(AHEM.to_vec()), None);
+        // Host-supplied faces (see `register_host_font`): registered under
+        // their own family names and appended to the sans-serif generic.
+        for blob in HOST_FONTS.lock().expect("HOST_FONTS poisoned").iter() {
+            let registered = font_ctx.collection.register_fonts(blob.clone(), None);
+            font_ctx.collection.append_generic_families(
+                parley::fontique::GenericFamily::SansSerif,
+                registered.iter().map(|(id, _)| *id),
+            );
+        }
         Self {
             font_ctx,
             layout_ctx: LayoutContext::new(),
