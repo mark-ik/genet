@@ -150,6 +150,31 @@ impl ServalPaintList {
             self.push_fill(r.x, r.y, r.width, r.height, color);
         }
     }
+
+    /// Compose another paint list (a satellite subtree) at `origin` in this
+    /// list's coordinate space: wrap `sub`'s commands in a single
+    /// `PushTransform(origin)` / `PopTransform` so its local coordinates land at
+    /// `origin`. The overlay-roots "overlay slot" primitive — pushed *after* the
+    /// emit walk (identity transform), so the satellite paints in top-layer
+    /// order over every page stacking context.
+    ///
+    /// Fill-only in the probe: `sub` must carry no `DrawText` / `DrawImage`
+    /// (no font/image side-table indices to remap). Text-bearing overlays add
+    /// that index merge here when real views land.
+    pub fn push_sublist(&mut self, origin: LayoutPoint, sub: &ServalPaintList) {
+        debug_assert!(
+            sub.fonts.is_empty() && sub.images.is_empty(),
+            "push_sublist is fill-only in the probe: a text/image satellite needs \
+             a font/image side-table merge (see overlays.rs)",
+        );
+        self.commands.push(PaintCmd::PushTransform(TransformSpec {
+            origin,
+            transform: LayoutTransform::identity(),
+            kind: TransformKind::Standard,
+        }));
+        self.commands.extend(sub.commands.iter().cloned());
+        self.commands.push(PaintCmd::PopTransform);
+    }
 }
 
 /// Scrollbar thumb colour (translucent dark grey, on the container's right edge).
@@ -289,16 +314,17 @@ impl FontCollector {
             None => {
                 let bytes = font.data.data();
                 let content = (font_content_id(bytes), bytes.len(), font.index);
-                let resource = registry.by_content.entry(content).or_insert_with(|| {
-                    FontResource {
+                let resource = registry
+                    .by_content
+                    .entry(content)
+                    .or_insert_with(|| FontResource {
                         key: FontInstanceKey::new(
                             SERVAL_FONT_NAMESPACE,
                             NEXT_FONT_KEY.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                         ),
                         data: std::sync::Arc::new(bytes.to_vec()),
                         index: font.index,
-                    }
-                });
+                    });
                 let key = resource.key;
                 let resource = resource.clone();
                 registry.by_key.entry(key).or_insert(resource);

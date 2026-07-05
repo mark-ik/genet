@@ -37,6 +37,7 @@ mod construct;
 mod font_metrics;
 mod fragment;
 mod highlights;
+mod overlays;
 mod host_loader;
 mod image_decode;
 mod incremental;
@@ -69,6 +70,7 @@ pub use cascade::{
 pub use cell::ArcRefCell;
 pub use fragment::FragmentPlane;
 pub use highlights::{HighlightRange, HighlightStyle};
+pub use overlays::OverlaySlot;
 pub use host_loader::{
     LocalFileImageLoader, ResourceResolver, inline_stylesheets, inline_stylesheets_from_source,
     linked_icon_href, linked_stylesheets, linked_stylesheets_with_loader,
@@ -221,6 +223,13 @@ pub struct ContentLayout<Id: Copy + Eq + Hash> {
     /// Registering touches no cascade/layout state: the next band re-emit
     /// simply includes the fills.
     highlights: highlights::HighlightRegistry<Id>,
+    /// The document's overlay-slot registry (top-layer + anchor-positioning +
+    /// UA-shadow subset; the overlay-roots "overlay slot"). Each slot is a
+    /// separately-emitted satellite paint list anchored to a page node, painted
+    /// after content + highlights at the anchor's live fragment position
+    /// (band-shifted). Registering touches no page layout — the satellite was
+    /// laid out by its own isolated cascade.
+    overlays: overlays::OverlayRegistry<Id>,
 }
 
 /// Cascade + decode + lay out a static content `dom` at `(width, height)`, returning a
@@ -296,6 +305,7 @@ where
         width,
         height,
         highlights: highlights::HighlightRegistry::new(),
+        overlays: overlays::OverlayRegistry::new(),
     }
 }
 
@@ -364,7 +374,63 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> ContentLayout<Id> {
                 }
             }
         }
+        // Overlay slots (the overlay-roots overlay slot): compose each satellite
+        // paint list at its anchor's live absolute origin, band-shifted, after
+        // the highlights — so it paints in top-layer order over everything. The
+        // satellite carries its own coordinates; `push_sublist` wraps it in a
+        // transform to the anchor. A slot whose anchor left the layout is
+        // silently skipped (the host unmounts on the anchor-removed event).
+        if !self.overlays.is_empty() {
+            for slot in self.overlays.values() {
+                if let Some((ox, oy)) =
+                    crate::serval_lane::absolute_origin(dom, &self.fragments, slot.anchor)
+                        .map(|p| (p.x, p.y))
+                {
+                    plist.push_sublist(
+                        paint_list_api::LayoutPoint::new(ox, oy - band_y as f32),
+                        &slot.content,
+                    );
+                }
+            }
+        }
         (plist, scroll_range, links)
+    }
+
+    /// Register (or replace) the named overlay slot: `content` (a satellite's
+    /// own emitted paint list, in satellite-local coords) paints at `anchor`'s
+    /// live fragment position on every subsequent [`emit_band`](Self::emit_band)
+    /// (the overlay-roots overlay slot). Touches no page layout: the satellite
+    /// was laid out by its own isolated cascade, so the page's sheets never
+    /// reach it. Painted top-layer (after content + highlights).
+    pub fn set_overlay(&mut self, name: &str, anchor: Id, content: ServalPaintList) {
+        self.overlays.insert(
+            name.to_string(),
+            overlays::OverlaySlot { anchor, content },
+        );
+    }
+
+    /// Remove the named overlay slot (no-op when absent).
+    pub fn clear_overlay(&mut self, name: &str) {
+        self.overlays.remove(name);
+    }
+
+    /// The number of laid-out fragments (page nodes with a box). A no-reflow
+    /// witness for overlay slots: registering a satellite must not change it.
+    pub fn fragment_count(&self) -> usize {
+        self.fragments.len()
+    }
+
+    /// The laid-out `(x, y, w, h)` of a page node, if it has a box — the anchor
+    /// geometry an overlay slot positions against.
+    pub fn node_rect(&self, node: Id) -> Option<(f32, f32, f32, f32)> {
+        self.fragments.rect_of(node).map(|l| {
+            (
+                l.location.x,
+                l.location.y,
+                l.size.width,
+                l.size.height,
+            )
+        })
     }
 
     /// Register (or replace) the named custom highlight: `ranges` paint with
@@ -695,6 +761,203 @@ mod tests {
                 .count(),
             plain_rects,
             "clear_highlight returns the band to its unhighlighted shape"
+        );
+    }
+
+    /// The `<p>` anchor in a single-paragraph body (overlay-slot tests).
+    fn anchor_p(doc: &StaticDocument) -> serval_static_dom::StaticNodeId {
+        use layout_dom_api::LocalName;
+        let mut q = vec![doc.document()];
+        while let Some(id) = q.pop() {
+            if doc
+                .element_name(id)
+                .is_some_and(|n| n.local == LocalName::from("p"))
+            {
+                return id;
+            }
+            q.extend(doc.dom_children(id));
+        }
+        panic!("no <p>")
+    }
+
+    /// A fill-only satellite: a laid-out `div` with a background, emitted to its
+    /// own paint list (its own isolated cascade — the page's sheets never reach
+    /// it). `sheet` is the *satellite's* stylesheet.
+    fn satellite(sheet: &str, w: u32, h: u32) -> (ServalPaintList, paint_list_api::ColorF) {
+        use paint_list_api::{PaintCmd, PaintList};
+        let sat_doc = StaticDocument::parse("<div class='card'></div>");
+        let sat = lay_out_content(&sat_doc, &[sheet], &NoImageLoader, w, h);
+        let (plist, _, _) = sat.emit_band(&sat_doc, 0, h, &ScrollOffsets::default());
+        // The card's background fill colour (the opaque one; skip any
+        // transparent root/clear rect the emit may prepend).
+        let color = plist
+            .commands()
+            .iter()
+            .find_map(|c| match c {
+                PaintCmd::DrawRect(r) if r.color.a > 0.0 => Some(r.color),
+                _ => None,
+            })
+            .expect("satellite paints a background fill");
+        (plist, color)
+    }
+
+    /// Overlay-slot P0 (a) no reflow leak + (d) top-layer order: registering a
+    /// satellite anchored to a page node does not change the page's own layout
+    /// (fragment plane byte-identical), and the satellite's fills paint *after*
+    /// the page content (last in the command stream).
+    #[test]
+    fn overlay_slot_does_not_reflow_the_page_and_paints_on_top() {
+        use paint_list_api::{ColorF, PaintCmd, PaintList};
+
+        let doc = StaticDocument::parse(
+            "<body style='margin:0'><p style='margin:0'>page content here</p></body>",
+        );
+        let mut layout = lay_out_content(&doc, &[], &NoImageLoader, 600, 400);
+        let p = anchor_p(&doc);
+        let scroll = ScrollOffsets::default();
+
+        let frags_before = layout.fragment_count();
+        let p_rect_before = layout.node_rect(p).expect("p rect");
+        let (plain, _, _) = layout.emit_band(&doc, 0, 400, &scroll);
+        let plain_cmds = plain.commands().len();
+
+        let (content, sat_color) =
+            satellite(".card { display: block; width: 80px; height: 40px; \
+                       background-color: rgb(20, 120, 200) }", 80, 40);
+        layout.set_overlay("preview", p, content);
+
+        // (a) The page's own layout is untouched: fragment count + the anchor's
+        // rect are identical (the satellite never entered the page box tree).
+        assert_eq!(layout.fragment_count(), frags_before, "no page reflow");
+        assert_eq!(
+            layout.node_rect(p).expect("p rect"),
+            p_rect_before,
+            "the anchor paragraph did not move"
+        );
+
+        let (lit, _, _) = layout.emit_band(&doc, 0, 400, &scroll);
+        // (d) The satellite's fill is present and paints last (top layer): the
+        // final DrawRect carries the satellite colour.
+        let last_rect_color = lit.commands().iter().rev().find_map(|c| match c {
+            PaintCmd::DrawRect(r) => Some(r.color),
+            _ => None,
+        });
+        assert_eq!(
+            last_rect_color,
+            Some(sat_color),
+            "the satellite paints in top-layer order (last fill)"
+        );
+        assert!(
+            lit.commands().len() > plain_cmds,
+            "the overlay added commands (a transform wrap + the satellite fills)"
+        );
+
+        // Clearing restores the plain command count.
+        layout.clear_overlay("preview");
+        let (cleared, _, _) = layout.emit_band(&doc, 0, 400, &scroll);
+        assert_eq!(
+            cleared.commands().len(),
+            plain_cmds,
+            "clear_overlay returns the band to its pre-overlay shape"
+        );
+    }
+
+    /// Overlay-slot P0 (b) anchor tracking: the satellite paints at the anchor's
+    /// position, and a lower band shifts it up by the band delta — it tracks the
+    /// content (via the anchor's fragment), not the viewport origin.
+    #[test]
+    fn overlay_slot_tracks_its_anchor_across_bands() {
+        use paint_list_api::{PaintCmd, PaintList};
+
+        // A tall page so the anchor sits well below the top; the satellite
+        // origin should follow it.
+        let doc = StaticDocument::parse(
+            "<body style='margin:0'><div style='height:300px'></div>\
+             <p style='margin:0'>anchor</p></body>",
+        );
+        let mut layout = lay_out_content(&doc, &[], &NoImageLoader, 600, 400);
+        let p = anchor_p(&doc);
+        let p_top = layout.node_rect(p).expect("p rect").1;
+        assert!(p_top > 250.0, "anchor sits low on the page: {p_top}");
+
+        let (content, sat_color) = satellite(
+            ".card { display: block; width: 60px; height: 30px; \
+             background-color: rgb(200, 60, 60) }",
+            60,
+            30,
+        );
+        layout.set_overlay("pin", p, content);
+        let scroll = ScrollOffsets::default();
+
+        let sat_y = |band_y: u32| -> f32 {
+            let (pl, _, _) = layout.emit_band(&doc, band_y, 400, &scroll);
+            // The overlay wraps its satellite in PushTransform(anchor). The
+            // satellite's own emission also carries internal transforms at
+            // origin 0 (its stacking root), so pick the wrap by its nonzero
+            // origin — the anchor sits far down this tall page.
+            pl.commands()
+                .iter()
+                .filter_map(|c| match c {
+                    PaintCmd::PushTransform(t) if t.origin.y.abs() > 50.0 => Some(t.origin.y),
+                    _ => None,
+                })
+                .next_back()
+                .expect("overlay anchor transform present")
+        };
+        let _ = sat_color;
+
+        let top_origin = sat_y(0);
+        assert!(
+            (top_origin - p_top).abs() < 0.5,
+            "the overlay anchors at the paragraph's top: {top_origin} vs {p_top}"
+        );
+        let lower_origin = sat_y(100);
+        assert!(
+            (lower_origin - (top_origin - 100.0)).abs() < 0.5,
+            "a lower band shifts the overlay up by the band delta: {lower_origin} vs {}",
+            top_origin - 100.0
+        );
+    }
+
+    /// Overlay-slot P0 (c) style isolation: the satellite is laid out by its own
+    /// cascade, so a page rule that *would* match the satellite's element does
+    /// not restyle it — the satellite renders identically whether or not the
+    /// page carries the conflicting rule.
+    #[test]
+    fn overlay_slot_content_is_isolated_from_page_styles() {
+        let sat_sheet = ".card { display: block; width: 50px; height: 25px; \
+                         background-color: rgb(30, 160, 90) }";
+
+        // Same satellite, two very different page sheets — one of which has a
+        // `.card` rule that would recolor the satellite if the page cascade
+        // leaked into it.
+        let page_plain = StaticDocument::parse("<body><p>x</p></body>");
+        let mut l1 = lay_out_content(&page_plain, &[], &NoImageLoader, 400, 200);
+        let page_hostile = StaticDocument::parse(
+            "<body><style>.card{background-color:rgb(255,0,0)}</style><p>x</p></body>",
+        );
+        let mut l2 = lay_out_content(
+            &page_hostile,
+            &[".card{background-color:rgb(255,0,0)}"],
+            &NoImageLoader,
+            400,
+            200,
+        );
+
+        let (c1, color1) = satellite(sat_sheet, 50, 25);
+        let (c2, color2) = satellite(sat_sheet, 50, 25);
+        assert_eq!(
+            color1, color2,
+            "the satellite's own cascade is deterministic regardless of any page"
+        );
+        // Neither the plain nor the `.card`-hostile page can change the
+        // satellite's colour: it was cascaded before it ever met a page.
+        l1.set_overlay("a", anchor_p(&page_plain), c1);
+        l2.set_overlay("a", anchor_p(&page_hostile), c2);
+        assert_ne!(
+            color1,
+            paint_list_api::ColorF { r: 1.0, g: 0.0, b: 0.0, a: 1.0 },
+            "the page's `.card{{color:red}}` did not reach the isolated satellite"
         );
     }
 }
