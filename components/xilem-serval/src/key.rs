@@ -236,6 +236,10 @@ pub struct OnKeyState<S> {
     /// The wrapped child's DOM node, so teardown can unregister and rebuild can
     /// detect a node swap and re-key the registry.
     node: NodeId,
+    /// The routing path this handler registered under — a registration is a
+    /// `(node, path)` pair and rebuild reconciles both (a nursery adoption
+    /// changes the path without recreating the element; moveBefore plan S5).
+    path: Vec<ViewId>,
 }
 
 impl<V, State, Action, F> ViewMarker for OnKey<V, State, Action, F> {}
@@ -266,8 +270,15 @@ where
             // phase (`self.capture`) is stored alongside it so dispatch routes
             // this listener in the matching pass.
             let path = ctx.view_path().to_vec();
-            ctx.register_key(node, path, self.capture);
-            (element, OnKeyState { child_state, node })
+            ctx.register_key(node, path.clone(), self.capture);
+            (
+                element,
+                OnKeyState {
+                    child_state,
+                    node,
+                    path,
+                },
+            )
         })
     }
 
@@ -288,19 +299,16 @@ where
                 element.reborrow_mut(),
                 app_state,
             );
-            // The child may have swapped its node; if so, move the registry entry
-            // to the new node. The captured path is structural (not
-            // node-dependent), so re-registering the same node is a harmless
-            // no-op we skip — exactly as `OnClick::rebuild`.
+            // A registration is a `(node, path)` pair; reconcile both, exactly
+            // as `OnClick::rebuild` (the path changes when this subtree was
+            // adopted into a different position — moveBefore plan S5).
             let node = *element.node;
-            if node != prev_node {
-                // The captured path is the same for both nodes (structural, not
-                // node-dependent), so it identifies the old node's entry to drop
-                // and keys the new one.
+            if node != prev_node || ctx.view_path() != view_state.path.as_slice() {
+                ctx.unregister_key(prev_node, &view_state.path);
                 let path = ctx.view_path().to_vec();
-                ctx.unregister_key(prev_node, &path);
-                ctx.register_key(node, path, self.capture);
+                ctx.register_key(node, path.clone(), self.capture);
                 view_state.node = node;
+                view_state.path = path;
             }
         });
     }
@@ -312,8 +320,9 @@ where
         element: Mut<'_, Self::Element>,
     ) {
         ctx.with_id(ON_KEY_ID, |ctx| {
-            let path = ctx.view_path().to_vec();
-            ctx.unregister_key(view_state.node, &path);
+            // Unregister by the STORED path (the ambient one can differ after
+            // an adoption or in a nursery drain).
+            ctx.unregister_key(view_state.node, &view_state.path);
             self.child
                 .teardown(&mut view_state.child_state, ctx, element);
         });

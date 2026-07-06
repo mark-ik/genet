@@ -21,11 +21,15 @@
 //! within the matching phase — rather than letting a later listener silently
 //! clobber an earlier one. (Grab-bag G2.3.)
 
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use std::hash::Hash;
 
 use crate::DomHandle;
+use crate::pod::{ServalElement, ServalElementMut};
+use layout_dom_api::{LayoutDom, LayoutDomMut};
 use serval_scripted_dom::NodeId;
-use xilem_core::{Environment, ViewId, ViewPathTracker};
+use xilem_core::{Environment, View, ViewId, ViewPathTracker};
 
 /// A registered event handler: its routing view path plus the propagation phase
 /// it listens in.
@@ -103,6 +107,79 @@ pub struct ServalCtx {
     /// walks the hit node's ancestor chain through this on a wheel event to find
     /// the element that handles the scroll.
     wheel_handlers: HashMap<NodeId, Vec<ViewId>>,
+    /// The portable-child nursery (moveBefore plan S5, cross-parent): children a
+    /// [`PortableKeyed`](crate::PortableKeyed) parked because their key left its
+    /// list, waiting within the same rebuild pass to be claimed by the sequence
+    /// the key arrived in. Buckets are per concrete `(K, V)` instantiation,
+    /// type-erased; the runner drains unclaimed children at the end of every
+    /// rebuild ([`drain_nursery`](Self::drain_nursery)), tearing them down for
+    /// real. A parked child's DOM node stays attached under its former parent
+    /// until adoption moves it or the drain removes it.
+    nursery: HashMap<TypeId, Box<dyn NurseryBucket>>,
+}
+
+/// A parked portable child: the previous view (an owned clone), its retained
+/// view state, and its element — everything an adoption's rebuild or a drain's
+/// teardown needs.
+struct ParkedChild<V, VS> {
+    view: V,
+    state: VS,
+    element: ServalElement,
+}
+
+/// One nursery bucket per concrete `(K, V, V::ViewState)` instantiation. The
+/// monomorphized `teardown` fn pointer is captured at park time, so the bucket
+/// itself needs no `View` bounds and the drain no type knowledge.
+struct Bucket<K, V, VS> {
+    parked: HashMap<K, ParkedChild<V, VS>>,
+    teardown: fn(V, VS, ServalElement, &mut ServalCtx),
+}
+
+/// Type-erased nursery bucket: `Any` for the typed claim, plus the drain hook.
+trait NurseryBucket {
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn drain_teardowns(&mut self, ctx: &mut ServalCtx);
+}
+
+impl<K, V, VS> NurseryBucket for Bucket<K, V, VS>
+where
+    K: Eq + Hash + 'static,
+    V: 'static,
+    VS: 'static,
+{
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn drain_teardowns(&mut self, ctx: &mut ServalCtx) {
+        for (_key, parked) in self.parked.drain() {
+            (self.teardown)(parked.view, parked.state, parked.element, ctx);
+        }
+    }
+}
+
+/// Tear down an unclaimed parked child for real: run the view teardown (which
+/// unregisters its handlers by their stored paths), then remove the node — it
+/// was left attached under its former parent by the park.
+fn teardown_parked<State, Action, V>(
+    view: V,
+    mut state: V::ViewState,
+    mut element: ServalElement,
+    ctx: &mut ServalCtx,
+) where
+    State: 'static,
+    Action: 'static,
+    V: View<State, Action, ServalCtx, Element = ServalElement>,
+{
+    let node = element.node;
+    let parent = ctx.dom.borrow().parent(node);
+    let el = ServalElementMut {
+        node: &mut element.node,
+        dom: ctx.dom.clone(),
+        parent,
+    };
+    view.teardown(&mut state, ctx, el);
+    ctx.dom.borrow_mut().remove(node);
 }
 
 impl ServalCtx {
@@ -117,6 +194,87 @@ impl ServalCtx {
             focusable: HashMap::new(),
             pointer_handlers: HashMap::new(),
             wheel_handlers: HashMap::new(),
+            nursery: HashMap::new(),
+        }
+    }
+
+    /// Park a portable child whose key left its [`PortableKeyed`](crate::PortableKeyed)
+    /// list: keep its (previous) view, view state, and element alive so the
+    /// sequence its key arrives in — later in this same rebuild pass — can adopt
+    /// it wholesale. The child's DOM node stays attached under its former parent
+    /// until adoption moves it (one atomic `Moved`) or the end-of-rebuild
+    /// [`drain_nursery`](Self::drain_nursery) tears it down. (moveBefore S5.)
+    pub fn park_portable<State, Action, K, V>(
+        &mut self,
+        key: K,
+        view: V,
+        state: V::ViewState,
+        element: ServalElement,
+    ) where
+        State: 'static,
+        Action: 'static,
+        K: Eq + Hash + 'static,
+        V: View<State, Action, ServalCtx, Element = ServalElement> + 'static,
+        V::ViewState: 'static,
+    {
+        let bucket = self
+            .nursery
+            .entry(TypeId::of::<Bucket<K, V, V::ViewState>>())
+            .or_insert_with(|| {
+                Box::new(Bucket::<K, V, V::ViewState> {
+                    parked: HashMap::new(),
+                    teardown: teardown_parked::<State, Action, V>,
+                })
+            });
+        let bucket = bucket
+            .as_any_mut()
+            .downcast_mut::<Bucket<K, V, V::ViewState>>()
+            .expect("nursery bucket keyed by its own TypeId");
+        bucket.parked.insert(
+            key,
+            ParkedChild {
+                view,
+                state,
+                element,
+            },
+        );
+    }
+
+    /// Claim a parked portable child by key, if one of this exact `(K, V)`
+    /// instantiation was parked earlier in the current rebuild pass. Returns the
+    /// previous view (for the rebuild diff), the retained view state, and the
+    /// still-attached element.
+    pub fn claim_portable<State, Action, K, V>(
+        &mut self,
+        key: &K,
+    ) -> Option<(V, V::ViewState, ServalElement)>
+    where
+        State: 'static,
+        Action: 'static,
+        K: Eq + Hash + 'static,
+        V: View<State, Action, ServalCtx, Element = ServalElement> + 'static,
+        V::ViewState: 'static,
+    {
+        let bucket = self
+            .nursery
+            .get_mut(&TypeId::of::<Bucket<K, V, V::ViewState>>())?
+            .as_any_mut()
+            .downcast_mut::<Bucket<K, V, V::ViewState>>()?;
+        let parked = bucket.parked.remove(key)?;
+        Some((parked.view, parked.state, parked.element))
+    }
+
+    /// Tear down every still-parked child. The runner calls this at the end of
+    /// each rebuild: a parked child not claimed within its own pass really is
+    /// gone (its key left every portable list), so it gets an ordinary teardown
+    /// and its node is removed. Loops until quiescent, since a teardown can
+    /// itself park nested portable children.
+    pub fn drain_nursery(&mut self) {
+        while !self.nursery.is_empty() {
+            let mut nursery = std::mem::take(&mut self.nursery);
+            for bucket in nursery.values_mut() {
+                bucket.drain_teardowns(self);
+            }
         }
     }
 

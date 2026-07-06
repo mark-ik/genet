@@ -197,6 +197,14 @@ pub struct OnClickState<S> {
     /// The wrapped child's DOM node, so teardown can unregister and rebuild can
     /// detect a node swap and re-key the registry.
     node: NodeId,
+    /// The routing path this handler registered under. A registration is a
+    /// `(node, path)` pair and rebuild reconciles **both**: the node changes on
+    /// a child swap, and the path changes when the subtree is adopted into a
+    /// different position (a nursery move re-parents the element without
+    /// recreating it — moveBefore plan S5). Teardown unregisters by this stored
+    /// path, which also keeps a drain-time teardown correct when the ambient
+    /// `view_path()` is not this view's.
+    path: Vec<ViewId>,
 }
 
 impl<V, State, Action, F> ViewMarker for OnClick<V, State, Action, F> {}
@@ -227,8 +235,15 @@ where
             // phase (`self.capture`) is stored alongside it so dispatch routes
             // this listener in the matching pass.
             let path = ctx.view_path().to_vec();
-            ctx.register_click(node, path, self.capture);
-            (element, OnClickState { child_state, node })
+            ctx.register_click(node, path.clone(), self.capture);
+            (
+                element,
+                OnClickState {
+                    child_state,
+                    node,
+                    path,
+                },
+            )
         })
     }
 
@@ -249,20 +264,18 @@ where
                 element.reborrow_mut(),
                 app_state,
             );
-            // The child may have swapped its node (analogous to `OnEvent`
-            // re-creating its listener when the element `was_created`). If so,
-            // move the registry entry to the new node. The captured path is
-            // unchanged (the view path is structural, not node-dependent), so a
-            // re-register on the same node is a harmless no-op we skip.
+            // A registration is a `(node, path)` pair; reconcile both. The node
+            // changes when the child swapped its element; the path changes when
+            // this subtree was adopted into a different position (a nursery
+            // move — moveBefore plan S5). Same node + same path is the steady
+            // state and skips the registry churn.
             let node = *element.node;
-            if node != prev_node {
-                // The captured path is the same for both nodes (it is structural,
-                // not node-dependent), so it both identifies the old node's entry
-                // to drop and keys the new one.
+            if node != prev_node || ctx.view_path() != view_state.path.as_slice() {
+                ctx.unregister_click(prev_node, &view_state.path);
                 let path = ctx.view_path().to_vec();
-                ctx.unregister_click(prev_node, &path);
-                ctx.register_click(node, path, self.capture);
+                ctx.register_click(node, path.clone(), self.capture);
                 view_state.node = node;
+                view_state.path = path;
             }
         });
     }
@@ -274,8 +287,11 @@ where
         element: Mut<'_, Self::Element>,
     ) {
         ctx.with_id(ON_CLICK_ID, |ctx| {
-            let path = ctx.view_path().to_vec();
-            ctx.unregister_click(view_state.node, &path);
+            // Unregister by the STORED path: after an adoption the ambient
+            // `view_path()` here can differ from the one this handler
+            // registered under (and a nursery drain tears down outside any
+            // meaningful ambient path at all).
+            ctx.unregister_click(view_state.node, &view_state.path);
             self.child
                 .teardown(&mut view_state.child_state, ctx, element);
         });

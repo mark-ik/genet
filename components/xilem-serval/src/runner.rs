@@ -173,6 +173,12 @@ where
 
         // The freshly diffed view becomes the retained `prev` for the next tick.
         *view = next;
+
+        // Tear down any portable child parked during this rebuild and not
+        // claimed within it — its key really left every portable list, so it
+        // gets a real teardown and its (still-attached) node is removed.
+        // (moveBefore plan S5, cross-parent.)
+        self.ctx.drain_nursery();
     }
 
     /// Build the routing paths for `chain` in DOM propagation order

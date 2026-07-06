@@ -94,6 +94,45 @@ impl<'v, 's, T> VecSplice<'v, 's, T> {
             self.scratch.extend(self.v.splice(self.ix.., []).rev());
         }
     }
+
+    /// The pending element at relative offset `n` (`0` = the next pending one).
+    /// Normalizes the pending queue onto `scratch` (reversed) first.
+    fn pending_at(&mut self, n: usize) -> Option<&T> {
+        self.clear_tail();
+        self.scratch
+            .len()
+            .checked_sub(1 + n)
+            .and_then(|i| self.scratch.get(i))
+    }
+
+    /// Reorder the pending queue so the element at relative offset `n` becomes
+    /// the next pending one; the displaced elements keep their relative order.
+    /// `false` when there is no pending element at `n`.
+    fn hoist_pending(&mut self, n: usize) -> bool {
+        self.clear_tail();
+        let Some(i) = self.scratch.len().checked_sub(1 + n) else {
+            return false;
+        };
+        // Pending order is `scratch` reversed, so moving the element to the
+        // END of `scratch` makes it the next pending one.
+        let hoisted = self.scratch.remove(i);
+        self.scratch.push(hoisted);
+        true
+    }
+
+    /// Take the next pending element out of the queue (the vec bookkeeping half
+    /// of [`ElementSplice::extract_pending`] — no store side effects here).
+    fn take_next_pending(&mut self) -> Option<T> {
+        self.clear_tail();
+        self.scratch.pop()
+    }
+
+    /// Push a foreign element in as the next pending one (the vec bookkeeping
+    /// half of [`ElementSplice::adopt_pending`]).
+    fn push_next_pending(&mut self, value: T) {
+        self.clear_tail();
+        self.scratch.push(value);
+    }
 }
 
 /// [`ElementSplice`] managing the children of one serval node in place.
@@ -207,5 +246,52 @@ impl ElementSplice<ServalElement> for ServalChildrenSplice<'_, '_, '_> {
             self.dom.borrow_mut().remove(node);
         }
         ret
+    }
+
+    fn hoist_pending(&mut self, n: usize) -> bool {
+        if n == 0 {
+            return true; // already the next pending element; nothing moves
+        }
+        // The current front of the pending queue is what the hoisted node
+        // moves before — read it before the reorder.
+        let Some(reference) = self.next_sibling() else {
+            return false;
+        };
+        let Some(node) = self.children.pending_at(n).map(|e| e.node) else {
+            return false;
+        };
+        if !self.children.hoist_pending(n) {
+            return false;
+        }
+        // One atomic move (`DomMutation::Moved`), never a remove + insert —
+        // the node stays attached, so retained per-node state survives.
+        // (moveBefore plan S5.)
+        self.dom
+            .borrow_mut()
+            .move_before(self.parent, node, Some(reference));
+        true
+    }
+
+    fn extract_pending(&mut self) -> Option<ServalElement> {
+        // The element leaves this splice's bookkeeping, but its DOM node stays
+        // attached where it is: parking is not removal. The node moves when the
+        // element is adopted elsewhere (`adopt_pending` → one `Moved`), or is
+        // removed for real when the nursery drain tears the orphan down.
+        // (moveBefore plan S5, cross-parent.)
+        self.children.take_next_pending()
+    }
+
+    fn adopt_pending(&mut self, element: ServalElement) -> Result<(), ServalElement> {
+        // Move the foreign element's node into place first (before the current
+        // front pending, append when none), then queue it as next pending so
+        // the caller's ordinary mutate-based rebuild consumes it. The node was
+        // still attached under its former parent (extract does not detach), so
+        // this is one atomic `Moved` — the never-detach contract.
+        let reference = self.next_sibling();
+        self.dom
+            .borrow_mut()
+            .move_before(self.parent, element.node, reference);
+        self.children.push_next_pending(element);
+        Ok(())
     }
 }
