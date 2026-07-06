@@ -1050,6 +1050,7 @@ pub(crate) fn walk<Id>(
         let int_w = decoded.width as f32;
         let int_h = decoded.height as f32;
         let key = em.images.add(decoded);
+        let bg_rendering = image_rendering_of(cv);
         let bg_style = bg_tile_style_of(cv);
         // The three reference boxes in this node's local (border-box) coords.
         let bw = local_bounds.width();
@@ -1112,7 +1113,7 @@ pub(crate) fn walk<Id>(
                             image_key: key,
                             stretch_size: LayoutSize::new(tw, th),
                             tile_spacing: LayoutSize::zero(),
-                            image_rendering: ImageRendering::Auto,
+                            image_rendering: bg_rendering,
                             alpha_type: AlphaType::PremultipliedAlpha,
                             color: ColorF::WHITE, // identity tint
                         }));
@@ -1123,7 +1124,7 @@ pub(crate) fn walk<Id>(
                         commands.push(PaintCmd::DrawImage(ImageItem {
                             placement: CommonPlacement::new(tile_rect),
                             image_key: key,
-                            image_rendering: ImageRendering::Auto,
+                            image_rendering: bg_rendering,
                             alpha_type: AlphaType::PremultipliedAlpha,
                             color: ColorF::WHITE, // identity tint
                         }));
@@ -1144,7 +1145,7 @@ pub(crate) fn walk<Id>(
                         image_key: key,
                         stretch_size: LayoutSize::new(tw, th),
                         tile_spacing: LayoutSize::zero(),
-                        image_rendering: ImageRendering::Auto,
+                        image_rendering: bg_rendering,
                         alpha_type: AlphaType::PremultipliedAlpha,
                         color: ColorF::WHITE, // identity tint
                     }));
@@ -1610,7 +1611,7 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
                         if let Some(cv) = primary_cv(styles, item.source) {
                             emit_object_image(&cv, rect, decoded, images, commands);
                         } else {
-                            emit_image_rect(rect, decoded, images, commands);
+                            emit_image_rect(rect, decoded, ImageRendering::Auto, images, commands);
                         }
                         emitted = true;
                     }
@@ -1842,7 +1843,7 @@ fn emit_object_image(
             kind: ClipKind::Rect(content_rect),
         }));
     }
-    emit_image_rect(object_rect, decoded, images, commands);
+    emit_image_rect(object_rect, decoded, image_rendering_of(cv), images, commands);
     if clips {
         commands.push(PaintCmd::PopClip);
     }
@@ -1851,6 +1852,7 @@ fn emit_object_image(
 fn emit_image_rect(
     rect: LayoutRect,
     decoded: &DecodedImage,
+    rendering: ImageRendering,
     images: &mut ImageCollector,
     commands: &mut Vec<PaintCmd>,
 ) {
@@ -1858,10 +1860,22 @@ fn emit_image_rect(
     commands.push(PaintCmd::DrawImage(ImageItem {
         placement: CommonPlacement::new(rect),
         image_key: key,
-        image_rendering: ImageRendering::Auto,
+        image_rendering: rendering,
         alpha_type: AlphaType::PremultipliedAlpha,
         color: ColorF::WHITE, // identity tint
     }));
+}
+
+/// The element's computed `image-rendering`, lowered to the paint-list
+/// enum. Inherited-box property, so anonymous fragments ride their
+/// parent's value through the primary style.
+fn image_rendering_of(cv: &ComputedValues) -> ImageRendering {
+    use style::computed_values::image_rendering::T as R;
+    match cv.get_inherited_box().image_rendering {
+        R::Auto => ImageRendering::Auto,
+        R::CrispEdges => ImageRendering::CrispEdges,
+        R::Pixelated => ImageRendering::Pixelated,
+    }
 }
 
 /// Emit a host-composited replaced content object, applying the same concrete
