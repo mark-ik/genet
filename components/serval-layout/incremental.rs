@@ -869,9 +869,15 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     where
         D: LayoutDom<NodeId = Id>,
     {
-        let invalidations: Vec<_> = mutations.iter().flat_map(classify).collect();
-        // Batch already applied to `dom`, so an invalidation (or an ancestor of
-        // one) can be a node removed in this batch; walk parents liveness-safe.
+        // Batch already applied to `dom`, so an invalidation can name a node
+        // dropped in this batch (a `Removed`'s `former_parent` whose subtree was
+        // also removed). Drop those — its subtree is gone — which also keeps the
+        // ancestor walk in live nodes (see the same filter in `apply_structural`).
+        let invalidations: Vec<_> = mutations
+            .iter()
+            .flat_map(classify)
+            .filter(|inv| dom.is_live(inv.node()))
+            .collect();
         coalesce(&invalidations, |id| live_parent(dom, id)).len()
     }
 
@@ -1301,7 +1307,20 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         // Plan the affected subtree roots (shared by the partial cascade
         // and the layout splice). A cross-parent `Moved` contributes both its
         // source and target parents (moveBefore plan S1, conservative).
-        let invalidations: Vec<_> = mutations.iter().flat_map(classify).collect();
+        // Drop invalidations rooted at a node dropped in this batch — a `Removed`'s
+        // `former_parent` whose whole subtree was also removed. That subtree no
+        // longer exists to restyle or splice, and the parent's own removal already
+        // invalidated *its* live parent, so no scope is lost. Because `drop_subtree`
+        // drops every descendant, a live node can never have a dead ancestor, so
+        // this also keeps every downstream ancestor walk (coalesce, restyle,
+        // splice) inside live nodes. Without it, `restyle_structural` /
+        // `try_splice_at` read a dead node. (Dead-NodeId liveness: editing/closing
+        // an inactive node's chrome.)
+        let invalidations: Vec<_> = mutations
+            .iter()
+            .flat_map(classify)
+            .filter(|inv| dom.is_live(inv.node()))
+            .collect();
         // The splice graft edits the retained box tree in place; grafting onto
         // an already-stale side-table would compound the damage, so heal with
         // a full relayout instead. Unreachable for hosts honouring the
