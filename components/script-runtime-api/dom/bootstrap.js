@@ -377,6 +377,48 @@
     finalizeNodeMove(move);
     return node;
   };
+  // The tree top a node hangs from: its document when connected, else the root
+  // of its detached tree. moveBefore's same-root gate compares these.
+  function treeTopOf(node) {
+    var t = node;
+    while (t.parentNode) t = t.parentNode;
+    return t;
+  }
+  // DOM `Node.moveBefore(node, child)`: an atomic, state-preserving move — the
+  // subtree never disconnects, so retained per-node state survives where
+  // insertBefore's remove+insert resets it. Stricter than insertBefore by
+  // design: a move never adopts, so both nodes must share one root (both under
+  // this document, or both inside the same detached tree), and only
+  // element/text/comment nodes move. (moveBefore plan S3.)
+  Node.prototype.moveBefore = function(node, ref) {
+    if (this.nodeType !== 1 && this.nodeType !== 9 && this.nodeType !== 11) {
+      throw new DOMException("This node cannot contain children.", "HierarchyRequestError");
+    }
+    ensureInsertable(this, node);
+    if (node.nodeType !== 1 && node.nodeType !== 3 && node.nodeType !== 8) {
+      throw new DOMException("Only element and character data nodes can be moved.", "HierarchyRequestError");
+    }
+    if (node.nodeType === 3 && this.nodeType === 9) {
+      throw new DOMException("Documents cannot contain text nodes.", "HierarchyRequestError");
+    }
+    if (ref !== null && ref !== undefined && ref.parentNode !== this) {
+      throw new DOMException("The reference node is not a child of this node.", "NotFoundError");
+    }
+    var thisTop = treeTopOf(this);
+    if (thisTop !== treeTopOf(node)) {
+      throw new DOMException("moveBefore does not adopt: both nodes must share a root.", "HierarchyRequestError");
+    }
+    __moveBefore(this.__ref, node.__ref, ref ? ref.__ref : undefined);
+    // Custom elements: the spec fires connectedMoveCallback when defined, else
+    // the disconnected + connected fallback pair. serval's registry does not
+    // capture connectedMoveCallback yet (plan S4), so a connected-tree move
+    // fires the fallback pair; a detached-tree move fires nothing.
+    if (thisTop.nodeType === 9) {
+      disconnectCustomElementTree(node);
+      connectCustomElementTree(node);
+    }
+    return node;
+  };
   Node.prototype.replaceChild = function(newChild, oldChild) {
     if (!oldChild || oldChild.parentNode !== this) {
       throw new DOMException("The node to be replaced is not a child of this node.", "NotFoundError");

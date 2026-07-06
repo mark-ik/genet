@@ -294,6 +294,34 @@ impl<E: ScriptEngine> NativeFn<E> for InsertBefore {
     }
 }
 
+/// `__moveBefore(parent, node, ref)` — atomically move the in-tree `node` before
+/// `ref` (append when `ref` is not a reflector), preserving subtree state: one
+/// `DomMutation::Moved`, never a `Removed` + `Inserted` pair. The unchecked
+/// primitive under `Node.prototype.moveBefore`; the spec's pre-move validity
+/// (same root, no cycles, NotFoundError reference) throws on the JS side, per
+/// this file's split. (moveBefore plan S3.)
+pub(crate) struct MoveBefore;
+impl<E: ScriptEngine> NativeFn<E> for MoveBefore {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let parent = cx.arg(0);
+        let node = cx.arg(1);
+        let reference = cx.arg(2);
+        if let (Some(p), Some(n)) = (cx.reflector_data(&parent), cx.reflector_data(&node)) {
+            let r = cx
+                .reflector_data(&reference)
+                .map(|r| NodeId::from_raw(r as usize));
+            with_dom::<E, _>(cx, |dom| {
+                dom.move_before(
+                    NodeId::from_raw(p as usize),
+                    NodeId::from_raw(n as usize),
+                    r,
+                )
+            });
+        }
+        Ok(cx.undefined())
+    }
+}
+
 /// `__localName(element)` → the element's local name (as stored, lowercase for
 /// HTML), or `null`.
 pub(crate) struct LocalNameOf;

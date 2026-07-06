@@ -465,6 +465,73 @@ impl<E: ScriptEngine> Runtime<E> {
         fired
     }
 
+    /// Run the window's animation frame callbacks against the frame timestamp
+    /// `now_ms` — the "run the animation frame callbacks" step of the rendering
+    /// update; the host tick owns the clock and calls this once per frame.
+    /// One callback per engine call, with a microtask checkpoint after each, so
+    /// a Promise reaction queued by callback N settles before callback N+1
+    /// (the same granularity [`run_timers`](Self::run_timers) has per task).
+    /// Callbacks registered during the run land in the next frame; canceled
+    /// handles are skipped. Returns how many callbacks ran.
+    ///
+    /// https://html.spec.whatwg.org/multipage/imagebitmap-and-animations.html#animation-frames
+    pub fn run_animation_frame_callbacks(&mut self, now_ms: f64) -> Result<usize, E::Error> {
+        self.trace_scheduler(
+            "run_animation_frame_callbacks",
+            "start",
+            Some(format!("now_ms={now_ms}")),
+        );
+        let mut ran = 0usize;
+        loop {
+            // Step 3: "For each handle in callbackHandles, if handle exists in
+            // callbacks: ... Invoke callback with « now » and "report"."
+            let v = match self
+                .engine
+                .eval(&format!("String(globalThis.__runOneAnimationFrameCallback({now_ms}))"))
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    self.flush_host_trace_events();
+                    self.trace_scheduler("run_animation_frame_callbacks", "error", None);
+                    return Err(error);
+                },
+            };
+            self.flush_host_trace_events();
+            let n = self
+                .engine
+                .value_to_string(&v)
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(0);
+            if n == 0 {
+                break;
+            }
+            ran += n;
+            // The JS stack is empty between callbacks: perform a microtask
+            // checkpoint, matching the between-callbacks checkpoint browsers
+            // exhibit ("clean up after running script" on an empty stack).
+            self.perform_microtask_checkpoint();
+        }
+        self.trace_scheduler(
+            "run_animation_frame_callbacks",
+            "end",
+            Some(format!("ran={ran}")),
+        );
+        Ok(ran)
+    }
+
+    /// Whether any animation frame callbacks are registered. The host uses this
+    /// (alongside its own animation state) to keep requesting frames only while
+    /// script is animating, so idle surfaces stop ticking.
+    pub fn has_animation_frame_callbacks(&mut self) -> bool {
+        self.engine
+            .eval("String(globalThis.__hasAnimationFrameCallbacks())")
+            .ok()
+            .and_then(|v| self.engine.value_to_string(&v).ok())
+            .map(|s| s == "true")
+            .unwrap_or(false)
+    }
+
     fn run_one_timer_task(&mut self, now_ms: Option<f64>) -> Result<usize, E::Error> {
         let expr = match now_ms {
             Some(now_ms) => format!("String(globalThis.__runTimers(1,{now_ms}))"),
@@ -1300,9 +1367,62 @@ const SHELL_GLOBALS_BOOTSTRAP: &str = r#"
   // the document URL, defaulting to about:blank); not snapshotted here.
   globalThis.navigator = { userAgent: 'serval', platform: '', language: 'en-US' };
 
-  // requestAnimationFrame as a 0-delay timer (no real frame clock yet).
-  globalThis.requestAnimationFrame = function(cb) { return setTimeout(cb, 0); };
-  globalThis.cancelAnimationFrame = function(id) { clearTimeout(id); };
+  // AnimationFrameProvider (window). The window's associated document is this
+  // runtime's one document, so window-global state realizes the document's
+  // "map of animation frame callbacks" and identifier counter. The host drives
+  // passes via Runtime::run_animation_frame_callbacks (its tick owns the clock).
+  // https://html.spec.whatwg.org/multipage/imagebitmap-and-animations.html#animation-frames
+  var rafCallbacks = {};   // "map of animation frame callbacks" (handle -> callback)
+  var rafId = 0;           // "animation frame callback identifier"
+  var rafPass = null;      // key snapshot of an in-progress "run the animation frame callbacks"
+  globalThis.requestAnimationFrame = function(callback) {
+    if (typeof callback !== 'function') {
+      throw new TypeError('requestAnimationFrame: callback is not callable');
+    }
+    // Step 3: "Increment target's animation frame callback identifier by one, and let handle be the result."
+    rafId += 1;
+    // Step 5: "Set callbacks[handle] to callback."
+    rafCallbacks[rafId] = callback;
+    // Step 6: "Return handle."
+    return rafId;
+  };
+  globalThis.cancelAnimationFrame = function(handle) {
+    // Step 3: "Remove callbacks[handle]."
+    delete rafCallbacks[handle];
+  };
+  // "Run the animation frame callbacks", one callback per host call, so the Rust
+  // drive loop can run a microtask checkpoint between callbacks (the JS stack is
+  // empty there, matching the checkpoint browsers exhibit between rAF callbacks;
+  // same granularity as the per-timer-task checkpoint). Returns 1 if a callback
+  // ran, 0 when the pass is exhausted (which also ends the pass).
+  globalThis.__runOneAnimationFrameCallback = function(now) {
+    if (rafPass === null) {
+      // Step 2: "Let callbackHandles be the result of getting the keys of callbacks."
+      rafPass = Object.keys(rafCallbacks);
+    }
+    while (rafPass.length > 0) {
+      var handle = rafPass.shift();
+      // Step 3: "For each handle in callbackHandles, if handle exists in callbacks:"
+      if (!(handle in rafCallbacks)) { continue; }
+      var callback = rafCallbacks[handle];
+      // Step 3: "Remove callbacks[handle]." Before invoking, so a
+      // requestAnimationFrame from inside the callback lands in the next pass.
+      delete rafCallbacks[handle];
+      // Step 3: "Invoke callback with « now » and "report"."
+      // Note: an exception propagates to the host (matching the timer path in
+      // __runTimers) instead of the spec's report-and-continue.
+      callback(now);
+      return 1;
+    }
+    rafPass = null;
+    return 0;
+  };
+  // Whether any frame callbacks are registered; the host keeps requesting
+  // frames only while script is animating.
+  globalThis.__hasAnimationFrameCallbacks = function() {
+    for (var k in rafCallbacks) { return true; }
+    return false;
+  };
 
   // DOMException with the legacy name→code table, so tests that construct it,
   // check `instanceof DOMException`, or read `.code`/`.name` work. (DOM methods
@@ -1468,6 +1588,45 @@ mod tests {
         rt.eval(script).expect("schedule");
         assert_eq!(rt.run_timers(10, 0.0), 2);
         assert_eq!(rt.host().borrow().console, vec!["first", "micro", "second"]);
+    }
+
+    /// rAF callbacks run once per pass in registration order with the frame
+    /// timestamp; a microtask queued by callback N runs before callback N+1
+    /// (same pass); a handle canceled mid-pass is skipped; a callback
+    /// registered mid-pass lands in the next frame; an idle runtime reports no
+    /// registered callbacks and a zero-count pass.
+    fn animation_frame_callbacks_work<E: ScriptEngine>() {
+        let script = "var c3; \
+                      requestAnimationFrame(function(now){ \
+                          console.log('one@' + now); \
+                          Promise.resolve().then(function(){ console.log('micro'); }); \
+                          cancelAnimationFrame(c3); \
+                          requestAnimationFrame(function(){ console.log('next'); }); \
+                      }); \
+                      requestAnimationFrame(function(){ console.log('two'); }); \
+                      c3 = requestAnimationFrame(function(){ console.log('canceled'); });";
+
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.eval(script).expect("schedule");
+        assert!(rt.has_animation_frame_callbacks());
+
+        // Pass 1: snapshot is the three registered handles; the mid-pass
+        // registration ('next') must not run, the canceled one must be skipped,
+        // and 'micro' must land between the two callbacks that do run.
+        assert_eq!(rt.run_animation_frame_callbacks(16.0).expect("frame 1"), 2);
+        assert_eq!(rt.host().borrow().console, vec!["one@16", "micro", "two"]);
+        assert!(rt.has_animation_frame_callbacks());
+
+        // Pass 2: only the mid-pass registration remains.
+        assert_eq!(rt.run_animation_frame_callbacks(32.0).expect("frame 2"), 1);
+        assert_eq!(
+            rt.host().borrow().console,
+            vec!["one@16", "micro", "two", "next"]
+        );
+
+        // Idle: nothing registered, nothing runs.
+        assert!(!rt.has_animation_frame_callbacks());
+        assert_eq!(rt.run_animation_frame_callbacks(48.0).expect("frame 3"), 0);
     }
 
     /// E4 trace seed: the runtime emits deterministic NDJSON over the named
@@ -1855,6 +2014,17 @@ mod tests {
     #[test]
     fn per_timer_microtask_checkpoint_on_nova() {
         per_timer_microtask_checkpoint_works::<script_engine_nova::NovaEngine>();
+    }
+
+    #[test]
+    fn animation_frame_callbacks_on_boa() {
+        animation_frame_callbacks_work::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn animation_frame_callbacks_on_nova() {
+        animation_frame_callbacks_work::<script_engine_nova::NovaEngine>();
     }
 
     #[test]

@@ -500,16 +500,13 @@
     "dom/nodes/moveBefore/object-crash-regression.html": "fail",
     "dom/nodes/moveBefore/pointer-events.html": "fail",
     "dom/nodes/moveBefore/popover-preserve.html": "fail",
-    "dom/nodes/moveBefore/preserve-render-blocking-script.html": {
-      "reason": "evaluation-threw",
-      "status": "error"
-    },
+    "dom/nodes/moveBefore/preserve-render-blocking-script.html": "fail",
     "dom/nodes/moveBefore/preserve-render-blocking-style.html": {
       "reason": "evaluation-threw",
       "status": "error"
     },
     "dom/nodes/moveBefore/relevant-mutations.html": "fail",
-    "dom/nodes/moveBefore/script-move-before.html": "fail",
+    "dom/nodes/moveBefore/script-move-before.html": "pass",
     "dom/nodes/moveBefore/select-option-optgroup.html": "fail",
     "dom/nodes/moveBefore/selection-preserve.html": "fail",
     "dom/nodes/moveBefore/slotchange-events.html": "fail",

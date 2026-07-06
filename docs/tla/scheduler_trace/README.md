@@ -1,6 +1,6 @@
 # Scheduler trace validation
 
-This is the E4 witness for `docs/2026-06-24_event_loop_rigor_plan.md`.
+This is the E4 witness for `docs/archive/2026-06-24_event_loop_rigor_plan.md`.
 
 `components/script-runtime-api` emits scheduler trace NDJSON through
 `Runtime::scheduler_trace_ndjson()`. Generate the TLA+ data module with:

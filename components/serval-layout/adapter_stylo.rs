@@ -718,16 +718,28 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
 
     fn animation_rule(
         &self,
-        _ctx: &SharedStyleContext,
+        ctx: &SharedStyleContext,
     ) -> Option<Arc<Locked<PropertyDeclarationBlock>>> {
-        None
+        // Interpolated CSS-animation declarations at the context's clock, from
+        // the document's animation set (empty until keyframes support lands).
+        ctx.animations.get_animation_declarations(
+            &style::animation::AnimationSetKey::new_for_non_pseudo(style::dom::TNode::opaque(&style::dom::TElement::as_node(self))),
+            ctx.current_time_for_animations,
+            Self::plane_from_ctx().shared_lock(),
+        )
     }
 
     fn transition_rule(
         &self,
-        _ctx: &SharedStyleContext,
+        ctx: &SharedStyleContext,
     ) -> Option<Arc<Locked<PropertyDeclarationBlock>>> {
-        None
+        // Interpolated CSS-transition declarations at the context's clock; the
+        // `RESTYLE_CSS_TRANSITIONS` replacement path re-splices these per tick.
+        ctx.animations.get_transition_declarations(
+            &style::animation::AnimationSetKey::new_for_non_pseudo(style::dom::TNode::opaque(&style::dom::TElement::as_node(self))),
+            ctx.current_time_for_animations,
+            Self::plane_from_ctx().shared_lock(),
+        )
     }
 
     fn state(&self) -> ElementState {
@@ -862,27 +874,35 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
     }
 
     fn may_have_animations(&self) -> bool {
-        false
+        // No cheap per-element bit here (Gecko keeps one); saying "maybe" makes
+        // rule collection consult the animation set, a hash lookup per element.
+        true
     }
 
-    fn has_animations(&self, _ctx: &SharedStyleContext) -> bool {
-        false
+    fn has_animations(&self, ctx: &SharedStyleContext) -> bool {
+        self.has_css_animations(ctx, None) || self.has_css_transitions(ctx, None)
     }
 
     fn has_css_animations(
         &self,
-        _ctx: &SharedStyleContext,
-        _pseudo: Option<PseudoElement>,
+        ctx: &SharedStyleContext,
+        pseudo: Option<PseudoElement>,
     ) -> bool {
-        false
+        ctx.animations.has_active_animations(&style::animation::AnimationSetKey::new(
+            style::dom::TNode::opaque(&style::dom::TElement::as_node(self)),
+            pseudo,
+        ))
     }
 
     fn has_css_transitions(
         &self,
-        _ctx: &SharedStyleContext,
-        _pseudo: Option<PseudoElement>,
+        ctx: &SharedStyleContext,
+        pseudo: Option<PseudoElement>,
     ) -> bool {
-        false
+        ctx.animations.has_active_transitions(&style::animation::AnimationSetKey::new(
+            style::dom::TNode::opaque(&style::dom::TElement::as_node(self)),
+            pseudo,
+        ))
     }
 
     fn shadow_root(&self) -> Option<<Self::ConcreteNode as TNode>::ConcreteShadowRoot> {

@@ -22,6 +22,7 @@ use std::hash::Hash;
 use rustc_hash::{FxHashMap, FxHashSet};
 use selectors::matching::ElementSelectorFlags;
 use servo_arc::Arc;
+use style::animation::DocumentAnimationSet;
 use style::data::{ElementDataMut, ElementDataRef, ElementDataWrapper};
 use style::properties::{ComputedValues, PropertyDeclarationBlock};
 use style::selector_parser::RestyleDamage;
@@ -247,6 +248,16 @@ pub struct StylePlane<NodeId: Copy + Eq + Hash> {
     /// locked under it, so a fresh lock per pass fails Stylo's `same_lock_as` guard
     /// on the `RESTYLE_STYLE_ATTRIBUTE` (CascadeWithReplacements) path.
     lock: SharedRwLock,
+    /// The document's running CSS transitions/animations (Stylo's Servo-mode
+    /// animation backend). Shared (`Arc` inside) with every cascade pass's
+    /// `SharedStyleContext`, so transitions started in one pass are visible to
+    /// the next. Like the lock, it must be stable across passes: `Transition`
+    /// state (start time, from/to values) lives here between ticks.
+    animations: DocumentAnimationSet,
+    /// The clock the animation backend reads, in seconds (Stylo transition
+    /// durations/delays are seconds). The session sets it before a pass; a
+    /// tick is "advance the clock, restyle the animating elements".
+    animation_clock: f64,
 }
 
 impl<NodeId: Copy + Eq + Hash> Default for StylePlane<NodeId> {
@@ -257,6 +268,8 @@ impl<NodeId: Copy + Eq + Hash> Default for StylePlane<NodeId> {
             marker_styles: FxHashMap::default(),
             contain_intrinsic_overrides: FxHashMap::default(),
             lock: SharedRwLock::new(),
+            animations: DocumentAnimationSet::default(),
+            animation_clock: 0.0,
         }
     }
 }
@@ -270,6 +283,25 @@ impl<NodeId: Copy + Eq + Hash> StylePlane<NodeId> {
     /// it each pass; the clone shares the same underlying lock.
     pub fn shared_lock(&self) -> &SharedRwLock {
         &self.lock
+    }
+
+    /// The document's animation set (see the field doc). Cloning shares the
+    /// same underlying `Arc<RwLock<..>>`; the cascade clones it into each
+    /// pass's `SharedStyleContext`.
+    pub fn animations(&self) -> &DocumentAnimationSet {
+        &self.animations
+    }
+
+    /// The animation clock the next cascade pass will read, in seconds.
+    pub fn animation_clock(&self) -> f64 {
+        self.animation_clock
+    }
+
+    /// Set the animation clock (seconds) for subsequent cascade passes. The
+    /// clock is monotonic per session; rewinding it mid-transition is
+    /// unsupported (Stylo compares it against recorded start times).
+    pub fn set_animation_clock(&mut self, now_s: f64) {
+        self.animation_clock = now_s;
     }
 
     pub fn insert(&mut self, id: NodeId, entry: StyleEntry) {

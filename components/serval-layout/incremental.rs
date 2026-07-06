@@ -35,6 +35,7 @@ use crate::cascade::{
     build_stylist, restyle_for_animation_tick, restyle_for_interaction, restyle_structural,
     restyle_with_snapshots, run_cascade_with_stylist, set_stylist_color_scheme,
 };
+use crate::transition_events::{TransitionEventRecord, harvest_transition_events};
 use crate::fragment::FragmentPlane;
 use crate::image_decode::{BackgroundImagePlane, DecodedImage, ImagePlane};
 use crate::invalidate::{classify, coalesce};
@@ -189,6 +190,15 @@ pub struct IncrementalLayout<Id: Copy + Eq + Hash> {
     last_damage: RestyleDamage,
     /// Cheap counters for the most recent mutation batch over this session.
     last_batch_stats: LayoutBatchStats,
+    /// Per-transition last-observed `AnimationState`, keyed by
+    /// `(opaque node id, longhand name)`. Diffed against the live animation set
+    /// after every `apply`/`tick_animations` to derive lifecycle events
+    /// (`crate::transition_events`).
+    transition_tracker: crate::transition_events::TransitionTracker,
+    /// CSS transition lifecycle events produced since the host last drained
+    /// them ([`take_transition_events`](Self::take_transition_events)). Filled
+    /// off the cascade so the host dispatches them as tasks.
+    pending_transition_events: Vec<TransitionEventRecord<Id>>,
 }
 
 impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
@@ -253,6 +263,8 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             highlights: crate::highlights::HighlightRegistry::new(),
             last_damage: RestyleDamage::empty(),
             last_batch_stats,
+            transition_tracker: crate::transition_events::TransitionTracker::default(),
+            pending_transition_events: Vec::new(),
         }
     }
 

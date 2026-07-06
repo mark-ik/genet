@@ -220,6 +220,22 @@ pub trait LayoutDomMut: LayoutDom {
         reference: Option<Self::NodeId>,
     );
 
+    /// Atomically move an in-tree `child` under `parent` before `reference`
+    /// (append when `None`), preserving subtree state — the `Node.moveBefore()`
+    /// contract (WHATWG DOM; docs/2026-07-05_movebefore_dom_standard_plan.md).
+    /// Records one [`DomMutation::Moved`] instead of the `Removed` + `Inserted`
+    /// pair [`insert_before`](Self::insert_before) produces for an in-tree node,
+    /// so consumers may keep the subtree's retained state. A move resolving to
+    /// the current position records nothing; a disconnected `child` degrades to
+    /// a plain insert (the DOM-level `moveBefore` throws there; this layout-side
+    /// contract stays total, like `insert_before`'s bad-reference fallback).
+    fn move_before(
+        &mut self,
+        parent: Self::NodeId,
+        child: Self::NodeId,
+        reference: Option<Self::NodeId>,
+    );
+
     /// Detach `node` from its parent and drop its subtree.
     fn remove(&mut self, node: Self::NodeId);
 
@@ -269,6 +285,19 @@ pub enum DomMutation<Id> {
     CharacterDataChanged { node: Id },
     /// `node`'s entire child subtree was replaced (e.g. via `innerHTML`).
     SubtreeReplaced { node: Id },
+    /// `node` moved atomically from `from_parent` to `to_parent` (possibly the
+    /// same parent, reordered) with state preserved — the `Node.moveBefore()`
+    /// contract (WHATWG DOM). Unlike a `Removed` + `Inserted` pair this promises
+    /// the subtree never left the tree: consumers may keep per-node retained
+    /// state (boxes, shaped text, focus, scroll) and treat the move as a
+    /// splice/graft candidate rather than a teardown. A conservative consumer
+    /// handles it exactly as removed-from + inserted-under.
+    /// (docs/2026-07-05_movebefore_dom_standard_plan.md, S1.)
+    Moved {
+        node: Id,
+        from_parent: Id,
+        to_parent: Id,
+    },
 }
 
 /// Serializable mirror of [`QualName`] for capture/replay logs.
@@ -325,6 +354,11 @@ pub enum CapturedMutation {
     SubtreeReplaced {
         node: u64,
     },
+    Moved {
+        node: u64,
+        from_parent: u64,
+        to_parent: u64,
+    },
 }
 
 #[cfg(feature = "capture")]
@@ -355,6 +389,15 @@ impl CapturedMutation {
                 Self::CharacterDataChanged { node: to_raw(node) }
             },
             DomMutation::SubtreeReplaced { node } => Self::SubtreeReplaced { node: to_raw(node) },
+            DomMutation::Moved {
+                node,
+                from_parent,
+                to_parent,
+            } => Self::Moved {
+                node: to_raw(node),
+                from_parent: to_raw(from_parent),
+                to_parent: to_raw(to_parent),
+            },
         }
     }
 
@@ -385,6 +428,15 @@ impl CapturedMutation {
             },
             Self::SubtreeReplaced { node } => DomMutation::SubtreeReplaced {
                 node: from_raw(node),
+            },
+            Self::Moved {
+                node,
+                from_parent,
+                to_parent,
+            } => DomMutation::Moved {
+                node: from_raw(node),
+                from_parent: from_raw(from_parent),
+                to_parent: from_raw(to_parent),
             },
         }
     }

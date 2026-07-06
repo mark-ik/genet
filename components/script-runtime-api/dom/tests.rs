@@ -438,6 +438,65 @@ fn dom_traversal_on_boa() {
     dom_traversal_works::<script_engine_boa::BoaEngine>();
 }
 
+/// `Node.moveBefore` (moveBefore plan S3), against any backend: cross-parent
+/// move, same-parent reorder, in-place no-op, the pre-move validity throws
+/// (bad reference → NotFoundError; disconnected node and would-be cycle →
+/// HierarchyRequestError), the node return value, and a move inside a detached
+/// tree (same root, so allowed — moveBefore never adopts, it never crosses).
+fn dom_move_before_works<E: ScriptEngine>() {
+    use serval_static_dom::StaticDocument;
+    let mut rt = Runtime::<E>::new().expect("runtime");
+    rt.load_dom(&StaticDocument::parse(
+        "<html><body><div id='a'><p id='p'></p></div>\
+         <div id='b'><span id='bk'></span></div></body></html>",
+    ));
+
+    rt.eval(
+        "function ids(c){ var o=[]; for (var i=0;i<c.length;i++) o.push(c[i].id); return o.join(','); }\
+         var a = document.getElementById('a');\
+         var b = document.getElementById('b');\
+         var p = document.getElementById('p');\
+         var bk = document.getElementById('bk');\
+         b.moveBefore(p, null);\
+         console.log(p.parentNode.id + ':' + ids(b.children) + ':' + ids(a.children));\
+         b.moveBefore(p, bk);\
+         console.log(ids(b.children));\
+         b.moveBefore(p, bk);\
+         console.log(ids(b.children));\
+         try { b.moveBefore(p, a); } catch (e) { console.log(e.name); }\
+         var d = document.createElement('div');\
+         try { b.moveBefore(d, null); } catch (e) { console.log(e.name); }\
+         try { p.moveBefore(b, null); } catch (e) { console.log(e.name); }\
+         console.log(String(b.moveBefore(p, null) === p) + ':' + ids(b.children));\
+         var host = document.createElement('div');\
+         var x = document.createElement('span'); x.id = 'x';\
+         var y = document.createElement('span'); y.id = 'y';\
+         host.appendChild(x); host.appendChild(y);\
+         host.moveBefore(y, x);\
+         console.log(ids(host.children));",
+    )
+    .expect("moveBefore script");
+
+    assert_eq!(
+        rt.host().borrow().console,
+        vec![
+            "b:bk,p:",               // cross-parent append: p under b, a emptied
+            "p,bk",                  // reorder before bk
+            "p,bk",                  // in-place move is a no-op
+            "NotFoundError",         // reference not a child of the target
+            "HierarchyRequestError", // a disconnected node cannot move in
+            "HierarchyRequestError", // moving an ancestor under its descendant
+            "true:bk,p",             // returns the node; p moved to the end
+            "y,x",                   // a move inside one detached tree is legal
+        ],
+    );
+}
+
+#[test]
+fn dom_move_before_on_boa() {
+    dom_move_before_works::<script_engine_boa::BoaEngine>();
+}
+
 #[test]
 fn dom_reflection_ns_on_boa() {
     dom_reflection_ns_works::<script_engine_boa::BoaEngine>();

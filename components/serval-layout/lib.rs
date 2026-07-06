@@ -52,6 +52,7 @@ mod snapshot;
 mod style;
 mod subtree;
 mod text_measure;
+mod transition_events;
 mod ua_defaults;
 mod viewport;
 
@@ -94,6 +95,7 @@ pub use serval_lane::{
 pub use snapshot::build_snapshot_map;
 pub use style::{StyleEntry, StylePlane};
 pub use subtree::{SubtreeView, render_subtree};
+pub use transition_events::{TransitionEventKind, TransitionEventRecord};
 pub use text_measure::{
     FontFamilySpec, GenericFamilyKind, InlineContent, InlineRun, TextMeasureCtx,
     measure_inline_content, register_host_font,

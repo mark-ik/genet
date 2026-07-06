@@ -432,6 +432,23 @@ impl ScriptedDom {
         self.node_mut(child).parent = None;
     }
 
+    /// The shared tree surgery behind `insert_before` / `move_before`: detach
+    /// `child`, re-link it under `parent` before `reference` (no mutation
+    /// recorded — the callers record what the operation *means*). The insertion
+    /// index resolves *after* detaching (so a move within the same parent
+    /// reflects the post-detach positions); a missing or non-child reference
+    /// falls back to append.
+    fn attach_at(&mut self, parent: NodeId, child: NodeId, reference: Option<NodeId>) {
+        self.detach(child);
+        self.node_mut(child).parent = Some(parent);
+        let idx = reference.and_then(|r| self.node(parent).children.iter().position(|&c| c == r));
+        let kids = &mut self.node_mut(parent).children;
+        match idx {
+            Some(i) => kids.insert(i, child),
+            None => kids.push(child),
+        }
+    }
+
     /// Free a node and its whole subtree (entries removed from the store).
     fn drop_subtree(&mut self, node: NodeId) {
         let children = std::mem::take(&mut self.node_mut(node).children);
@@ -682,6 +699,15 @@ impl LayoutDomMut for ScriptedDom {
     }
 
     fn append_child(&mut self, parent: NodeId, child: NodeId) {
+        // Spec observability: appending an in-tree node is a remove + insert,
+        // and the former parent's consumers must hear the removal. The detach
+        // used to be silent here. (moveBefore plan S1.)
+        if let Some(former_parent) = self.node(child).parent {
+            self.mutations.push(DomMutation::Removed {
+                node: child,
+                former_parent,
+            });
+        }
         self.detach(child);
         self.node_mut(child).parent = Some(parent);
         self.node_mut(parent).children.push(child);
@@ -692,21 +718,51 @@ impl LayoutDomMut for ScriptedDom {
     }
 
     fn insert_before(&mut self, parent: NodeId, child: NodeId, reference: Option<NodeId>) {
-        self.detach(child);
-        self.node_mut(child).parent = Some(parent);
-        // Resolve the insertion index *after* detaching (so a move within the
-        // same parent reflects the post-detach positions). A missing or
-        // non-child reference falls back to append.
-        let idx = reference.and_then(|r| self.node(parent).children.iter().position(|&c| c == r));
-        let kids = &mut self.node_mut(parent).children;
-        match idx {
-            Some(i) => kids.insert(i, child),
-            None => kids.push(child),
+        // As in `append_child`: an in-tree insert is a remove + insert, both
+        // observable. State preservation is `move_before`'s contract, not this
+        // one's. (moveBefore plan S1.)
+        if let Some(former_parent) = self.node(child).parent {
+            self.mutations.push(DomMutation::Removed {
+                node: child,
+                former_parent,
+            });
         }
+        self.attach_at(parent, child, reference);
         self.mutations.push(DomMutation::Inserted {
             node: child,
             parent,
         });
+    }
+
+    fn move_before(&mut self, parent: NodeId, child: NodeId, reference: Option<NodeId>) {
+        let from_parent = self.node(child).parent;
+        // Spec pre-move step: a reference of the moving node itself means
+        // "before my own next sibling", i.e. stay in place.
+        let reference = if reference == Some(child) {
+            self.sibling(child, 1)
+        } else {
+            reference
+        };
+        // A move resolving to the current position is a no-op: nothing moves,
+        // nothing is recorded (and per spec, no state resets either).
+        if from_parent == Some(parent) && self.sibling(child, 1) == reference {
+            return;
+        }
+        self.attach_at(parent, child, reference);
+        match from_parent {
+            Some(from_parent) => self.mutations.push(DomMutation::Moved {
+                node: child,
+                from_parent,
+                to_parent: parent,
+            }),
+            // A disconnected node has no subtree state to preserve; record the
+            // plain insert this actually is. (The DOM-level `moveBefore` throws
+            // there; this layout-side contract stays total.)
+            None => self.mutations.push(DomMutation::Inserted {
+                node: child,
+                parent,
+            }),
+        }
     }
 
     fn remove(&mut self, node: NodeId) {
@@ -926,7 +982,8 @@ mod tests {
             vec![a, b, c, d, e]
         );
 
-        // Each insert recorded exactly one Inserted under root.
+        // Each insert recorded exactly one Inserted under root (all three
+        // children were detached fresh nodes, so no Removed accompanies them).
         let mut muts = Vec::new();
         dom.drain_mutations(&mut muts);
         assert_eq!(muts.len(), 3);
@@ -934,6 +991,113 @@ mod tests {
             muts.iter()
                 .all(|m| matches!(m, DomMutation::Inserted { parent, .. } if *parent == root))
         );
+    }
+
+    #[test]
+    fn in_tree_insert_reports_the_removal_too() {
+        // Re-inserting an in-tree node is a remove + insert, both observable —
+        // the former parent's consumers must hear the child left. (moveBefore
+        // plan S1: this detach used to be silent.)
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let a = dom.create_element(qual("a"));
+        let b = dom.create_element(qual("b"));
+        let child = dom.create_element(qual("child"));
+        dom.append_child(root, a);
+        dom.append_child(root, b);
+        dom.append_child(a, child);
+        let mut drained = Vec::new();
+        dom.drain_mutations(&mut drained);
+
+        dom.insert_before(b, child, None);
+        let mut muts = Vec::new();
+        dom.drain_mutations(&mut muts);
+        assert_eq!(
+            muts,
+            vec![
+                DomMutation::Removed {
+                    node: child,
+                    former_parent: a,
+                },
+                DomMutation::Inserted {
+                    node: child,
+                    parent: b,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn move_before_moves_across_parents_with_one_moved_record() {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let a = dom.create_element(qual("a"));
+        let b = dom.create_element(qual("b"));
+        let child = dom.create_element(qual("child"));
+        let b_kid = dom.create_element(qual("bkid"));
+        dom.append_child(root, a);
+        dom.append_child(root, b);
+        dom.append_child(a, child);
+        dom.append_child(b, b_kid);
+        let mut drained = Vec::new();
+        dom.drain_mutations(&mut drained);
+
+        dom.move_before(b, child, Some(b_kid));
+        assert_eq!(dom.parent(child), Some(b));
+        assert_eq!(dom.dom_children(b).collect::<Vec<_>>(), vec![child, b_kid]);
+        assert!(dom.dom_children(a).next().is_none());
+
+        // One Moved record: not a Removed + Inserted pair, so consumers may
+        // keep the subtree's retained state.
+        let mut muts = Vec::new();
+        dom.drain_mutations(&mut muts);
+        assert_eq!(
+            muts,
+            vec![DomMutation::Moved {
+                node: child,
+                from_parent: a,
+                to_parent: b,
+            }]
+        );
+    }
+
+    #[test]
+    fn move_before_same_parent_reorders_and_noops_in_place() {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let a = dom.create_element(qual("a"));
+        let b = dom.create_element(qual("b"));
+        let c = dom.create_element(qual("c"));
+        dom.append_child(root, a);
+        dom.append_child(root, b);
+        dom.append_child(root, c);
+        let mut drained = Vec::new();
+        dom.drain_mutations(&mut drained);
+
+        // Reorder: move c before a → [c, a, b], one Moved with equal parents.
+        dom.move_before(root, c, Some(a));
+        assert_eq!(dom.dom_children(root).collect::<Vec<_>>(), vec![c, a, b]);
+        let mut muts = Vec::new();
+        dom.drain_mutations(&mut muts);
+        assert_eq!(
+            muts,
+            vec![DomMutation::Moved {
+                node: c,
+                from_parent: root,
+                to_parent: root,
+            }]
+        );
+
+        // A move to the current position records nothing: before its own next
+        // sibling, before itself (the spec pre-move step), and a last child
+        // "moved" to append.
+        dom.move_before(root, c, Some(a));
+        dom.move_before(root, c, Some(c));
+        dom.move_before(root, b, None);
+        let mut noop = Vec::new();
+        dom.drain_mutations(&mut noop);
+        assert_eq!(noop, Vec::new());
+        assert_eq!(dom.dom_children(root).collect::<Vec<_>>(), vec![c, a, b]);
     }
 
     #[test]

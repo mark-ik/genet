@@ -847,20 +847,17 @@ mod tests {
     /// the header) lost clicks to the sidebar behind it.
     #[test]
     fn hit_test_prefers_positioned_overlay_over_later_in_flow_content() {
-        let document =
-            StaticDocument::parse("<html><body><aside>o</aside><p>u</p></body></html>");
+        let document = StaticDocument::parse("<html><body><aside>o</aside><p>u</p></body></html>");
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
         crate::cascade::run_cascade(
             &document,
             &mut styles,
             euclid::Size2D::new(800.0, 600.0),
-            &[
-                "body { margin: 0; padding: 0; } \
+            &["body { margin: 0; padding: 0; } \
                  aside { position: absolute; top: 0; left: 0; \
                          width: 200px; height: 200px; } \
                  p { display: block; width: 200px; height: 200px; \
-                     margin: 0; padding: 0; }",
-            ],
+                     margin: 0; padding: 0; }"],
             None,
         );
         let viewport = taffy::Size {
@@ -872,7 +869,9 @@ mod tests {
 
         // (50, 50) is inside both the absolute <aside> overlay and the
         // in-flow <p> behind it.
-        let hit = view.hit_test(Point::new(50.0, 50.0)).expect("hit something");
+        let hit = view
+            .hit_test(Point::new(50.0, 50.0))
+            .expect("hit something");
         let aside = find_element(NodeRef::document(&document), local_name!("aside"))
             .expect("<aside> exists");
         let expected = document.opaque_id(aside.id());
@@ -890,22 +889,19 @@ mod tests {
     /// walk, the way paint lifts its layers.
     #[test]
     fn hit_test_prefers_positioned_overlay_across_subtrees() {
-        let document = StaticDocument::parse(
-            "<html><body><div><aside>o</aside></div><p>u</p></body></html>",
-        );
+        let document =
+            StaticDocument::parse("<html><body><div><aside>o</aside></div><p>u</p></body></html>");
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
         crate::cascade::run_cascade(
             &document,
             &mut styles,
             euclid::Size2D::new(800.0, 600.0),
-            &[
-                "body { margin: 0; padding: 0; } \
+            &["body { margin: 0; padding: 0; } \
                  div { display: block; height: 30px; } \
                  aside { position: absolute; top: 0; left: 0; \
                          width: 200px; height: 200px; } \
                  p { display: block; width: 200px; height: 200px; \
-                     margin: 0; padding: 0; }",
-            ],
+                     margin: 0; padding: 0; }"],
             None,
         );
         let viewport = taffy::Size {

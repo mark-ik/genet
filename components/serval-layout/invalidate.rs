@@ -113,21 +113,41 @@ fn is_ancestor<Id: Copy + Eq>(
     false
 }
 
-/// Classify a single mutation into its invalidation scope.
-pub fn classify<Id: Copy>(mutation: &DomMutation<Id>) -> Invalidation<Id> {
-    match mutation {
+/// Classify a single mutation into its invalidation scope(s). Every mutation
+/// yields one invalidation except a cross-parent [`DomMutation::Moved`], which
+/// yields two (both the source and the target parent's flow and sibling-
+/// dependent selectors changed) — the same scopes the equivalent `Removed` +
+/// `Inserted` pair would have produced. (moveBefore plan S1: conservative; the
+/// graft fast path is S2.)
+pub fn classify<Id: Copy + PartialEq>(
+    mutation: &DomMutation<Id>,
+) -> impl Iterator<Item = Invalidation<Id>> {
+    let (first, second) = match mutation {
         // A class/id/style attribute can change which selectors match the element
         // and its descendants → restyle the subtree.
-        DomMutation::AttributeChanged { node, .. } => Invalidation::RestyleSubtree(*node),
+        DomMutation::AttributeChanged { node, .. } => (Invalidation::RestyleSubtree(*node), None),
         // Insert/remove affects sibling- and child-dependent selectors and the
         // parent's flow → restyle the parent's subtree.
-        DomMutation::Inserted { parent, .. } => Invalidation::RestyleSubtree(*parent),
-        DomMutation::Removed { former_parent, .. } => Invalidation::RestyleSubtree(*former_parent),
+        DomMutation::Inserted { parent, .. } => (Invalidation::RestyleSubtree(*parent), None),
+        DomMutation::Removed { former_parent, .. } => {
+            (Invalidation::RestyleSubtree(*former_parent), None)
+        },
         // innerHTML rebuilt the node's children → restyle the subtree.
-        DomMutation::SubtreeReplaced { node } => Invalidation::RestyleSubtree(*node),
+        DomMutation::SubtreeReplaced { node } => (Invalidation::RestyleSubtree(*node), None),
         // Text edits change line metrics but not selector matching → relayout only.
-        DomMutation::CharacterDataChanged { node } => Invalidation::RelayoutSubtree(*node),
-    }
+        DomMutation::CharacterDataChanged { node } => (Invalidation::RelayoutSubtree(*node), None),
+        // A move restyles the target parent's subtree, plus the source parent's
+        // when they differ (a same-parent reorder has one scope, not two).
+        DomMutation::Moved {
+            from_parent,
+            to_parent,
+            ..
+        } => (
+            Invalidation::RestyleSubtree(*to_parent),
+            (from_parent != to_parent).then(|| Invalidation::RestyleSubtree(*from_parent)),
+        ),
+    };
+    std::iter::once(first).chain(second)
 }
 
 #[cfg(test)]
@@ -142,32 +162,55 @@ mod tests {
     #[test]
     fn classify_maps_each_mutation() {
         type Id = u32;
+        let one = |m: &DomMutation<Id>| classify(m).collect::<Vec<_>>();
         assert_eq!(
-            classify::<Id>(&DomMutation::AttributeChanged {
+            one(&DomMutation::AttributeChanged {
                 node: 1,
                 name: class_attr(),
                 old_value: None,
             }),
-            Invalidation::RestyleSubtree(1),
+            vec![Invalidation::RestyleSubtree(1)],
         );
         assert_eq!(
-            classify::<Id>(&DomMutation::Inserted { node: 2, parent: 3 }),
-            Invalidation::RestyleSubtree(3),
+            one(&DomMutation::Inserted { node: 2, parent: 3 }),
+            vec![Invalidation::RestyleSubtree(3)],
         );
         assert_eq!(
-            classify::<Id>(&DomMutation::Removed {
+            one(&DomMutation::Removed {
                 node: 4,
                 former_parent: 5,
             }),
-            Invalidation::RestyleSubtree(5),
+            vec![Invalidation::RestyleSubtree(5)],
         );
         assert_eq!(
-            classify::<Id>(&DomMutation::SubtreeReplaced { node: 6 }),
-            Invalidation::RestyleSubtree(6),
+            one(&DomMutation::SubtreeReplaced { node: 6 }),
+            vec![Invalidation::RestyleSubtree(6)],
         );
         assert_eq!(
-            classify::<Id>(&DomMutation::CharacterDataChanged { node: 7 }),
-            Invalidation::RelayoutSubtree(7),
+            one(&DomMutation::CharacterDataChanged { node: 7 }),
+            vec![Invalidation::RelayoutSubtree(7)],
+        );
+        // A cross-parent move restyles both parents' subtrees — the same scopes
+        // its Removed + Inserted equivalent would have produced; a same-parent
+        // reorder has one scope.
+        assert_eq!(
+            one(&DomMutation::Moved {
+                node: 8,
+                from_parent: 9,
+                to_parent: 10,
+            }),
+            vec![
+                Invalidation::RestyleSubtree(10),
+                Invalidation::RestyleSubtree(9),
+            ],
+        );
+        assert_eq!(
+            one(&DomMutation::Moved {
+                node: 8,
+                from_parent: 9,
+                to_parent: 9,
+            }),
+            vec![Invalidation::RestyleSubtree(9)],
         );
         assert_eq!(Invalidation::RelayoutSubtree(7).node(), 7);
     }

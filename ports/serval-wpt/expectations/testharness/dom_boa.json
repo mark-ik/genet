@@ -102,7 +102,7 @@
     "dom/events/handler-count.html?window": "fail",
     "dom/events/keypress-dispatch-crash.html": "skip",
     "dom/events/label-default-action.html": "fail",
-    "dom/events/legacy-pre-activation-behavior.window.html": "fail",
+    "dom/events/legacy-pre-activation-behavior.window.html": "pass",
     "dom/events/mouse-event-retarget.html": "fail",
     "dom/events/no-focus-events-at-clicking-editable-content-in-link.html": "fail",
     "dom/events/non-cancelable-when-passive/generic-events-stay-cancelable.html": "pass",
@@ -535,10 +535,10 @@
     "dom/nodes/moveBefore/object-crash-regression.html": "fail",
     "dom/nodes/moveBefore/pointer-events.html": "fail",
     "dom/nodes/moveBefore/popover-preserve.html": "fail",
-    "dom/nodes/moveBefore/preserve-render-blocking-script.html": "error",
+    "dom/nodes/moveBefore/preserve-render-blocking-script.html": "fail",
     "dom/nodes/moveBefore/preserve-render-blocking-style.html": "error",
     "dom/nodes/moveBefore/relevant-mutations.html": "fail",
-    "dom/nodes/moveBefore/script-move-before.html": "fail",
+    "dom/nodes/moveBefore/script-move-before.html": "pass",
     "dom/nodes/moveBefore/select-option-optgroup.html": "fail",
     "dom/nodes/moveBefore/selection-preserve.html": "fail",
     "dom/nodes/moveBefore/slotchange-events.html": "fail",
@@ -661,7 +661,7 @@
     "dom/traversal/TreeWalker-walking-outside-a-tree.html": "pass",
     "dom/traversal/TreeWalker.html": "error",
     "dom/window-extends-event-target.html": "fail",
-    "dom/xpath-result-single-node-value-nullable.html": "fail"
+    "dom/xpath-result-single-node-value-nullable.html": "pass"
   },
   "version": 1
 }

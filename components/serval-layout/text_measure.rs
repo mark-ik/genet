@@ -409,7 +409,8 @@ impl TextMeasureCtx {
         self.layouts.retain(|k, _| !keys.contains(k));
         self.marker_layouts.retain(|k, _| !keys.contains(k));
         self.ellipsis_layouts.retain(|k, _| !keys.contains(k));
-        self.inline_block_layouts.retain(|(k, _), _| !keys.contains(k));
+        self.inline_block_layouts
+            .retain(|(k, _), _| !keys.contains(k));
         self.float_bands.retain(|k, _| !keys.contains(k));
     }
 
@@ -424,8 +425,11 @@ impl TextMeasureCtx {
             .extend(from.layouts.into_iter().map(|(k, v)| (shift(k), v)));
         self.marker_layouts
             .extend(from.marker_layouts.into_iter().map(|(k, v)| (shift(k), v)));
-        self.ellipsis_layouts
-            .extend(from.ellipsis_layouts.into_iter().map(|(k, v)| (shift(k), v)));
+        self.ellipsis_layouts.extend(
+            from.ellipsis_layouts
+                .into_iter()
+                .map(|(k, v)| (shift(k), v)),
+        );
         self.inline_block_layouts.extend(
             from.inline_block_layouts
                 .into_iter()

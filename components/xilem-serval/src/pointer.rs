@@ -107,6 +107,10 @@ where
 pub struct OnPointerState<S> {
     child_state: S,
     node: NodeId,
+    /// The routing path this handler registered under — rebuild reconciles the
+    /// `(node, path)` pair (an adoption changes the path without recreating the
+    /// element; moveBefore plan S5).
+    path: Vec<ViewId>,
 }
 
 impl<V, State, Action, F> ViewMarker for OnPointer<V, State, Action, F> {}
@@ -131,8 +135,15 @@ where
             let (element, child_state) = self.child.build(ctx, app_state);
             let node = element.node;
             let path = ctx.view_path().to_vec();
-            ctx.register_pointer(node, path);
-            (element, OnPointerState { child_state, node })
+            ctx.register_pointer(node, path.clone());
+            (
+                element,
+                OnPointerState {
+                    child_state,
+                    node,
+                    path,
+                },
+            )
         })
     }
 
@@ -153,12 +164,15 @@ where
                 element.reborrow_mut(),
                 app_state,
             );
+            // Reconcile the `(node, path)` pair — the path changes when this
+            // subtree was adopted into a different position. (moveBefore S5.)
             let node = *element.node;
-            if node != prev_node {
+            if node != prev_node || ctx.view_path() != view_state.path.as_slice() {
                 ctx.unregister_pointer(prev_node);
                 let path = ctx.view_path().to_vec();
-                ctx.register_pointer(node, path);
+                ctx.register_pointer(node, path.clone());
                 view_state.node = node;
+                view_state.path = path;
             }
         });
     }

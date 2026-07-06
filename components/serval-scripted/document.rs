@@ -1891,6 +1891,104 @@ mod tests {
         );
     }
 
+    /// The CSS transitions plan's T1 done-condition: a `transition: opacity`
+    /// style flip driven through explicit animation-clock times (start, mid,
+    /// end), observed through `getComputedStyle` at each. The test owns the
+    /// clock; no host loop is involved. One persistent `IncrementalLayout`
+    /// carries the transition state across ticks (its style plane owns the
+    /// animation set), standing in for the retained-session host this lane
+    /// will grow (`frame()` still rebuilds its session today).
+    fn transition_interpolates_via_get_computed_style<E: ScriptEngine>() {
+        use layout_dom_api::LayoutDomMut;
+
+        const SHEETS: &[&str] =
+            &["#d{width:10px;height:10px;opacity:0;transition:opacity 2s linear}"];
+
+        let mut rt = script_runtime_api::Runtime::<E>::new().expect("runtime");
+        rt.eval(
+            "var h = document.createElement('html'); \
+             var b = document.createElement('body'); \
+             var d = document.createElement('div'); d.setAttribute('id','d'); \
+             b.appendChild(d); h.appendChild(b); document.appendChild(h);",
+        )
+        .expect("build dom");
+        // The initial cascade covers the freshly built DOM; drop the
+        // construction mutations so the first apply sees only the flip.
+        {
+            let mut host = rt.host().borrow_mut();
+            let mut v = Vec::new();
+            host.dom.drain_mutations(&mut v);
+        }
+        let session = {
+            let host = rt.host().borrow();
+            IncrementalLayout::new(&host.dom, SHEETS, 400.0, 300.0)
+        };
+        let session = Rc::new(RefCell::new(session));
+
+        struct Bridge {
+            session: Rc<RefCell<IncrementalLayout<NodeId>>>,
+        }
+        impl ComputedStyleHandler for Bridge {
+            fn computed_value(&self, node: u64, property: &str) -> Option<String> {
+                self.session
+                    .borrow()
+                    .computed_value(NodeId::from_raw(node as usize), property)
+            }
+        }
+        rt.set_computed_style_handler(Box::new(Bridge {
+            session: session.clone(),
+        }));
+
+        fn observed<E: ScriptEngine>(rt: &mut script_runtime_api::Runtime<E>) -> f32 {
+            rt.eval("console.log(getComputedStyle(document.getElementById('d')).opacity);")
+                .expect("read opacity");
+            rt.host()
+                .borrow()
+                .console
+                .last()
+                .expect("opacity logged")
+                .parse()
+                .expect("numeric opacity")
+        }
+
+        assert!(observed(&mut rt) < 0.001, "starts transparent");
+
+        // Script flips the style; the apply (clock still 0.0) starts the
+        // transition and holds the start value.
+        rt.eval("document.getElementById('d').setAttribute('style','opacity:1');")
+            .expect("flip");
+        {
+            let mut host = rt.host().borrow_mut();
+            let mut muts = Vec::new();
+            host.dom.drain_mutations(&mut muts);
+            session.borrow_mut().apply(&host.dom, SHEETS, &muts);
+        }
+        assert!(session.borrow().has_active_animations(), "flip starts it");
+        assert!(observed(&mut rt) < 0.001, "start value holds at t=0");
+
+        // Mid tick: t=1s of a 2s linear transition.
+        {
+            let host = rt.host().borrow();
+            session.borrow_mut().tick_animations(&host.dom, 1.0);
+        }
+        let mid = observed(&mut rt);
+        assert!(
+            (mid - 0.5).abs() < 0.01,
+            "getComputedStyle sees ~0.5 mid-transition, got {mid}"
+        );
+
+        // Finishing tick: end value lands, the animation set drains.
+        {
+            let host = rt.host().borrow();
+            session.borrow_mut().tick_animations(&host.dom, 2.5);
+        }
+        assert!(
+            (observed(&mut rt) - 1.0).abs() < 0.001,
+            "end value after the transition"
+        );
+        assert!(!session.borrow().has_active_animations());
+    }
+
     /// The input → event bridge end to end: a `click_at` over a laid-out element
     /// hit-tests it and dispatches a `click` that runs the page's listener. This is
     /// the path a host (meerkat) drives when forwarding a pointer click to a scripted
@@ -2002,6 +2100,10 @@ mod tests {
     #[test]
     fn get_computed_style_reads_cascade_on_boa() {
         get_computed_style_reads_cascade::<BoaEngine>();
+    }
+    #[test]
+    fn transition_interpolates_via_get_computed_style_on_boa() {
+        transition_interpolates_via_get_computed_style::<BoaEngine>();
     }
     #[test]
     fn external_script_runs_on_boa() {
@@ -2140,6 +2242,10 @@ mod tests {
         #[test]
         fn get_computed_style_reads_cascade_on_nova() {
             get_computed_style_reads_cascade::<NovaEngine>();
+        }
+        #[test]
+        fn transition_interpolates_via_get_computed_style_on_nova() {
+            transition_interpolates_via_get_computed_style::<NovaEngine>();
         }
         #[test]
         fn scripted_content_scrolls_on_nova() {

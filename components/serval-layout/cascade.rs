@@ -43,7 +43,6 @@ use rustc_hash::FxHashMap;
 use selectors::matching::QuirksMode;
 use servo_arc::Arc as ServoArc;
 use style::Atom;
-use style::animation::DocumentAnimationSet;
 use style::context::{
     RegisteredSpeculativePainter, RegisteredSpeculativePainters, SharedStyleContext, StyleContext,
 };
@@ -677,6 +676,118 @@ where
     }
 }
 
+/// Animation tick: restyle the elements with running CSS transitions against
+/// the plane's current animation clock. Hint each animating element with
+/// `RESTYLE_CSS_TRANSITIONS`, so Stylo's replacement path re-splices the
+/// interpolated declarations (`CascadeOrigin::Transitions`) at the new time
+/// and `process_animations` finishes/cancels expired transitions.
+///
+/// Call after [`StylePlane::set_animation_clock`]. A cheap no-op returning
+/// empty damage when nothing is animating. Per-owner by construction: the
+/// animating set is this plane's (this document's); ticking one document
+/// never touches another.
+pub fn restyle_for_animation_tick<D>(
+    dom: &D,
+    plane: &mut StylePlane<D::NodeId>,
+    stylist: &Stylist,
+) -> RestyleOutcome
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash + 'static,
+{
+    use style::animation::AnimationState;
+    use style::invalidation::element::restyle_hints::RestyleHint;
+
+    // Advance transition states at the new clock: Stylo's Servo-mode backend
+    // leaves the Pending -> Running -> Finished lifecycle to the embedder
+    // (Servo's script thread does this; here the tick does). Finished
+    // transitions drop out of rule collection (it ignores Canceled +
+    // Finished), so the style lands on the after-change value this pass. The
+    // caller then harvests these state flips into `transitionstart`/`end`
+    // events and prunes the terminal transitions
+    // ([`crate::transition_events::harvest_transition_events`]).
+    let now = plane.animation_clock();
+    // Snapshot the animating identities (OpaqueNode values) in the same pass.
+    let mut animating: std::collections::HashSet<usize> = std::collections::HashSet::default();
+    {
+        let mut sets = plane.animations().sets.write();
+        for (key, set) in sets.iter_mut() {
+            for transition in set.transitions.iter_mut() {
+                let live = matches!(
+                    transition.state,
+                    AnimationState::Pending | AnimationState::Running
+                );
+                if live && transition.has_ended(now) {
+                    transition.state = AnimationState::Finished;
+                } else if transition.state == AnimationState::Pending
+                    && now >= transition.start_time
+                {
+                    transition.state = AnimationState::Running;
+                }
+            }
+            animating.insert(key.node.0);
+        }
+    }
+    plane.reset_damage();
+    if animating.is_empty() {
+        return RestyleOutcome {
+            needs_relayout: false,
+            damage: RestyleDamage::empty(),
+            restyled_elements: 0,
+        };
+    }
+
+    // Walk the document for the animating elements and hint them for
+    // re-match+cascade. `RESTYLE_SELF` (not the `RESTYLE_CSS_TRANSITIONS`
+    // replacement hint: animation hints require Gecko's separate
+    // animation-only traversal, which serval does not run) makes rule
+    // collection re-read the interpolated declarations off the animation set
+    // at the new clock via `TElement::animation_rule`/`transition_rule`.
+    // O(document) per tick; acceptable at v1 (the interaction restyle walks
+    // comparable state per frame). Ancestors get `dirty_descendants` so the
+    // traversal descends to the hinted nodes.
+    let mut restyled_elements = 0usize;
+    let mut stack = vec![dom.document()];
+    while let Some(node) = stack.pop() {
+        for child in dom.dom_children(node) {
+            stack.push(child);
+        }
+        if !matches!(dom.kind(node), layout_dom_api::NodeKind::Element) {
+            continue;
+        }
+        if !animating.contains(&(dom.opaque_id(node) as usize)) {
+            continue;
+        }
+        if let Some(entry) = plane.get(node) {
+            // SAFETY: not inside a cascade traversal (single-threaded, no
+            // live borrow of this entry's ElementData).
+            if let Some(mut data) = unsafe { entry.mutate_data() } {
+                data.hint.insert(RestyleHint::RESTYLE_SELF);
+                restyled_elements += 1;
+            }
+        }
+        let mut cur = dom.parent(node);
+        while let Some(ancestor) = cur {
+            if let Some(entry) = plane.get(ancestor) {
+                entry.dirty_descendants.set(true);
+            }
+            cur = dom.parent(ancestor);
+        }
+    }
+
+    cascade_traverse(dom, plane, stylist, None, None);
+
+    // Terminal transitions stay in the set until the caller harvests their
+    // `transitionend`/`transitioncancel` events; the harvest then prunes them
+    // (see `IncrementalLayout::tick_animations`).
+    let damage = plane.aggregate_damage();
+    RestyleOutcome {
+        needs_relayout: damage.contains(RestyleDamage::RELAYOUT),
+        damage,
+        restyled_elements,
+    }
+}
+
 /// Shared cascade traversal over a caller-owned [`Stylist`]. `snapshots =
 /// None` is a full cascade (every element styled because none has
 /// `ElementData` yet); `Some` is the incremental restyle path (existing
@@ -748,7 +859,13 @@ fn cascade_traverse<D>(
     //    it carries the pre-mutation snapshots Stylo's invalidator reads.
     let empty_snapshots = SnapshotMap::new();
     let snapshot_map = snapshots.unwrap_or(&empty_snapshots);
-    let animations = DocumentAnimationSet::default();
+    // The plane's persistent animation set (clone shares the Arc) + clock, so
+    // transitions started by this pass survive into the next and interpolated
+    // declarations resolve against the session's time. Stylo's Servo-mode
+    // `finish_restyle` -> `process_animations` drives start/cancel per element
+    // inside the traversal; nothing here needs to know about individual
+    // transitions.
+    let animations = plane.animations().clone();
     let registered_painters = NoOpRegisteredPainters;
 
     let context = SharedStyleContext {
@@ -758,7 +875,7 @@ fn cascade_traverse<D>(
         guards,
         visited_styles_enabled: false,
         animations,
-        current_time_for_animations: 0.0,
+        current_time_for_animations: plane.animation_clock(),
         snapshot_map,
         registered_speculative_painters: &registered_painters,
     };

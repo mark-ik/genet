@@ -142,6 +142,7 @@ pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(),
     engine.set_function::<NodeValue>("__nodeValue", 1)?;
     engine.set_function::<RemoveChild>("__removeChild", 2)?;
     engine.set_function::<InsertBefore>("__insertBefore", 3)?;
+    engine.set_function::<MoveBefore>("__moveBefore", 3)?;
     engine.set_function::<LocalNameOf>("__localName", 1)?;
     engine.set_function::<NamespaceUri>("__namespaceURI", 1)?;
     engine.set_function::<PrefixOf>("__prefix", 1)?;

@@ -111,6 +111,14 @@ pub(crate) enum RecordedMutation {
         node: u64,
         new_inner_html: String,
     },
+    /// An atomic in-tree move (`move_before`): the subtree survives, so no
+    /// serialized HTML rides along — replay re-parents the live node.
+    Moved {
+        node: u64,
+        from_parent: u64,
+        to_parent: u64,
+        next_sibling: Option<u64>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -173,6 +181,16 @@ impl RecordedMutation {
             DomMutation::SubtreeReplaced { node } => Self::SubtreeReplaced {
                 node: dom.capture_node_id(*node),
                 new_inner_html: dom.inner_html(*node),
+            },
+            DomMutation::Moved {
+                node,
+                from_parent,
+                to_parent,
+            } => Self::Moved {
+                node: dom.capture_node_id(*node),
+                from_parent: dom.capture_node_id(*from_parent),
+                to_parent: dom.capture_node_id(*to_parent),
+                next_sibling: dom.next_sibling(*node).map(|id| dom.capture_node_id(id)),
             },
         }
     }
@@ -452,6 +470,21 @@ fn replay_mutation(dom: &mut ScriptedDom, mutation: &RecordedMutation) -> Result
             new_inner_html,
         } => {
             dom.set_inner_html(dom.remint_node_id(*node), new_inner_html);
+        },
+        RecordedMutation::Moved {
+            node,
+            from_parent,
+            to_parent,
+            next_sibling,
+        } => {
+            let node = dom.remint_node_id(*node);
+            let from_parent = dom.remint_node_id(*from_parent);
+            if dom.parent(node) != Some(from_parent) {
+                return Err("moved node parent mismatch before replay".to_string());
+            }
+            let to_parent = dom.remint_node_id(*to_parent);
+            let next_sibling = next_sibling.map(|raw| dom.remint_node_id(raw));
+            dom.move_before(to_parent, node, next_sibling);
         },
     }
     Ok(())

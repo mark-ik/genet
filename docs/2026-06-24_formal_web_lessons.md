@@ -60,4 +60,4 @@ The agent concept transfers even though its process binding does not: copy the s
 The two takeaways that are coherent workstreams without an existing home became scoped plans:
 
 - `2026-06-24_byob_streams_plan.md` — idea 1, the BYOB byte-stream controller port (the recommended first build: bounded, ships a feature, reference impl + conformance test on the same engine/spec).
-- `2026-06-24_event_loop_rigor_plan.md` — ideas 3/4/7 + the two bug-rules: per-task microtask checkpoint (E1), the atomicity invariants in the realization (E2), spec-step annotation discipline (E3), and optional TLA+ trace validation of the scheduler (E4, deferred).
+- `archive/2026-06-24_event_loop_rigor_plan.md` — ideas 3/4/7 + the two bug-rules: per-task microtask checkpoint (E1), the atomicity invariants in the realization (E2), spec-step annotation discipline (E3), and TLA+ trace validation of the scheduler (E4). Archived 2026-07-05, all phases done; residuals in `2026-07-05_event_loop_rigor_followups.md`.

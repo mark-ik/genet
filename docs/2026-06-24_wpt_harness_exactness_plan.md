@@ -99,8 +99,10 @@ dashboard into a regression gate:
 from WPT, and architecture-agnostic (it needs only an event log + a model).
 The first fixture witness is now wired under `docs/tla/scheduler_trace/` with a
 checked-in generated `SchedulerTraceData.tla`, a generator drift check, and CI TLC
-wiring. Broader protocol specs remain part of `2026-06-24_event_loop_rigor_plan.md`,
-not a blocker for this harness plan.
+wiring. That plan completed and archived 2026-07-05
+(`archive/2026-06-24_event_loop_rigor_plan.md`); broader protocol specs are now
+carried by `2026-07-05_event_loop_rigor_followups.md`, not a blocker for this
+harness plan.
 
 ## H5 — test262 runner (the Nova worklist, realized)
 
