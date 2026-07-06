@@ -257,33 +257,54 @@ impl<NodeId: Copy + Eq + Hash> BackgroundImagePlane<NodeId> {
         D: LayoutDom<NodeId = NodeId>,
         L: ImageLoader,
     {
-        let decode = |src: String| -> Option<DecodedImage> {
-            if src.starts_with("data:") {
+        Self::decode_from_cascade_cached(dom, styles, loader, &mut FxHashMap::default())
+    }
+
+    /// [`decode_from_cascade`](Self::decode_from_cascade) with a caller-owned
+    /// URL-keyed decode cache, so a retained session that rebuilds the plane
+    /// after restyles never decodes the same source twice.
+    pub fn decode_from_cascade_cached<D, L>(
+        dom: &D,
+        styles: &StylePlane<NodeId>,
+        loader: &L,
+        cache: &mut FxHashMap<String, DecodedImage>,
+    ) -> Self
+    where
+        D: LayoutDom<NodeId = NodeId>,
+        L: ImageLoader,
+    {
+        let mut decode = |src: String| -> Option<DecodedImage> {
+            if let Some(hit) = cache.get(&src) {
+                return Some(hit.clone());
+            }
+            let decoded = if src.starts_with("data:") {
                 decode_data_uri(&src)
             } else {
                 loader
                     .load(&src)
                     .and_then(|bytes| decode_image_bytes(&bytes))
-            }
+            }?;
+            cache.insert(src, decoded.clone());
+            Some(decoded)
         };
         let mut images = FxHashMap::default();
         let mut pseudo_images = FxHashMap::default();
         let mut border_images = FxHashMap::default();
         let mut queue = vec![dom.document()];
         while let Some(id) = queue.pop() {
-            if let Some(decoded) = background_image_url(styles, id).and_then(decode) {
+            if let Some(decoded) = background_image_url(styles, id).and_then(&mut decode) {
                 images.insert(id, decoded);
             }
             // Block `::before` / `::after` boxes carry their own background, keyed
             // by `(element, kind)` since they have no DOM id of their own.
             for kind in [PseudoKind::Before, PseudoKind::After] {
                 if let Some(decoded) =
-                    pseudo_background_image_url(styles, id, kind).and_then(decode)
+                    pseudo_background_image_url(styles, id, kind).and_then(&mut decode)
                 {
                     pseudo_images.insert((id, kind), decoded);
                 }
             }
-            if let Some(decoded) = border_image_url(styles, id).and_then(decode) {
+            if let Some(decoded) = border_image_url(styles, id).and_then(&mut decode) {
                 border_images.insert(id, decoded);
             }
             queue.extend(dom.dom_children(id));

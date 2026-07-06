@@ -26,17 +26,17 @@ use engine_observables_api::{
 };
 use layout_dom_api::{DomMutation, LayoutDom};
 use paint_list_api::DeviceIntSize;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use style::selector_parser::RestyleDamage;
 use style::stylist::Stylist;
 
 use crate::box_tree::BoxTree;
 use crate::cascade::{
-    build_stylist, restyle_for_interaction, restyle_structural, restyle_with_snapshots,
-    run_cascade_with_stylist, set_stylist_color_scheme,
+    build_stylist, restyle_for_animation_tick, restyle_for_interaction, restyle_structural,
+    restyle_with_snapshots, run_cascade_with_stylist, set_stylist_color_scheme,
 };
 use crate::fragment::FragmentPlane;
-use crate::image_decode::{BackgroundImagePlane, ImagePlane};
+use crate::image_decode::{BackgroundImagePlane, DecodedImage, ImagePlane};
 use crate::invalidate::{classify, coalesce};
 use crate::paint_emit::{
     ScrollOffsets, ServalPaintList, emit_paint_list_scrolled,
@@ -143,6 +143,14 @@ pub struct IncrementalLayout<Id: Copy + Eq + Hash> {
     /// Empty for a document with no `<img>`; remote URLs are skipped (data: only — the
     /// session carries no host loader), which is exactly the chrome's data-URI favicons.
     images: ImagePlane<Id>,
+    /// Decoded CSS `background-image` / `border-image` sources (`data:`
+    /// inline; remote URLs need a host loader seam, not wired here yet).
+    /// Rebuilt whenever styles may have changed which URL applies: a
+    /// class or inline-style flip can swap an element's background.
+    bg_images: BackgroundImagePlane<Id>,
+    /// URL-keyed decode cache backing `bg_images` rebuilds, so a plane
+    /// refresh re-decodes nothing it has seen before.
+    bg_decode_cache: FxHashMap<String, DecodedImage>,
     /// Whether `built` / `text_ctx` still match `fragments`. Set by every full
     /// layout; cleared by a structural splice (which updates `fragments` but not
     /// the box-tree side-table). [`emit_paint_list`](Self::emit_paint_list)
@@ -220,6 +228,13 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             box_tree_nodes: Some(built.node_count()),
             ..LayoutBatchStats::default()
         };
+        let mut bg_decode_cache = FxHashMap::default();
+        let bg_images = BackgroundImagePlane::decode_from_cascade_cached(
+            dom,
+            &styles,
+            &crate::image_decode::NoImageLoader,
+            &mut bg_decode_cache,
+        );
         Self {
             styles,
             stylist,
@@ -228,6 +243,8 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             built,
             text_ctx,
             images: ImagePlane::decode_from_dom(dom),
+            bg_images,
+            bg_decode_cache,
             paint_side_valid: true,
             width,
             height,
@@ -242,6 +259,21 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     /// The current per-node fragment plane.
     pub fn fragments(&self) -> &FragmentPlane<Id> {
         &self.fragments
+    }
+
+    /// Rebuild the decoded background/border-image plane from the current
+    /// cascade. The URL-keyed cache makes repeats walk-only: nothing seen
+    /// before is decoded again.
+    fn refresh_bg_images<D>(&mut self, dom: &D)
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        self.bg_images = BackgroundImagePlane::decode_from_cascade_cached(
+            dom,
+            &self.styles,
+            &crate::image_decode::NoImageLoader,
+            &mut self.bg_decode_cache,
+        );
     }
 
     /// Flip the session's `prefers-color-scheme` and restyle in place (W3C
@@ -914,12 +946,40 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         self.debug_assert_fixed_sheets(stylesheets);
         let coalesced_invalidations = self.coalesced_invalidation_count(dom, mutations);
 
+        // Background/border-image sources can change with any structural
+        // batch, a class/id flip, or an inline-style edit that mentions
+        // them. The common per-frame case (a geometry-only inline-style
+        // edit: left/top/transform) skips the plane rebuild entirely.
+        let mentions_bg = |s: &str| s.contains("background") || s.contains("border-image");
+        let needs_bg_refresh = mutations.iter().any(|m| match m {
+            DomMutation::AttributeChanged {
+                node,
+                name,
+                old_value,
+            } => match name.local.as_ref() {
+                "class" | "id" => true,
+                "style" => {
+                    old_value.as_deref().is_some_and(mentions_bg)
+                        || dom
+                            .attribute(*node, &name.ns, &name.local)
+                            .as_deref()
+                            .is_some_and(mentions_bg)
+                }
+                _ => false,
+            },
+            DomMutation::CharacterDataChanged { .. } => false,
+            _ => true,
+        });
+
         let attribute_only = mutations
             .iter()
             .all(|m| matches!(m, DomMutation::AttributeChanged { .. }));
 
         if !attribute_only {
             let batch = self.apply_structural(dom, mutations);
+            if needs_bg_refresh {
+                self.refresh_bg_images(dom);
+            }
             self.write_batch_stats(
                 batch.applied,
                 mutations.len(),
@@ -937,6 +997,9 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         // nodes live in — the precondition for the cheap replacement path).
         let outcome = restyle_with_snapshots(dom, &mut self.styles, &self.stylist, mutations);
         self.last_damage = outcome.damage;
+        if needs_bg_refresh {
+            self.refresh_bg_images(dom);
+        }
         if outcome.needs_relayout {
             let (fragments, built) = full_layout(
                 dom,
@@ -1036,6 +1099,70 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         }
     }
 
+    /// Advance the session's animation clock to `now_s` (seconds) and restyle
+    /// the elements with running CSS transitions at the new time — the style
+    /// half of the rendering update's animation tick (the CSS transitions
+    /// plan's T2 orders this after rAF callbacks in the host tick). Returns
+    /// [`Applied::Unchanged`] when nothing is animating, so idle surfaces do
+    /// zero dirty work; hosts should gate frame requests on
+    /// [`has_active_animations`](Self::has_active_animations).
+    ///
+    /// Transitions start on the restyle that changes a transitionable property
+    /// (any [`apply`](Self::apply) batch), against the clock as of that pass;
+    /// this method only advances and re-interpolates them.
+    pub fn tick_animations<D>(&mut self, dom: &D, now_s: f64) -> Applied
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        self.styles.set_animation_clock(now_s);
+        if !self.has_active_animations() {
+            return Applied::Unchanged;
+        }
+        let outcome = restyle_for_animation_tick(dom, &mut self.styles, &self.stylist);
+        self.last_damage = outcome.damage;
+        if outcome.restyled_elements == 0 {
+            return Applied::Unchanged;
+        }
+        if outcome.needs_relayout {
+            let (fragments, built) = full_layout(
+                dom,
+                &self.styles,
+                self.width,
+                self.height,
+                &mut self.text_ctx,
+            );
+            self.fragments = fragments;
+            self.built = built;
+            self.paint_side_valid = true;
+            self.recompute_viewport(dom);
+            Applied::Restyled
+        } else {
+            // Paint-only: refresh every box node's cached style, same rationale
+            // as `set_interaction` — an interpolated inherited value (color)
+            // reaches descendants past the animating element itself.
+            let mut all = Vec::new();
+            let mut queue = vec![dom.document()];
+            while let Some(id) = queue.pop() {
+                all.push(id);
+                queue.extend(dom.dom_children(id));
+            }
+            self.built.refresh_styles_for(&self.styles, all);
+            Applied::RepaintOnly
+        }
+    }
+
+    /// Whether the session has any running CSS transitions (or, later, CSS
+    /// animations). The finishing tick clears this; hosts request frames only
+    /// while it is true, so steady surfaces stop ticking entirely.
+    pub fn has_active_animations(&self) -> bool {
+        self.styles
+            .animations()
+            .sets
+            .read()
+            .values()
+            .any(|set| set.has_active_animation() || set.has_active_transition())
+    }
+
     /// Emit a glyph-bearing [`ServalPaintList`] from the current layout — the
     /// engine-agnostic command stream a host composites or lowers to a scene.
     /// Valid on the `RepaintOnly` path (a transform-only frame keeps box
@@ -1062,7 +1189,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             "emit_paint_list after a structural splice: the box-tree side-table is \
              stale (relayout first). Attribute-only hosts never hit this.",
         );
-        let bg_images = BackgroundImagePlane::new();
+
         // Merge the session's retained per-element scroll (driven by `scroll_at`)
         // with the caller's own offsets, so a content document's inner scrollers
         // move while a host's explicit offsets (meerkat's panes) still apply.
@@ -1077,7 +1204,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             &self.built,
             &self.text_ctx,
             &self.images,
-            &bg_images,
+            &self.bg_images,
             &merged,
             viewport,
             self.viewport.scroll,
@@ -1105,7 +1232,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             "emit_paint_list_excluding_subtrees after a structural splice: the box-tree \
              side-table is stale (relayout first). Attribute-only hosts never hit this.",
         );
-        let bg_images = BackgroundImagePlane::new();
+
         let merged = self.merged_scroll(scroll_offsets);
         emit_paint_list_scrolled_excluding_subtrees(
             dom,
@@ -1114,7 +1241,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             &self.built,
             &self.text_ctx,
             &self.images,
-            &bg_images,
+            &self.bg_images,
             &merged,
             skipped_subtrees,
             viewport,
@@ -1140,7 +1267,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             "emit_subtree_paint_list after a structural splice: the box-tree side-table \
              is stale (relayout first). Attribute-only hosts never hit this.",
         );
-        let bg_images = BackgroundImagePlane::new();
+
         let merged = self.merged_scroll(scroll_offsets);
         emit_subtree_paint_list_scrolled(
             dom,
@@ -1150,7 +1277,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             &self.built,
             &self.text_ctx,
             &self.images,
-            &bg_images,
+            &self.bg_images,
             &merged,
             viewport,
         )
@@ -1971,6 +2098,69 @@ mod tests {
             rect_before, rect_after,
             "color change must not move the box"
         );
+    }
+
+    /// A `transition: opacity 2s linear` style flip interpolates across
+    /// explicit animation-clock ticks (the CSS transitions plan's T1
+    /// done-condition, layout half): the flip pass starts the transition and
+    /// holds the start value, a mid tick re-splices the interpolated value,
+    /// the finishing tick lands the end value and empties the animation set,
+    /// and an idle tick reports `Unchanged`.
+    #[test]
+    fn transition_interpolates_across_animation_ticks() {
+        const SHEET: &[&str] =
+            &["p{width:100px;height:20px;opacity:0;transition:opacity 2s linear}"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        fn opacity(
+            layout: &IncrementalLayout<<ScriptedDom as LayoutDom>::NodeId>,
+            p: <ScriptedDom as LayoutDom>::NodeId,
+        ) -> f32 {
+            layout
+                .computed_value(p, "opacity")
+                .expect("opacity supported")
+                .parse()
+                .expect("numeric opacity")
+        }
+        assert!(opacity(&layout, p) < 0.001, "starts transparent");
+        assert!(!layout.has_active_animations());
+
+        // Flip to opacity:1 via inline style; the restyle starts the
+        // transition against the session clock (still 0.0) and holds the
+        // start value.
+        let _ = drain(&mut dom);
+        dom.set_attribute(p, attr("style"), "opacity:1");
+        let muts = drain(&mut dom);
+        layout.apply(&dom, SHEET, &muts);
+        assert!(layout.has_active_animations(), "flip starts the transition");
+        assert!(opacity(&layout, p) < 0.001, "start value holds at t=0");
+
+        // Mid tick: t=1s of a 2s linear transition.
+        let applied = layout.tick_animations(&dom, 1.0);
+        assert_ne!(applied, Applied::Unchanged, "mid tick restyles");
+        let mid = opacity(&layout, p);
+        assert!((mid - 0.5).abs() < 0.01, "t=1s of 2s linear => ~0.5, got {mid}");
+        assert!(layout.has_active_animations());
+
+        // Finishing tick: past the duration lands the end value and drains
+        // the animation set.
+        layout.tick_animations(&dom, 2.5);
+        assert!((opacity(&layout, p) - 1.0).abs() < 0.001, "t>=2s => 1");
+        assert!(
+            !layout.has_active_animations(),
+            "finishing tick empties the set"
+        );
+
+        // Idle tick: nothing animating, zero dirty work.
+        assert_eq!(layout.tick_animations(&dom, 3.0), Applied::Unchanged);
     }
 
     /// `emit_paint_list` produces a glyph-bearing list, and keeps producing one
