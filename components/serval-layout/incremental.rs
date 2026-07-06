@@ -273,8 +273,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             .dom_children(dom.document())
             .find(|&c| matches!(dom.kind(c), layout_dom_api::NodeKind::Element));
         if let Some(root_element) = root_element {
-            let outcome =
-                restyle_structural(dom, &mut self.styles, &self.stylist, &[root_element]);
+            let outcome = restyle_structural(dom, &mut self.styles, &self.stylist, &[root_element]);
             self.last_damage = outcome.damage;
         }
         let (fragments, built) = full_layout(
@@ -871,7 +870,9 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         D: LayoutDom<NodeId = Id>,
     {
         let invalidations: Vec<_> = mutations.iter().flat_map(classify).collect();
-        coalesce(&invalidations, |id| dom.parent(id)).len()
+        // Batch already applied to `dom`, so an invalidation (or an ancestor of
+        // one) can be a node removed in this batch; walk parents liveness-safe.
+        coalesce(&invalidations, |id| live_parent(dom, id)).len()
     }
 
     /// Apply a drained mutation batch, updating styles (and fragments
@@ -1306,7 +1307,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         // a full relayout instead. Unreachable for hosts honouring the
         // emittable-path contract.
         if !self.paint_side_valid {
-            let roots = coalesce(&invalidations, |id| dom.parent(id));
+            let roots = coalesce(&invalidations, |id| live_parent(dom, id));
             let outcome = restyle_structural(
                 dom,
                 &mut self.styles,
@@ -1314,12 +1315,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
                 &roots.iter().map(|inv| inv.node()).collect::<Vec<_>>(),
             );
             self.last_damage = outcome.damage;
-            return self.full_relayout(
-                dom,
-                roots.len(),
-                outcome.restyled_elements,
-                outcome.damage,
-            );
+            return self.full_relayout(dom, roots.len(), outcome.restyled_elements, outcome.damage);
         }
         // Lift non-element invalidation roots (a `CharacterDataChanged` roots at
         // the TEXT node, which owns no fragment or box) to the nearest element
@@ -1331,7 +1327,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             .into_iter()
             .map(|inv| inv.lifted_to(element_root(dom, inv.node())))
             .collect();
-        let roots = coalesce(&invalidations, |id| dom.parent(id));
+        let roots = coalesce(&invalidations, |id| live_parent(dom, id));
         let root_ids: Vec<Id> = roots.iter().map(|inv| inv.node()).collect();
         let outcome = restyle_structural(dom, &mut self.styles, &self.stylist, &root_ids);
         self.last_damage = outcome.damage;
@@ -1398,7 +1394,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         D: LayoutDom<NodeId = Id>,
     {
         let Some(prior_root) = self.fragments.rect_of(root).copied() else {
-        tracing::debug!(target: "serval_layout::splice", reason = "no-prior-fragment", "splice fallback");
+            tracing::debug!(target: "serval_layout::splice", reason = "no-prior-fragment", "splice fallback");
             return Err(());
         };
         // Lay out just this subtree (re-rooted) over the persistent styles,
@@ -1427,15 +1423,11 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             - prior_root.border.top
             - prior_root.border.bottom)
             .max(1.0);
-        let (scoped, scoped_built, scoped_ctx) = scoped_layout(
-            &SubtreeView::new(dom, root),
-            &self.styles,
-            avail_w,
-            avail_h,
-        );
+        let (scoped, scoped_built, scoped_ctx) =
+            scoped_layout(&SubtreeView::new(dom, root), &self.styles, avail_w, avail_h);
         let scoped_boxes = scoped_built.node_count();
         let Some(scoped_root) = scoped.rect_of(root).copied() else {
-        tracing::debug!(target: "serval_layout::splice", reason = "no-scoped-fragment", "splice fallback");
+            tracing::debug!(target: "serval_layout::splice", reason = "no-scoped-fragment", "splice fallback");
             return Err(());
         };
         // Margin-collapse parity at the splice boundary. A `SubtreeView`-rooted
@@ -1446,7 +1438,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         // a root would mis-place every child by the lost collapse. (CSS 2.2
         // §8.3.1.)
         if splice_loses_margin_collapse(dom, &self.styles, &scoped, root) {
-        tracing::debug!(target: "serval_layout::splice", reason = "margin-collapse", "splice fallback");
+            tracing::debug!(target: "serval_layout::splice", reason = "margin-collapse", "splice fallback");
             return Err(());
         }
         // Outer size change → ancestors would reflow → escalate / fall back.
@@ -1475,7 +1467,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             scoped_ctx,
             &mut self.text_ctx,
         ) {
-        tracing::debug!(target: "serval_layout::splice", reason = "graft-bail", "splice fallback");
+            tracing::debug!(target: "serval_layout::splice", reason = "graft-bail", "splice fallback");
             return Err(());
         }
         // Splice the scoped subtree into the prior fragments. Fragment
@@ -1548,6 +1540,21 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
 /// invalidation raised on a text node (which owns no fragment or box). Returns
 /// `node` unchanged when it is dead (a batch can mutate then remove a node) or
 /// has no element ancestor; the splice guards then take the full-relayout path.
+/// Liveness-safe parent lookup for the coalescing ancestor walks. The mutation
+/// batch is already applied to `dom`, so a classified invalidation (or an
+/// ancestor of one) can be a node removed in the same batch — e.g. a `Removed`'s
+/// `former_parent` whose own parent was also removed when a subtree is dropped.
+/// Returns `None` for a dead id so the walk ends there instead of panicking the
+/// strict `parent` read accessor — the same liveness discipline [`element_root`]
+/// uses. (Dead-NodeId liveness: editing/closing an inactive node's chrome.)
+fn live_parent<D: LayoutDom>(dom: &D, id: D::NodeId) -> Option<D::NodeId> {
+    if dom.is_live(id) {
+        dom.parent(id)
+    } else {
+        None
+    }
+}
+
 fn element_root<D: LayoutDom>(dom: &D, node: D::NodeId) -> D::NodeId {
     let mut cur = node;
     loop {
@@ -2077,6 +2084,110 @@ mod tests {
         );
     }
 
+    /// A cross-parent `move_before` between two size-stable containers splices
+    /// incrementally — the moveBefore plan's S2 observable contract. The one
+    /// atomic `Moved` record invalidates both parents (source lost the child,
+    /// target gained it), each subtree splices at its held outer size, and the
+    /// retained emit matches a fresh session over the moved DOM. This is the
+    /// engine half of chrome tear-out: moving a subtree between two window
+    /// roots in a forest dom is exactly this batch shape.
+    #[test]
+    fn cross_parent_move_splices_incrementally() {
+        const SHEET: &[&str] = &["body { height: 300px; overflow: hidden; } \
+             div { height: 100px; overflow: hidden; } p { height: 20px; }"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let a = dom.create_element(html("div"));
+        let b = dom.create_element(html("div"));
+        dom.append_child(body, a);
+        dom.append_child(body, b);
+        let p = dom.create_element(html("p"));
+        dom.append_child(a, p);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let _ = drain(&mut dom);
+
+        dom.move_before(b, p, None);
+        let muts = drain(&mut dom);
+        assert_eq!(muts.len(), 1, "one atomic Moved record, not a pair");
+        assert_eq!(layout.apply(&dom, SHEET, &muts), Applied::Spliced);
+        let stats = layout.last_batch_stats();
+        assert_eq!(stats.applied, LayoutApplyKind::Spliced);
+        assert_eq!(
+            stats.coalesced_invalidations, 2,
+            "both the source and target parent splice"
+        );
+        assert!(
+            layout.paint_ready(),
+            "a spliced move stays on the emittable path"
+        );
+
+        // The moved <p> lands where a full recompute would put it (inside b).
+        let mut oracle_styles = StylePlane::new();
+        run_cascade(
+            &dom,
+            &mut oracle_styles,
+            euclid::Size2D::new(W, H),
+            SHEET,
+            None,
+        );
+        let oracle = lay_out(&dom, &oracle_styles, W, H);
+        let spliced = layout.fragments().rect_of(p).expect("moved <p> laid out");
+        let full = oracle.rect_of(p).expect("oracle <p>");
+        assert!(
+            (spliced.location.y - full.location.y).abs() < 0.5,
+            "moved <p> y must match full"
+        );
+        assert_emit_matches_fresh(&layout, &dom, SHEET, "cross-parent move");
+    }
+
+    /// A same-parent `move_before` reorder splices with a single invalidation
+    /// scope (one `Moved` with equal parents yields one root, not two), and the
+    /// retained emit matches a fresh session over the reordered DOM.
+    #[test]
+    fn same_parent_move_reorder_splices_with_one_scope() {
+        const SHEET: &[&str] = &["body { height: 300px; overflow: hidden; } \
+             div { height: 200px; overflow: hidden; } p { height: 20px; }"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let d = dom.create_element(html("div"));
+        dom.append_child(body, d);
+        let first = dom.create_element(html("p"));
+        let second = dom.create_element(html("p"));
+        dom.append_child(d, first);
+        dom.append_child(d, second);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let _ = drain(&mut dom);
+
+        // Reorder: second before first.
+        dom.move_before(d, second, Some(first));
+        let muts = drain(&mut dom);
+        assert_eq!(muts.len(), 1, "one atomic Moved record");
+        assert_eq!(layout.apply(&dom, SHEET, &muts), Applied::Spliced);
+        let stats = layout.last_batch_stats();
+        assert_eq!(
+            stats.coalesced_invalidations, 1,
+            "a same-parent reorder has one scope, not two"
+        );
+        // The reorder really landed: `second` now sits above `first`.
+        let top = layout.fragments().rect_of(second).expect("second laid out");
+        let bottom = layout.fragments().rect_of(first).expect("first laid out");
+        assert!(
+            top.location.y < bottom.location.y,
+            "reordered <p> paints above its former predecessor"
+        );
+        assert_emit_matches_fresh(&layout, &dom, SHEET, "same-parent reorder");
+    }
+
     /// The splice graft's parity oracle: after `apply`, the retained session's
     /// emit must match a FRESH session built over the same mutated DOM,
     /// command-for-command. Font keys are process-stable (the global font
@@ -2109,9 +2220,8 @@ mod tests {
     fn spliced_text_change_emits_new_glyphs_and_matches_fresh() {
         use paint_list_api::{PaintCmd, PaintList};
 
-        const SHEET: &[&str] = &[
-            "body { height: 200px; overflow: hidden; margin: 0 } p { height: 20px; margin: 0 }",
-        ];
+        const SHEET: &[&str] =
+            &["body { height: 200px; overflow: hidden; margin: 0 } p { height: 20px; margin: 0 }"];
         let mut dom = ScriptedDom::new();
         let root = dom.document();
         let h = dom.create_element(html("html"));
@@ -2142,7 +2252,10 @@ mod tests {
         dom.set_text(text, "two three");
         let muts = drain(&mut dom);
         assert_eq!(layout.apply(&dom, SHEET, &muts), Applied::Spliced);
-        assert!(layout.paint_ready(), "text splice keeps the session emittable");
+        assert!(
+            layout.paint_ready(),
+            "text splice keeps the session emittable"
+        );
         let after = layout.emit_paint_list(&dom, &scroll, dev);
         assert!(
             glyph_count(&after) > glyph_count(&before),
@@ -2156,9 +2269,8 @@ mod tests {
     /// a fresh session (palette rows / suggestion lists shape).
     #[test]
     fn spliced_insert_matches_fresh_and_hit_tests() {
-        const SHEET: &[&str] = &[
-            "body { height: 200px; overflow: hidden; margin: 0 } p { height: 20px; margin: 0 }",
-        ];
+        const SHEET: &[&str] =
+            &["body { height: 200px; overflow: hidden; margin: 0 } p { height: 20px; margin: 0 }"];
         let mut dom = ScriptedDom::new();
         let root = dom.document();
         let h = dom.create_element(html("html"));
@@ -2191,9 +2303,8 @@ mod tests {
     /// DOM.
     #[test]
     fn spliced_removal_matches_fresh() {
-        const SHEET: &[&str] = &[
-            "body { height: 200px; overflow: hidden; margin: 0 } p { height: 20px; }",
-        ];
+        const SHEET: &[&str] =
+            &["body { height: 200px; overflow: hidden; margin: 0 } p { height: 20px; }"];
         let mut dom = ScriptedDom::new();
         let root = dom.document();
         let h = dom.create_element(html("html"));
@@ -3430,10 +3541,19 @@ mod tests {
         let p_rect = *layout.fragments().rect_of(p).expect("p rect");
 
         // Register a highlight over "needle" (bytes 9..15 of the text node).
-        let color = ColorF { r: 1.0, g: 0.8, b: 0.2, a: 0.5 };
+        let color = ColorF {
+            r: 1.0,
+            g: 0.8,
+            b: 0.2,
+            a: 0.5,
+        };
         layout.set_highlight(
             "find",
-            vec![crate::highlights::HighlightRange { node: p, start: 9, end: 15 }],
+            vec![crate::highlights::HighlightRange {
+                node: p,
+                start: 9,
+                end: 15,
+            }],
             crate::highlights::HighlightStyle { color },
         );
         let lit = layout.emit_paint_list(&dom, &scroll, dev);
@@ -3505,7 +3625,12 @@ mod tests {
         let text = dom.create_text("wrap wrap wrap wrap wrap wrap wrap wrap needle");
         dom.append_child(p, text);
         let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
-        let color = ColorF { r: 0.2, g: 0.6, b: 1.0, a: 0.5 };
+        let color = ColorF {
+            r: 0.2,
+            g: 0.6,
+            b: 1.0,
+            a: 0.5,
+        };
         // "needle" is the last 6 bytes.
         let text_len = "wrap wrap wrap wrap wrap wrap wrap wrap needle".len();
         layout.set_highlight(
@@ -3552,4 +3677,3 @@ mod tests {
         );
     }
 }
-
