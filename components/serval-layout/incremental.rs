@@ -22,7 +22,7 @@
 use std::hash::Hash;
 
 use engine_observables_api::{
-    FragmentQuery, LayoutApplyKind, LayoutBatchStats, LayoutDamageClass, Point,
+    FragmentQuery, InteractionState, LayoutApplyKind, LayoutBatchStats, LayoutDamageClass, Point,
 };
 use layout_dom_api::{DomMutation, LayoutDom};
 use paint_list_api::DeviceIntSize;
@@ -32,8 +32,8 @@ use style::stylist::Stylist;
 
 use crate::box_tree::BoxTree;
 use crate::cascade::{
-    build_stylist, restyle_structural, restyle_with_snapshots, run_cascade_with_stylist,
-    set_stylist_color_scheme,
+    build_stylist, restyle_for_interaction, restyle_structural, restyle_with_snapshots,
+    run_cascade_with_stylist, set_stylist_color_scheme,
 };
 use crate::fragment::FragmentPlane;
 use crate::image_decode::{BackgroundImagePlane, ImagePlane};
@@ -988,6 +988,54 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         }
     }
 
+    /// Apply a host [`InteractionState`] (`:hover` / `:active` / `:focus`)
+    /// and restyle the affected elements — the retained-session twin of
+    /// [`restyle_for_interaction`]. Call on pointer-target change (not per
+    /// pixel); returns [`Applied::Unchanged`] when no interaction-sensitive
+    /// selector matched, so a host can skip the repaint.
+    ///
+    /// Interaction styling is typically paint-tier (colors), which lands on
+    /// the cheap `RepaintOnly` path. A `:hover` rule that changes geometry
+    /// (padding, size) takes the full-relayout path, same as `apply`.
+    pub fn set_interaction<D>(&mut self, dom: &D, state: &InteractionState) -> Applied
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let outcome = restyle_for_interaction(dom, &mut self.styles, &self.stylist, state);
+        self.last_damage = outcome.damage;
+        if outcome.restyled_elements == 0 {
+            return Applied::Unchanged;
+        }
+        if outcome.needs_relayout {
+            let (fragments, built) = full_layout(
+                dom,
+                &self.styles,
+                self.width,
+                self.height,
+                &mut self.text_ctx,
+            );
+            self.fragments = fragments;
+            self.built = built;
+            self.paint_side_valid = true;
+            self.recompute_viewport(dom);
+            Applied::Restyled
+        } else {
+            // Paint-only: refresh every box node's cached style. The restyle
+            // may reach past the hovered chain (inherited values in
+            // descendants), and interaction flips are low-frequency
+            // (pointer-target changes), so the blanket refresh is the simple
+            // correct choice.
+            let mut all = Vec::new();
+            let mut queue = vec![dom.document()];
+            while let Some(id) = queue.pop() {
+                all.push(id);
+                queue.extend(dom.dom_children(id));
+            }
+            self.built.refresh_styles_for(&self.styles, all);
+            Applied::RepaintOnly
+        }
+    }
+
     /// Emit a glyph-bearing [`ServalPaintList`] from the current layout — the
     /// engine-agnostic command stream a host composites or lowers to a scene.
     /// Valid on the `RepaintOnly` path (a transform-only frame keeps box
@@ -1816,6 +1864,58 @@ mod tests {
         let mut v = Vec::new();
         dom.drain_mutations(&mut v);
         v
+    }
+
+    /// `set_interaction` drives `:hover` on the retained session: hovering
+    /// recolors (paint-only), unhovering restores, and a document with no
+    /// interaction-sensitive selectors reports `Unchanged` so hosts can
+    /// skip the repaint.
+    #[test]
+    fn set_interaction_drives_hover_repaint_only() {
+        const SHEET: &[&str] = &[
+            "p{width:100px;height:20px;color:rgb(0,0,255)} p:hover{color:rgb(255,0,0)}",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        assert!((color(&layout, p)[2] - 1.0).abs() < 0.001, "p starts blue");
+        let rect_before = *layout.fragments().rect_of(p).expect("p rect");
+
+        let hover = InteractionState {
+            hovered: Some(engine_observables_api::SourceNodeId(dom.opaque_id(p))),
+            ..Default::default()
+        };
+        let applied = layout.set_interaction(&dom, &hover);
+        assert_eq!(applied, Applied::RepaintOnly, "color-only hover");
+        assert!(
+            (color(&layout, p)[0] - 1.0).abs() < 0.001,
+            "p is red while hovered"
+        );
+        assert_eq!(
+            *layout.fragments().rect_of(p).expect("p rect"),
+            rect_before,
+            "hover recolor moves no boxes"
+        );
+
+        let applied = layout.set_interaction(&dom, &InteractionState::default());
+        assert_eq!(applied, Applied::RepaintOnly);
+        assert!(
+            (color(&layout, p)[2] - 1.0).abs() < 0.001,
+            "p restores to blue on unhover"
+        );
+
+        // No interaction-sensitive selectors -> Unchanged (host skips paint).
+        const PLAIN: &[&str] = &["p{width:100px;height:20px;color:rgb(0,0,255)}"];
+        let mut plain = IncrementalLayout::new(&dom, PLAIN, W, H);
+        let applied = plain.set_interaction(&dom, &hover);
+        assert_eq!(applied, Applied::Unchanged);
     }
 
     /// A color-only change: incremental restyle, layout skipped

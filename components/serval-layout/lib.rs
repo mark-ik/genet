@@ -78,6 +78,7 @@ pub use host_loader::{
 pub use image_decode::{
     BackgroundImagePlane, DecodedImage, ImageLoader, ImagePlane, NoImageLoader, decode_image_bytes,
 };
+pub use engine_observables_api::{InteractionState, SourceNodeId};
 pub use incremental::{Applied, IncrementalLayout};
 pub use invalidate::{Invalidation, classify, coalesce};
 pub use layout::layout;
