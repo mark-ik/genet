@@ -28,6 +28,35 @@ pub trait ElementSplice<Element: ViewElement> {
     fn index(&self) -> usize;
     /// Delete the next existing element, after running a function on it.
     fn delete<R>(&mut self, f: impl FnOnce(Element::Mut<'_>) -> R) -> R;
+    /// Move the pending (not yet processed) element at relative offset `n`
+    /// (`0` = the next pending element) to the front of the pending queue,
+    /// repositioning its backing node so the underlying store observes one
+    /// atomic move rather than a delete + re-insert; the displaced elements
+    /// keep their relative order. A splice that cannot move elements returns
+    /// `false` (the default), and the caller falls back to tearing down and
+    /// rebuilding the affected children.
+    fn hoist_pending(&mut self, n: usize) -> bool {
+        let _ = n;
+        false
+    }
+    /// Take the next pending element out of this splice **without** destroying
+    /// its backing node — the node stays where it is in the underlying store
+    /// until whoever parked the element either adopts it elsewhere
+    /// ([`adopt_pending`](Self::adopt_pending)) or tears it down for real.
+    /// `None` (the default) when this splice cannot extract; the caller falls
+    /// down to an ordinary teardown.
+    fn extract_pending(&mut self) -> Option<Element> {
+        None
+    }
+    /// Adopt a foreign element — one extracted from another splice — as this
+    /// splice's next pending element, moving its backing node into place
+    /// atomically (one move, never a delete + re-insert). The caller then
+    /// consumes it with the ordinary [`mutate`](Self::mutate)-based rebuild.
+    /// `Err(element)` (the default) hands the element back when this splice
+    /// cannot adopt; the caller falls back to building the child fresh.
+    fn adopt_pending(&mut self, element: Element) -> Result<(), Element> {
+        Err(element)
+    }
 }
 
 /// An append only `Vec`.
