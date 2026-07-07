@@ -84,6 +84,28 @@ where
         )
 }
 
+/// A `<chisel-leaf>` element view: a custom-paint widget leaf.
+///
+/// The host registers a chisel `Leaf` under `key` (a stable `u64`) in its
+/// `LeafRegistry`; serval lays out a `width`×`height` block box and paint splices
+/// the leaf's own Path-A `PaintCmd`s (from the host's `LeafPaintSource`) at it — or,
+/// later, a Path-B external texture. A leaf: it has no serval-painted children (the
+/// widget *is* its content). This mirrors [`external_texture`]: the view carries only
+/// the stable `key` + a box, and the host registers the payload under that key out of
+/// band. See `docs/2026-07-07_chisel_widget_leaf_design.md`.
+pub fn chisel_leaf<State, Action>(key: u64, width: u32, height: u32) -> El<(), State, Action>
+where
+    State: 'static,
+    Action: 'static,
+{
+    el("chisel-leaf", ())
+        .attr("key", key.to_string())
+        .attr(
+            "style",
+            format!("display:block;width:{width}px;height:{height}px"),
+        )
+}
+
 /// A leaf element whose children are owned by the host, not the view tree.
 ///
 /// The element itself is still diffed like any other [`El`], but it carries an empty
@@ -173,6 +195,39 @@ mod tests {
         assert_eq!(
             d.attribute(root, &no_ns, &LocalName::from("style")),
             Some("display:block;width:320px;height:240px"),
+            "sizes itself as a block box",
+        );
+    }
+
+    /// `chisel_leaf(7, 20, 10)` builds a `<chisel-leaf>` element carrying the leaf
+    /// key and a block box sized via its `style` attribute — the element
+    /// serval-layout treats as a replaced leaf whose paint is the host leaf's
+    /// Path-A commands. Mirrors `external_texture_builds_keyed_element`.
+    #[test]
+    fn chisel_leaf_builds_keyed_element() {
+        use layout_dom_api::{LocalName, Namespace};
+        let no_ns = Namespace::from("");
+        let dom = Rc::new(RefCell::new(ScriptedDom::new()));
+        let runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            |_: &()| chisel_leaf::<(), ()>(7, 20, 10),
+            (),
+        );
+        let d = dom.borrow();
+        let root = runner.root();
+        assert_eq!(
+            d.element_name(root).unwrap().local.as_ref(),
+            "chisel-leaf",
+            "the view names the reserved element",
+        );
+        assert_eq!(
+            d.attribute(root, &no_ns, &LocalName::from("key")),
+            Some("7"),
+            "carries the leaf key"
+        );
+        assert_eq!(
+            d.attribute(root, &no_ns, &LocalName::from("style")),
+            Some("display:block;width:20px;height:10px"),
             "sizes itself as a block box",
         );
     }
