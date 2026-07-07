@@ -689,7 +689,6 @@ where
     ))
 }
 
-#[allow(clippy::too_many_arguments)]
 /// Variant of [`emit_paint_list_with_layouts`] that also splices chisel Path-A
 /// leaves' commands from `leaves` (see [`LeafPaintSource`]). The host owns the
 /// leaf registry, runs each dirty leaf's paint into a buffer, and passes the
@@ -1294,14 +1293,28 @@ pub(crate) fn walk<Id>(
         }
     } else if let Some(decoded) = em.images_plane.get(dom_id) {
         emit_object_image(cv, content_box(&l), decoded, &mut em.images, commands);
-    }
-    if let Some(leaf_key) = node.chisel_leaf_key {
+    } else if let Some(leaf_key) = node.chisel_leaf_key {
         // A chisel Path-A leaf paints its own command stream in place of
-        // serval-painted content. Its commands are in the leaf's local
-        // (border-box origin) coordinates — the same space as `local_bounds`
-        // above — so they splice in directly with no transform.
+        // serval-painted content, in the leaf's local coordinates with (0,0) at
+        // the content-box origin — the same content box `<img>` and
+        // `<external-texture>` paint into. Offset by `content_offset`
+        // (border + padding) so a leaf with CSS border/padding lands correctly.
+        // Chained onto the replaced-content `if`/`else if` so a box paints at
+        // most one replaced payload.
         if let Some(cmds) = em.leaves.and_then(|src| src.leaf_commands(leaf_key)) {
+            let (ox, oy) = content_offset;
+            let shift = ox != 0.0 || oy != 0.0;
+            if shift {
+                commands.push(PaintCmd::PushTransform(TransformSpec {
+                    origin: LayoutPoint::new(ox, oy),
+                    transform: LayoutTransform::identity(),
+                    kind: TransformKind::Standard,
+                }));
+            }
             commands.extend_from_slice(cmds);
+            if shift {
+                commands.push(PaintCmd::PopTransform);
+            }
         }
     }
     // A loaded `border-image` replaces the normal border (CSS Backgrounds-3 §6):
@@ -3931,6 +3944,78 @@ mod tests {
             &empty,
         );
         assert!(!has_rect_rgb(&plist2, (0.1, 0.9, 0.2)));
+    }
+
+    /// A chisel leaf with CSS border + padding paints in its content box: the
+    /// splice is wrapped in a `PushTransform` at the content-box origin (border +
+    /// padding), not at the border-box origin.
+    #[test]
+    fn chisel_leaf_offsets_commands_into_its_content_box() {
+        let document = StaticDocument::parse(
+            "<html><body><chisel-leaf key='7' style='width:20px;height:10px;padding:10px;border:5px solid'></chisel-leaf></body></html>",
+        );
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[],
+            None,
+        );
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
+
+        let green = ColorF {
+            r: 0.1,
+            g: 0.9,
+            b: 0.2,
+            a: 1.0,
+        };
+        let leaves = StubLeaves(vec![PaintCmd::DrawRect(RectItem {
+            placement: CommonPlacement::new(LayoutRect::new(
+                LayoutPoint::new(0.0, 0.0),
+                LayoutPoint::new(20.0, 10.0),
+            )),
+            color: green,
+        })]);
+        let plist = emit_paint_list_with_leaves(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &FxHashMap::default(),
+            DeviceIntSize::new(800, 600),
+            &leaves,
+        );
+
+        let cmds = plist.commands();
+        let gi = cmds
+            .iter()
+            .position(|c| {
+                matches!(c, PaintCmd::DrawRect(r)
+                    if (r.color.r - 0.1).abs() < 0.05
+                        && (r.color.g - 0.9).abs() < 0.05
+                        && (r.color.b - 0.2).abs() < 0.05)
+            })
+            .expect("green leaf rect present");
+        assert!(gi > 0, "the leaf rect is not the first command");
+        // border(5) + padding(10) = 15px content offset on each axis.
+        assert!(
+            matches!(&cmds[gi - 1], PaintCmd::PushTransform(spec)
+                if (spec.origin.x - 15.0).abs() < 0.01 && (spec.origin.y - 15.0).abs() < 0.01),
+            "a content-offset PushTransform (15,15) should precede the leaf commands, got {:?}",
+            cmds[gi - 1]
+        );
+        assert!(
+            matches!(&cmds[gi + 1], PaintCmd::PopTransform),
+            "a PopTransform should follow the leaf commands"
+        );
     }
 
     fn has_rect_rgb(plist: &ServalPaintList, rgb: (f32, f32, f32)) -> bool {

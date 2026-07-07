@@ -158,6 +158,78 @@ impl<K: Eq + Hash> LeafRegistry<K> {
     }
 }
 
+/// Rendered Path-A command buffers, keyed by leaf key. This is the **leaf-tier
+/// paint cache**: the third of the four retention gates (view `memoize`,
+/// `IncrementalLayout`, this, netrender tile cache). A leaf re-renders only when
+/// it reports `paint_dirty` or has no buffer yet; an unchanged leaf keeps its
+/// cached commands. Neutral: only `paint_list_api` types, so a serval-side
+/// adapter can expose it through the layout engine's `LeafPaintSource`.
+#[derive(Default)]
+pub struct RenderedLeaves {
+    /// Per leaf: the box size the buffer was painted at (so a later relayout to a
+    /// different size re-renders) plus the commands.
+    map: HashMap<u64, (Size, Vec<PaintCmd>)>,
+}
+
+impl RenderedLeaves {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The cached Path-A commands for `key`, or `None` if the leaf has not been
+    /// rendered (no size available, or never present). This is exactly the shape
+    /// a serval-side `LeafPaintSource` newtype forwards to.
+    pub fn get(&self, key: u64) -> Option<&[PaintCmd]> {
+        self.map.get(&key).map(|(_, cmds)| cmds.as_slice())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Drop cached buffers for leaves the predicate rejects. The host calls this
+    /// after a reactive diff removes leaf nodes, so the cache does not leak.
+    pub fn retain_keys(&mut self, keep: impl Fn(u64) -> bool) {
+        self.map.retain(|k, _| keep(*k));
+    }
+}
+
+impl LeafRegistry<u64> {
+    /// Re-render leaves into `out`, keyed by leaf key, running each leaf's
+    /// `paint` when it is `paint_dirty`, has no cached buffer yet, **or** its box
+    /// size changed since the cached buffer was painted — the leaf-tier retention
+    /// gate. The size check catches container-driven relayouts (percentage / flex
+    /// width, window resize) that resize the box without the leaf flipping
+    /// `paint_dirty`. `size_of` supplies each leaf's content-box size from the
+    /// host's completed layout; a leaf with no size (not laid out this frame) is
+    /// skipped. Returns the count of leaves actually (re)painted, so the host can
+    /// tell whether the paint list changed.
+    pub fn render_into(
+        &mut self,
+        size_of: impl Fn(u64) -> Option<Size>,
+        out: &mut RenderedLeaves,
+    ) -> usize {
+        let mut painted = 0;
+        for (key, leaf) in self.leaves.iter_mut() {
+            let Some(size) = size_of(*key) else { continue };
+            let cached_size = out.map.get(key).map(|(s, _)| *s);
+            if !leaf.paint_dirty() && cached_size == Some(size) {
+                continue;
+            }
+            let mut cmds = Vec::new();
+            let mut cx = PaintCx::new(&mut cmds, size);
+            leaf.paint(&mut cx);
+            out.map.insert(*key, (size, cmds));
+            painted += 1;
+        }
+        painted
+    }
+}
+
 /// The trivial first catalog leaf: a solid-color swatch. It proves the Path-A
 /// pipeline end to end (measure -> emit one `DrawRect`) and exercises the
 /// `paint_dirty` gate.
@@ -202,6 +274,94 @@ impl Leaf for Swatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    /// A leaf whose dirtiness is externally observable, so the retention gate can
+    /// be driven from the test.
+    struct FlagLeaf {
+        dirty: Rc<Cell<bool>>,
+    }
+
+    impl Leaf for FlagLeaf {
+        fn measure(&mut self, _known: SizeHint, _available: SizeHint) -> Size {
+            Size {
+                width: 8.0,
+                height: 8.0,
+            }
+        }
+        fn paint(&mut self, cx: &mut PaintCx<'_>) {
+            cx.fill_rect(0.0, 0.0, 8.0, 8.0, ColorF::WHITE);
+            self.dirty.set(false);
+        }
+        fn paint_dirty(&self) -> bool {
+            self.dirty.get()
+        }
+    }
+
+    #[test]
+    fn render_into_respects_the_paint_dirty_gate() {
+        let dirty = Rc::new(Cell::new(true));
+        let mut reg: LeafRegistry<u64> = LeafRegistry::new();
+        reg.insert(3, Box::new(FlagLeaf { dirty: dirty.clone() }));
+        let mut out = RenderedLeaves::new();
+        let sized = |_k: u64| {
+            Some(Size {
+                width: 8.0,
+                height: 8.0,
+            })
+        };
+
+        // Fresh + dirty -> painted.
+        assert_eq!(reg.render_into(sized, &mut out), 1, "fresh dirty leaf paints");
+        assert!(out.get(3).is_some());
+
+        // Clean + cached -> skipped (the gate).
+        assert_eq!(
+            reg.render_into(sized, &mut out),
+            0,
+            "clean, cached leaf is not repainted"
+        );
+
+        // Size change without paint_dirty (container relayout) -> repainted.
+        let bigger = |_k: u64| {
+            Some(Size {
+                width: 16.0,
+                height: 16.0,
+            })
+        };
+        assert_eq!(
+            reg.render_into(bigger, &mut out),
+            1,
+            "a resized leaf repaints even when it is not paint_dirty"
+        );
+        assert_eq!(
+            reg.render_into(bigger, &mut out),
+            0,
+            "and is stable once cached at the new size"
+        );
+
+        // Re-dirtied -> repainted.
+        dirty.set(true);
+        assert_eq!(
+            reg.render_into(sized, &mut out),
+            1,
+            "a re-dirtied leaf repaints"
+        );
+
+        // No size (not laid out this frame) -> skipped even when dirty.
+        dirty.set(true);
+        let no_size = |_k: u64| None;
+        assert_eq!(
+            reg.render_into(no_size, &mut out),
+            0,
+            "a leaf with no layout size is skipped"
+        );
+
+        // retain_keys drops stale buffers.
+        out.retain_keys(|k| k != 3);
+        assert!(out.get(3).is_none());
+    }
 
     #[test]
     fn swatch_measures_paints_and_clears_dirty() {

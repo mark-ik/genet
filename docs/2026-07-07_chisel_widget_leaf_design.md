@@ -25,10 +25,23 @@ Code samples are **illustrative** unless marked implementation-ready.
   an unchanged `emit_inner`, so no call site moved). An end-to-end test parses a
   `<chisel-leaf>`, lays it out, and asserts the source's command lands in the
   `ServalPaintList` (`paint_emit::tests::chisel_leaf_splices_its_path_a_commands`).
+- **Leaf-tier retention cache (the new gate).** `RenderedLeaves` +
+  `LeafRegistry::render_into` re-render a leaf only when it is `paint_dirty`, is
+  uncached, **or its box size changed** since the cached buffer was painted (the
+  size check catches container-driven relayouts that do not dirty the leaf).
+  Tested (`render_into_respects_the_paint_dirty_gate`).
+- **Coordinate model:** a Path-A leaf paints in its **content box**, `(0,0)` at
+  the content-box origin, matching `<img>` / `<external-texture>`. `paint_emit`
+  wraps the splice in a `PushTransform` at `content_offset` (border + padding);
+  guarded by `chisel_leaf_offsets_commands_into_its_content_box`.
+- **Adversarial review (2026-07-07):** two real bugs found and fixed (stale-sized
+  cache; content-offset ignored) plus the emit branch chained after the
+  image/external-texture branches (one replaced payload per box); the
+  additive/byte-identical and engine-neutral claims were independently confirmed.
 - **Next:** the `xilem-serval` `leaf(…)` view (creates the `<chisel-leaf>` node +
-  registry entry), the host adapter (`LeafRegistry` → `LeafPaintSource`: run each
-  dirty leaf's `paint` into a buffer), and an on-screen smoke. Then the orrery
-  Path-B port.
+  registry entry) — deferred while `xilem-serval` is under concurrent edit — the
+  host adapter (a serval-render newtype: `RenderedLeaves` → `LeafPaintSource`),
+  and an on-screen smoke. Then the orrery Path-B port.
 
 ---
 
@@ -119,7 +132,7 @@ pub trait Leaf {
 
     /// Semantics. Fill this node's accesskit node during serval-layout's
     /// accesskit_tree walk (a knob still announces as a slider).
-    fn accessibility(&mut self, node: &mut accesskit::NodeBuilder);
+    fn accessibility(&mut self, node: &mut accesskit::Node);
 
     /// Retention gates. Two signals, because they gate different passes:
     ///   `paint_dirty` gates the repaint gate (has paint output changed?);
@@ -244,8 +257,10 @@ paint_list_api   (shared seam)   PaintCmd, ExternalTextureItem, ...
 layout_dom_api   (shared seam)   LayoutDomMut, NodeId, QualName
 accesskit / vello / kurbo / peniko   (crates.io)
 
-chisel                            Leaf trait, PaintCx, LeafRegistry, catalog
-    depends on: the seams above + vello/kurbo/peniko + accesskit
+chisel                            Leaf, PaintCx, LeafRegistry, RenderedLeaves, catalog
+    depends on: paint_list_api + accesskit (Path A today). vello/kurbo/peniko
+                join when Path B (own vello::Scene) lands. No layout_dom_api
+                needed: the registry is generic over the host's leaf key (u64).
     depends on: NOT xilem, NOT masonry, NOT serval-engine
 
 xilem-serval                      reactive backend (stays a serval component)
