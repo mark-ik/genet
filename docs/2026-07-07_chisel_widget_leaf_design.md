@@ -44,12 +44,25 @@ Code samples are **illustrative** unless marked implementation-ready.
   registers the `Leaf` under that key out of band (as a texture producer registers
   a texture). Auto-exported via `pub use tags::*`; test
   `tags::tests::chisel_leaf_builds_keyed_element`.
-- **Next:** the host render glue — a serval-render newtype (`RenderedLeaves` →
-  `LeafPaintSource`) plus, in the runner/render path, enumerate `<chisel-leaf>`
-  nodes, `render_into` them at their content-box sizes, and call
-  `emit_paint_list_with_leaves`. This touches the runner, so it is gated on the
-  concurrent `xilem-serval` work settling. Then an on-screen smoke, then the
-  orrery Path-B port.
+- **Next (blocked on concurrent in-flight files — precise resume point):**
+  1. In `serval-layout/lib.rs`, re-export `emit_paint_list_with_leaves` and
+     `LeafPaintSource` (the explicit `pub use paint_emit::{…}` list does not carry
+     them yet, so no external crate can call them). *Blocked: `lib.rs` is under
+     concurrent edit.*
+  2. Add a serval-layout helper to enumerate `<chisel-leaf>` nodes as
+     `(u64 key, content-box Size)` from a laid-out doc (border/padding from the
+     box node's `final_layout`), and re-export it. *Blocked: same `lib.rs`.*
+  3. In `serval-render`, add a `_with_leaves` render entry (mirroring
+     `paint_list_from_scripted_dom`) + a `RenderedLeaves` → `LeafPaintSource`
+     newtype (orphan-rule-legal only here): cascade → layout → enumerate →
+     `LeafRegistry::render_into` at content-box sizes → `emit_paint_list_with_leaves`.
+     Add a `chisel` dep. Needs step 1/2's re-exports.
+  4. Wire the call site + `LeafRegistry` ownership in `xilem-serval/runner.rs`.
+     *Blocked: `runner.rs` is under concurrent edit.*
+  5. On-screen smoke; then the orrery Path-B port.
+
+  Steps 1-2 and 4 all edit files currently dirty with concurrent work, so the
+  render glue waits for those to land (or for a greenlight to edit them in place).
 
 ---
 
