@@ -16,6 +16,7 @@ members = [
     "components/serval-static-html",
     "components/xilem-core",
     "components/xilem-serval",
+    "components/chisel",
     "components/smolweb-views",
     "components/serval-winit-host",
     "components/serval-render",

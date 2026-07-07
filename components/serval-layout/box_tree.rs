@@ -152,6 +152,12 @@ pub(crate) struct BoxNode<Id> {
     /// `key` (a constellation actor scene, a scrying WebView, a pelt tile's external
     /// content lane). The box still participates in layout like a replaced element.
     pub(crate) external_texture_key: Option<u64>,
+    /// `Some(key)` => a chisel Path-A leaf (`<chisel-leaf key="…">`): paint emits
+    /// the leaf's own `PaintCmd` stream (pulled from the host's `LeafPaintSource`
+    /// by this `key`) in place of serval-painted content. Sizes and participates
+    /// in layout like a replaced element (CSS-driven, default object size). See
+    /// `docs/2026-07-07_chisel_widget_leaf_design.md`.
+    pub(crate) chisel_leaf_key: Option<u64>,
     /// `Some((row, col))` => this box is a `display: table-cell` flattened into
     /// its `display: table` ancestor's grid (see [`build_table`]). It is laid out
     /// as a grid item at the explicit 0-based `(row, col)` (injected by
@@ -180,6 +186,7 @@ impl<Id> BoxNode<Id> {
             replaced_size: None,
             replaced_intrinsic_size: None,
             external_texture_key: None,
+            chisel_leaf_key: None,
             grid_placement: None,
             source,
             cache: Cache::new(),
@@ -473,6 +480,7 @@ where
         // `<external-texture>` carries a host-composited texture key; every other
         // replaced element yields `None` here.
         node.external_texture_key = crate::construct::external_texture_key_of(dom, elem.id());
+        node.chisel_leaf_key = crate::construct::chisel_leaf_key_of(dom, elem.id());
         let i = tree.push(node);
         tree.node_map.insert(elem.id(), nid(i));
         return i;

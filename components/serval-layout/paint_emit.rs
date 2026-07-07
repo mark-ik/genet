@@ -61,6 +61,18 @@ use crate::image_decode::{BackgroundImagePlane, DecodedImage, ImagePlane};
 use crate::style::StylePlane;
 use crate::text_measure::TextMeasureCtx;
 
+/// A host-provided source of pre-emitted Path-A paint commands for chisel leaf
+/// nodes (`<chisel-leaf key="…">`), keyed by the leaf's stable `key`. The host
+/// runs each dirty leaf's `paint` into a command buffer and exposes it here; this
+/// producer splices those commands at the leaf's box. serval-layout only queries,
+/// so it does not depend on the chisel crate. See
+/// `docs/2026-07-07_chisel_widget_leaf_design.md`.
+pub trait LeafPaintSource {
+    /// The Path-A commands for the leaf registered under `key`, in the leaf's
+    /// local (border-box origin) coordinates, or `None` if absent.
+    fn leaf_commands(&self, key: u64) -> Option<&[PaintCmd]>;
+}
+
 /// Clone the primary cascaded style (`ComputedValues`) for `id`, or `None` when
 /// the cascade has no data (hand-rolled style fixtures, text nodes). A cheap
 /// refcount bump on the cascade's `Arc`. The decoration helpers below read a
@@ -443,6 +455,9 @@ pub(crate) struct Emitter<'a, NodeId: Copy + Eq + Hash> {
     /// high-churn pane roots, then emit those pane roots separately off the same
     /// retained layout.
     skipped_subtrees: Option<&'a FxHashSet<NodeId>>,
+    /// Host source of chisel leaves' Path-A commands, keyed by leaf `key`.
+    /// `None` on every path with no leaves (the overwhelming common case).
+    leaves: Option<&'a dyn LeafPaintSource>,
 }
 
 impl<NodeId: Copy + Eq + Hash> Emitter<'_, NodeId> {
@@ -675,6 +690,50 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Variant of [`emit_paint_list_with_layouts`] that also splices chisel Path-A
+/// leaves' commands from `leaves` (see [`LeafPaintSource`]). The host owns the
+/// leaf registry, runs each dirty leaf's paint into a buffer, and passes the
+/// buffer source here; the leaf's box is a `<chisel-leaf key="…">` replaced
+/// element. Zero document scroll, matching `emit_paint_list_with_layouts`.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_paint_list_with_leaves<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    constructed: &BoxTree<D::NodeId>,
+    text_ctx: &TextMeasureCtx,
+    images: &ImagePlane<D::NodeId>,
+    bg_images: &BackgroundImagePlane<D::NodeId>,
+    scroll_offsets: &ScrollOffsets<D::NodeId>,
+    viewport: DeviceIntSize,
+    leaves: &dyn LeafPaintSource,
+) -> ServalPaintList
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    emit_inner_with_leaves(
+        dom,
+        styles,
+        fragments,
+        constructed,
+        Some(text_ctx),
+        images,
+        bg_images,
+        scroll_offsets,
+        viewport,
+        (0.0, 0.0),
+        (0.0, 0.0),
+        constructed.root_arena(),
+        None,
+        Some(leaves),
+    )
+}
+
+/// Forwarding wrapper: the historical `emit_inner` with no leaf source. Every
+/// existing entry point calls this, so their call sites are unchanged; only
+/// [`emit_paint_list_with_leaves`] supplies leaves.
+#[allow(clippy::too_many_arguments)]
 fn emit_inner<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
@@ -694,6 +753,45 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    emit_inner_with_leaves(
+        dom,
+        styles,
+        fragments,
+        constructed,
+        text_ctx,
+        images_plane,
+        bg_images_plane,
+        scroll_offsets,
+        viewport,
+        viewport_scroll,
+        root_origin,
+        root_arena,
+        skipped_subtrees,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_inner_with_leaves<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    constructed: &BoxTree<D::NodeId>,
+    text_ctx: Option<&TextMeasureCtx>,
+    images_plane: &ImagePlane<D::NodeId>,
+    bg_images_plane: &BackgroundImagePlane<D::NodeId>,
+    scroll_offsets: &FxHashMap<D::NodeId, (f32, f32)>,
+    viewport: DeviceIntSize,
+    viewport_scroll: (f32, f32),
+    root_origin: (f32, f32),
+    root_arena: usize,
+    skipped_subtrees: Option<&FxHashSet<D::NodeId>>,
+    leaves: Option<&dyn LeafPaintSource>,
+) -> ServalPaintList
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
     let mut commands = Vec::new();
     let mut emitter = Emitter {
         styles,
@@ -705,6 +803,7 @@ where
         canvas_bg_source: None,
         viewport_scroll,
         skipped_subtrees,
+        leaves,
     };
     // CSS Backgrounds-3 §root-background: the root element's background (or, when
     // the root is transparent, the body's) is painted over the *entire* canvas,
@@ -1195,6 +1294,15 @@ pub(crate) fn walk<Id>(
         }
     } else if let Some(decoded) = em.images_plane.get(dom_id) {
         emit_object_image(cv, content_box(&l), decoded, &mut em.images, commands);
+    }
+    if let Some(leaf_key) = node.chisel_leaf_key {
+        // A chisel Path-A leaf paints its own command stream in place of
+        // serval-painted content. Its commands are in the leaf's local
+        // (border-box origin) coordinates — the same space as `local_bounds`
+        // above — so they splice in directly with no transform.
+        if let Some(cmds) = em.leaves.and_then(|src| src.leaf_commands(leaf_key)) {
+            commands.extend_from_slice(cmds);
+        }
     }
     // A loaded `border-image` replaces the normal border (CSS Backgrounds-3 §6):
     // paint the 9-slice and skip the regular border below. Anonymous boxes never
@@ -3745,6 +3853,84 @@ mod tests {
         )
         .commands()
         .to_vec()
+    }
+
+    struct StubLeaves(Vec<PaintCmd>);
+    impl LeafPaintSource for StubLeaves {
+        fn leaf_commands(&self, key: u64) -> Option<&[PaintCmd]> {
+            (key == 7).then_some(self.0.as_slice())
+        }
+    }
+
+    /// End-to-end: a `<chisel-leaf key="7">` element is recognized as a replaced
+    /// leaf (construct), carries its key onto the box (box_tree), and paint pulls
+    /// its Path-A commands from the `LeafPaintSource` and splices them.
+    #[test]
+    fn chisel_leaf_splices_its_path_a_commands() {
+        let document = StaticDocument::parse(
+            "<html><body><chisel-leaf key='7' style='width:20px;height:10px'></chisel-leaf></body></html>",
+        );
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[],
+            None,
+        );
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
+
+        // The leaf's Path-A output: one distinctive green rect in local coords.
+        let green = ColorF {
+            r: 0.1,
+            g: 0.9,
+            b: 0.2,
+            a: 1.0,
+        };
+        let leaves = StubLeaves(vec![PaintCmd::DrawRect(RectItem {
+            placement: CommonPlacement::new(LayoutRect::new(
+                LayoutPoint::new(0.0, 0.0),
+                LayoutPoint::new(20.0, 10.0),
+            )),
+            color: green,
+        })]);
+
+        let plist = emit_paint_list_with_leaves(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &FxHashMap::default(),
+            DeviceIntSize::new(800, 600),
+            &leaves,
+        );
+        assert!(
+            has_rect_rgb(&plist, (0.1, 0.9, 0.2)),
+            "the chisel leaf's Path-A command should appear in the paint list"
+        );
+
+        // A source with no matching key splices nothing.
+        let empty = StubLeaves(Vec::new());
+        let plist2 = emit_paint_list_with_leaves(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &FxHashMap::default(),
+            DeviceIntSize::new(800, 600),
+            &empty,
+        );
+        assert!(!has_rect_rgb(&plist2, (0.1, 0.9, 0.2)));
     }
 
     fn has_rect_rgb(plist: &ServalPaintList, rgb: (f32, f32, f32)) -> bool {

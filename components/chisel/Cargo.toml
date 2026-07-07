@@ -1,0 +1,26 @@
+[package]
+name = "chisel"
+version.workspace = true
+authors.workspace = true
+# License: workspace default (MPL-2.0) while chisel lives inside the serval
+# workspace. chisel is new, engine-neutral code (not Servo-derived); relicense
+# at spinout to match the standalone wgpu-sibling libs. See
+# docs/2026-07-07_chisel_widget_leaf_design.md.
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Custom-paint widget leaves for the serval host: a small contract that plugs a leaf into serval's layout / paint / input / a11y passes."
+
+[lib]
+name = "chisel"
+path = "src/lib.rs"
+
+# Engine-neutral: chisel targets the paint seam (`paint_list_api`, the netrender
+# common vocabulary) and accesskit, not the serval engine concretely. Path B
+# (own vello::Scene -> external texture) will add vello when the orrery port
+# lands; the scaffold is Path A only.
+[dependencies]
+paint_list_api = { workspace = true }
+accesskit = { workspace = true }
