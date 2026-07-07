@@ -38,10 +38,18 @@ Code samples are **illustrative** unless marked implementation-ready.
   cache; content-offset ignored) plus the emit branch chained after the
   image/external-texture branches (one replaced payload per box); the
   additive/byte-identical and engine-neutral claims were independently confirmed.
-- **Next:** the `xilem-serval` `leaf(…)` view (creates the `<chisel-leaf>` node +
-  registry entry) — deferred while `xilem-serval` is under concurrent edit — the
-  host adapter (a serval-render newtype: `RenderedLeaves` → `LeafPaintSource`),
-  and an on-screen smoke. Then the orrery Path-B port.
+- **Author view landed.** `chisel_leaf(key, w, h)` in `xilem-serval`'s `tags.rs`
+  builds the `<chisel-leaf key="…">` block box, exactly mirroring
+  `external_texture`: the view carries only the stable key + a box, and the host
+  registers the `Leaf` under that key out of band (as a texture producer registers
+  a texture). Auto-exported via `pub use tags::*`; test
+  `tags::tests::chisel_leaf_builds_keyed_element`.
+- **Next:** the host render glue — a serval-render newtype (`RenderedLeaves` →
+  `LeafPaintSource`) plus, in the runner/render path, enumerate `<chisel-leaf>`
+  nodes, `render_into` them at their content-box sizes, and call
+  `emit_paint_list_with_leaves`. This touches the runner, so it is gated on the
+  concurrent `xilem-serval` work settling. Then an on-screen smoke, then the
+  orrery Path-B port.
 
 ---
 
