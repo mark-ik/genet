@@ -27,8 +27,26 @@ use std::time::{Duration, Instant};
 
 use layout_dom_api::{LayoutDom, LocalName, Namespace};
 use script_engine_api::ScriptEngine;
-use script_runtime_api::{FetchHandler, FetchOutcome, Runtime, TestResult, WebGlFactory};
+use script_runtime_api::{
+    FetchHandler, FetchOutcome, MediaQueryHandler, Runtime, TestResult, WebGlFactory,
+};
 use serval_static_dom::StaticDocument;
+
+thread_local! {
+    /// One media-query evaluator per thread (the WPT 800x600 viewport, default
+    /// media environment), shared across tests so `matchMedia` works without a
+    /// per-test stylist build.
+    static MEDIA_QUERY_EVAL: std::rc::Rc<serval_layout::MediaQueryEvaluator> =
+        std::rc::Rc::new(serval_layout::MediaQueryEvaluator::new(800.0, 600.0));
+}
+
+/// `matchMedia` seam for the WPT runner: evaluates against a default device.
+struct WptMediaQueries(std::rc::Rc<serval_layout::MediaQueryEvaluator>);
+impl MediaQueryHandler for WptMediaQueries {
+    fn evaluate(&self, query: &str) -> (String, bool) {
+        self.0.evaluate(query)
+    }
+}
 
 /// A deferred `fetch()` completion, applied to the runtime by the drive loop. A
 /// response streams as `StartStream` (status + headers) -> `Chunk`* (body) ->
@@ -279,6 +297,11 @@ fn prepare_runtime<E: ScriptEngine>(
     if let Some(h) = handler {
         rt.set_fetch_handler(h);
     }
+    // `window.matchMedia` over a default device, so css/mediaqueries tests can
+    // parse + evaluate queries (they never render).
+    rt.set_media_query_handler(Box::new(WptMediaQueries(
+        MEDIA_QUERY_EVAL.with(|e| e.clone()),
+    )));
     if let Some(factory) = webgl {
         rt.set_webgl_factory(factory);
     }

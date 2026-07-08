@@ -96,16 +96,35 @@ fn events_for(prior: Option<&AnimationState>, current: &AnimationState) -> &'sta
     }
 }
 
-/// Walk the animating elements, diff each transition against `tracker`, and
-/// return the resulting events. Also prunes terminal (finished/canceled)
-/// transitions from the set and their tracker keys, so a later re-created
-/// transition on the same property is seen fresh and `has_active_animations`
-/// settles once nothing is running.
+/// The lifecycle phase a transition is in *as of the current clock*, derived
+/// here rather than read from Stylo's `Transition::state`: the tick never flips
+/// state (interpolation clamps a past-end transition to its final value on its
+/// own), so this module owns the whole lifecycle. `Canceled` is the exception —
+/// Stylo sets it during `apply` when a property stops transitioning — so it is
+/// read off the transition.
+fn phase_at(transition: &style::animation::Transition, now: f64) -> AnimationState {
+    if transition.state == AnimationState::Canceled {
+        AnimationState::Canceled
+    } else if now >= transition.start_time + transition.property_animation.duration {
+        AnimationState::Finished
+    } else if now >= transition.start_time {
+        AnimationState::Running
+    } else {
+        AnimationState::Pending
+    }
+}
+
+/// Walk the animating elements, diff each transition's clock-derived phase
+/// against `tracker`, emit the resulting events, and prune transitions that
+/// have reached a terminal phase (finished/canceled) plus their tracker keys —
+/// so a later re-created transition on the same property is seen fresh and
+/// `has_active_animations` settles once nothing runs.
 ///
-/// `now` is the current animation clock (seconds), used for a canceled
-/// transition's `elapsedTime`. Uses interior mutability on the set, so it takes
-/// `&plane`. Cheap when nothing is animating and the tracker is empty (the
-/// caller should gate on that to skip the walk entirely).
+/// Runs *after* the tick's re-cascade (order-independent: it reads the clock,
+/// not Stylo state, and the value is already correct from interpolation). `now`
+/// is the current animation clock (seconds). Uses interior mutability on the
+/// set, so it takes `&plane`. Cheap when nothing is animating and the tracker
+/// is empty (the caller gates on that to skip the walk entirely).
 pub fn harvest_transition_events<D>(
     dom: &D,
     plane: &StylePlane<D::NodeId>,
@@ -141,7 +160,7 @@ where
         }
     }
 
-    // Diff every transition against the tracker.
+    // Diff every transition's clock-derived phase against the tracker.
     let mut sets = plane.animations().sets.write();
     let mut seen: std::collections::HashSet<(usize, String)> = std::collections::HashSet::new();
     for (key, set) in sets.iter() {
@@ -153,8 +172,8 @@ where
             let property_name = transition.property_animation.property_id().name().into_owned();
             let tkey = (opaque, property_name.clone());
             seen.insert(tkey.clone());
-            let prior = tracker.get(&tkey);
-            for &kind in events_for(prior, &transition.state) {
+            let phase = phase_at(transition, now);
+            for &kind in events_for(tracker.get(&tkey), &phase) {
                 let elapsed_time = match kind {
                     // run/start: the time already consumed by a negative delay,
                     // else 0.
@@ -173,24 +192,21 @@ where
                     elapsed_time,
                 });
             }
-            tracker.insert(tkey, transition.state.clone());
+            tracker.insert(tkey, phase);
         }
     }
 
-    // Forget transitions that no longer exist (silently removed without a
-    // terminal state we saw) and terminal ones we just emitted for.
-    tracker.retain(|k, state| {
-        seen.contains(k) && matches!(state, AnimationState::Pending | AnimationState::Running)
+    // Forget transitions no longer present, and terminal ones just emitted for.
+    tracker.retain(|k, phase| {
+        seen.contains(k) && matches!(phase, AnimationState::Pending | AnimationState::Running)
     });
 
     // Drop terminal transitions from the live set so the session goes idle.
     for set in sets.values_mut() {
-        set.transitions.retain(|t| {
-            !matches!(t.state, AnimationState::Finished | AnimationState::Canceled)
-        });
-        set.animations.retain(|a| {
-            !matches!(a.state, AnimationState::Finished | AnimationState::Canceled)
-        });
+        set.transitions
+            .retain(|t| !matches!(phase_at(t, now), AnimationState::Finished | AnimationState::Canceled));
+        set.animations
+            .retain(|a| !matches!(a.state, AnimationState::Finished | AnimationState::Canceled));
     }
     sets.retain(|_, set| !set.is_empty());
 

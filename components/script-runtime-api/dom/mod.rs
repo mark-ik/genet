@@ -149,6 +149,7 @@ pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(),
     engine.set_function::<CreateElementNS>("__createElementNS", 2)?;
     engine.set_function::<AttributeNames>("__attributeNames", 1)?;
     engine.set_function::<ComputedStyleValue>("__computedStyleValue", 2)?;
+    engine.set_function::<MatchMedia>("__matchMedia", 1)?;
     engine.set_function::<EvaluateXPath>("__xpathEvaluate", 2)?;
     let html_interfaces = html_interfaces::bootstrap_script();
     engine.eval(&html_interfaces)?;
@@ -220,6 +221,40 @@ impl<E: ScriptEngine> NativeFn<E> for ComputedStyleValue {
             Some(v) => cx.make_string(&v),
             None => Ok(cx.make_null()),
         }
+    }
+}
+
+/// The host's media-query seam for `window.matchMedia`. Mirrors
+/// [`ComputedStyleHandler`]: the runtime links no layout engine, so a host with
+/// one (evaluating against its `IncrementalLayout` device) implements this to
+/// parse + evaluate a media query string. Returns the *serialized* (normalized)
+/// query and whether it currently matches. Install with
+/// [`Runtime::set_media_query_handler`](crate::Runtime::set_media_query_handler).
+pub trait MediaQueryHandler {
+    fn evaluate(&self, query: &str) -> (String, bool);
+}
+
+/// Clone the media-query handler out of host state (not borrowed while invoked).
+fn host_media_query<E: ScriptEngine>(cx: &mut E::CallCx<'_>) -> Option<Rc<dyn MediaQueryHandler>> {
+    let data = cx.host_data()?;
+    let cell = data.downcast_ref::<RefCell<HostState>>()?;
+    let handler = cell.borrow().media_query.clone();
+    handler
+}
+
+/// `__matchMedia(query)` -> `"<0|1>\n<serialized media>"` (matches flag + the
+/// normalized query), which the `matchMedia` shim splits into a MediaQueryList.
+/// With no handler bound, returns `"0\n<raw query>"`.
+struct MatchMedia;
+impl<E: ScriptEngine> NativeFn<E> for MatchMedia {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let a0 = cx.arg(0);
+        let query = cx.value_to_string(&a0)?;
+        let (media, matches) = match host_media_query::<E>(cx) {
+            Some(h) => h.evaluate(&query),
+            None => (query.clone(), false),
+        };
+        cx.make_string(&format!("{}\n{}", u8::from(matches), media))
     }
 }
 

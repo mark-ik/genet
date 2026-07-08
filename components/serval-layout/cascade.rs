@@ -41,12 +41,14 @@ use engine_observables_api::{InteractionState, SourceNodeId};
 use layout_dom_api::LayoutDom;
 use rustc_hash::FxHashMap;
 use selectors::matching::QuirksMode;
+use cssparser::{Parser, ParserInput};
 use servo_arc::Arc as ServoArc;
 use style::Atom;
 use style::context::{
     RegisteredSpeculativePainter, RegisteredSpeculativePainters, SharedStyleContext, StyleContext,
 };
 use style::device::Device;
+use style::parser::ParserContext;
 use style::driver;
 use style::global_style_data::GLOBAL_STYLE_DATA;
 use style::media_queries::MediaList;
@@ -54,14 +56,16 @@ use style::media_queries::MediaType;
 use style::properties::ComputedValues;
 use style::properties::declaration_block::parse_style_attribute;
 use style::properties::style_structs::Font;
-use style::queries::values::PrefersColorScheme;
+use style::queries::values::{MediaEnvironment, PrefersColorScheme, PrefersReducedMotion};
 use style::selector_parser::{RestyleDamage, SnapshotMap};
 use style::shared_lock::{SharedRwLock, StylesheetGuards};
 use style::stylesheets::{
-    AllowImportRules, CssRuleType, DocumentStyleSheet, Origin, Stylesheet, UrlExtraData,
+    AllowImportRules, CssRuleType, CustomMediaEvaluator, DocumentStyleSheet, Origin, Stylesheet,
+    UrlExtraData,
 };
 use style::stylist::Stylist;
 use style::thread_state::{self, ThreadState};
+use style_traits::{ParsingMode, ToCss};
 use style::traversal::{DomTraversal, PerLevelTraversalData, recalc_style_at};
 use style::traversal_flags::TraversalFlags;
 use stylo_dom::ElementState;
@@ -150,36 +154,54 @@ fn make_device_with_scheme(
     quirks: QuirksMode,
     scheme: PrefersColorScheme,
 ) -> Device {
-    Device::new(
+    make_device_with_prefs(
+        viewport,
+        quirks,
+        MediaEnvironment {
+            prefers_color_scheme: scheme,
+            ..MediaEnvironment::default()
+        },
+    )
+}
+
+/// Build a `Device` carrying the host's full media-query environment (the
+/// preference + capability feature values serval's `mark-ik/stylo` fork exposes
+/// to `@media` evaluation beyond the upstream Servo set). The whole
+/// [`MediaEnvironment`] is set atomically, so individual features never clobber
+/// each other (see the parity plan's M2).
+fn make_device_with_prefs(
+    viewport: euclid::default::Size2D<f32>,
+    quirks: QuirksMode,
+    env: MediaEnvironment,
+) -> Device {
+    let mut device = Device::new(
         MediaType::screen(),
         quirks,
         euclid::Size2D::from_untyped(viewport),
         euclid::Scale::new(1.0),
         Box::new(SkrifaFontMetricsProvider),
         ComputedValues::initial_values_with_font_override(Font::initial_values()),
-        scheme,
-    )
+        env.prefers_color_scheme,
+    );
+    device.set_media_environment(env);
+    device
 }
 
-/// Re-evaluate the Stylist's media queries under a new `prefers-color-scheme`
-/// (W3C adoption plan P3): swap the Device, mark the origins whose applicable
-/// rules changed dirty, and flush. The rule TREE is untouched — only rule
-/// applicability recomputes — so `StrongRuleNode`s held by a persistent
-/// `StylePlane` stay valid, which is what lets a theme flip restyle a live
-/// session instead of rebuilding it (the persistent-Stylist invariant).
-pub fn set_stylist_color_scheme(
+/// Re-evaluate the Stylist's media queries under a new [`MediaEnvironment`]: swap
+/// the Device, mark the origins whose applicable rules changed dirty, and flush.
+/// The rule TREE is untouched — only rule applicability recomputes — so
+/// `StrongRuleNode`s held by a persistent `StylePlane` stay valid, which is what
+/// lets a preference flip restyle a live session instead of rebuilding it (the
+/// persistent-Stylist invariant). This is the atomic setter; the per-preference
+/// helpers below are read-modify-write shims over it.
+pub fn set_stylist_media_env(
     stylist: &mut Stylist,
     lock: &SharedRwLock,
     viewport: euclid::default::Size2D<f32>,
     quirks: QuirksMode,
-    dark: bool,
+    env: MediaEnvironment,
 ) {
-    let scheme = if dark {
-        PrefersColorScheme::Dark
-    } else {
-        PrefersColorScheme::Light
-    };
-    let device = make_device_with_scheme(viewport, quirks, scheme);
+    let device = make_device_with_prefs(viewport, quirks, env);
     let read = lock.read();
     let guards = StylesheetGuards {
         author: &read,
@@ -188,6 +210,105 @@ pub fn set_stylist_color_scheme(
     let origins = stylist.set_device(device, &guards);
     stylist.force_stylesheet_origins_dirty(origins);
     stylist.flush(&guards);
+}
+
+/// Re-evaluate under a new `prefers-color-scheme` (W3C adoption plan P3).
+/// Read-modify-write over the Stylist's current [`MediaEnvironment`], so the
+/// other preferences (reduced-motion, …) are preserved, not clobbered.
+pub fn set_stylist_color_scheme(
+    stylist: &mut Stylist,
+    lock: &SharedRwLock,
+    viewport: euclid::default::Size2D<f32>,
+    quirks: QuirksMode,
+    dark: bool,
+) {
+    let mut env = stylist.device().media_environment();
+    env.prefers_color_scheme = if dark {
+        PrefersColorScheme::Dark
+    } else {
+        PrefersColorScheme::Light
+    };
+    set_stylist_media_env(stylist, lock, viewport, quirks, env);
+}
+
+/// Re-evaluate under a new `prefers-reduced-motion` preference. Read-modify-write
+/// over the current [`MediaEnvironment`], preserving the color scheme and other
+/// preferences.
+pub fn set_stylist_reduced_motion(
+    stylist: &mut Stylist,
+    lock: &SharedRwLock,
+    viewport: euclid::default::Size2D<f32>,
+    quirks: QuirksMode,
+    reduce: bool,
+) {
+    let mut env = stylist.device().media_environment();
+    env.prefers_reduced_motion = if reduce {
+        PrefersReducedMotion::Reduce
+    } else {
+        PrefersReducedMotion::NoPreference
+    };
+    set_stylist_media_env(stylist, lock, viewport, quirks, env);
+}
+
+/// Parse a CSS media query string and evaluate it against `stylist`'s device —
+/// the engine side of `window.matchMedia`. Returns the *serialized* (normalized)
+/// query and whether it currently matches. An invalid or unknown query
+/// serializes to `"not all"` and never matches (CSS media-query error handling),
+/// which is exactly what `matchMedia().media` / `.matches` expose to script and
+/// what the WPT `query_should_be_known` / `query_should_be_unknown` helpers key
+/// on. `@custom-media` is not resolved (`CustomMediaEvaluator::none`).
+pub fn evaluate_media_query(stylist: &Stylist, query: &str) -> (String, bool) {
+    let url_data = make_url_data(None);
+    let quirks_mode = stylist.quirks_mode();
+    let context = ParserContext::new(
+        Origin::Author,
+        &url_data,
+        None,
+        ParsingMode::DEFAULT,
+        quirks_mode,
+        Default::default(),
+        None,
+        None,
+        Default::default(),
+    );
+    let mut input = ParserInput::new(query);
+    let media_list = MediaList::parse(&context, &mut Parser::new(&mut input));
+    let serialized = media_list.to_css_string();
+    let mut custom = CustomMediaEvaluator::none();
+    let matches = media_list.evaluate(stylist.device(), quirks_mode, &mut custom);
+    (serialized, matches)
+}
+
+/// A self-contained media-query evaluator: owns a `Stylist` at a fixed viewport
+/// with the default media environment, for hosts that need `matchMedia` without
+/// a full layout session (e.g. the WPT testharness runner). Build once, evaluate
+/// many.
+pub struct MediaQueryEvaluator {
+    stylist: Stylist,
+    // Keeps the stylist's `SharedRwLock` alive alongside it.
+    _lock: SharedRwLock,
+}
+
+impl MediaQueryEvaluator {
+    /// Build an evaluator with a `width`x`height` (CSS px) viewport and no
+    /// author sheets (only the device matters for media evaluation).
+    pub fn new(width: f32, height: f32) -> Self {
+        let lock = SharedRwLock::new();
+        let stylist = build_stylist(
+            euclid::Size2D::new(width, height),
+            &[],
+            None,
+            &lock,
+            QuirksMode::NoQuirks,
+        );
+        Self { stylist, _lock: lock }
+    }
+
+    /// Evaluate a media query string; returns the serialized query and whether
+    /// it matches. See [`evaluate_media_query`].
+    pub fn evaluate(&self, query: &str) -> (String, bool) {
+        evaluate_media_query(&self.stylist, query)
+    }
 }
 
 /// Run Stylo's cascade over `dom`, populating `plane` with `ElementData`
@@ -676,16 +797,24 @@ where
     }
 }
 
-/// Animation tick: restyle the elements with running CSS transitions against
-/// the plane's current animation clock. Hint each animating element with
-/// `RESTYLE_CSS_TRANSITIONS`, so Stylo's replacement path re-splices the
-/// interpolated declarations (`CascadeOrigin::Transitions`) at the new time
-/// and `process_animations` finishes/cancels expired transitions.
+/// Animation tick: re-cascade every element with a live CSS transition against
+/// the plane's current animation clock, so `transition_rule` re-reads the
+/// interpolated declarations (`CascadeOrigin::Transitions`) at the new time.
 ///
-/// Call after [`StylePlane::set_animation_clock`]. A cheap no-op returning
-/// empty damage when nothing is animating. Per-owner by construction: the
-/// animating set is this plane's (this document's); ticking one document
-/// never touches another.
+/// No state flipping: `PropertyAnimation::calculate_value` clamps progress to
+/// `[0, 1]`, so a transition already past its end interpolates to the final
+/// (after-change) value without being marked `Finished`. The lifecycle states
+/// and event emission live entirely in
+/// [`crate::transition_events::harvest_transition_events`], which the host runs
+/// after this tick; keeping them out of the cascade avoids Stylo's
+/// `process_animations` silently dropping a just-finished transition before its
+/// `transitionend` is harvested. `RESTYLE_SELF`, not `RESTYLE_CSS_TRANSITIONS`:
+/// the animation-only replacement hint assumes Gecko's separate animation-only
+/// traversal, which serval does not run.
+///
+/// Call after [`StylePlane::set_animation_clock`]. A cheap no-op (empty damage)
+/// when nothing is animating. Per-owner by construction: the animating set is
+/// this plane's (this document's); ticking one document never touches another.
 pub fn restyle_for_animation_tick<D>(
     dom: &D,
     plane: &mut StylePlane<D::NodeId>,
@@ -695,39 +824,12 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash + 'static,
 {
-    use style::animation::AnimationState;
     use style::invalidation::element::restyle_hints::RestyleHint;
 
-    // Advance transition states at the new clock: Stylo's Servo-mode backend
-    // leaves the Pending -> Running -> Finished lifecycle to the embedder
-    // (Servo's script thread does this; here the tick does). Finished
-    // transitions drop out of rule collection (it ignores Canceled +
-    // Finished), so the style lands on the after-change value this pass. The
-    // caller then harvests these state flips into `transitionstart`/`end`
-    // events and prunes the terminal transitions
-    // ([`crate::transition_events::harvest_transition_events`]).
-    let now = plane.animation_clock();
-    // Snapshot the animating identities (OpaqueNode values) in the same pass.
-    let mut animating: std::collections::HashSet<usize> = std::collections::HashSet::default();
-    {
-        let mut sets = plane.animations().sets.write();
-        for (key, set) in sets.iter_mut() {
-            for transition in set.transitions.iter_mut() {
-                let live = matches!(
-                    transition.state,
-                    AnimationState::Pending | AnimationState::Running
-                );
-                if live && transition.has_ended(now) {
-                    transition.state = AnimationState::Finished;
-                } else if transition.state == AnimationState::Pending
-                    && now >= transition.start_time
-                {
-                    transition.state = AnimationState::Running;
-                }
-            }
-            animating.insert(key.node.0);
-        }
-    }
+    let animating: std::collections::HashSet<usize> = {
+        let sets = plane.animations().sets.read();
+        sets.keys().map(|k| k.node.0).collect()
+    };
     plane.reset_damage();
     if animating.is_empty() {
         return RestyleOutcome {
@@ -737,15 +839,9 @@ where
         };
     }
 
-    // Walk the document for the animating elements and hint them for
-    // re-match+cascade. `RESTYLE_SELF` (not the `RESTYLE_CSS_TRANSITIONS`
-    // replacement hint: animation hints require Gecko's separate
-    // animation-only traversal, which serval does not run) makes rule
-    // collection re-read the interpolated declarations off the animation set
-    // at the new clock via `TElement::animation_rule`/`transition_rule`.
-    // O(document) per tick; acceptable at v1 (the interaction restyle walks
-    // comparable state per frame). Ancestors get `dirty_descendants` so the
-    // traversal descends to the hinted nodes.
+    // Walk the document, hinting each animating element for re-match+cascade
+    // (ancestors get `dirty_descendants` so the traversal descends to them).
+    // O(document) per tick; comparable to the interaction restyle's walk.
     let mut restyled_elements = 0usize;
     let mut stack = vec![dom.document()];
     while let Some(node) = stack.pop() {
@@ -759,8 +855,8 @@ where
             continue;
         }
         if let Some(entry) = plane.get(node) {
-            // SAFETY: not inside a cascade traversal (single-threaded, no
-            // live borrow of this entry's ElementData).
+            // SAFETY: not inside a cascade traversal (single-threaded, no live
+            // borrow of this entry's ElementData).
             if let Some(mut data) = unsafe { entry.mutate_data() } {
                 data.hint.insert(RestyleHint::RESTYLE_SELF);
                 restyled_elements += 1;
@@ -777,9 +873,6 @@ where
 
     cascade_traverse(dom, plane, stylist, None, None);
 
-    // Terminal transitions stay in the set until the caller harvests their
-    // `transitionend`/`transitioncancel` events; the harvest then prunes them
-    // (see `IncrementalLayout::tick_animations`).
     let damage = plane.aggregate_damage();
     RestyleOutcome {
         needs_relayout: damage.contains(RestyleDamage::RELAYOUT),
@@ -1784,6 +1877,499 @@ mod tests {
             color_of::<ScriptedDom>(&plane, p0)[0] < 0.01,
             "p0 reverts to default"
         );
+    }
+
+    /// The `prefers-reduced-motion` media feature (serval's `mark-ik/stylo`
+    /// fork adds it to the Servo set) evaluates against the `Device` and
+    /// re-evaluates live: at the default `no-preference` the no-preference rule
+    /// wins; after `set_stylist_reduced_motion(true)` the `reduce` rule wins,
+    /// with the rule tree left intact.
+    #[test]
+    fn prefers_reduced_motion_media_query_evaluates_and_reevaluates() {
+        use html5ever::ns;
+        use layout_dom_api::{LayoutDomMut, QualName};
+        use serval_scripted_dom::ScriptedDom;
+
+        const SHEET: &[&str] = &[
+            "@media (prefers-reduced-motion: reduce) { p { color: rgb(255, 0, 0); } } \
+             @media (prefers-reduced-motion: no-preference) { p { color: rgb(0, 0, 255); } }",
+        ];
+        let html = |l: &str| QualName::new(None, ns!(html), l.into());
+
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+
+        let mut plane: StylePlane<_> = StylePlane::new();
+        let mut stylist = cascade_persistent(&dom, &mut plane, SHEET);
+
+        // Default device: no-preference → blue.
+        let c = color_of::<ScriptedDom>(&plane, p);
+        assert!(
+            c[2] > 0.99 && c[0] < 0.01,
+            "no-preference default → blue, got {c:?}"
+        );
+
+        // Flip to reduce and re-evaluate media queries → red.
+        let lock = plane.shared_lock().clone();
+        let quirks = selectors_quirks_mode(dom.quirks_mode());
+        set_stylist_reduced_motion(
+            &mut stylist,
+            &lock,
+            euclid::Size2D::new(800.0, 600.0),
+            quirks,
+            true,
+        );
+        // Force the elements to re-cascade under the swapped device (the media
+        // re-evaluation dirties the stylist, but the persistent plane's cached
+        // `ElementData` needs a restyle hint to actually recompute).
+        restyle_structural(&dom, &mut plane, &stylist, &[h]);
+        let c = color_of::<ScriptedDom>(&plane, p);
+        assert!(
+            c[0] > 0.99 && c[2] < 0.01,
+            "reduce → red after re-evaluation, got {c:?}"
+        );
+    }
+
+    /// `evaluate_media_query` (the engine side of `matchMedia`) parses a query
+    /// string, evaluates it against the stylist device, and serializes it:
+    /// valid queries match or not per the viewport/env; an unknown feature
+    /// serializes to `"not all"` and never matches.
+    #[test]
+    fn evaluate_media_query_matches_and_serializes() {
+        use html5ever::ns;
+        use layout_dom_api::{LayoutDomMut, QualName};
+        use serval_scripted_dom::ScriptedDom;
+
+        let html = |l: &str| QualName::new(None, ns!(html), l.into());
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let mut plane: StylePlane<_> = StylePlane::new();
+        // cascade_persistent builds the stylist at an 800x600 viewport.
+        let stylist = cascade_persistent(&dom, &mut plane, &[]);
+
+        // Valid, matching (800 >= 500).
+        let (media, matches) = evaluate_media_query(&stylist, "(min-width: 500px)");
+        assert!(matches, "800px viewport matches min-width: 500px");
+        assert_ne!(media, "not all", "valid query is not 'not all', got {media:?}");
+
+        // Valid, not matching.
+        let (_, m) = evaluate_media_query(&stylist, "(min-width: 900px)");
+        assert!(!m, "800px viewport does not match min-width: 900px");
+
+        // A fork-added feature evaluates too (default env is no-preference).
+        let (_, m) = evaluate_media_query(&stylist, "(prefers-reduced-motion: no-preference)");
+        assert!(m, "default env matches prefers-reduced-motion: no-preference");
+
+        // An unknown feature is valid <general-enclosed> syntax: preserved on
+        // serialization but evaluates to false (never matches).
+        let (_, m) = evaluate_media_query(&stylist, "(totally-bogus-feature: 5)");
+        assert!(!m, "unknown feature never matches");
+    }
+
+    /// Tier E app/engine-state media features (parity plan M5): display-mode
+    /// and scripting evaluate against the `MediaEnvironment`. Neither matches
+    /// the default (browser + enabled); each flips when the host reports a
+    /// different state.
+    #[test]
+    fn tier_e_state_media_features_evaluate() {
+        use html5ever::ns;
+        use layout_dom_api::{LayoutDomMut, QualName};
+        use serval_scripted_dom::ScriptedDom;
+        use style::queries::values::{DisplayMode, Scripting};
+
+        const SHEET: &[&str] = &[
+            "p { color: rgb(0, 0, 0); } \
+             @media (display-mode: standalone) { p { color: rgb(255, 0, 0); } } \
+             @media (scripting: none) { p { color: rgb(0, 255, 0); } }",
+        ];
+        let html = |l: &str| QualName::new(None, ns!(html), l.into());
+
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+
+        let mut plane: StylePlane<_> = StylePlane::new();
+        let mut stylist = cascade_persistent(&dom, &mut plane, SHEET);
+        let lock = plane.shared_lock().clone();
+        let quirks = selectors_quirks_mode(dom.quirks_mode());
+        let vp = euclid::Size2D::new(800.0, 600.0);
+
+        // Default: display-mode browser, scripting enabled → neither rule → black.
+        assert!(color_of::<ScriptedDom>(&plane, p)[0] < 0.01, "default → black");
+
+        let check = |stylist: &mut Stylist, plane: &mut StylePlane<_>, env: MediaEnvironment| {
+            set_stylist_media_env(stylist, &lock, vp, quirks, env);
+            restyle_structural(&dom, plane, stylist, &[h]);
+            color_of::<ScriptedDom>(plane, p)
+        };
+
+        let c = check(&mut stylist, &mut plane, MediaEnvironment {
+            display_mode: DisplayMode::Standalone,
+            ..MediaEnvironment::default()
+        });
+        assert!(c[0] > 0.99 && c[1] < 0.01, "display-mode: standalone → red, got {c:?}");
+
+        let c = check(&mut stylist, &mut plane, MediaEnvironment {
+            scripting: Scripting::None,
+            ..MediaEnvironment::default()
+        });
+        assert!(c[1] > 0.99 && c[0] < 0.01, "scripting: none → green, got {c:?}");
+    }
+
+    /// Tier D device-capability media features (parity plan M4): pointer, hover,
+    /// color-gamut (PartialOrd match), and update each evaluate against the
+    /// `MediaEnvironment`. Flipping away from the default screen (fine pointer +
+    /// hover + srgb + fast) proves the defaults too, so the responsive idiom
+    /// `(hover: hover) and (pointer: fine)` holds by construction at the default.
+    #[test]
+    fn tier_d_capability_media_features_evaluate() {
+        use html5ever::ns;
+        use layout_dom_api::{LayoutDomMut, QualName};
+        use serval_scripted_dom::ScriptedDom;
+        use style::queries::values::{ColorGamut, PointerCapabilities, Update};
+
+        const SHEET: &[&str] = &[
+            "p { color: rgb(0, 0, 0); } \
+             @media (pointer: coarse) { p { color: rgb(255, 0, 0); } } \
+             @media (hover: none) { p { color: rgb(0, 255, 0); } } \
+             @media (color-gamut: p3) { p { color: rgb(0, 0, 255); } } \
+             @media (update: slow) { p { color: rgb(255, 255, 0); } }",
+        ];
+        let html = |l: &str| QualName::new(None, ns!(html), l.into());
+
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+
+        let mut plane: StylePlane<_> = StylePlane::new();
+        let mut stylist = cascade_persistent(&dom, &mut plane, SHEET);
+        let lock = plane.shared_lock().clone();
+        let quirks = selectors_quirks_mode(dom.quirks_mode());
+        let vp = euclid::Size2D::new(800.0, 600.0);
+
+        // Default screen: none of the "unusual capability" rules match → black.
+        // (Confirms fine pointer, hover, srgb gamut, fast update.)
+        assert!(color_of::<ScriptedDom>(&plane, p)[0] < 0.01, "default screen → black");
+
+        let check = |stylist: &mut Stylist, plane: &mut StylePlane<_>, env: MediaEnvironment| {
+            set_stylist_media_env(stylist, &lock, vp, quirks, env);
+            restyle_structural(&dom, plane, stylist, &[h]);
+            color_of::<ScriptedDom>(plane, p)
+        };
+
+        // Primary pointer is coarse but can still hover (COARSE|HOVER) →
+        // (pointer: coarse) matches; (hover: none) does not.
+        let c = check(&mut stylist, &mut plane, MediaEnvironment {
+            primary_pointer_capabilities: PointerCapabilities::COARSE | PointerCapabilities::HOVER,
+            ..MediaEnvironment::default()
+        });
+        assert!(c[0] > 0.99 && c[1] < 0.01, "pointer: coarse → red, got {c:?}");
+
+        // Primary pointer is fine but can't hover → (hover: none) matches.
+        let c = check(&mut stylist, &mut plane, MediaEnvironment {
+            primary_pointer_capabilities: PointerCapabilities::FINE,
+            ..MediaEnvironment::default()
+        });
+        assert!(c[1] > 0.99 && c[0] < 0.01, "hover: none → green, got {c:?}");
+
+        // color-gamut: p3 matches when the device gamut is at least p3.
+        let c = check(&mut stylist, &mut plane, MediaEnvironment {
+            color_gamut: ColorGamut::P3,
+            ..MediaEnvironment::default()
+        });
+        assert!(c[2] > 0.99 && c[0] < 0.01, "color-gamut ≥ p3 → blue, got {c:?}");
+
+        let c = check(&mut stylist, &mut plane, MediaEnvironment {
+            update: Update::Slow,
+            ..MediaEnvironment::default()
+        });
+        assert!(c[0] > 0.99 && c[1] > 0.99 && c[2] < 0.01, "update: slow → yellow, got {c:?}");
+    }
+
+    /// Multi-capability `any-pointer`: a hybrid device (touchscreen + mouse)
+    /// reports BOTH coarse and fine for `any-pointer`, so a rule gated on
+    /// `(any-pointer: coarse) and (any-pointer: fine)` matches — something a
+    /// single-value pointer model could never express. The primary pointer
+    /// stays the fine mouse, so `(pointer: coarse)` does not match.
+    #[test]
+    fn multi_capability_any_pointer_matches_coarse_and_fine() {
+        use html5ever::ns;
+        use layout_dom_api::{LayoutDomMut, QualName};
+        use serval_scripted_dom::ScriptedDom;
+        use style::queries::values::PointerCapabilities;
+
+        const SHEET: &[&str] = &[
+            "p { color: rgb(0, 0, 0); } \
+             @media (any-pointer: coarse) and (any-pointer: fine) { p { color: rgb(255, 0, 0); } } \
+             @media (pointer: coarse) { p { color: rgb(0, 255, 0); } }",
+        ];
+        let html = |l: &str| QualName::new(None, ns!(html), l.into());
+
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+
+        let mut plane: StylePlane<_> = StylePlane::new();
+        let mut stylist = cascade_persistent(&dom, &mut plane, SHEET);
+        let lock = plane.shared_lock().clone();
+        let quirks = selectors_quirks_mode(dom.quirks_mode());
+        let vp = euclid::Size2D::new(800.0, 600.0);
+
+        // Default (mouse only): any-pointer is fine, not coarse → combined rule
+        // fails → black.
+        assert!(color_of::<ScriptedDom>(&plane, p)[0] < 0.01, "mouse-only → black");
+
+        // Hybrid: any-pointer is coarse + fine + hover; primary stays the fine
+        // mouse. The combined any-pointer rule matches (red); (pointer: coarse)
+        // does not (primary is fine).
+        set_stylist_media_env(&mut stylist, &lock, vp, quirks, MediaEnvironment {
+            all_pointer_capabilities: PointerCapabilities::COARSE
+                | PointerCapabilities::FINE
+                | PointerCapabilities::HOVER,
+            ..MediaEnvironment::default()
+        });
+        restyle_structural(&dom, &mut plane, &stylist, &[h]);
+        let c = color_of::<ScriptedDom>(&plane, p);
+        assert!(
+            c[0] > 0.99 && c[1] < 0.01,
+            "hybrid device matches (any-pointer: coarse) AND (any-pointer: fine) → red, got {c:?}"
+        );
+    }
+
+    /// Tier C accessibility media features (parity plan M3): prefers-contrast,
+    /// prefers-reduced-transparency, inverted-colors each evaluate against the
+    /// `MediaEnvironment`. Each feature drives a distinct color, so flipping one
+    /// env field at a time isolates it. (forced-colors is covered separately,
+    /// since its color-reverting confounds a color observable.)
+    #[test]
+    fn tier_c_accessibility_media_features_evaluate() {
+        use html5ever::ns;
+        use layout_dom_api::{LayoutDomMut, QualName};
+        use serval_scripted_dom::ScriptedDom;
+        use style::queries::values::{InvertedColors, PrefersContrast, PrefersReducedTransparency};
+
+        const SHEET: &[&str] = &[
+            "p { color: rgb(0, 0, 0); } \
+             @media (prefers-contrast: more) { p { color: rgb(255, 0, 0); } } \
+             @media (prefers-reduced-transparency: reduce) { p { color: rgb(0, 255, 0); } } \
+             @media (inverted-colors: inverted) { p { color: rgb(0, 0, 255); } }",
+        ];
+        let html = |l: &str| QualName::new(None, ns!(html), l.into());
+
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+
+        let mut plane: StylePlane<_> = StylePlane::new();
+        let mut stylist = cascade_persistent(&dom, &mut plane, SHEET);
+        let lock = plane.shared_lock().clone();
+        let quirks = selectors_quirks_mode(dom.quirks_mode());
+        let vp = euclid::Size2D::new(800.0, 600.0);
+
+        assert!(color_of::<ScriptedDom>(&plane, p)[0] < 0.01, "default → black");
+
+        let check = |stylist: &mut Stylist, plane: &mut StylePlane<_>, env: MediaEnvironment| {
+            set_stylist_media_env(stylist, &lock, vp, quirks, env);
+            restyle_structural(&dom, plane, stylist, &[h]);
+            color_of::<ScriptedDom>(plane, p)
+        };
+
+        let c = check(&mut stylist, &mut plane, MediaEnvironment {
+            prefers_contrast: PrefersContrast::More,
+            ..MediaEnvironment::default()
+        });
+        assert!(c[0] > 0.99 && c[1] < 0.01, "prefers-contrast: more → red, got {c:?}");
+
+        let c = check(&mut stylist, &mut plane, MediaEnvironment {
+            prefers_reduced_transparency: PrefersReducedTransparency::Reduce,
+            ..MediaEnvironment::default()
+        });
+        assert!(c[1] > 0.99 && c[0] < 0.01, "reduced-transparency → green, got {c:?}");
+
+        let c = check(&mut stylist, &mut plane, MediaEnvironment {
+            inverted_colors: InvertedColors::Inverted,
+            ..MediaEnvironment::default()
+        });
+        assert!(c[2] > 0.99 && c[0] < 0.01, "inverted-colors → blue, got {c:?}");
+    }
+
+    /// The `forced-colors` media feature evaluates. Observed via the `none`
+    /// state (which upstream stylo's shared cascade does not color-revert): a
+    /// `@media (forced-colors: none)` rule applies at the default env and stops
+    /// applying once the host reports `active`. (Servo mode reverts colors when
+    /// active but does *not* honor `forced-color-adjust: none` — that opt-out is
+    /// `cfg(gecko)` in stylo — so the full forced-colors behavior stays deferred
+    /// per the parity plan; only the query is wired here.)
+    #[test]
+    fn forced_colors_media_feature_evaluates() {
+        use html5ever::ns;
+        use layout_dom_api::{LayoutDomMut, QualName};
+        use serval_scripted_dom::ScriptedDom;
+        use style::values::specified::color::ForcedColors;
+
+        const SHEET: &[&str] = &[
+            "p { color: rgb(0, 0, 0); } \
+             @media (forced-colors: none) { p { color: rgb(0, 255, 0); } }",
+        ];
+        let html = |l: &str| QualName::new(None, ns!(html), l.into());
+
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+
+        let mut plane: StylePlane<_> = StylePlane::new();
+        let mut stylist = cascade_persistent(&dom, &mut plane, SHEET);
+        let lock = plane.shared_lock().clone();
+        let quirks = selectors_quirks_mode(dom.quirks_mode());
+        let vp = euclid::Size2D::new(800.0, 600.0);
+
+        // Default env: forced-colors is none → the rule matches → green.
+        let c = color_of::<ScriptedDom>(&plane, p);
+        assert!(c[1] > 0.99, "forced-colors: none matches at default → green, got {c:?}");
+
+        // Host reports active → the (forced-colors: none) rule no longer matches.
+        set_stylist_media_env(&mut stylist, &lock, vp, quirks, MediaEnvironment {
+            forced_colors: ForcedColors::Active,
+            ..MediaEnvironment::default()
+        });
+        restyle_structural(&dom, &mut plane, &stylist, &[h]);
+        let c = color_of::<ScriptedDom>(&plane, p);
+        assert!(c[1] < 0.99, "active → (forced-colors: none) stops matching, got {c:?}");
+    }
+
+    /// The `MediaEnvironment` consolidation (parity plan M2): setting one
+    /// preference no longer clobbers another. Flip reduced-motion, then flip
+    /// color-scheme, each through its own read-modify-write setter, and both
+    /// `@media` queries still respond — reduced-motion survives the later
+    /// color-scheme flip.
+    #[test]
+    fn media_environment_preferences_do_not_clobber() {
+        use html5ever::ns;
+        use layout_dom_api::{LayoutDomMut, QualName};
+        use serval_scripted_dom::ScriptedDom;
+
+        // Red iff reduce, green channel iff dark. A pixel that is red AND has a
+        // green tint means both preferences are active at once.
+        const SHEET: &[&str] = &[
+            "p { color: rgb(0, 0, 0); } \
+             @media (prefers-reduced-motion: reduce) { p { color: rgb(255, 0, 0); } } \
+             @media (prefers-color-scheme: dark) and (prefers-reduced-motion: reduce) \
+             { p { color: rgb(255, 128, 0); } }",
+        ];
+        let html = |l: &str| QualName::new(None, ns!(html), l.into());
+
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+
+        let mut plane: StylePlane<_> = StylePlane::new();
+        let mut stylist = cascade_persistent(&dom, &mut plane, SHEET);
+        let lock = plane.shared_lock().clone();
+        let quirks = selectors_quirks_mode(dom.quirks_mode());
+        let vp = euclid::Size2D::new(800.0, 600.0);
+
+        // Default (light, no-preference): black.
+        assert!(color_of::<ScriptedDom>(&plane, p)[0] < 0.01, "default black");
+
+        // Flip reduced-motion → red.
+        set_stylist_reduced_motion(&mut stylist, &lock, vp, quirks, true);
+        restyle_structural(&dom, &mut plane, &stylist, &[h]);
+        let c = color_of::<ScriptedDom>(&plane, p);
+        assert!(c[0] > 0.99 && c[1] < 0.01, "reduce → pure red, got {c:?}");
+
+        // Now flip color-scheme to dark. If reduced-motion were clobbered back to
+        // no-preference, the combined rule would not apply and we'd fall back to
+        // black. Instead both are active → orange (red with a green tint).
+        set_stylist_color_scheme(&mut stylist, &lock, vp, quirks, true);
+        restyle_structural(&dom, &mut plane, &stylist, &[h]);
+        let c = color_of::<ScriptedDom>(&plane, p);
+        assert!(
+            c[0] > 0.99 && c[1] > 0.4,
+            "dark + reduce both active → orange (reduce not clobbered), got {c:?}"
+        );
+    }
+
+    /// Tier A geometry media features (`height`, `orientation`, `aspect-ratio`)
+    /// — all absent from upstream Servo, added in `mark-ik/stylo` — evaluate
+    /// against the viewport and flip with it. A combined query proves all three
+    /// at once: it matches a landscape 800x600 viewport and fails a portrait one.
+    #[test]
+    fn tier_a_geometry_media_features_evaluate() {
+        use html5ever::ns;
+        use layout_dom_api::{LayoutDomMut, QualName};
+        use serval_scripted_dom::ScriptedDom;
+
+        const SHEET: &[&str] = &[
+            "p { color: rgb(0, 0, 0); } \
+             @media (min-height: 500px) and (orientation: landscape) and (min-aspect-ratio: 5/4) \
+             { p { color: rgb(255, 0, 0); } }",
+        ];
+        let html = |l: &str| QualName::new(None, ns!(html), l.into());
+        let build = || {
+            let mut dom = ScriptedDom::new();
+            let root = dom.document();
+            let h = dom.create_element(html("html"));
+            dom.append_child(root, h);
+            let body = dom.create_element(html("body"));
+            dom.append_child(h, body);
+            let p = dom.create_element(html("p"));
+            dom.append_child(body, p);
+            (dom, p)
+        };
+
+        // Landscape 800x600: height 600 ≥ 500, landscape, 4/3 ≥ 5/4 → red.
+        let (dom, p) = build();
+        let mut plane: StylePlane<_> = StylePlane::new();
+        run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, None);
+        let c = color_of::<ScriptedDom>(&plane, p);
+        assert!(c[0] > 0.99, "landscape 800x600 → red, got {c:?}");
+
+        // Portrait 600x800: orientation fails → default black.
+        let (dom, p) = build();
+        let mut plane: StylePlane<_> = StylePlane::new();
+        run_cascade(&dom, &mut plane, euclid::Size2D::new(600.0, 800.0), SHEET, None);
+        let c = color_of::<ScriptedDom>(&plane, p);
+        assert!(c[0] < 0.01, "portrait 600x800 → black (query fails), got {c:?}");
     }
 
     /// `:focus` matches only the focused element while `:focus-within` matches

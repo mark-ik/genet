@@ -71,7 +71,19 @@ event-loop/task-source surface of `components/script-runtime-api/lib.rs`
    trigger is tag-counter magnitude, not any specific test. Hypothesis (not
    verified): tagged raw NodeIds, `(doc_tag << 48) | index`, cross the JS
    boundary as f64 in the dispatch/reflector paths and exceed exact-integer
-   range once tags grow. Owned by the DOM identity lane, not this plan.
+   range once tags grow.
+
+   *Resolved 2026-07-06 (hypothesis confirmed).* The transitions plan's event
+   dispatch hit the same wall and pinned the mechanism: `dispatch_event`
+   interpolated the raw node id into the eval string as a **bare number**
+   (`__dispatchSynthetic({raw_node_id}, …)`), so a tagged id above 2^53 was
+   parsed as an f64 and lost its low bits, which corrupted the doc-tag high bits
+   and tripped the fence. Fix: pass the id as a **string** literal
+   (`"{raw_node_id}"`) — the `__dispatch*` bridges already do `String(rawId)` —
+   in both `dispatch_event` and the new `dispatch_transition_event`. The
+   `scheduler_trace_ndjson` full-suite guards are green again. Any future
+   raw-id-in-eval site must quote the id; the fetch-id sites (`__fetchPushChunk`
+   etc.) are small counters and unaffected.
 
 ## Not carried
 

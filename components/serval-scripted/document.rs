@@ -89,6 +89,24 @@ impl ComputedStyleHandler for ComputedStyleBridge {
     }
 }
 
+/// The host side of `script_runtime_api`'s media-query seam: evaluates a
+/// `matchMedia` query string against the last rendered frame's device. Before
+/// the first frame (no layout), a query never matches and echoes back raw.
+#[cfg(feature = "render")]
+struct MediaQueryBridge {
+    layout: RetainedLayout,
+}
+
+#[cfg(feature = "render")]
+impl script_runtime_api::MediaQueryHandler for MediaQueryBridge {
+    fn evaluate(&self, query: &str) -> (String, bool) {
+        match self.layout.borrow().as_ref() {
+            Some(layout) => layout.evaluate_media_query(query),
+            None => (query.to_string(), false),
+        }
+    }
+}
+
 /// A live document driven by script: a [`Runtime`] holding the mutable DOM, plus the
 /// host-owned viewport scroll the runtime mirrors. Generic over the JS engine `E`
 /// (the monomorphization the `--engine` selection picks, exactly as serval-wpt's
@@ -225,6 +243,11 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         let layout: RetainedLayout = {
             let layout = Rc::new(RefCell::new(None));
             rt.set_computed_style_handler(Box::new(ComputedStyleBridge {
+                layout: layout.clone(),
+            }));
+            // The media-query seam shares the same retained frame, so
+            // `window.matchMedia` evaluates against the current device.
+            rt.set_media_query_handler(Box::new(MediaQueryBridge {
                 layout: layout.clone(),
             }));
             layout
@@ -1891,6 +1914,29 @@ mod tests {
         );
     }
 
+    /// End to end: `window.matchMedia(query)` evaluates against the rendered
+    /// frame's device. A width query resolves per the 400px viewport, a
+    /// fork-added feature query resolves against the default env, and `.media`
+    /// is the serialized query.
+    fn match_media_evaluates_against_the_frame<E: ScriptEngine>() {
+        let mut doc = ScriptedDocument::<E>::parse(
+            "<html><body><script>setTimeout(function(){\
+               var w = matchMedia('(min-width: 100px)');\
+               var n = matchMedia('(min-width: 9999px)');\
+               var rm = matchMedia('(prefers-reduced-motion: no-preference)');\
+               console.log(w.matches + '|' + n.matches + '|' + rm.matches + '|' + (w.media.length > 0));\
+             }, 0);</script></body></html>",
+        )
+        .expect("doc");
+        let _ = doc.frame(400, 300); // populate the retained frame/device
+        doc.pump(16.0); // fire the timer -> matchMedia evaluates
+        assert!(
+            doc.console().iter().any(|l| l == "true|false|true|true"),
+            "matchMedia evaluated against the frame: {:?}",
+            doc.console(),
+        );
+    }
+
     /// The CSS transitions plan's T1 done-condition: a `transition: opacity`
     /// style flip driven through explicit animation-clock times (start, mid,
     /// end), observed through `getComputedStyle` at each. The test owns the
@@ -1985,6 +2031,96 @@ mod tests {
         assert!(
             (observed(&mut rt) - 1.0).abs() < 0.001,
             "end value after the transition"
+        );
+        assert!(!session.borrow().has_active_animations());
+    }
+
+    /// End to end: a page's `transitionrun` / `transitionstart` / `transitionend`
+    /// listeners fire, in order, with the right `propertyName` and `elapsedTime`,
+    /// when the host drives the layout tick and dispatches the harvested lifecycle
+    /// events through the runtime. A `1s` delay separates run from start.
+    fn transition_events_dispatch_to_listeners<E: ScriptEngine>() {
+        use layout_dom_api::LayoutDomMut;
+
+        const SHEETS: &[&str] =
+            &["#d{width:10px;height:10px;opacity:0;transition:opacity 2s linear 1s}"];
+
+        let mut rt = script_runtime_api::Runtime::<E>::new().expect("runtime");
+        rt.eval(
+            "var h = document.createElement('html'); \
+             var b = document.createElement('body'); \
+             var d = document.createElement('div'); d.setAttribute('id','d'); \
+             b.appendChild(d); h.appendChild(b); document.appendChild(h); \
+             d.addEventListener('transitionrun', function(e){ console.log('run:'+e.propertyName); }); \
+             d.addEventListener('transitionstart', function(e){ console.log('start:'+e.propertyName+':'+e.elapsedTime); }); \
+             d.addEventListener('transitionend', function(e){ console.log('end:'+e.propertyName+':'+e.elapsedTime); });",
+        )
+        .expect("build dom + listeners");
+        {
+            let mut host = rt.host().borrow_mut();
+            let mut v = Vec::new();
+            host.dom.drain_mutations(&mut v);
+        }
+        let session = {
+            let host = rt.host().borrow();
+            Rc::new(RefCell::new(IncrementalLayout::new(&host.dom, SHEETS, 400.0, 300.0)))
+        };
+
+        // Drain the layout's harvested transition events and dispatch each at
+        // its node through the runtime — the host loop's per-frame step.
+        fn pump<E: ScriptEngine>(
+            rt: &mut script_runtime_api::Runtime<E>,
+            session: &Rc<RefCell<IncrementalLayout<NodeId>>>,
+        ) {
+            let events = {
+                let host = rt.host().borrow();
+                session.borrow_mut().take_transition_events(&host.dom)
+            };
+            for ev in events {
+                rt.dispatch_transition_event(
+                    ev.node.raw(),
+                    ev.kind.event_type(),
+                    &ev.property_name,
+                    ev.elapsed_time,
+                )
+                .expect("dispatch");
+            }
+        }
+
+        // Flip -> create the transition (delay phase). apply, then pump: run.
+        rt.eval("document.getElementById('d').setAttribute('style','opacity:1');")
+            .expect("flip");
+        {
+            let mut host = rt.host().borrow_mut();
+            let mut muts = Vec::new();
+            host.dom.drain_mutations(&mut muts);
+            session.borrow_mut().apply(&host.dom, SHEETS, &muts);
+        }
+        pump(&mut rt, &session);
+
+        // t=2s: past the 1s delay -> start.
+        {
+            let host = rt.host().borrow();
+            session.borrow_mut().tick_animations(&host.dom, 2.0);
+        }
+        pump(&mut rt, &session);
+
+        // t=3.5s: past delay+duration -> end.
+        {
+            let host = rt.host().borrow();
+            session.borrow_mut().tick_animations(&host.dom, 3.5);
+        }
+        pump(&mut rt, &session);
+
+        let console = rt.host().borrow().console.clone();
+        assert_eq!(
+            console,
+            vec![
+                "run:opacity".to_string(),
+                "start:opacity:0".to_string(),
+                "end:opacity:2".to_string(),
+            ],
+            "transition events fired in order with propertyName/elapsedTime: {console:?}"
         );
         assert!(!session.borrow().has_active_animations());
     }
@@ -2102,8 +2238,16 @@ mod tests {
         get_computed_style_reads_cascade::<BoaEngine>();
     }
     #[test]
+    fn match_media_evaluates_against_the_frame_on_boa() {
+        match_media_evaluates_against_the_frame::<BoaEngine>();
+    }
+    #[test]
     fn transition_interpolates_via_get_computed_style_on_boa() {
         transition_interpolates_via_get_computed_style::<BoaEngine>();
+    }
+    #[test]
+    fn transition_events_dispatch_to_listeners_on_boa() {
+        transition_events_dispatch_to_listeners::<BoaEngine>();
     }
     #[test]
     fn external_script_runs_on_boa() {
@@ -2244,8 +2388,16 @@ mod tests {
             get_computed_style_reads_cascade::<NovaEngine>();
         }
         #[test]
+        fn match_media_evaluates_against_the_frame_on_nova() {
+            match_media_evaluates_against_the_frame::<NovaEngine>();
+        }
+        #[test]
         fn transition_interpolates_via_get_computed_style_on_nova() {
             transition_interpolates_via_get_computed_style::<NovaEngine>();
+        }
+        #[test]
+        fn transition_events_dispatch_to_listeners_on_nova() {
+            transition_events_dispatch_to_listeners::<NovaEngine>();
         }
         #[test]
         fn scripted_content_scrolls_on_nova() {

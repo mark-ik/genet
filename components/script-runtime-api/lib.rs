@@ -46,7 +46,7 @@ mod platform;
 mod selector;
 mod webgl;
 
-pub use dom::{ComputedStyleHandler, CookieProvider};
+pub use dom::{ComputedStyleHandler, CookieProvider, MediaQueryHandler};
 pub use fetch::{FetchHandler, FetchOutcome, FetchRequest};
 pub use harness::TestResult;
 pub use platform::StorageProvider;
@@ -102,6 +102,12 @@ pub struct HostState {
     /// [`Runtime::set_computed_style_handler`]; an `Rc` so the native sink clones
     /// it out before calling (no live `HostState` borrow during the call).
     pub computed_style: Option<std::rc::Rc<dyn ComputedStyleHandler>>,
+    /// The host's media-query seam for `window.matchMedia` (e.g. a
+    /// `ScriptedDocument` over `IncrementalLayout`). `None` = no layout bound, so
+    /// `matchMedia(q).matches` is `false` and `.media` is the raw query. Installed
+    /// by [`Runtime::set_media_query_handler`]; an `Rc` so the native sink clones
+    /// it out before calling (no live `HostState` borrow during the call).
+    pub media_query: Option<std::rc::Rc<dyn MediaQueryHandler>>,
     /// The host's cookie store for `document.cookie` (e.g. meerkat's view over the
     /// netfetcher session jar). `None` = no store, so `document.cookie` reads `""` and
     /// a write is a no-op. Installed by [`Runtime::set_cookie_provider`]; an `Rc` so
@@ -298,8 +304,12 @@ impl<E: ScriptEngine> Runtime<E> {
             "start",
             Some(format!("type={event_type};node={raw_node_id}")),
         );
+        // Pass the node id as a *string* literal, not a bare number: a tagged
+        // raw NodeId can exceed 2^53 and lose precision as a JS f64, corrupting
+        // its doc-tag high bits and tripping the scripted-DOM fence. The
+        // `__dispatchSynthetic` bridge does `String(rawId)` anyway.
         let v = match self.engine.eval(&format!(
-            "__dispatchSynthetic({raw_node_id}, {event_type:?})"
+            "__dispatchSynthetic(\"{raw_node_id}\", {event_type:?})"
         )) {
             Ok(value) => value,
             Err(error) => {
@@ -317,6 +327,33 @@ impl<E: ScriptEngine> Runtime<E> {
         self.perform_microtask_checkpoint();
         self.trace_scheduler("dispatch_event", "end", Some(format!("proceed={proceed}")));
         Ok(proceed)
+    }
+
+    /// Dispatch a CSS transition lifecycle event (`transitionrun` /
+    /// `transitionstart` / `transitionend` / `transitioncancel`) at `raw_node_id`,
+    /// carrying `property_name` and `elapsed_time` (seconds). The host drives this
+    /// from the layout tick's harvested events, off the cascade. Bubbles, not
+    /// cancelable; a microtask checkpoint runs after so listener-scheduled
+    /// continuations settle. An unknown id is a no-op.
+    pub fn dispatch_transition_event(
+        &mut self,
+        raw_node_id: usize,
+        event_type: &str,
+        property_name: &str,
+        elapsed_time: f64,
+    ) -> Result<(), E::Error> {
+        // Pass the node id as a *string* literal, not a bare number: a tagged
+        // raw NodeId can exceed 2^53 and lose precision as a JS f64 (the
+        // `__dispatchTransition` bridge does `String(rawId)` anyway). `{:?}`
+        // renders each &str as a quoted, escaped literal (valid JS), so a
+        // property name / event type can't break out of the call expression.
+        let expr = format!(
+            "__dispatchTransition(\"{raw_node_id}\", {event_type:?}, {property_name:?}, {elapsed_time})"
+        );
+        self.engine.eval(&expr)?;
+        self.flush_host_trace_events();
+        self.perform_microtask_checkpoint();
+        Ok(())
     }
 
     /// The scripted-tier GC tick (G3): retire the reflectors the engine reports
@@ -588,6 +625,29 @@ impl<E: ScriptEngine> Runtime<E> {
     /// boundary, mirroring [`set_fetch_handler`](Self::set_fetch_handler).
     pub fn set_computed_style_handler(&mut self, handler: Box<dyn ComputedStyleHandler>) {
         self.host.borrow_mut().computed_style = Some(std::rc::Rc::from(handler));
+    }
+
+    /// Install the host's media-query seam for `window.matchMedia` (e.g. a
+    /// handler evaluating a query string against the host's `IncrementalLayout`
+    /// device). Until set, `matchMedia(q).matches` is `false`. The runtime links
+    /// no layout engine — this is the boundary, mirroring
+    /// [`set_computed_style_handler`](Self::set_computed_style_handler).
+    pub fn set_media_query_handler(&mut self, handler: Box<dyn MediaQueryHandler>) {
+        self.host.borrow_mut().media_query = Some(std::rc::Rc::from(handler));
+    }
+
+    /// Notify script that the media environment changed (viewport resize,
+    /// preference flip, …). Re-evaluates every live `MediaQueryList` and fires a
+    /// `change` event on those whose match state flipped. The host calls this
+    /// after mutating the device its [`MediaQueryHandler`] evaluates against. A
+    /// microtask checkpoint runs after so listener-scheduled work settles.
+    pub fn notify_media_features_changed(&mut self) -> Result<(), E::Error> {
+        self.engine.eval(
+            "globalThis.__reevaluateMediaQueries && globalThis.__reevaluateMediaQueries()",
+        )?;
+        self.flush_host_trace_events();
+        self.perform_microtask_checkpoint();
+        Ok(())
     }
 
     /// Install the host's cookie store for `document.cookie` (e.g. meerkat's view over
@@ -1590,6 +1650,56 @@ mod tests {
         assert_eq!(rt.host().borrow().console, vec!["first", "micro", "second"]);
     }
 
+    /// A `MediaQueryList`'s `.matches` is live, and `change` fires (via
+    /// `addEventListener('change')`) when the host re-evaluates after the device
+    /// flips — once per genuine flip, not on a no-op re-evaluation, and both
+    /// directions.
+    fn match_media_change_events_work<E: ScriptEngine>() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        struct FlipHandler {
+            on: Rc<Cell<bool>>,
+        }
+        impl MediaQueryHandler for FlipHandler {
+            fn evaluate(&self, query: &str) -> (String, bool) {
+                (query.to_string(), self.on.get())
+            }
+        }
+
+        let flag = Rc::new(Cell::new(false));
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.set_media_query_handler(Box::new(FlipHandler { on: flag.clone() }));
+        rt.eval(
+            "globalThis.__seen = []; \
+             var mql = matchMedia('(min-width: 500px)'); \
+             mql.addEventListener('change', function(e){ __seen.push('c:' + e.matches); }); \
+             console.log('init:' + mql.matches);",
+        )
+        .expect("setup");
+        let last = |rt: &Runtime<E>| rt.host().borrow().console.last().cloned().unwrap_or_default();
+        assert_eq!(last(&rt), "init:false");
+
+        // Device flips to matching + notify -> one change; `.matches` now true.
+        flag.set(true);
+        rt.notify_media_features_changed().expect("notify");
+        rt.eval("console.log('after:' + mql.matches + '|' + __seen.join(','));")
+            .expect("read");
+        assert_eq!(last(&rt), "after:true|c:true");
+
+        // Re-notify with no state change -> no new event.
+        rt.notify_media_features_changed().expect("notify2");
+        rt.eval("console.log('again:' + __seen.join(','));").expect("read2");
+        assert_eq!(last(&rt), "again:c:true");
+
+        // Flip back -> another change (both directions fire).
+        flag.set(false);
+        rt.notify_media_features_changed().expect("notify3");
+        rt.eval("console.log('final:' + mql.matches + '|' + __seen.join(','));")
+            .expect("read3");
+        assert_eq!(last(&rt), "final:false|c:true,c:false");
+    }
+
     /// rAF callbacks run once per pass in registration order with the frame
     /// timestamp; a microtask queued by callback N runs before callback N+1
     /// (same pass); a handle canceled mid-pass is skipped; a callback
@@ -2025,6 +2135,17 @@ mod tests {
     #[test]
     fn animation_frame_callbacks_on_nova() {
         animation_frame_callbacks_work::<script_engine_nova::NovaEngine>();
+    }
+
+    #[test]
+    fn match_media_change_events_on_boa() {
+        match_media_change_events_work::<script_engine_boa::BoaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn match_media_change_events_on_nova() {
+        match_media_change_events_work::<script_engine_nova::NovaEngine>();
     }
 
     #[test]

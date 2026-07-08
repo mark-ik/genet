@@ -1998,6 +1998,89 @@
     return node.dispatchEvent(ev);
   };
 
+  // TransitionEvent (css-transitions): an Event carrying `propertyName`,
+  // `elapsedTime`, and `pseudoElement`. Bubbles, not cancelable. Minimal:
+  // backed by the shell Event with the extra fields attached, enough for
+  // listeners and the four transition* event types.
+  globalThis.TransitionEvent = function(type, init) {
+    init = init || {};
+    var ev = new Event(String(type), {
+      bubbles: init.bubbles !== undefined ? !!init.bubbles : true,
+      cancelable: !!init.cancelable,
+    });
+    ev.propertyName = init.propertyName !== undefined ? String(init.propertyName) : '';
+    ev.elapsedTime = init.elapsedTime !== undefined ? Number(init.elapsedTime) : 0;
+    ev.pseudoElement = init.pseudoElement !== undefined ? String(init.pseudoElement) : '';
+    return ev;
+  };
+
+  // Host bridge: dispatch a transition* event at a node (from the layout tick's
+  // harvested lifecycle events). `type` is one of transitionrun /
+  // transitionstart / transitionend / transitioncancel.
+  globalThis.__dispatchTransition = function(rawId, type, propertyName, elapsedTime) {
+    var node = wrapNode(__reflectNode(String(rawId)));
+    if (!node) { return false; }
+    var ev = new globalThis.TransitionEvent(String(type), {
+      propertyName: propertyName,
+      elapsedTime: elapsedTime,
+    });
+    return node.dispatchEvent(ev);
+  };
+
+  // window.matchMedia (css-mediaqueries): a MediaQueryList over the host's
+  // media-query evaluation. `.matches` / `.media` are LIVE (re-evaluated against
+  // the current device on each access). `change` fires (addEventListener /
+  // addListener / onchange) when the host calls
+  // `Runtime::notify_media_features_changed` and the query's result flipped.
+  // Note: a MQL with a change listener is retained for re-evaluation (a small
+  // leak vs a real weak-ref registry); MQLs never listened to are not retained.
+  (function() {
+    var live = []; // `fire` closures for MQLs with a change listener / onchange
+    function evalq(q) { return __matchMedia(q); }
+    globalThis.matchMedia = function(query) {
+      var q = String(query);
+      var listeners = [];
+      var last = evalq(q).charAt(0) === '1';
+      var registered = false;
+      var onchange = null;
+      var mql = {
+        get matches() { return evalq(q).charAt(0) === '1'; },
+        get media() { var r = evalq(q); var nl = r.indexOf('\n'); return nl >= 0 ? r.slice(nl + 1) : ''; },
+        addEventListener: function(type, cb) {
+          if (type === 'change' && typeof cb === 'function') { listeners.push(cb); register(); }
+        },
+        removeEventListener: function(type, cb) {
+          if (type === 'change') { var i = listeners.indexOf(cb); if (i >= 0) listeners.splice(i, 1); }
+        },
+        addListener: function(cb) { this.addEventListener('change', cb); },
+        removeListener: function(cb) { this.removeEventListener('change', cb); },
+        dispatchEvent: function() { return false; },
+      };
+      Object.defineProperty(mql, 'onchange', {
+        configurable: true, enumerable: true,
+        get: function() { return onchange; },
+        set: function(v) { onchange = v; if (typeof v === 'function') register(); },
+      });
+      function register() { if (!registered) { registered = true; live.push(fire); } }
+      function fire() {
+        var now = evalq(q).charAt(0) === '1';
+        if (now === last) { return; }
+        last = now;
+        var ev = { type: 'change', matches: now, media: mql.media, target: mql, currentTarget: mql };
+        if (typeof onchange === 'function') { try { onchange.call(mql, ev); } catch (e) {} }
+        var snap = listeners.slice();
+        for (var i = 0; i < snap.length; i++) { try { snap[i].call(mql, ev); } catch (e) {} }
+      }
+      return mql;
+    };
+    // Re-evaluate all listened MediaQueryLists; fire `change` on those that
+    // flipped. The host calls this after any device / preference change.
+    globalThis.__reevaluateMediaQueries = function() {
+      var snap = live.slice();
+      for (var i = 0; i < snap.length; i++) { snap[i](); }
+    };
+  })();
+
   // window.frames is the window itself when there are no child browsing
   // contexts (the static-DOM harness has none).
   globalThis.frames = globalThis.window || globalThis;

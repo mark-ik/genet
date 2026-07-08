@@ -72,6 +72,24 @@ pub enum Applied {
     FullRecompute,
 }
 
+/// Whether CSS transitions animate over the clock or complete instantly. The
+/// host sets this from the user's motion preference (an OS
+/// `prefers-reduced-motion: reduce`, or an explicit "disable animations"
+/// toggle); it is the engine-level lever, distinct from the author-facing
+/// `@media (prefers-reduced-motion)` query (which needs a media feature stylo's
+/// Servo set does not carry — see the CSS transitions plan).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AnimationMode {
+    /// Transitions interpolate across ticks (the default).
+    #[default]
+    Full,
+    /// Transitions complete instantly: the first tick after a change lands the
+    /// final value with no intermediate frames, and lifecycle events are
+    /// suppressed (reduced motion is silent). Style changes still take effect —
+    /// only the animation between old and new is removed.
+    Disabled,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct AppliedBatch {
     applied: Applied,
@@ -192,13 +210,11 @@ pub struct IncrementalLayout<Id: Copy + Eq + Hash> {
     last_batch_stats: LayoutBatchStats,
     /// Per-transition last-observed `AnimationState`, keyed by
     /// `(opaque node id, longhand name)`. Diffed against the live animation set
-    /// after every `apply`/`tick_animations` to derive lifecycle events
-    /// (`crate::transition_events`).
+    /// by [`take_transition_events`](Self::take_transition_events) to derive
+    /// lifecycle events (`crate::transition_events`).
     transition_tracker: crate::transition_events::TransitionTracker,
-    /// CSS transition lifecycle events produced since the host last drained
-    /// them ([`take_transition_events`](Self::take_transition_events)). Filled
-    /// off the cascade so the host dispatches them as tasks.
-    pending_transition_events: Vec<TransitionEventRecord<Id>>,
+    /// Whether transitions animate or complete instantly (reduced motion).
+    animation_mode: AnimationMode,
 }
 
 impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
@@ -264,7 +280,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             last_damage: RestyleDamage::empty(),
             last_batch_stats,
             transition_tracker: crate::transition_events::TransitionTracker::default(),
-            pending_transition_events: Vec::new(),
+            animation_mode: AnimationMode::default(),
         }
     }
 
@@ -385,6 +401,14 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     /// the standard tradeoff for a script-before-layout split).
     pub fn computed_value(&self, node: Id, property: &str) -> Option<String> {
         crate::computed_query::computed_value_string(&self.styles, node, property)
+    }
+
+    /// Evaluate a CSS media query string against this session's device — the
+    /// engine side of `window.matchMedia`. Returns the serialized (normalized)
+    /// query and whether it currently matches. See
+    /// [`crate::cascade::evaluate_media_query`].
+    pub fn evaluate_media_query(&self, query: &str) -> (String, bool) {
+        crate::cascade::evaluate_media_query(&self.stylist, query)
     }
 
     /// The accumulated CSS-transform translate from the root to `node`, in scene px: what paint
@@ -1126,8 +1150,22 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     where
         D: LayoutDom<NodeId = Id>,
     {
-        self.styles.set_animation_clock(now_s);
-        if !self.has_active_animations() {
+        // Reduced motion: jump the clock past every transition's end so this
+        // single frame lands the final value with no interpolation. Monotonic —
+        // the completion clock is `start + duration` of the last-created
+        // transition, always >= the current clock. `take_transition_events`
+        // then cleans the finished transitions up (silently, in this mode).
+        let effective_now = match self.animation_mode {
+            AnimationMode::Full => now_s,
+            AnimationMode::Disabled => self.max_transition_end().unwrap_or(now_s).max(now_s),
+        };
+        self.styles.set_animation_clock(effective_now);
+        // Re-cascade while any transition is still in the set, including the
+        // frame that crosses a transition's end (it must land the final value)
+        // and any that linger until the host drains them via
+        // `take_transition_events`. `has_active_animations` (clock-based) is the
+        // *host's* signal to stop requesting frames, not this gate.
+        if self.styles.animations().sets.read().is_empty() {
             return Applied::Unchanged;
         }
         let outcome = restyle_for_animation_tick(dom, &mut self.styles, &self.stylist);
@@ -1163,16 +1201,76 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         }
     }
 
-    /// Whether the session has any running CSS transitions (or, later, CSS
-    /// animations). The finishing tick clears this; hosts request frames only
-    /// while it is true, so steady surfaces stop ticking entirely.
+    /// Whether the session has any CSS transition (or, later, CSS animation)
+    /// still live as of the current animation clock — i.e. not canceled and
+    /// with its end time in the future. Terminal transitions that linger until
+    /// the host drains their events
+    /// ([`take_transition_events`](Self::take_transition_events)) do not count,
+    /// so this is the true idle signal: hosts request frames only while it is
+    /// true, and a steady surface stops ticking entirely.
     pub fn has_active_animations(&self) -> bool {
+        use style::animation::AnimationState::Canceled;
+        let now = self.styles.animation_clock();
+        self.styles.animations().sets.read().values().any(|set| {
+            set.transitions.iter().any(|t| {
+                t.state != Canceled && t.start_time + t.property_animation.duration > now
+            }) || set.animations.iter().any(|a| a.state != Canceled)
+        })
+    }
+
+    /// Whether transitions animate or complete instantly (reduced motion). The
+    /// host sets this from the user's motion preference.
+    pub fn set_animation_mode(&mut self, mode: AnimationMode) {
+        self.animation_mode = mode;
+    }
+
+    /// The current [`AnimationMode`].
+    pub fn animation_mode(&self) -> AnimationMode {
+        self.animation_mode
+    }
+
+    /// The latest end time (`start_time + duration`, seconds) across all live
+    /// transitions, or `None` when the set is empty. Reduced motion jumps the
+    /// clock here to complete everything in one frame.
+    fn max_transition_end(&self) -> Option<f64> {
         self.styles
             .animations()
             .sets
             .read()
             .values()
-            .any(|set| set.has_active_animation() || set.has_active_transition())
+            .flat_map(|set| set.transitions.iter())
+            .map(|t| t.start_time + t.property_animation.duration)
+            .fold(None, |acc, end| Some(acc.map_or(end, |a: f64| a.max(end))))
+    }
+
+    /// Drain the CSS transition lifecycle events
+    /// (`transitionrun`/`start`/`end`/`cancel`) produced since the last call,
+    /// and prune the transitions that have reached a terminal phase. The host
+    /// calls this after every [`apply`](Self::apply) and
+    /// [`tick_animations`](Self::tick_animations), then dispatches each event
+    /// through the JS runtime (off the cascade, as a task). Cheap and empty
+    /// when nothing has animated since the last drain.
+    ///
+    /// In [`AnimationMode::Disabled`] the terminal transitions are still pruned
+    /// (so the session goes idle) but no events are returned — reduced motion is
+    /// silent.
+    pub fn take_transition_events<D>(&mut self, dom: &D) -> Vec<TransitionEventRecord<Id>>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        // Gate the DOM walk: nothing to diff when the live set and the tracker
+        // are both empty (the overwhelmingly common case).
+        if self.transition_tracker.is_empty() && self.styles.animations().sets.read().is_empty() {
+            return Vec::new();
+        }
+        let now = self.styles.animation_clock();
+        let events =
+            harvest_transition_events(dom, &self.styles, &mut self.transition_tracker, now);
+        match self.animation_mode {
+            AnimationMode::Full => events,
+            // Pruning already happened inside the harvest; drop the events.
+            AnimationMode::Disabled => Vec::new(),
+        }
     }
 
     /// Emit a glyph-bearing [`ServalPaintList`] from the current layout — the
@@ -2121,7 +2219,7 @@ mod tests {
     #[test]
     fn transition_interpolates_across_animation_ticks() {
         const SHEET: &[&str] =
-            &["p{width:100px;height:20px;opacity:0;transition:opacity 2s linear}"];
+            &["p{width:100px;height:20px;opacity:0;transition:opacity 2s linear 1s}"];
         let mut dom = ScriptedDom::new();
         let root = dom.document();
         let h = dom.create_element(html("html"));
@@ -2146,33 +2244,178 @@ mod tests {
         assert!(!layout.has_active_animations());
 
         // Flip to opacity:1 via inline style; the restyle starts the
-        // transition against the session clock (still 0.0) and holds the
-        // start value.
+        // transition against the session clock (still 0.0), holding the start
+        // value. `1s` delay so t=0 is squarely in the delay phase.
         let _ = drain(&mut dom);
         dom.set_attribute(p, attr("style"), "opacity:1");
         let muts = drain(&mut dom);
         layout.apply(&dom, SHEET, &muts);
         assert!(layout.has_active_animations(), "flip starts the transition");
-        assert!(opacity(&layout, p) < 0.001, "start value holds at t=0");
+        let _ = layout.take_transition_events(&dom); // model the host: drain each frame
+        assert!(opacity(&layout, p) < 0.001, "start value holds during the delay");
 
-        // Mid tick: t=1s of a 2s linear transition.
-        let applied = layout.tick_animations(&dom, 1.0);
+        // Mid tick: t=2s = 1s past the 1s delay, halfway through the 2s active
+        // duration.
+        let applied = layout.tick_animations(&dom, 2.0);
         assert_ne!(applied, Applied::Unchanged, "mid tick restyles");
         let mid = opacity(&layout, p);
-        assert!((mid - 0.5).abs() < 0.01, "t=1s of 2s linear => ~0.5, got {mid}");
+        assert!((mid - 0.5).abs() < 0.01, "1s into 2s linear => ~0.5, got {mid}");
+        let _ = layout.take_transition_events(&dom);
         assert!(layout.has_active_animations());
 
-        // Finishing tick: past the duration lands the end value and drains
-        // the animation set.
-        layout.tick_animations(&dom, 2.5);
-        assert!((opacity(&layout, p) - 1.0).abs() < 0.001, "t>=2s => 1");
+        // Finishing tick: past delay+duration lands the end value; draining
+        // then empties the set.
+        layout.tick_animations(&dom, 3.5);
+        assert!((opacity(&layout, p) - 1.0).abs() < 0.001, "t>=delay+dur => 1");
+        let _ = layout.take_transition_events(&dom);
         assert!(
             !layout.has_active_animations(),
-            "finishing tick empties the set"
+            "finishing tick + drain empties the set"
         );
 
         // Idle tick: nothing animating, zero dirty work.
-        assert_eq!(layout.tick_animations(&dom, 3.0), Applied::Unchanged);
+        assert_eq!(layout.tick_animations(&dom, 4.0), Applied::Unchanged);
+    }
+
+    /// The transition lifecycle emits `transitionrun` at creation (in the
+    /// delay phase), `transitionstart` when it leaves the delay, and
+    /// `transitionend` at completion — in that order, with the transitioning
+    /// longhand's name and the right `elapsedTime` — draining through
+    /// `take_transition_events`. A `1s` delay separates run from start.
+    #[test]
+    fn transition_events_fire_run_start_end() {
+        use crate::transition_events::TransitionEventKind::*;
+
+        const SHEET: &[&str] =
+            &["p{width:100px;height:20px;opacity:0;transition:opacity 2s linear 1s}"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        assert!(layout.take_transition_events(&dom).is_empty(), "idle: none");
+
+        // Flip creates the transition; at t=0 it is in its 1s delay phase ->
+        // transitionrun only (elapsedTime 0).
+        let _ = drain(&mut dom);
+        dom.set_attribute(p, attr("style"), "opacity:1");
+        let muts = drain(&mut dom);
+        layout.apply(&dom, SHEET, &muts);
+        let run = layout.take_transition_events(&dom);
+        assert_eq!(run.len(), 1, "just run in the delay phase: {run:?}");
+        assert_eq!(run[0].kind, Run);
+        assert_eq!(run[0].node, p);
+        assert_eq!(run[0].property_name, "opacity");
+        assert!(run[0].elapsed_time.abs() < 1e-9);
+
+        // t=2s: 1s past the 1s delay -> transitionstart.
+        layout.tick_animations(&dom, 2.0);
+        let start = layout.take_transition_events(&dom);
+        assert_eq!(start.len(), 1, "one event leaving the delay: {start:?}");
+        assert_eq!(start[0].kind, Start);
+
+        // t=3.5s: past delay+duration -> transitionend (elapsedTime == duration).
+        layout.tick_animations(&dom, 3.5);
+        let end = layout.take_transition_events(&dom);
+        assert_eq!(end.len(), 1, "one event at end: {end:?}");
+        assert_eq!(end[0].kind, End);
+        assert!((end[0].elapsed_time - 2.0).abs() < 1e-9, "elapsed == duration");
+
+        // Drained and idle.
+        assert!(layout.take_transition_events(&dom).is_empty());
+        assert!(!layout.has_active_animations());
+    }
+
+    /// `AnimationMode::Disabled` (reduced motion): a style flip that would
+    /// transition instead lands the final value on the first tick with no
+    /// intermediate frame, emits no lifecycle events, and leaves the session
+    /// idle. The style change itself still takes effect.
+    #[test]
+    fn disabled_mode_completes_transitions_instantly_and_silently() {
+        const SHEET: &[&str] =
+            &["p{width:100px;height:20px;opacity:0;transition:opacity 10s linear}"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        layout.set_animation_mode(AnimationMode::Disabled);
+        fn opacity(
+            layout: &IncrementalLayout<<ScriptedDom as LayoutDom>::NodeId>,
+            p: <ScriptedDom as LayoutDom>::NodeId,
+        ) -> f32 {
+            layout
+                .computed_value(p, "opacity")
+                .expect("opacity")
+                .parse()
+                .expect("numeric")
+        }
+
+        let _ = drain(&mut dom);
+        dom.set_attribute(p, attr("style"), "opacity:1");
+        let muts = drain(&mut dom);
+        layout.apply(&dom, SHEET, &muts);
+
+        // One tick at a small real clock (0.1s, far short of the 10s duration):
+        // reduced motion still jumps straight to the final value.
+        layout.tick_animations(&dom, 0.1);
+        assert!(
+            (opacity(&layout, p) - 1.0).abs() < 0.001,
+            "disabled mode lands the final value immediately, not interpolated"
+        );
+        // No events, and the session is idle right away.
+        assert!(
+            layout.take_transition_events(&dom).is_empty(),
+            "reduced motion is silent"
+        );
+        assert!(!layout.has_active_animations(), "no lingering animation");
+    }
+
+    /// Removing the transitioning element mid-flight (`display:none` cancels
+    /// active transitions per spec) fires `transitioncancel`, not `end`.
+    #[test]
+    fn transition_cancel_fires_on_display_none() {
+        use crate::transition_events::TransitionEventKind::*;
+
+        const SHEET: &[&str] =
+            &["p{width:100px;height:20px;opacity:0;transition:opacity 4s linear}"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let _ = drain(&mut dom);
+        dom.set_attribute(p, attr("style"), "opacity:1");
+        let muts = drain(&mut dom);
+        layout.apply(&dom, SHEET, &muts);
+        layout.tick_animations(&dom, 1.0); // Pending -> Running
+        let _ = layout.take_transition_events(&dom); // drain run+start
+        assert!(layout.has_active_animations());
+
+        // display:none cancels the running transition.
+        dom.set_attribute(p, attr("style"), "opacity:1;display:none");
+        let muts = drain(&mut dom);
+        layout.apply(&dom, SHEET, &muts);
+        let cancel = layout.take_transition_events(&dom);
+        assert_eq!(cancel.len(), 1, "one cancel event: {cancel:?}");
+        assert_eq!(cancel[0].kind, Cancel);
+        assert_eq!(cancel[0].property_name, "opacity");
+        assert!(!layout.has_active_animations(), "canceled: idle");
     }
 
     /// `emit_paint_list` produces a glyph-bearing list, and keeps producing one

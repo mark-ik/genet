@@ -129,14 +129,77 @@ reports no active animations and produces no dirty tiles.
 
 ### T3: events + WPT measurement
 
-- Dispatch `transitionrun`, `transitionstart`, `transitionend`,
-  `transitioncancel` from animation-set state changes, as tasks on the proper
-  task source (not synchronously inside the cascade).
-- `prefers-reduced-motion` threaded to stylo's media evaluation as a real
-  host setting, plus a host-level disable-animations setting (both surfaced as
-  configuration, not hardcoded).
-- Wire a `css/css-transitions` slice into the WPT runner under the existing
-  `unexpected=0` governance; record the baseline pass set in `meta/`.
+- **Transition lifecycle events — *landed 2026-07-06.*** `transitionrun` /
+  `transitionstart` / `transitionend` / `transitioncancel` are derived off the
+  cascade and dispatched through the runtime, in order, with `propertyName` and
+  `elapsedTime`. Design:
+  - New `components/serval-layout/transition_events.rs`: `TransitionEventRecord`
+    / `TransitionEventKind`, and `harvest_transition_events`, which diffs each
+    transition's *clock-derived* lifecycle phase (not Stylo's `state`) against a
+    per-session tracker and emits the ordered events. Deriving phase from the
+    clock — rather than flipping Stylo state in the tick — was the key
+    simplification: `PropertyAnimation::calculate_value` already clamps a
+    past-end transition to its final value, and it dodges Stylo's
+    `process_animations` silently dropping a just-finished transition before its
+    `transitionend` is harvested (the bug the first cut hit).
+  - `IncrementalLayout::take_transition_events(dom)` drains them (gated: no walk
+    when idle) and prunes terminal transitions; `has_active_animations` is now
+    clock-based (a transition with its end in the future), so it is the true
+    idle signal independent of when the host drains. The tick's gate is
+    "set non-empty" so the ending frame still lands the final value.
+  - `Runtime::dispatch_transition_event` + a `TransitionEvent` /
+    `__dispatchTransition` bootstrap pair. The host loop's per-frame step:
+    apply/tick, `take_transition_events`, dispatch each (off the cascade).
+  - Guards: `transition_events_fire_run_start_end` +
+    `transition_cancel_fires_on_display_none` (serval-layout),
+    `transition_events_dispatch_to_listeners_on_boa`/`_on_nova`
+    (serval-scripted, end to end through real listeners).
+  - *Bonus fix:* dispatching by node id exposed the pre-existing doc-tag/f64
+    precision bug (`2026-07-05_event_loop_rigor_followups.md`). Passing the raw
+    id as a **string** literal to the `__dispatch*` bridges (not a bare number
+    that rounds above 2^53) fixed both the new path and `dispatch_event`,
+    turning the previously-red `scheduler_trace_ndjson` full-suite guards green.
+- **Reduced motion (host disable) — *landed 2026-07-06.*** `AnimationMode`
+  (`Full` / `Disabled`) on `IncrementalLayout`, set by the host from the user's
+  motion preference (`set_animation_mode`). In `Disabled`, `tick_animations`
+  jumps the clock past every transition's end so the first tick lands the final
+  value with no intermediate frame (monotonic: the completion clock is the
+  last-created transition's `start + duration`), and `take_transition_events`
+  prunes the finished transitions but returns nothing — reduced motion is
+  silent. The style change still takes effect; only the animation is removed.
+  Because the host frame order is apply -> tick -> paint (T2), the pre-change
+  value is never painted, so the change is visually instant. Guard:
+  `disabled_mode_completes_transitions_instantly_and_silently`.
+  - **Author-facing `@media (prefers-reduced-motion)` — *landed 2026-07-06,
+    fork-gate closed.*** Mark accepted a patched `mark-ik/stylo` (2026-07-06), so
+    the feature stylo's Servo set lacked is now added there. Fork branch
+    `mark-ik/servo-media-features` (based on the v0.18.0 tag, rev 8bde0e9):
+    registers the `prefers-reduced-motion` atom, adds a `PrefersReducedMotion`
+    value enum (shared `queries::values`), a `Device` preference field with
+    getter/setter (kept out of `Device::new` so callers stay source-compatible,
+    the `color_scheme` pattern), and the media-feature evaluator + descriptor.
+    serval repoints all 8 stylo crate pins (workspace deps + the two
+    `[patch.crates-io]` redirects) at the fork branch; `cascade.rs` gains
+    `make_device_with_prefs` and `set_stylist_reduced_motion` (the live
+    re-evaluation counterpart of `set_stylist_color_scheme`). Guard:
+    `prefers_reduced_motion_media_query_evaluates_and_reevaluates` proves
+    `@media (prefers-reduced-motion: reduce/no-preference)` selects the right
+    rule at the default and flips after the setter. serval-layout suite green
+    (257) against the fork. **This is the first entry in the planned Servo-mode
+    media-feature parity set** (~30 standard features stylo's Servo build omits:
+    hover/pointer/any-\*, prefers-contrast, forced-colors, resolution,
+    orientation, display-mode, …); the fork + wiring pattern established here
+    (atom + enum + Device field/setter + evaluator + serval device plumbing)
+    repeats mechanically for the rest. Outstanding: consolidate the per-preference
+    `Device` rebuilds into one host-set bundle (today `set_stylist_reduced_motion`
+    resets color scheme), and push the remaining features when a WPT slice or
+    responsive-CSS need makes them load-bearing.
+- **Remaining in T3:**
+  - Wire a `css/css-transitions` slice into the WPT runner under the existing
+    `unexpected=0` governance; record the baseline pass set in `meta/`.
+  - Stricter task-source queueing: events dispatch off the cascade today (post
+    apply/tick), which satisfies "not synchronously inside the cascade"; routing
+    them through a named task source is a rigor follow-up.
 
 **Done when:** the chosen `css/css-transitions` slice runs `unexpected=0` on
 boa, and the event-order tests in that slice (run/start/end ordering,

@@ -44,6 +44,12 @@ $baselines = @(
         Subset = "html/webappapis/timers"
         Engine = "boa"
         Expectations = "ports/serval-wpt/expectations/testharness/html_webappapis_timers_boa.json"
+    },
+    @{
+        # matchMedia over a default device (no GPU / render needed).
+        Subset = "css/mediaqueries"
+        Engine = "boa"
+        Expectations = "ports/serval-wpt/expectations/testharness/css_mediaqueries_boa.json"
     }
 )
 

@@ -577,10 +577,10 @@ fn real_main() {
     }
 
     if (args.expectations.is_some() || args.write_expectations.is_some())
-        && args.command != "testharness"
+        && !matches!(args.command.as_str(), "testharness" | "reftest")
     {
         eprintln!(
-            "--expectations / --write-expectations are currently supported for `testharness` only"
+            "--expectations / --write-expectations are supported for `testharness` and `reftest`"
         );
         std::process::exit(2);
     }
@@ -2125,14 +2125,19 @@ fn reftest(tests: &[TestCase], args: &Args) {
 
     let (mut passed, mut failed, mut skipped, mut errored) = (0, 0, 0, 0);
     let mut buckets: HashMap<&'static str, u64> = HashMap::new();
+    // Per-test coarse status for the optional expectations baseline (mirrors the
+    // testharness lane's `ActualRecord`s), fed to `finish_expectations` below.
+    let mut actuals: Vec<ActualRecord> = Vec::new();
     for test in tests {
         let Ok(bytes) = fs::read(&test.path) else {
             errored += 1;
+            actuals.push(ActualRecord::with_reason(test, "error", "read-failed"));
             continue;
         };
         let test_html = String::from_utf8_lossy(&bytes).into_owned();
         if test.kind != Kind::Reftest {
             skipped += 1;
+            actuals.push(ActualRecord::with_reason(test, "skip", "non-reftest"));
             continue;
         }
         let (kind, href) = if let Some((href, cmp)) = test.refs.first() {
@@ -2144,21 +2149,25 @@ fn reftest(tests: &[TestCase], args: &Args) {
         } else {
             let Some((kind, href)) = reftest_ref(&test_html) else {
                 skipped += 1;
+                actuals.push(ActualRecord::with_reason(test, "skip", "no-ref"));
                 continue;
             };
             (kind, href)
         };
         let Some(direct_ref) = resolve_ref(&test.path, &href, tests_root) else {
             skipped += 1;
+            actuals.push(ActualRecord::with_reason(test, "skip", "ref-unresolved"));
             continue;
         };
         let Some((ref_path, ref_html)) = final_ref(direct_ref, kind, tests_root) else {
             errored += 1;
+            actuals.push(ActualRecord::with_reason(test, "error", "ref-missing"));
             println!("ERROR ref-missing {}", test.name());
             continue;
         };
         if needs_script(&test_html) || needs_script(&ref_html) {
             skipped += 1;
+            actuals.push(ActualRecord::with_reason(test, "skip", "needs-script"));
             if args.verbose {
                 println!("SKIP  script   {}", test.name());
             }
@@ -2192,6 +2201,7 @@ fn reftest(tests: &[TestCase], args: &Args) {
             Ok(pair) => pair,
             Err(_) => {
                 failed += 1;
+                actuals.push(ActualRecord::with_reason(test, "fail", "crash"));
                 println!("FAIL  crash    {}", test.name());
                 continue;
             },
@@ -2204,11 +2214,13 @@ fn reftest(tests: &[TestCase], args: &Args) {
         };
         if pass {
             passed += 1;
+            actuals.push(ActualRecord::new(test, "pass"));
             if args.verbose {
                 println!("PASS  {}", test.name());
             }
         } else {
             failed += 1;
+            actuals.push(ActualRecord::new(test, "fail"));
             let k = if kind == MatchKind::Match {
                 "match   "
             } else {
@@ -2268,7 +2280,11 @@ fn reftest(tests: &[TestCase], args: &Args) {
         );
         println!("  ({legend})");
     }
-    if failed > 0 || errored > 0 {
+    // Optional expectations baseline (write or check). When a baseline is
+    // checked, its `unexpected=0` verdict owns the exit code; the raw
+    // failed/errored exit only applies to un-guarded runs.
+    finish_expectations(args, "reftest", &actuals);
+    if args.expectations.is_none() && (failed > 0 || errored > 0) {
         std::process::exit(1);
     }
 }

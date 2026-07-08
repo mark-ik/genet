@@ -65,8 +65,8 @@ pub use caret::{
     caret_rect, find_text_rects, range_rects, selection_rects, selection_style, text_selection,
 };
 pub use cascade::{
-    RestyleOutcome, apply_interaction, restyle_for_interaction, restyle_structural,
-    restyle_with_snapshots, run_cascade,
+    MediaQueryEvaluator, RestyleOutcome, apply_interaction, evaluate_media_query,
+    restyle_for_interaction, restyle_structural, restyle_with_snapshots, run_cascade,
 };
 pub use cell::ArcRefCell;
 pub use fragment::FragmentPlane;
@@ -80,7 +80,7 @@ pub use image_decode::{
     BackgroundImagePlane, DecodedImage, ImageLoader, ImagePlane, NoImageLoader, decode_image_bytes,
 };
 pub use engine_observables_api::{InteractionState, SourceNodeId};
-pub use incremental::{Applied, IncrementalLayout};
+pub use incremental::{AnimationMode, Applied, IncrementalLayout};
 pub use invalidate::{Invalidation, classify, coalesce};
 pub use layout::layout;
 pub use paint_emit::{
