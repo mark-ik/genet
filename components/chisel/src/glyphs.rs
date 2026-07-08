@@ -6,7 +6,7 @@
 use paint_list_api::ColorF;
 
 use crate::path::Path;
-use crate::{Leaf, PaintCx, Size, SizeHint, round_stroke, solid_stroke};
+use crate::{Leaf, PaintCx, Size, SizeHint, round_stroke};
 
 /// One node of a [`GraphGlyph`], in normalized `0..1` coordinates (scaled to
 /// the leaf's box at paint time).
