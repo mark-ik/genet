@@ -56,6 +56,7 @@ use std::rc::Rc;
 use layout_dom_api::{LocalName, Namespace, QualName};
 use serval_scripted_dom::ScriptedDom;
 
+mod arrangement;
 mod context;
 mod controls;
 mod element;
@@ -82,6 +83,7 @@ mod wheel;
 #[cfg(test)]
 mod tests;
 
+pub use arrangement::{arrangement, placed};
 pub use context::ServalCtx;
 pub use controls::{
     Checkbox, TextField, TextInput, button, checkbox, checkbox_typed, text_field, text_field_typed,

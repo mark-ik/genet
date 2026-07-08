@@ -23,6 +23,9 @@ path = "src/lib.rs"
 # divergence lives in other xilem crates, not `xilem_core`, so vendoring is
 # loss-free and lets a bare serval clone resolve without any xilem fork checkout.
 [dependencies]
+# Arrangement placements (Placement / VirtualWindow) for the `placed` /
+# `arrangement` views — the view half of chisel's tier-3 arrangement leaf.
+chisel = { path = "../chisel" }
 xilem_core = { path = "../xilem-core" }
 serval-scripted-dom = { path = "../serval-scripted-dom" }
 layout_dom_api = { package = "layout-dom-api", path = "../shared/layout-dom" }

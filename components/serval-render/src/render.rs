@@ -798,6 +798,63 @@ mod tests {
         );
     }
 
+    /// The arrangement contract's paint half: absolutely-placed children in a
+    /// `position: relative` container paint in `z-index` order (CSS 2.1
+    /// Appendix E via `paint_stacking`), not DOM order — a raised card
+    /// overpaints its sibling regardless of insertion order.
+    #[test]
+    fn arranged_children_paint_in_z_order_not_dom_order() {
+        use paint_list_api::PaintList;
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let container = dom.create_element(html("div"));
+        dom.set_attribute(
+            container,
+            attr("style"),
+            "position: relative; width: 200px; height: 100px;",
+        );
+        dom.append_child(root, container);
+        // DOM-first card carries the HIGHER z: if paint follows DOM order it
+        // comes first; if it follows z (correct) it comes last.
+        let raised = dom.create_element(html("div"));
+        dom.set_attribute(
+            raised,
+            attr("style"),
+            "position: absolute; left: 10px; top: 10px; z-index: 3; \
+             width: 80px; height: 60px; background-color: rgb(200, 30, 30);",
+        );
+        dom.append_child(container, raised);
+        let lowered = dom.create_element(html("div"));
+        dom.set_attribute(
+            lowered,
+            attr("style"),
+            "position: absolute; left: 40px; top: 20px; z-index: 2; \
+             width: 80px; height: 60px; background-color: rgb(30, 30, 200);",
+        );
+        dom.append_child(container, lowered);
+
+        let plist = paint_list_from_scripted_dom(
+            &dom,
+            &["div { display: block; }"],
+            200,
+            100,
+            None,
+            &ScrollOffsets::default(),
+        );
+        let pos_of = |r: f32, b: f32| {
+            plist.commands().iter().position(|c| {
+                matches!(c, PaintCmd::DrawRect(rect)
+                    if (rect.color.r - r).abs() < 0.05 && (rect.color.b - b).abs() < 0.05)
+            })
+        };
+        let red = pos_of(200.0 / 255.0, 30.0 / 255.0).expect("raised card paints");
+        let blue = pos_of(30.0 / 255.0, 200.0 / 255.0).expect("lowered card paints");
+        assert!(
+            blue < red,
+            "z-index 3 paints after z-index 2 despite DOM order (blue at {blue}, red at {red})",
+        );
+    }
+
     /// End-to-end Path-A: a `<chisel-leaf key="7">` in the DOM plus a `Swatch`
     /// registered under key 7 render through the whole chain — cascade → layout →
     /// `BoxTree::chisel_leaf_boxes` → `LeafRegistry::render_into` at the content-box
