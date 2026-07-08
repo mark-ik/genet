@@ -129,6 +129,12 @@ impl TileShell {
         self.surface.note_frame_millis(millis);
     }
 
+    /// Show or hide the chisel status bar (passthrough to
+    /// [`TileSurface::set_status_bar`]). Default on.
+    pub fn set_status_bar(&mut self, on: bool) {
+        self.surface.set_status_bar(on);
+    }
+
     /// Render the frame at the current size, caching the tile content rects for input
     /// routing. While a tab drag is moving, the frame carries a ghost of the dragged tab
     /// at the cursor. The host composites the returned [`TileFrame`].

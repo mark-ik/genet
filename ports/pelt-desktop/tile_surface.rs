@@ -48,6 +48,10 @@ type TileLogic = fn(&TileState) -> TileView;
 pub struct TileState {
     tree: TileTree,
     pending: Vec<TileEvent>,
+    /// Whether the frame renders the chisel status bar (tree glyph +
+    /// frame-time meter). Default on; an embedding host that carries its own
+    /// chrome turns it off ([`TileSurface::set_status_bar`]).
+    status_bar: bool,
 }
 
 /// The status bar's frame-time meter leaf key (chisel `LeafRegistry`).
@@ -64,17 +68,19 @@ fn tile_view(state: &TileState) -> TileView {
     let tree = el::<_, TileState, ()>("div", render_node(&state.tree, &[]))
         .attr("class", "tile-body")
         .attr("style", "flex: 1 1 0; min-height: 0; display: flex;");
-    let status = el::<_, TileState, ()>(
-        "div",
-        (
-            el::<_, TileState, ()>("div", ()).attr("class", "tile-status-spacer"),
-            chisel_leaf::<TileState, ()>(TREE_GLYPH_LEAF_KEY, 20, 20)
-                .attr("class", "tile-status-leaf"),
-            chisel_leaf::<TileState, ()>(FRAME_METER_LEAF_KEY, 64, 8)
-                .attr("class", "tile-status-leaf"),
-        ),
-    )
-    .attr("class", "tile-statusbar");
+    let status = state.status_bar.then(|| {
+        el::<_, TileState, ()>(
+            "div",
+            (
+                el::<_, TileState, ()>("div", ()).attr("class", "tile-status-spacer"),
+                chisel_leaf::<TileState, ()>(TREE_GLYPH_LEAF_KEY, 20, 20)
+                    .attr("class", "tile-status-leaf"),
+                chisel_leaf::<TileState, ()>(FRAME_METER_LEAF_KEY, 64, 8)
+                    .attr("class", "tile-status-leaf"),
+            ),
+        )
+        .attr("class", "tile-statusbar")
+    });
     Box::new(
         el::<_, TileState, ()>("div", (tree, status)).attr(
             "style",
@@ -384,6 +390,7 @@ impl TileSurface {
             TileState {
                 tree,
                 pending: Vec::new(),
+                status_bar: true,
             },
         );
         let mut leaves = LeafRegistry::new();
@@ -407,6 +414,13 @@ impl TileSurface {
         };
         surface.load_docs();
         surface
+    }
+
+    /// Show or hide the chisel status bar (tree glyph + frame-time meter).
+    /// Default on; an embedding host that carries its own chrome (meerkat's
+    /// workbench pane) turns it off rather than double-chroming.
+    pub fn set_status_bar(&mut self, on: bool) {
+        self.runner.update(|s| s.status_bar = on);
     }
 
     /// Feed the status-bar meter the last frame's measured wall time. Scale:
