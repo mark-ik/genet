@@ -76,10 +76,17 @@ Code samples are **illustrative** unless marked implementation-ready.
   (mixed with text, or 2+ side by side in a plain block) ride `InlineContent`
   and do not paint their commands yet. Rows of widgets should use flex (now
   correct); the inline-flow lane is a follow-up.
+- **First live-window consumer: pelt's tile chrome (2026-07-08).** The tile
+  frame gains a status bar with two real-data leaves: a live tile-tree
+  `GraphGlyph` (topology re-fed only on change) and a frame-time `Meter` fed
+  from measured wall time (`TileShell::note_frame_millis`). `TileSurface` owns
+  the `LeafRegistry` + retained `RenderedLeaves` and renders through
+  `scene_from_session_dom_with_leaves`. chisel gained `Leaf: Any` +
+  `LeafRegistry::get_mut_as` (trait upcast) for typed host access. Headed run:
+  `cargo run -p pelt --features tiles -- --tiles <urls>`.
 - **Next:**
-  1. Live-window wiring: a host owns `LeafRegistry` + `RenderedLeaves` and calls
-     the `_with_leaves` scene fns in its frame loop (pelt chrome / meerkat).
-     *Runner ownership gated on the concurrent `runner.rs` rewrite.*
+  1. meerkat adoption (same pattern as pelt's tile chrome); runner-owned
+     registries once the concurrent `runner.rs` rewrite lands.
   2. The orrery Path-B port (adds `vello` to chisel; leaf renders its own
      `vello::Scene` to a texture via `install_external_texture`).
 
