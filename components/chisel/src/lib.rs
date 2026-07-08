@@ -23,9 +23,11 @@ use std::hash::Hash;
 use paint_list_api::items::PathItem;
 use paint_list_api::{CommonPlacement, LayoutPoint, LayoutRect, RectItem};
 
+mod arrange;
 mod glyphs;
 mod path;
 
+pub use arrange::{Placement, VirtualWindow};
 pub use glyphs::{GraphGlyph, GraphGlyphNode, Knob, Meter};
 pub use path::Path;
 // The paint vocabulary leaves author against, re-exported (`pub use` also
