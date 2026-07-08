@@ -23,3 +23,17 @@ winit = { workspace = true }
 wgpu = { version = "29", default-features = false, features = ["std", "wgsl"] }
 # Host-neutral diagnostics facade (P3 raster spans); the app owns the subscriber.
 tracing = "0.1"
+# AccessKit bridge (src/a11y.rs): pushes a host's `TreeUpdate` to the OS a11y API
+# and drains screen-reader action requests. The core crate here; the platform
+# adapters are target-gated below so a wasm build never pulls them.
+accesskit = { workspace = true }
+raw-window-handle = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+accesskit_windows = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+accesskit_macos = { workspace = true }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+accesskit_unix = { workspace = true }

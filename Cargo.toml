@@ -67,6 +67,12 @@ rust-version = "1.86.0"
 
 [workspace.dependencies]
 accesskit = { version = "0.24.0", features = ["serde"] }
+# Platform AccessKit adapters for the winit host bridge (serval-winit-host::a11y),
+# tracking accesskit 0.24. Target-gated in the consuming crate, so a non-native
+# build (wasm) never pulls them.
+accesskit_windows = "0.32"
+accesskit_macos = "0.26"
+accesskit_unix = "0.21"
 app_units = "0.7"
 arboard = "3"
 argon2 = { version = "0.5", features = ["alloc"] }
@@ -245,6 +251,13 @@ tracing-subscriber = "0.3.23"
 tungstenite = "0.29"
 unicode-bidi = "0.3.18"
 unicode_categories = "0.1.1"
+# Highlighted-text stack for xilem-serval's optional `highlight` feature: illume
+# (portable lexer: djot structure + code injection + prose entities) and tinct
+# (perceptual seed-to-palette, with the syntax-role palette). Both are standalone
+# sibling libs; xilem-serval is the assembly point that maps illume's kinds onto
+# tinct's roles, so every serval host gets highlighted editing for free.
+illume = { git = "https://github.com/mark-ik/illume.git", branch = "main" }
+tinct = "0.1.1"
 unicode-properties = { version = "0.1.4", features = ["emoji"] }
 unicode-script = "0.5"
 unicode-segmentation = "1.13.2"

@@ -12,7 +12,8 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 use accesskit::{
-    Node as AccessNode, NodeId as AccessNodeId, Rect, Role, Toggled, Tree, TreeId, TreeUpdate,
+    Action, Node as AccessNode, NodeId as AccessNodeId, Rect, Role, Toggled, Tree, TreeId,
+    TreeUpdate,
 };
 use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
 
@@ -75,19 +76,34 @@ where
     name
 }
 
-fn build<D>(
+/// The shared subtree walk behind both [`accesskit_tree`] (the sealed engine
+/// tree) and [`build_subtree`] (a host stitching several subtrees). `id_of`
+/// assigns each node its id, `skip` prunes element subtrees the caller projects
+/// elsewhere, and `advertise_actions` gates whether controls declare the host
+/// action they accept (recording them in `actionable`) — off for the engine
+/// tree so hosts that don't route actions don't promise affordances they can't
+/// honor.
+#[allow(clippy::too_many_arguments)]
+fn walk<D, I, S>(
     dom: &D,
     fragments: &FragmentPlane<D::NodeId>,
     origins: &HashMap<D::NodeId, (f32, f32)>,
     node: D::NodeId,
+    id_of: &I,
+    skip: &S,
+    advertise_actions: bool,
     out: &mut Vec<(AccessNodeId, AccessNode)>,
+    actionable: &mut Vec<D::NodeId>,
 ) -> AccessNodeId
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
+    I: Fn(&D, D::NodeId) -> AccessNodeId,
+    S: Fn(&D, D::NodeId) -> bool,
 {
-    let id = access_id(dom, node);
-    let mut access = AccessNode::new(role_for(dom, node));
+    let id = id_of(dom, node);
+    let role = role_for(dom, node);
+    let mut access = AccessNode::new(role);
 
     let name = direct_text(dom, node);
     if !name.is_empty() {
@@ -103,6 +119,18 @@ where
         access.set_toggled(toggled);
     }
 
+    if advertise_actions {
+        let action = match role {
+            Role::Button => Some(Action::Click),
+            Role::TextInput => Some(Action::Focus),
+            _ => None,
+        };
+        if let Some(action) = action {
+            access.add_action(action);
+            actionable.push(node);
+        }
+    }
+
     if let (Some(&(x0, y0)), Some(layout)) = (origins.get(&node), fragments.rect_of(node)) {
         let (x0, y0) = (x0 as f64, y0 as f64);
         access.set_bounds(Rect::new(
@@ -115,14 +143,35 @@ where
 
     let mut children = Vec::new();
     for child in dom.dom_children(node) {
-        if dom.kind(child) == NodeKind::Element {
-            children.push(build(dom, fragments, origins, child, out));
+        if dom.kind(child) == NodeKind::Element && !skip(dom, child) {
+            children.push(walk(
+                dom,
+                fragments,
+                origins,
+                child,
+                id_of,
+                skip,
+                advertise_actions,
+                out,
+                actionable,
+            ));
         }
     }
     access.set_children(children);
 
     out.push((id, access));
     id
+}
+
+fn origins_of<D>(dom: &D, fragments: &FragmentPlane<D::NodeId>) -> HashMap<D::NodeId, (f32, f32)>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    crate::serval_lane::accumulate_origins(dom, fragments)
+        .into_iter()
+        .map(|(id, p)| (id, (p.x, p.y)))
+        .collect()
 }
 
 /// Emit an AccessKit tree for a laid-out Serval DOM.
@@ -136,13 +185,20 @@ where
     D::NodeId: Copy + Eq + Hash,
 {
     let root = dom.document();
-    let origins: HashMap<D::NodeId, (f32, f32)> =
-        crate::serval_lane::accumulate_origins(dom, fragments)
-            .into_iter()
-            .map(|(id, p)| (id, (p.x, p.y)))
-            .collect();
+    let origins = origins_of(dom, fragments);
     let mut nodes = Vec::new();
-    build(dom, fragments, &origins, root, &mut nodes);
+    let mut actionable = Vec::new();
+    walk(
+        dom,
+        fragments,
+        &origins,
+        root,
+        &|d: &D, n: D::NodeId| access_id(d, n),
+        &|_d: &D, _n: D::NodeId| false,
+        false,
+        &mut nodes,
+        &mut actionable,
+    );
 
     TreeUpdate {
         nodes,
@@ -150,6 +206,41 @@ where
         tree_id: TreeId::ROOT,
         focus: access_id(dom, focus.unwrap_or(root)),
     }
+}
+
+/// Walk a laid-out subtree into AccessKit nodes for a host that stitches several
+/// subtrees (chrome, content panes, host root) into one tree before converting
+/// once. Returns the `(id, node)` pairs in insertion order, the subtree root's
+/// id, and the DOM nodes that advertise a host action (buttons, text fields) so
+/// the host can route an AccessKit request back to its activation path.
+///
+/// `id_of` assigns each node its id: a stitching host salts ids into a range
+/// disjoint from its other subtrees, where [`accesskit_tree`] uses the DOM's
+/// opaque id. `skip` prunes element subtrees the host projects elsewhere (a pane
+/// it gives richer, actionable a11y of its own). Roles honor ARIA `role=` then
+/// tag, and `aria-checked` sets toggled state — the same leaf logic as the
+/// engine tree, so a host subtree never drifts behind on standards support.
+#[allow(clippy::type_complexity)]
+pub fn build_subtree<D, I, S>(
+    dom: &D,
+    fragments: &FragmentPlane<D::NodeId>,
+    root: D::NodeId,
+    id_of: &I,
+    skip: &S,
+) -> (Vec<(AccessNodeId, AccessNode)>, AccessNodeId, Vec<D::NodeId>)
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+    I: Fn(&D, D::NodeId) -> AccessNodeId,
+    S: Fn(&D, D::NodeId) -> bool,
+{
+    let origins = origins_of(dom, fragments);
+    let mut nodes = Vec::new();
+    let mut actionable = Vec::new();
+    let root_id = walk(
+        dom, fragments, &origins, root, id_of, skip, true, &mut nodes, &mut actionable,
+    );
+    (nodes, root_id, actionable)
 }
 
 #[cfg(test)]

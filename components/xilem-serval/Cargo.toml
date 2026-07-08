@@ -13,6 +13,13 @@ description = "A xilem_core backend that diffs a Xilem view tree into serval's m
 name = "xilem_serval"
 path = "src/lib.rs"
 
+[features]
+# Syntax-highlighted text fields: the styled field pre-wired with a lexer (illume)
+# and a palette (tinct), so any serval host gets highlighted djot/code/entity
+# editing for free. Off by default — a host that only wants a plain field pays no
+# jotdown/logos/tinct dep. See `src/highlight.rs`.
+highlight = ["dep:illume", "dep:tinct"]
+
 # Third reactive backend beside Masonry (`xilem`) and the browser DOM
 # (`xilem_web`), pointed at serval's `LayoutDomMut`. We take only the
 # diff/message core, not the Masonry renderer, so we depend on `xilem_core`
@@ -32,3 +39,8 @@ layout_dom_api = { package = "layout-dom-api", path = "../shared/layout-dom" }
 # UAX#29 word boundaries for Ctrl+←/→ word motion + Ctrl+Backspace/Delete kill-word
 # in `TextInput` (the buffer owns word segmentation; the host just sends the key).
 unicode-segmentation = { workspace = true }
+# The `highlight` feature's lexer + palette (optional). illume emits (range, kind)
+# spans; tinct maps a role to a contrast-gated colour. This crate owns the
+# kind -> role -> class map that joins them (src/highlight.rs).
+illume = { workspace = true, optional = true }
+tinct = { workspace = true, optional = true }

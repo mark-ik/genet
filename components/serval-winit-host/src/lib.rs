@@ -22,6 +22,9 @@
 //! frame.present();
 //! ```
 
+mod a11y;
+pub use a11y::{A11yActionRequest, AccessKitBridge, BridgeStatus};
+
 use std::sync::Arc;
 
 use netrender::{ColorLoad, NetrenderOptions, Renderer, Scene};
