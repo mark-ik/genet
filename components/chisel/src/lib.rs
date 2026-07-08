@@ -21,16 +21,18 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 use paint_list_api::items::PathItem;
-use paint_list_api::{ColorF, CommonPlacement, LayoutPoint, LayoutRect, PaintCmd, RectItem};
+use paint_list_api::{CommonPlacement, LayoutPoint, LayoutRect, RectItem};
 
 mod glyphs;
 mod path;
 
 pub use glyphs::{GraphGlyph, GraphGlyphNode, Knob, Meter};
 pub use path::Path;
-// The stroke vocabulary leaves author against, re-exported so a leaf crate
-// needs no direct paint_list_api dep for the common cases.
+// The paint vocabulary leaves author against, re-exported (`pub use` also
+// imports, so these serve the crate body too) so a leaf crate or a host wiring
+// leaves needs no direct paint_list_api dep for the common cases.
 pub use paint_list_api::items::{DashPattern, PathData, StrokeCap, StrokeJoin, StrokeStyle};
+pub use paint_list_api::{ColorF, PaintCmd};
 
 /// Known / available size passed to [`Leaf::measure`] (device px). `None` means
 /// the dimension is unconstrained, matching CSS `auto` / indefinite space.
