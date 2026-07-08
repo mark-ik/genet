@@ -27,11 +27,13 @@ use pelt_core::tile::{
     ContentSource, DocumentRef, DropTarget, SplitAxis, TabStack, TileEvent, TileId, TilePath,
     TileTree,
 };
+use chisel::{ColorF, GraphGlyph, GraphGlyphNode, LeafRegistry, Meter, RenderedLeaves, Size};
 use serval_layout::IncrementalLayout;
-use serval_render::{ContentReport, scene_from_session_dom};
+use serval_render::{ContentReport, scene_from_session_dom, scene_from_session_dom_with_leaves};
 use serval_scripted_dom::{NodeId, ScriptedDom};
 use xilem_serval::{
-    AnyView, DomHandle, PointerClick, ServalAppRunner, ServalCtx, ServalElement, el, on_click,
+    AnyView, DomHandle, PointerClick, ServalAppRunner, ServalCtx, ServalElement, chisel_leaf, el,
+    on_click,
 };
 
 use crate::document::{ClickOutcome, LoadedDocument, LocalFetcher};
@@ -48,11 +50,119 @@ pub struct TileState {
     pending: Vec<TileEvent>,
 }
 
+/// The status bar's frame-time meter leaf key (chisel `LeafRegistry`).
+pub const FRAME_METER_LEAF_KEY: u64 = 901;
+/// The status bar's live tile-tree glyph leaf key.
+pub const TREE_GLYPH_LEAF_KEY: u64 = 902;
+
 /// Map the tile tree to flex DOM. Splits become `display:flex` row/column with each
 /// child sized by `flex-grow: fraction`; tab-stacks become a tab bar over a
-/// content-area placeholder marked with the active tile's id.
+/// content-area placeholder marked with the active tile's id. Below the tree, a
+/// status bar carries two chisel widget leaves fed with real data (no placebo):
+/// a miniature of the live tile-tree topology and a frame-time meter.
 fn tile_view(state: &TileState) -> TileView {
-    render_node(&state.tree, &[])
+    let tree = el::<_, TileState, ()>("div", render_node(&state.tree, &[]))
+        .attr("class", "tile-body")
+        .attr("style", "flex: 1 1 0; min-height: 0; display: flex;");
+    let status = el::<_, TileState, ()>(
+        "div",
+        (
+            el::<_, TileState, ()>("div", ()).attr("class", "tile-status-spacer"),
+            chisel_leaf::<TileState, ()>(TREE_GLYPH_LEAF_KEY, 20, 20)
+                .attr("class", "tile-status-leaf"),
+            chisel_leaf::<TileState, ()>(FRAME_METER_LEAF_KEY, 64, 8)
+                .attr("class", "tile-status-leaf"),
+        ),
+    )
+    .attr("class", "tile-statusbar");
+    Box::new(
+        el::<_, TileState, ()>("div", (tree, status)).attr(
+            "style",
+            "display: flex; flex-direction: column; width: 100%; height: 100%;",
+        ),
+    )
+}
+
+/// Project the live tile tree onto the status-bar glyph: splits become gray
+/// inner nodes at their depth, stacks become leaves tinted by the active tab's
+/// accent (default blue when untinted), edges parent -> child. Coordinates are
+/// normalized `0..1` (depth on x, leaf order on y), the glyph's contract.
+fn tree_glyph_topology(tree: &TileTree) -> (Vec<GraphGlyphNode>, Vec<(u16, u16)>) {
+    fn depth_of(t: &TileTree) -> usize {
+        match t {
+            TileTree::Split { children, .. } => {
+                1 + children.iter().map(|b| depth_of(&b.tree)).max().unwrap_or(0)
+            },
+            TileTree::Stack(_) => 0,
+        }
+    }
+    fn leaves_of(t: &TileTree) -> usize {
+        match t {
+            TileTree::Split { children, .. } => children.iter().map(|b| leaves_of(&b.tree)).sum(),
+            TileTree::Stack(_) => 1,
+        }
+    }
+    fn walk(
+        t: &TileTree,
+        depth: f32,
+        max_depth: f32,
+        leaf_i: &mut usize,
+        leaf_count: usize,
+        nodes: &mut Vec<GraphGlyphNode>,
+        edges: &mut Vec<(u16, u16)>,
+    ) -> u16 {
+        match t {
+            TileTree::Split { children, .. } => {
+                let me = nodes.len() as u16;
+                // Placeholder position; set to the children's mean y below.
+                nodes.push(GraphGlyphNode {
+                    x: depth / max_depth,
+                    y: 0.5,
+                    color: ColorF { r: 0.55, g: 0.55, b: 0.62, a: 1.0 },
+                });
+                let mut ys = Vec::new();
+                for branch in children {
+                    let child =
+                        walk(&branch.tree, depth + 1.0, max_depth, leaf_i, leaf_count, nodes, edges);
+                    ys.push(nodes[child as usize].y);
+                    edges.push((me, child));
+                }
+                if !ys.is_empty() {
+                    nodes[me as usize].y = ys.iter().sum::<f32>() / ys.len() as f32;
+                }
+                me
+            },
+            TileTree::Stack(stack) => {
+                let me = nodes.len() as u16;
+                let y = if leaf_count > 1 {
+                    *leaf_i as f32 / (leaf_count - 1) as f32
+                } else {
+                    0.5
+                };
+                *leaf_i += 1;
+                let color = stack
+                    .tabs
+                    .get(stack.active)
+                    .and_then(|t| t.accent.as_ref())
+                    .map(|a| ColorF {
+                        r: a.background[0] as f32 / 255.0,
+                        g: a.background[1] as f32 / 255.0,
+                        b: a.background[2] as f32 / 255.0,
+                        a: 1.0,
+                    })
+                    .unwrap_or(ColorF { r: 0.40, g: 0.60, b: 0.95, a: 1.0 });
+                nodes.push(GraphGlyphNode { x: depth / max_depth, y, color });
+                me
+            },
+        }
+    }
+    let max_depth = depth_of(tree).max(1) as f32;
+    let leaf_count = leaves_of(tree);
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut leaf_i = 0usize;
+    walk(tree, 0.0, max_depth, &mut leaf_i, leaf_count, &mut nodes, &mut edges);
+    (nodes, edges)
 }
 
 /// Encode a split path (`[0, 1]`) as a DOM-attr string (`"0.1"`); the empty path (the
@@ -205,6 +315,9 @@ const DEFAULT_TILE_CSS: &str = "\
     .tile-close { flex: 0 0 auto; margin-left: 10px; padding: 0 5px; font-size: 15px; color: #999999; } \
     .tile-content { flex: 1 1 0; min-height: 0; background: #ffffff; } \
     .tile-divider { flex: 0 0 10px; background: #1a1a1f; } \
+    .tile-statusbar { display: flex; align-items: center; height: 26px; padding: 0 10px; background: #1a1a1f; } \
+    .tile-status-spacer { flex: 1 1 auto; height: 1px; } \
+    .tile-status-leaf { margin-left: 10px; } \
     .tile-ghost { display: inline-block; padding: 8px 14px; font-size: 15px; line-height: 1.2; color: #ffffff; background: #4a4a55; border: 1px solid #6a6a77; opacity: 0.85; }";
 
 /// A rendered tile-tree frame: the frame scene (tab bars + dividers), one layer per
@@ -248,6 +361,17 @@ pub struct TileSurface {
     runner: ServalAppRunner<TileState, TileLogic, TileView, ()>,
     docs: HashMap<TileId, LoadedDocument>,
     sheets: Vec<String>,
+    /// The status bar's chisel widget leaves (frame meter, tree glyph), keyed by
+    /// the `<chisel-leaf key>`s the frame view emits.
+    leaves: LeafRegistry<u64>,
+    /// Retained Path-A buffers across frames: a leaf repaints only when its data
+    /// or box size changed (the leaf-tier retention gate).
+    rendered: RenderedLeaves,
+    /// Rolling frame-time peak (meter scale units), decayed per note so a spike
+    /// stays visible for a moment. Real measured time, never synthetic.
+    frame_peak: f32,
+    /// The tree glyph's last topology, to re-feed the leaf only on change.
+    glyph_topo: (Vec<GraphGlyphNode>, Vec<(u16, u16)>),
 }
 
 impl TileSurface {
@@ -262,13 +386,52 @@ impl TileSurface {
                 pending: Vec::new(),
             },
         );
+        let mut leaves = LeafRegistry::new();
+        let mut meter = Meter::new(false, Size { width: 64.0, height: 8.0 });
+        // Frame-time scale: full bar = 2 missed 60hz frames (33.3ms).
+        meter.fill_color = ColorF { r: 0.45, g: 0.75, b: 0.95, a: 1.0 };
+        meter.track_color = ColorF { r: 0.10, g: 0.10, b: 0.13, a: 1.0 };
+        leaves.insert(FRAME_METER_LEAF_KEY, Box::new(meter));
+        leaves.insert(
+            TREE_GLYPH_LEAF_KEY,
+            Box::new(GraphGlyph::new(Vec::new(), Vec::new(), Size { width: 20.0, height: 20.0 })),
+        );
         let mut surface = Self {
             runner,
             docs: HashMap::new(),
             sheets: vec![DEFAULT_TILE_CSS.to_string()],
+            leaves,
+            rendered: RenderedLeaves::new(),
+            frame_peak: 0.0,
+            glyph_topo: (Vec::new(), Vec::new()),
         };
         surface.load_docs();
         surface
+    }
+
+    /// Feed the status-bar meter the last frame's measured wall time. Scale:
+    /// full bar = 33.3ms (two missed 60hz frames); the peak tick is a rolling,
+    /// slowly-decaying max so a spike stays readable.
+    pub fn note_frame_millis(&mut self, millis: f32) {
+        let value = (millis / 33.3).clamp(0.0, 1.0);
+        self.frame_peak = (self.frame_peak - 0.01).max(value).clamp(0.0, 1.0);
+        let peak = self.frame_peak;
+        if let Some(meter) = self.leaves.get_mut_as::<Meter>(&FRAME_METER_LEAF_KEY) {
+            meter.set_level(value, Some(peak));
+        }
+    }
+
+    /// Re-feed the tree glyph when the tile topology changed: splits as gray
+    /// inner nodes, stacks as leaves tinted by their active tab's accent (the
+    /// tab-bar color identity), edges parent -> child.
+    fn sync_tree_glyph(&mut self) {
+        let topo = tree_glyph_topology(&self.runner.state().tree);
+        if topo != self.glyph_topo {
+            if let Some(glyph) = self.leaves.get_mut_as::<GraphGlyph>(&TREE_GLYPH_LEAF_KEY) {
+                glyph.set_graph(topo.0.clone(), topo.1.clone());
+            }
+            self.glyph_topo = topo;
+        }
     }
 
     /// Layer a host theme over the default tile CSS — the seam [`DEFAULT_TILE_CSS`]
@@ -364,6 +527,9 @@ impl TileSurface {
     /// active tile (its rect + its document's scene). The host composites the frame,
     /// then each tile layer over its rect.
     pub fn frame(&mut self, width: u32, height: u32) -> TileFrame {
+        // Keep the status-bar tree glyph current before emitting (cheap
+        // compare; the leaf repaints only when the topology changed).
+        self.sync_tree_glyph();
         let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
         // Lay the frame out once for both the scene and the content-area rects.
         let (frame_scene, areas) = {
@@ -371,7 +537,14 @@ impl TileSurface {
             let dom = dom.borrow();
             let session =
                 IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32);
-            let scene = scene_from_session_dom(&session, &*dom, width.max(1), height.max(1));
+            let scene = scene_from_session_dom_with_leaves(
+                &session,
+                &*dom,
+                width.max(1),
+                height.max(1),
+                &mut self.leaves,
+                &mut self.rendered,
+            );
             let areas = content_area_rects(&dom, &session);
             (scene, areas)
         };
@@ -845,6 +1018,36 @@ mod tests {
                 .iter()
                 .any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
             "the tile's document paints text",
+        );
+    }
+
+    /// The status bar's chisel leaves paint into the frame scene: the tree
+    /// glyph contributes path shapes (its node circles), and after the host
+    /// notes a frame time the meter's fill rect appears in its fill color.
+    #[test]
+    fn status_bar_leaves_paint_into_the_frame_scene() {
+        let mut surface = TileSurface::new(TileTree::single(doc_tile(1, "<h1>Hello</h1>")));
+        let frame = surface.frame(800, 600);
+        assert!(
+            frame
+                .frame_scene
+                .ops
+                .iter()
+                .any(|op| matches!(op, netrender::SceneOp::Shape(_))),
+            "the tree glyph paints path shapes into the frame scene",
+        );
+
+        // Note a real-ish frame time; the meter's fill rect shows in its color.
+        surface.note_frame_millis(20.0);
+        let frame = surface.frame(800, 600);
+        let fill = [0.45, 0.75, 0.95, 1.0];
+        assert!(
+            frame.frame_scene.ops.iter().any(|op| matches!(
+                op,
+                netrender::SceneOp::Rect(r)
+                    if r.color.iter().zip(fill).all(|(a, b)| (a - b).abs() < 0.01)
+            )),
+            "the frame-time meter's fill rect paints in its fill color",
         );
     }
 

@@ -123,6 +123,12 @@ impl TileShell {
         self.height = height.max(1);
     }
 
+    /// Feed the status bar's frame-time meter the last frame's measured wall
+    /// time (passthrough to [`TileSurface::note_frame_millis`]).
+    pub fn note_frame_millis(&mut self, millis: f32) {
+        self.surface.note_frame_millis(millis);
+    }
+
     /// Render the frame at the current size, caching the tile content rects for input
     /// routing. While a tab drag is moving, the frame carries a ghost of the dragged tab
     /// at the cursor. The host composites the returned [`TileFrame`].

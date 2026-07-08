@@ -150,7 +150,11 @@ pub struct LeafAction;
 /// The retention gates are two signals, because they gate different passes:
 /// [`paint_dirty`](Leaf::paint_dirty) gates repaint,
 /// [`layout_dirty`](Leaf::layout_dirty) gates serval's relayout.
-pub trait Leaf {
+///
+/// `Any` supertrait: hosts push live values into registered leaves through
+/// [`LeafRegistry::get_mut_as`] (a meter fed each frame, a glyph fed on model
+/// change), so the registry can hand back the concrete type.
+pub trait Leaf: std::any::Any {
     /// Intrinsic sizing. Feeds serval's replaced-element `replaced_intrinsic_size`
     /// (a chisel leaf is a replaced element, like `<img>` / `<external-texture>`).
     fn measure(&mut self, known: SizeHint, available: SizeHint) -> Size;
@@ -206,6 +210,15 @@ impl<K: Eq + Hash> LeafRegistry<K> {
 
     pub fn get_mut(&mut self, key: &K) -> Option<&mut (dyn Leaf + 'static)> {
         self.leaves.get_mut(key).map(|b| b.as_mut())
+    }
+
+    /// Typed access to a registered leaf (trait upcast to `Any`, then
+    /// downcast): the host-side channel for pushing live values into a leaf
+    /// (`meter.set_level(...)` each frame). `None` if absent or of another type.
+    pub fn get_mut_as<T: Leaf>(&mut self, key: &K) -> Option<&mut T> {
+        self.leaves
+            .get_mut(key)
+            .and_then(|b| (b.as_mut() as &mut dyn std::any::Any).downcast_mut::<T>())
     }
 
     pub fn remove(&mut self, key: &K) -> Option<Box<dyn Leaf>> {

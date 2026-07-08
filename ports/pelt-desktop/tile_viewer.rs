@@ -129,6 +129,9 @@ mod windowed {
         }
 
         fn render(&mut self) {
+            // Time the whole frame (produce + rasterize + compose) and feed the
+            // status bar's meter for the NEXT frame: real measured wall time.
+            let frame_t0 = std::time::Instant::now();
             let (win_w, win_h) = (self.width.max(1), self.height.max(1));
             self.shell.resize(win_w, win_h);
             let frame = self.shell.frame();
@@ -204,6 +207,8 @@ mod windowed {
             }
             swap.present();
             self.redraws += 1;
+            self.shell
+                .note_frame_millis(frame_t0.elapsed().as_secs_f32() * 1000.0);
         }
 
         fn request_redraw(&self) {
