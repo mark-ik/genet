@@ -665,7 +665,16 @@ impl<'a, D: LayoutDom> SelectorsElement for StyleNodeRef<'a, D> {
     }
 
     fn is_root(&self) -> bool {
-        self.dom().parent(self.id).is_none()
+        // The root element is the document's element child — it has no *element*
+        // parent. `parent()` returns the parent NODE, which for the root element
+        // is the document node (not `None`), so the old `parent().is_none()` test
+        // never fired and `:root` (plus Stylo's root-specific cascade) never
+        // matched. Test the parent's kind instead: root iff there is no parent, or
+        // the parent is not an element (i.e. the document).
+        match self.dom().parent(self.id) {
+            None => true,
+            Some(p) => !matches!(self.dom().kind(p), NodeKind::Element),
+        }
     }
 
     fn add_element_unique_hashes(&self, _filter: &mut BloomFilter) -> bool {

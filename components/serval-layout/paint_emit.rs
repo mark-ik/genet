@@ -3107,14 +3107,26 @@ fn border_of(cv: &ComputedValues, w: f32, h: f32) -> Option<(LayoutSideOffsets, 
     let bottom_style = stylo_border_style(border.border_bottom_style);
     let left_style = stylo_border_style(border.border_left_style);
 
-    // No-op early-out: every side is zero-width or none/hidden style.
-    let renderable =
-        |w: f32, s: BorderStyle| w > 0.0 && !matches!(s, BorderStyle::None | BorderStyle::Hidden);
-    if !renderable(top_w, top_style)
-        && !renderable(right_w, right_style)
-        && !renderable(bottom_w, bottom_style)
-        && !renderable(left_w, left_style)
-    {
+    // CSS 2.1 §8.5.1: a side whose border-style is `none` or `hidden` computes to
+    // a 0 border-width, whatever the specified width (which defaults to `medium` =
+    // 3px). Stylo hands us the un-clamped width here — taffy already zeroes it for
+    // layout, but this paint path must too, or a one-sided shorthand
+    // (`border-bottom: ...`) leaves the other three sides at 3px `currentColor` and
+    // the renderer paints a phantom frame on the un-styled edges.
+    let styled_width = |w: f32, s: BorderStyle| {
+        if matches!(s, BorderStyle::None | BorderStyle::Hidden) {
+            0.0
+        } else {
+            w
+        }
+    };
+    let top_w = styled_width(top_w, top_style);
+    let right_w = styled_width(right_w, right_style);
+    let bottom_w = styled_width(bottom_w, bottom_style);
+    let left_w = styled_width(left_w, left_style);
+
+    // No-op early-out: nothing renderable once none/hidden sides are zeroed.
+    if top_w <= 0.0 && right_w <= 0.0 && bottom_w <= 0.0 && left_w <= 0.0 {
         return None;
     }
 
@@ -3866,6 +3878,39 @@ mod tests {
             &FxHashMap::default(),
             DeviceIntSize::new(800, 600),
         )
+    }
+
+    /// Regression: a single-side border shorthand paints ONLY that side. The
+    /// three un-declared sides keep their initial `medium` (3px) width while their
+    /// style stays `none`; CSS 2.1 §8.5.1 computes a none-styled side's width to 0,
+    /// so the emitted border must be non-zero only on the bottom. Before the fix
+    /// the raw `medium` widths reached the renderer and painted a 3px
+    /// `currentColor` phantom frame on the un-styled edges (the strophe/woodshed
+    /// "cream frame at the viewport rim" bug).
+    #[test]
+    fn single_side_border_paints_only_that_side() {
+        let document = StaticDocument::parse("<html><body><div>x</div></body></html>");
+        let plist = emit_with_sheet(
+            &document,
+            "html, body, div { display: block; margin: 0; } \
+             div { border-bottom: 1px solid #ff0000; }",
+        );
+        let border = plist
+            .commands()
+            .iter()
+            .find_map(|c| match c {
+                PaintCmd::DrawBorder(b) => Some(b),
+                _ => None,
+            })
+            .expect("the div's bottom border is emitted");
+        assert!(
+            border.widths.bottom > 0.0,
+            "the declared bottom side paints: {}",
+            border.widths.bottom
+        );
+        assert_eq!(border.widths.top, 0.0, "no phantom top border");
+        assert_eq!(border.widths.left, 0.0, "no phantom left border");
+        assert_eq!(border.widths.right, 0.0, "no phantom right border");
     }
 
     /// Emit `html` cascaded with `sheet` at 800×600 with an explicit document

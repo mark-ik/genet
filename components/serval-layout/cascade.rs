@@ -1625,6 +1625,42 @@ mod tests {
         assert!((a - 1.0).abs() < 0.001, "alpha: {a}");
     }
 
+    /// `:root` matches the document's root element. serval's root element
+    /// (`<html>`) has the document NODE as its parent, not `None`, so the old
+    /// `is_root = parent().is_none()` never fired and `:root` matched nothing
+    /// (custom properties or rules put on `:root` silently did nothing — the
+    /// strophe/woodshed "palette on `:root` renders black" bug). Cascading
+    /// `:root { background-color: rgb(0,255,0) }` must colour `<html>`
+    /// (background-color does not inherit, so only a real `:root` match paints it).
+    #[test]
+    fn root_pseudo_matches_the_document_root_element() {
+        let document = StaticDocument::parse("<html><body><p>x</p></body></html>");
+        let mut plane: StylePlane<_> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut plane,
+            euclid::Size2D::new(800.0, 600.0),
+            &[":root { background-color: rgb(0, 255, 0); }"],
+            None,
+        );
+        let html_id = find_element(&document, local_name!("html")).expect("html exists");
+        let entry = plane.get(html_id).expect("html StyleEntry exists");
+        let data = entry.borrow_data().expect("html ElementData populated");
+        let primary = data.styles.primary();
+        let current_color = primary.get_inherited_text().color;
+        let srgb = primary
+            .get_background()
+            .background_color
+            .resolve_to_absolute(&current_color)
+            .into_srgb_legacy();
+        let [r, g, b, _a] = *srgb.raw_components();
+        assert!(g > 0.99, ":root must match <html> and paint it green: g={g}");
+        assert!(
+            r < 0.01 && b < 0.01,
+            ":root background is pure green: r={r} b={b}"
+        );
+    }
+
     /// Cascade origin ordering: an **author** declaration beats a UA default even
     /// at lower specificity. The UA sheet sets `strong { font-weight: bold }` (a
     /// type selector, specificity 0,0,1); an author `* { font-weight: normal }`
