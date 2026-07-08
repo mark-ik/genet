@@ -148,9 +148,22 @@ sheet). Pure views-layer sugar crate, zero engine changes.
    the serval-render level. Unlocks cards, grids, editors, TUI. (Note:
    xilem-serval's `overlay::Placement` is an unrelated type; `chisel::Placement`
    is not re-exported at that crate's root.)
-4. **Path-B rasterize seam.** Host-side vello-scene-to-texture +
-   `install_external_texture`; done when the orrery renders as a chisel leaf
-   and its `compose.rs` branch is retired.
+4. **Path-B rasterize seam.** ~~done when the orrery renders as a chisel leaf~~
+   **Landed 2026-07-08, in two shapes** (the port taught the split):
+   - *chisel `SceneSlot` / `PaintCx::scene`* (serval `2f38249`): a leaf encodes a
+     `vello::Scene`; `RenderedLeaves` splices one `DrawExternalTexture` at the box
+     and epoch-gates the scene for a host rasterize pass. For vello-native widget
+     leaves (a future waveform's zoomed view).
+   - *host texture registry* (mere orrery port): meerkat's orrery + gloss
+     scenes are **`netrender::Scene`** (the renderer's own scene — graph, camera,
+     layout, gnode pool), rasterized by the host's `rasterize_for`. They ride the
+     same `<external-texture>` element but as a host `HashMap<key, texture>` with
+     the host's own change gate (`orrery_redraw` / resize), not a chisel leaf.
+   Both retire meerkat's hardcoded `ORRERY_SCENE_KEY` / `GLOSS_MINIMAP_SCENE_KEY`
+   compose branch: it is now a uniform key→texture lookup, which also dissolves
+   the "no generic key→texture registry" objection the old design review raised.
+   Pick by scene source: vello-built → `SceneSlot`; host `netrender::Scene`
+   canvas → registry.
 5. **Family crates.** Split `chisel-glyphs` out of chisel core once ≥3 leaves
    exist; audio family per the Strophe promotion rule.
 
