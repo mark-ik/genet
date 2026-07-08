@@ -35,6 +35,24 @@ where
         .attr("style", placement.style())
 }
 
+/// [`placed`] with extra CSS merged into the same `style` attribute (a second
+/// `style` attr would replace the placement, not extend it) — for wrappers
+/// that also need explicit size or paint (grid cells, card frames).
+pub fn placed_with<State, Action, Seq>(
+    placement: Placement,
+    extra_css: impl AsRef<str>,
+    child: Seq,
+) -> El<Seq, State, Action>
+where
+    State: 'static,
+    Action: 'static,
+    Seq: ViewSequence<State, Action, ServalCtx, ServalElement>,
+{
+    el("div", child)
+        .attr("class", "arranged")
+        .attr("style", format!("{} {}", placement.style(), extra_css.as_ref()))
+}
+
 /// The arrangement container: `position: relative` (the children's containing
 /// block and stacking context) with an explicit `width`×`height` content
 /// extent. Nest it inside an `overflow: scroll` box for a virtualized list —

@@ -25,9 +25,11 @@ use paint_list_api::{CommonPlacement, LayoutPoint, LayoutRect, RectItem};
 
 mod arrange;
 mod glyphs;
+mod grid;
 mod path;
 
 pub use arrange::{Placement, VirtualWindow};
+pub use grid::{GridColumn, GridSpec};
 pub use glyphs::{GraphGlyph, GraphGlyphNode, Knob, Meter};
 pub use path::Path;
 // The paint vocabulary leaves author against, re-exported (`pub use` also

@@ -59,6 +59,7 @@ use serval_scripted_dom::ScriptedDom;
 mod arrangement;
 mod context;
 mod controls;
+mod grid;
 mod element;
 mod event;
 mod focusable;
@@ -83,8 +84,9 @@ mod wheel;
 #[cfg(test)]
 mod tests;
 
-pub use arrangement::{arrangement, placed};
+pub use arrangement::{arrangement, placed, placed_with};
 pub use context::ServalCtx;
+pub use grid::{GridView, data_grid};
 pub use controls::{
     Checkbox, TextField, TextInput, button, checkbox, checkbox_typed, text_field, text_field_typed,
     textarea, textarea_typed, toggle,
