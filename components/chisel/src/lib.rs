@@ -27,9 +27,11 @@ mod arrange;
 mod glyphs;
 mod grid;
 mod path;
+mod slot;
 
 pub use arrange::{Placement, VirtualWindow};
 pub use grid::{GridColumn, GridSpec};
+pub use slot::SceneSlot;
 pub use glyphs::{GraphGlyph, GraphGlyphNode, Knob, Meter};
 pub use path::Path;
 // The paint vocabulary leaves author against, re-exported (`pub use` also
@@ -53,17 +55,40 @@ pub struct Size {
     pub height: f32,
 }
 
-/// Paint context handed to [`Leaf::paint`]. Path A only for now: the leaf pushes
-/// common [`PaintCmd`]s, which serval splices into its paint list at the leaf's
-/// box. The leaf paints in local coordinates, `(0,0)` at its top-left.
+/// Paint context handed to [`Leaf::paint`], covering both paint paths. Path A:
+/// the leaf pushes common [`PaintCmd`]s, spliced into serval's paint list at
+/// the leaf's box. Path B: the leaf encodes a [`vello::Scene`]
+/// ([`scene`](Self::scene) / [`set_scene`](Self::set_scene)); the cache then
+/// splices a single `DrawExternalTexture` carrying the leaf's key, and the
+/// host rasterizes the scene into the texture it registers under that key
+/// (chisel stays GPU-free). Local coordinates, `(0,0)` at the content-box
+/// top-left, on both paths.
 pub struct PaintCx<'a> {
     cmds: &'a mut Vec<PaintCmd>,
+    scene: Option<vello::Scene>,
     size: Size,
 }
 
 impl<'a> PaintCx<'a> {
     pub fn new(cmds: &'a mut Vec<PaintCmd>, size: Size) -> Self {
-        Self { cmds, size }
+        Self { cmds, scene: None, size }
+    }
+
+    /// Path B: the leaf's own vello scene (created empty on first call).
+    /// Painting into this makes the leaf a scene leaf for this repaint; any
+    /// Path-A commands pushed alongside are ignored.
+    pub fn scene(&mut self) -> &mut vello::Scene {
+        self.scene.get_or_insert_with(vello::Scene::new)
+    }
+
+    /// Path B, whole-scene form: hand over an already-built scene (the
+    /// [`SceneSlot`] shape, for hosts whose scene production is app-coupled).
+    pub fn set_scene(&mut self, scene: vello::Scene) {
+        self.scene = Some(scene);
+    }
+
+    pub(crate) fn take_scene(&mut self) -> Option<vello::Scene> {
+        self.scene.take()
     }
 
     /// The leaf's box size in local coordinates.
@@ -240,11 +265,23 @@ impl<K: Eq + Hash> LeafRegistry<K> {
 /// it reports `paint_dirty` or has no buffer yet; an unchanged leaf keeps its
 /// cached commands. Neutral: only `paint_list_api` types, so a serval-side
 /// adapter can expose it through the layout engine's `LeafPaintSource`.
+/// One leaf's rendered output: the splice commands (Path A: the leaf's own
+/// stream; Path B: one `DrawExternalTexture` at the box), plus the scene and
+/// its epoch for Path-B leaves.
+struct RenderedLeaf {
+    size: Size,
+    splice: Vec<PaintCmd>,
+    /// Path-B only: the leaf's encoded vello scene, awaiting host rasterize.
+    scene: Option<vello::Scene>,
+    /// Bumped on every repaint of this entry; the host re-rasterizes a scene
+    /// only when its `(epoch, size)` moved — the retention chain extended
+    /// through the GPU handoff.
+    epoch: u64,
+}
+
 #[derive(Default)]
 pub struct RenderedLeaves {
-    /// Per leaf: the box size the buffer was painted at (so a later relayout to a
-    /// different size re-renders) plus the commands.
-    map: HashMap<u64, (Size, Vec<PaintCmd>)>,
+    map: HashMap<u64, RenderedLeaf>,
 }
 
 impl RenderedLeaves {
@@ -252,11 +289,20 @@ impl RenderedLeaves {
         Self::default()
     }
 
-    /// The cached Path-A commands for `key`, or `None` if the leaf has not been
+    /// The cached splice commands for `key`, or `None` if the leaf has not been
     /// rendered (no size available, or never present). This is exactly the shape
     /// a serval-side `LeafPaintSource` newtype forwards to.
     pub fn get(&self, key: u64) -> Option<&[PaintCmd]> {
-        self.map.get(&key).map(|(_, cmds)| cmds.as_slice())
+        self.map.get(&key).map(|r| r.splice.as_slice())
+    }
+
+    /// The Path-B scenes awaiting host rasterize: `(key, scene, epoch, size)`.
+    /// The host rasterizes into the texture it registers under `key` when
+    /// `(epoch, size)` moved since its last pass, and skips the rest.
+    pub fn scenes(&self) -> impl Iterator<Item = (u64, &vello::Scene, u64, Size)> {
+        self.map
+            .iter()
+            .filter_map(|(k, r)| r.scene.as_ref().map(|s| (*k, s, r.epoch, r.size)))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -289,17 +335,45 @@ impl LeafRegistry<u64> {
         size_of: impl Fn(u64) -> Option<Size>,
         out: &mut RenderedLeaves,
     ) -> usize {
+        use paint_list_api::items::ExternalTextureItem;
         let mut painted = 0;
         for (key, leaf) in self.leaves.iter_mut() {
             let Some(size) = size_of(*key) else { continue };
-            let cached_size = out.map.get(key).map(|(s, _)| *s);
+            let prior = out.map.get(key);
+            let cached_size = prior.map(|r| r.size);
             if !leaf.paint_dirty() && cached_size == Some(size) {
                 continue;
             }
+            let prior_epoch = prior.map(|r| r.epoch).unwrap_or(0);
+            let prior_scene = out.map.remove(key).and_then(|r| r.scene);
             let mut cmds = Vec::new();
             let mut cx = PaintCx::new(&mut cmds, size);
             leaf.paint(&mut cx);
-            out.map.insert(*key, (size, cmds));
+            // A scene repaint yields a fresh scene; a size-only repaint of a
+            // scene leaf (relayout, no new content) carries the prior scene
+            // forward so the host re-rasterizes it at the new size.
+            let scene = cx.take_scene().or(prior_scene);
+            let entry = match scene {
+                Some(scene) => RenderedLeaf {
+                    size,
+                    // Path B splices one external-texture draw at the box; the
+                    // texture key is the leaf key (the host registers its
+                    // rasterized texture under the same key).
+                    splice: vec![PaintCmd::DrawExternalTexture(ExternalTextureItem {
+                        placement: CommonPlacement::new(LayoutRect::new(
+                            LayoutPoint::new(0.0, 0.0),
+                            LayoutPoint::new(size.width, size.height),
+                        )),
+                        texture_key: *key,
+                        opacity: 1.0,
+                        content_generation: None,
+                    })],
+                    scene: Some(scene),
+                    epoch: prior_epoch + 1,
+                },
+                None => RenderedLeaf { size, splice: cmds, scene: None, epoch: prior_epoch + 1 },
+            };
+            out.map.insert(*key, entry);
             painted += 1;
         }
         painted

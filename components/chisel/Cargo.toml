@@ -18,9 +18,10 @@ name = "chisel"
 path = "src/lib.rs"
 
 # Engine-neutral: chisel targets the paint seam (`paint_list_api`, the netrender
-# common vocabulary) and accesskit, not the serval engine concretely. Path B
-# (own vello::Scene -> external texture) will add vello when the orrery port
-# lands; the scaffold is Path A only.
+# common vocabulary), accesskit, and vello (Path-B scene leaves encode a
+# vello::Scene CPU-side; rasterization stays with the host) — not the serval
+# engine concretely.
 [dependencies]
 paint_list_api = { workspace = true }
 accesskit = { workspace = true }
+vello = { workspace = true }
