@@ -106,7 +106,14 @@ An IDE-grade editor is mostly tiers 1+3; chisel only paints the margins.
 **Data grid.** The flagship arrangement-leaf widget: virtualized rows, sticky
 headers via z-order, sparkline-in-cell, sortable columns. Every consumer wants
 it (Mere node tables, Strophe clip lists, Isometry encounter tables). Build
-once.
+once. **Landed 2026-07-08:** `chisel::grid` (GridColumn / GridSpec) +
+`xilem_serval::data_grid`. Sticky-by-construction header (scroll is caller
+state; the header never scrolls) with `on_header_click(col)` for caller-owned
+sort; only the window's rows exist as DOM; any view rides as a cell (tested
+with a `chisel_leaf` sparkline-in-cell). Wheel wiring + theming stay with the
+caller (`on_wheel` + `GridSpec::max_scroll`; `grid-*` classes). This also
+resolves open question 2 below: the header is DOM children of the grid root,
+not a synced leaf.
 
 **gpui-style authoring sugar.** gpui-the-framework stays excluded, but its
 chained Rust styling (`el.flex().p(4).bg(var)`) is borrowable technique: a
