@@ -132,9 +132,15 @@ sheet). Pure views-layer sugar crate, zero engine changes.
    the serval-render `_with_leaves` test path, Knob proves the
    pointer-wrap-around-leaf pattern, and GraphGlyph draws inside a native
    button.
-3. **Arrangement leaf.** Done when a card frame drags/stacks with DOM content,
-   and a 10k-row list materializes only visible rows. Unlocks cards, grids,
-   editors, TUI.
+3. **Arrangement leaf.** ~~Done when a card frame drags/stacks with DOM
+   content, and a 10k-row list materializes only visible rows.~~ **Landed
+   2026-07-08:** `chisel::arrange` (`Placement`, `VirtualWindow`) +
+   xilem-serval `placed` / `arrangement` views; both done conditions hit in
+   tests (10k rows → <30 DOM children at the honest full extent; drag/raise =
+   attribute diff on a retained node), and z-over-DOM paint order proven at
+   the serval-render level. Unlocks cards, grids, editors, TUI. (Note:
+   xilem-serval's `overlay::Placement` is an unrelated type; `chisel::Placement`
+   is not re-exported at that crate's root.)
 4. **Path-B rasterize seam.** Host-side vello-scene-to-texture +
    `install_external_texture`; done when the orrery renders as a chisel leaf
    and its `compose.rs` branch is retired.
