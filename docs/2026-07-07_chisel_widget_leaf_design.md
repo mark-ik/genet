@@ -56,13 +56,31 @@ Code samples are **illustrative** unless marked implementation-ready.
   `render::tests::scripted_chisel_leaf_renders_its_leaf_into_the_paint_list`:
   a `<chisel-leaf key="7">` + a `Swatch` under key 7 → the leaf's command lands in
   the paint list, cache retains it.
-- **Next (only the live wiring + smoke remain):**
-  1. Wire the call site + `LeafRegistry` ownership into the render loop
-     (`xilem-serval/runner.rs`): own a registry + a retained `RenderedLeaves`, and
-     call `scene_from_scripted_dom_with_leaves` where the loop emits today.
-     *Gated on `runner.rs`, which is a concurrent rewrite.*
-  2. On-screen smoke (a `Swatch` leaf rendered in a live window).
-  3. The orrery Path-B port (adds `vello` to chisel; leaf renders its own
+- **Session (retained) leaf path + FIRST PIXELS (2026-07-08).**
+  `emit_paint_list_scrolled_with_leaves` (paint_emit) →
+  `IncrementalLayout::emit_paint_list_with_leaves` + `chisel_leaf_boxes()`
+  (session accessor) → `serval_render::scene_from_session_dom_with_leaves`. The
+  pelt-desktop smoke (`smoke_chisel.rs`, `png-reftest` feature) renders a Knob,
+  Meter, and GraphGlyph through the session path to an offscreen wgpu target,
+  color-checks the readback, and writes the receipt
+  (`testing/serval/images/2026-07-08_chisel_first_pixels.png`). The outcome
+  carries attribution counts (leaf boxes found / leaves painted) so a failure
+  names its seam.
+- **Blockification fix (engine, standards-correct).** The smoke exposed a spec
+  bug: `establishes_inline_context` decided purely from the children, so a flex
+  row of replaced elements (imgs, chisel leaves) collapsed into one inline leaf
+  and lost per-child boxes. Per CSS Display 3 §2.4 flex/grid children blockify;
+  the container now returns false before the child scan. 265 serval-layout
+  tests green.
+- **Known gap:** replaced chisel leaves flowing in a *real* inline context
+  (mixed with text, or 2+ side by side in a plain block) ride `InlineContent`
+  and do not paint their commands yet. Rows of widgets should use flex (now
+  correct); the inline-flow lane is a follow-up.
+- **Next:**
+  1. Live-window wiring: a host owns `LeafRegistry` + `RenderedLeaves` and calls
+     the `_with_leaves` scene fns in its frame loop (pelt chrome / meerkat).
+     *Runner ownership gated on the concurrent `runner.rs` rewrite.*
+  2. The orrery Path-B port (adds `vello` to chisel; leaf renders its own
      `vello::Scene` to a texture via `install_external_texture`).
 
 ---

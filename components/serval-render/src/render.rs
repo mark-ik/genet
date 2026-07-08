@@ -375,6 +375,44 @@ where
     paint::translate_paint_list(&plist)
 }
 
+/// [`scene_from_session_dom`] plus chisel widget leaves: the retained-session
+/// (chrome) counterpart of [`scene_from_scripted_dom_with_leaves`]. Each laid-out
+/// `<chisel-leaf>` box is sized from the session's retained box tree, its `Leaf`
+/// re-rendered into `cache` only when dirty or resized, and the session emit
+/// splices the cached commands at the box.
+pub fn scene_from_session_dom_with_leaves<D>(
+    session: &IncrementalLayout<D::NodeId>,
+    dom: &D,
+    width: u32,
+    height: u32,
+    registry: &mut LeafRegistry<u64>,
+    cache: &mut RenderedLeaves,
+) -> netrender::Scene
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash + Send + Sync + 'static,
+{
+    let sizes: std::collections::HashMap<u64, (f32, f32)> =
+        session.chisel_leaf_boxes().into_iter().collect();
+    registry.render_into(
+        |key| {
+            sizes.get(&key).map(|&(w, h)| chisel::Size {
+                width: w,
+                height: h,
+            })
+        },
+        cache,
+    );
+    let source = LeafSource(cache);
+    let plist = session.emit_paint_list_with_leaves(
+        dom,
+        &ScrollOffsets::default(),
+        DeviceIntSize::new(width as i32, height as i32),
+        &source,
+    );
+    paint::translate_paint_list(&plist)
+}
+
 /// The [`ServalPaintList`] half of [`scene_from_session`] — emit from the session
 /// plus the focused-field + scrollbar overlays, before lowering to a Scene. The
 /// session companion to [`paint_list_from_scripted_dom`], for a host that

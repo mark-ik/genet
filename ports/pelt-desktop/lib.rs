@@ -74,6 +74,8 @@ pub(crate) const STRUCTURAL_SHEET: &[&str] = &[
     "body { padding: 8px; }",
 ];
 
+#[cfg(feature = "png-reftest")]
+mod smoke_chisel;
 #[cfg(feature = "macos-present")]
 mod smoke_macos;
 #[cfg(feature = "netrender")]
@@ -96,6 +98,8 @@ pub use headless::{Fuzz, png_within_fuzz, render_png, render_png_scrolled};
 #[cfg(any(feature = "tile-surface", feature = "scripted"))]
 pub use href::resolve_href;
 pub use profile::{DesktopHostProfile, WindowingMode};
+#[cfg(feature = "png-reftest")]
+pub use smoke_chisel::{ChiselSmokeOutcome, run_chisel_smoke};
 #[cfg(feature = "macos-present")]
 pub use smoke_macos::{
     MacosCALayerPresentSmokeConfig, MacosCALayerPresentSmokeOutcome,

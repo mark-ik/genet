@@ -35,8 +35,10 @@ pub use a11y::accesskit_tree;
 pub use inspect::{ContentReport, OutlineEntry, content_report};
 pub use render::{
     TextCursor, caret_byte_at, caret_screen_rect, fragments_from_scripted_dom, hit_test_node,
-    paint_list_from_scripted_dom, paint_list_from_session, scene_from_layout_dom,
-    scene_from_scripted_dom, scene_from_session, scene_from_session_dom, soft_wrap_caret_byte,
+    paint_list_from_scripted_dom, paint_list_from_scripted_dom_with_leaves,
+    paint_list_from_session, scene_from_layout_dom, scene_from_scripted_dom,
+    scene_from_scripted_dom_with_leaves, scene_from_session, scene_from_session_dom,
+    scene_from_session_dom_with_leaves, soft_wrap_caret_byte,
 };
 
 #[cfg(test)]

@@ -600,6 +600,45 @@ where
     )
 }
 
+/// [`emit_paint_list_scrolled`] plus a chisel [`LeafPaintSource`]: the session
+/// (retained-layout) counterpart of [`emit_paint_list_with_leaves`], carrying the
+/// document scroll the session paths paint at.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_paint_list_scrolled_with_leaves<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    constructed: &BoxTree<D::NodeId>,
+    text_ctx: &TextMeasureCtx,
+    images: &ImagePlane<D::NodeId>,
+    bg_images: &BackgroundImagePlane<D::NodeId>,
+    scroll_offsets: &ScrollOffsets<D::NodeId>,
+    viewport: DeviceIntSize,
+    viewport_scroll: (f32, f32),
+    leaves: &dyn LeafPaintSource,
+) -> ServalPaintList
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    emit_inner_with_leaves(
+        dom,
+        styles,
+        fragments,
+        constructed,
+        Some(text_ctx),
+        images,
+        bg_images,
+        scroll_offsets,
+        viewport,
+        viewport_scroll,
+        (0.0, 0.0),
+        constructed.root_arena(),
+        None,
+        Some(leaves),
+    )
+}
+
 /// Like [`emit_paint_list_scrolled`] but skips any subtree whose root DOM node id
 /// appears in `skipped_subtrees`. Intended for coarse retained shell partitioning:
 /// emit the shell base without the churn-heavy pane roots, then emit those roots

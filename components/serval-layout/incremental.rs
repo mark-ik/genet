@@ -40,8 +40,9 @@ use crate::fragment::FragmentPlane;
 use crate::image_decode::{BackgroundImagePlane, DecodedImage, ImagePlane};
 use crate::invalidate::{classify, coalesce};
 use crate::paint_emit::{
-    ScrollOffsets, ServalPaintList, emit_paint_list_scrolled,
-    emit_paint_list_scrolled_excluding_subtrees, emit_subtree_paint_list_scrolled,
+    LeafPaintSource, ScrollOffsets, ServalPaintList, emit_paint_list_scrolled,
+    emit_paint_list_scrolled_excluding_subtrees, emit_paint_list_scrolled_with_leaves,
+    emit_subtree_paint_list_scrolled,
 };
 use crate::serval_lane::ServalLaneView;
 use crate::style::StylePlane;
@@ -1321,6 +1322,53 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         );
         self.append_highlights(dom, &mut plist);
         plist
+    }
+
+    /// [`emit_paint_list`](Self::emit_paint_list) plus a chisel
+    /// [`LeafPaintSource`]: splices each `<chisel-leaf>`'s Path-A commands at its
+    /// box on the retained (session) paint path. Pair with
+    /// [`chisel_leaf_boxes`](Self::chisel_leaf_boxes) to size the leaves before
+    /// rendering them into the source. See
+    /// `docs/2026-07-07_chisel_widget_leaf_design.md`.
+    pub fn emit_paint_list_with_leaves<D>(
+        &self,
+        dom: &D,
+        scroll_offsets: &ScrollOffsets<Id>,
+        viewport: DeviceIntSize,
+        leaves: &dyn LeafPaintSource,
+    ) -> ServalPaintList
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        debug_assert!(
+            self.paint_side_valid,
+            "emit_paint_list_with_leaves after a structural splice: the box-tree \
+             side-table is stale (relayout first).",
+        );
+        let merged = self.merged_scroll(scroll_offsets);
+        let mut plist = emit_paint_list_scrolled_with_leaves(
+            dom,
+            &self.styles,
+            &self.fragments,
+            &self.built,
+            &self.text_ctx,
+            &self.images,
+            &self.bg_images,
+            &merged,
+            viewport,
+            self.viewport.scroll,
+            leaves,
+        );
+        self.append_highlights(dom, &mut plist);
+        plist
+    }
+
+    /// The session's laid-out `<chisel-leaf>` boxes as `(key, content-box size)`,
+    /// from the retained box tree ([`BoxTree::chisel_leaf_boxes`]). The host
+    /// renders each registered leaf at this size (`chisel`'s `render_into`)
+    /// before emitting with leaves.
+    pub fn chisel_leaf_boxes(&self) -> Vec<(u64, (f32, f32))> {
+        self.built.chisel_leaf_boxes()
     }
 
     /// Emit the current layout while skipping any subtree whose root id appears in

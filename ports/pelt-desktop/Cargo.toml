@@ -88,7 +88,7 @@ netrender = ["dep:netrender", "dep:webgl_wgpu", "dep:wgpu"]
 # with a fuzz threshold. GPU-required, so opt-in; the scene-snapshot lane stays
 # GPU-free. `viewer` already brings the netrender + wgpu crates (via
 # `tile-surface`); this just adds the PNG encoder.
-png-reftest = ["viewer", "dep:image"]
+png-reftest = ["viewer", "dep:image", "dep:chisel"]
 # Headed presentation through serval's `WindowsDxgiBackend`. Drives
 # the netrender renderer through the C4 DCOMP composition swapchain
 # attached to a winit window's HWND. Windows-only at runtime; the
@@ -145,6 +145,9 @@ serval-layout = { path = "../../components/serval-layout", optional = true }
 # (the headless-scripted-DOM scrape path for SPAs). Depends only on layout-dom-api.
 serval-extract = { path = "../../components/serval-extract", optional = true }
 serval-winit-host = { path = "../../components/serval-winit-host", optional = true }
+# Chisel widget leaves (png-reftest feature): the first-pixels smoke renders
+# Knob/Meter/GraphGlyph leaves through the session leaf path to an offscreen PNG.
+chisel = { path = "../../components/chisel", optional = true }
 # Spec `data:` URL decoding for the LocalFetcher (percent-encoded + base64 bodies).
 data-url = { workspace = true, optional = true }
 

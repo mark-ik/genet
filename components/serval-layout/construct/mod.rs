@@ -70,6 +70,21 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    // A flex/grid container's children blockify (CSS Display 3 §2.4): its items
+    // lay out as blocks regardless of their shape, so the container never
+    // establishes an inline formatting context. Without this, a flex row of
+    // replaced elements (imgs, chisel widget leaves) would wrongly collapse
+    // into one inline leaf and lose their per-child boxes.
+    {
+        use style::values::specified::box_::DisplayInside;
+        let inside = styles
+            .get(elem.id())
+            .and_then(|e| e.borrow_data())
+            .map(|d| d.styles.primary().get_box().display.inside());
+        if matches!(inside, Some(DisplayInside::Flex | DisplayInside::Grid)) {
+            return false;
+        }
+    }
     let mut has_inline_text = false;
     let mut replaced_count = 0;
     for child in elem.dom_children() {
