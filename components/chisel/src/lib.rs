@@ -20,7 +20,17 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
+use paint_list_api::items::PathItem;
 use paint_list_api::{ColorF, CommonPlacement, LayoutPoint, LayoutRect, PaintCmd, RectItem};
+
+mod glyphs;
+mod path;
+
+pub use glyphs::{GraphGlyph, GraphGlyphNode, Knob, Meter};
+pub use path::Path;
+// The stroke vocabulary leaves author against, re-exported so a leaf crate
+// needs no direct paint_list_api dep for the common cases.
+pub use paint_list_api::items::{DashPattern, PathData, StrokeCap, StrokeJoin, StrokeStyle};
 
 /// Known / available size passed to [`Leaf::measure`] (device px). `None` means
 /// the dimension is unconstrained, matching CSS `auto` / indefinite space.
@@ -71,6 +81,53 @@ impl<'a> PaintCx<'a> {
             )),
             color,
         }));
+    }
+
+    /// Draw a path with an optional fill and optional stroke (CSS/SVG
+    /// "filled then stroked"). Placement is the leaf's own box.
+    pub fn path(&mut self, path: PathData, fill: Option<ColorF>, stroke: Option<StrokeStyle>) {
+        let s = self.size;
+        self.cmds.push(PaintCmd::DrawPath(PathItem {
+            placement: CommonPlacement::new(LayoutRect::new(
+                LayoutPoint::new(0.0, 0.0),
+                LayoutPoint::new(s.width, s.height),
+            )),
+            path,
+            fill,
+            stroke,
+        }));
+    }
+
+    /// Fill a path with a solid color.
+    pub fn fill_path(&mut self, path: PathData, color: ColorF) {
+        self.path(path, Some(color), None);
+    }
+
+    /// Stroke a path.
+    pub fn stroke_path(&mut self, path: PathData, style: StrokeStyle) {
+        self.path(path, None, Some(style));
+    }
+}
+
+/// A solid stroke: butt caps, miter joins, no dash.
+pub fn solid_stroke(color: ColorF, width: f32) -> StrokeStyle {
+    StrokeStyle {
+        color,
+        width,
+        cap: StrokeCap::Butt,
+        join: StrokeJoin::Miter,
+        dash: None,
+    }
+}
+
+/// A round-capped, round-joined solid stroke (polylines, arcs, needles).
+pub fn round_stroke(color: ColorF, width: f32) -> StrokeStyle {
+    StrokeStyle {
+        color,
+        width,
+        cap: StrokeCap::Round,
+        join: StrokeJoin::Round,
+        dash: None,
     }
 }
 
