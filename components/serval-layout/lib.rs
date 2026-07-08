@@ -84,9 +84,10 @@ pub use incremental::{Applied, IncrementalLayout};
 pub use invalidate::{Invalidation, classify, coalesce};
 pub use layout::layout;
 pub use paint_emit::{
-    SCROLLBAR_COLOR, SCROLLBAR_WIDTH, ScrollOffsets, ServalPaintList, emit_paint_list,
-    emit_paint_list_scrolled, emit_paint_list_scrolled_excluding_subtrees,
-    emit_paint_list_with_layouts, emit_subtree_paint_list_scrolled, push_scrollbars,
+    LeafPaintSource, SCROLLBAR_COLOR, SCROLLBAR_WIDTH, ScrollOffsets, ServalPaintList,
+    emit_paint_list, emit_paint_list_scrolled, emit_paint_list_scrolled_excluding_subtrees,
+    emit_paint_list_with_layouts, emit_paint_list_with_leaves, emit_subtree_paint_list_scrolled,
+    push_scrollbars,
 };
 pub use serval_lane::{
     ServalLaneView, absolute_origin, accumulate_origins, accumulate_painted_origins,

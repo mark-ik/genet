@@ -231,6 +231,36 @@ impl<Id: Copy + Eq + Hash> BoxTree<Id> {
             .and_then(|n| n.inline_content.as_ref())
     }
 
+    /// Enumerate laid-out `<chisel-leaf>` boxes as `(leaf key, content-box size in
+    /// device px)`. The host renders each chisel `Leaf` at this size before paint
+    /// (`chisel::LeafRegistry::render_into`); the key is the `<chisel-leaf key="…">`
+    /// value stamped onto the box during construction (`chisel_leaf_key`). The
+    /// content box is the border-box size minus border + padding — the same box
+    /// `paint_emit` splices the leaf into. See
+    /// `docs/2026-07-07_chisel_widget_leaf_design.md`.
+    pub fn chisel_leaf_boxes(&self) -> Vec<(u64, (f32, f32))> {
+        self.nodes
+            .iter()
+            .filter_map(|n| {
+                let key = n.chisel_leaf_key?;
+                let l = &n.final_layout;
+                let w = (l.size.width
+                    - l.border.left
+                    - l.border.right
+                    - l.padding.left
+                    - l.padding.right)
+                    .max(0.0);
+                let h = (l.size.height
+                    - l.border.top
+                    - l.border.bottom
+                    - l.padding.top
+                    - l.padding.bottom)
+                    .max(0.0);
+                Some((key, (w, h)))
+            })
+            .collect()
+    }
+
     /// The byte-range → source-element index for inline-formatting leaf `id` (keyed
     /// by DOM `Id`), or `None` when `id` has no inline text. Read by inline
     /// hit-testing to map a point inside the leaf to the inline element under it.

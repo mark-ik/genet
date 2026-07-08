@@ -17,6 +17,10 @@ path = "src/lib.rs"
 # The serval DOM + the engine pipeline this drives.
 serval-scripted-dom = { path = "../serval-scripted-dom" }
 serval-layout = { path = "../serval-layout" }
+# chisel widget leaves: the `_with_leaves` render entry renders each `<chisel-leaf>`
+# box's `Leaf` and splices its Path-A commands. serval-render is the orphan-rule-legal
+# home for the `RenderedLeaves` -> `LeafPaintSource` adapter (it owns both deps).
+chisel = { path = "../chisel" }
 layout_dom_api = { workspace = true }
 # Paint-list -> netrender::Scene lowering (aliased `paint`), the Scene type, and
 # the paint/query value types.
