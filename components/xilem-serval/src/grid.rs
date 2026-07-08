@@ -38,6 +38,7 @@ pub fn data_grid<State, Action>(
     scroll: f32,
     cell: impl Fn(usize, usize) -> GridView<State, Action>,
     on_header_click: impl Fn(&mut State, usize) + Clone + 'static,
+    row_class: impl Fn(usize) -> Option<String>,
 ) -> GridView<State, Action>
 where
     State: 'static,
@@ -92,13 +93,19 @@ where
                 })
                 .collect();
             let zebra = if r % 2 == 0 { "grid-row grid-row-even" } else { "grid-row grid-row-odd" };
+            // Per-row class hook: selection / active / status styling the caller
+            // owns (every real table needs it), appended to the zebra base.
+            let class = match row_class(r) {
+                Some(extra) => format!("{zebra} {extra}"),
+                None => zebra.to_string(),
+            };
             Box::new(
                 placed_with(
                     Placement::new(0.0, r as f32 * spec.row_height - scroll),
                     format!("width: {width}px; height: {}px;", spec.row_height),
                     cells,
                 )
-                .attr("class", zebra)
+                .attr("class", class)
                 .attr("data-row", r.to_string()),
             ) as GridView<State, Action>
         })
@@ -167,6 +174,8 @@ mod tests {
                 }
             },
             |s: &mut GridState, _col| s.descending = !s.descending,
+            // Mark row 0 selected, to exercise the per-row class hook.
+            |r| (r == 0).then(|| "grid-row-selected".to_string()),
         )
     }
 
@@ -214,6 +223,12 @@ mod tests {
             let mut rows = Vec::new();
             find_all(&d, root, "grid-row", &mut rows);
             assert!(rows.len() < 25, "10k rows materialize a window, got {}", rows.len());
+            // The per-row class hook rides on the row's class: row 0 is the
+            // window's first row at scroll 0 and the view marks it selected.
+            let mut selected = Vec::new();
+            find_all(&d, root, "grid-row-selected", &mut selected);
+            assert_eq!(selected.len(), 1, "row_class marks exactly row 0 selected");
+            assert!(class_of(&d, selected[0]).contains("grid-row"), "hook appends to the zebra base");
             let mut leaves = Vec::new();
             find_all(&d, root, "grid-cell", &mut leaves);
             assert_eq!(leaves.len(), rows.len() * 3, "three cells per materialized row");

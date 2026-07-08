@@ -90,6 +90,10 @@ mod tests;
 pub use arrangement::{arrangement, placed, placed_with};
 pub use context::ServalCtx;
 pub use grid::{GridView, data_grid};
+// Re-export the grid's spec types from chisel so a host building a `data_grid`
+// needs no second direct `chisel` dep (isometry, etc.). The grid widget's home
+// is here; its column model rides along.
+pub use chisel::{GridColumn, GridSpec};
 #[cfg(feature = "highlight")]
 pub use highlight::{
     Highlight, entity_styles, highlighted_text_field, highlighted_textarea, note_styles,
