@@ -60,6 +60,8 @@ mod arrangement;
 mod context;
 mod controls;
 mod grid;
+#[cfg(feature = "highlight")]
+mod highlight;
 mod element;
 mod event;
 mod focusable;
@@ -88,6 +90,11 @@ mod tests;
 pub use arrangement::{arrangement, placed, placed_with};
 pub use context::ServalCtx;
 pub use grid::{GridView, data_grid};
+#[cfg(feature = "highlight")]
+pub use highlight::{
+    Highlight, entity_styles, highlighted_text_field, highlighted_textarea, note_styles,
+    role_class, styles_for, syntax_css,
+};
 pub use controls::{
     Checkbox, TextField, TextInput, button, checkbox, checkbox_typed, text_field, text_field_typed,
     textarea, textarea_typed, toggle,
