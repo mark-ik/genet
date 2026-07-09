@@ -20,7 +20,7 @@ mod field;
 mod text_input;
 mod toggle;
 
-pub use button::button;
+pub use button::{button, button_with};
 pub use field::{TextField, text_field, text_field_typed, textarea, textarea_typed};
 pub(crate) use field::{edit, edit_multiline};
 pub use text_input::TextInput;

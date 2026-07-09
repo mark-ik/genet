@@ -229,3 +229,86 @@ where
     F: Fn(&mut State, PointerEvent) -> OA + 'static,
 {
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tags::chisel_leaf;
+    use crate::{AnyView, DomHandle, ServalAppRunner, ServalCtx, ServalElement};
+    use chisel::{Knob, Size};
+    use layout_dom_api::LayoutDom;
+    use serval_scripted_dom::ScriptedDom;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    const KNOB_KEY: u64 = 3;
+    const BOX: (f32, f32) = (48.0, 48.0);
+
+    struct KnobState {
+        knob: Knob,
+    }
+
+    type KnobView = Box<dyn AnyView<KnobState, (), ServalCtx, ServalElement>>;
+
+    /// The catalog's composition rule 2 made concrete: `on_pointer` wraps the
+    /// leaf, the drag delta maps to a value **here in the view layer**, and the
+    /// leaf only paints (`Knob` implements no `Leaf::event`).
+    fn knob_view(_s: &KnobState) -> KnobView {
+        Box::new(on_pointer(
+            chisel_leaf::<KnobState, ()>(KNOB_KEY, 48, 48),
+            |s: &mut KnobState, e: PointerEvent| {
+                // Normalize without knowing layout: `local` is element-local and
+                // `size` is the element's box, both supplied by the runner.
+                if !matches!(e.phase, PointerPhase::Up) {
+                    s.knob.set_value((e.local.0 / e.size.0).clamp(0.0, 1.0));
+                }
+            },
+        ))
+    }
+
+    fn drag(phase: PointerPhase, x: f32) -> PointerEvent {
+        PointerEvent::new(phase, (x, 24.0), BOX)
+    }
+
+    #[test]
+    fn dragging_a_pointer_wrapped_leaf_drives_the_knob_from_the_view_layer() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            knob_view,
+            KnobState {
+                knob: Knob::new(Size { width: 48.0, height: 48.0 }),
+            },
+        );
+        let root = runner.root();
+
+        assert_eq!(
+            dom.borrow().element_name(root).map(|q| q.local.to_string()).as_deref(),
+            Some("chisel-leaf"),
+            "on_pointer wraps the leaf element itself; nothing wraps it in a div",
+        );
+        assert_eq!(runner.state().knob.value(), 0.0, "knob starts at zero");
+
+        // Down at the horizontal midpoint of a 48px box -> 0.5.
+        runner.dispatch_pointer_down(root, drag(PointerPhase::Down, 24.0));
+        assert_eq!(runner.state().knob.value(), 0.5, "press sets the value");
+        assert_eq!(
+            runner.pointer_capture(),
+            Some(root),
+            "the leaf captures the drag, so moves route to it even outside its box",
+        );
+
+        // Move to three-quarters across -> 0.75.
+        runner.dispatch_pointer_move(drag(PointerPhase::Move, 36.0));
+        assert_eq!(runner.state().knob.value(), 0.75, "the drag tracks the pointer");
+
+        // A move past the edge clamps rather than overshooting.
+        runner.dispatch_pointer_move(drag(PointerPhase::Move, 96.0));
+        assert_eq!(runner.state().knob.value(), 1.0, "past the edge clamps to full");
+
+        // Up releases the capture and this handler ignores it, so the value holds.
+        runner.dispatch_pointer_up(drag(PointerPhase::Up, 0.0));
+        assert_eq!(runner.state().knob.value(), 1.0, "release does not reset the value");
+        assert_eq!(runner.pointer_capture(), None, "up releases the capture");
+    }
+}
