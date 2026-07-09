@@ -1,7 +1,7 @@
 # CSS transitions plan
 
 **Date:** 2026-07-05
-**Status:** plan (not started).
+**Status:** v1 landed 2026-07-06 (`507f1331989`: transitions + transition events + WPT slices; T1/T2 and reduced-motion marked landed inline below). Deferred phases (CSS animations `@keyframes`, renderer-side fast path) remain open.
 **Scope:** CSS transitions in serval's Boa/Nova lane, style-tier, host-clocked.
 CSS animations (`@keyframes`) and any renderer-side fast path are explicitly
 deferred phases, not part of the v1 done-condition.
