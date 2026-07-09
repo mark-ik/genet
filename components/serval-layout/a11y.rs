@@ -105,7 +105,12 @@ where
     let role = role_for(dom, node);
     let mut access = AccessNode::new(role);
 
-    let name = direct_text(dom, node);
+    // Accessible name: `aria-label` wins (ARIA semantics), else the node's direct
+    // text. Icon-only or nested controls carry no direct text, so `aria-label` is
+    // how a host names them.
+    let name = attr(dom, node, "aria-label")
+        .map(str::to_string)
+        .unwrap_or_else(|| direct_text(dom, node));
     if !name.is_empty() {
         access.set_label(name);
     }
@@ -120,8 +125,13 @@ where
     }
 
     if advertise_actions {
+        // Toggle controls (switch / checkbox / radio) are invoked via `Click` in
+        // AccessKit, same as a button; a text field takes `Focus`. Anything that
+        // advertises an action is recorded so the host can route the request.
         let action = match role {
-            Role::Button => Some(Action::Click),
+            Role::Button | Role::Switch | Role::CheckBox | Role::RadioButton => {
+                Some(Action::Click)
+            }
             Role::TextInput => Some(Action::Focus),
             _ => None,
         };
