@@ -61,6 +61,7 @@ mod context;
 mod controls;
 mod grid;
 mod editor;
+mod menu;
 #[cfg(feature = "highlight")]
 mod highlight;
 mod element;
@@ -92,6 +93,7 @@ pub use arrangement::{arrangement, placed, placed_with};
 pub use context::ServalCtx;
 pub use grid::{GridView, data_grid};
 pub use editor::{EditHistory, pair_close, wrap_selection};
+pub use menu::{MENU_CLASS, MENU_ROW_ACTIVE_CLASS, MENU_ROW_CLASS, menu};
 // Re-export the grid's spec types from chisel so a host building a `data_grid`
 // needs no second direct `chisel` dep (isometry, etc.). The grid widget's home
 // is here; its column model rides along.
