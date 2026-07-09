@@ -881,6 +881,7 @@ where
         root_arena,
         root_origin,
         &mut commands,
+        &[],
     );
     if document_scrolled {
         commands.push(PaintCmd::PopTransform);
@@ -921,6 +922,22 @@ pub(crate) struct Deferred {
     /// [`crate::paint_stacking::paint_layer`] so it stays pinned. `false` for
     /// `absolute` / z-index layers, which scroll with the document.
     pub(crate) attaches_to_viewport: bool,
+    /// Absolute-scene overflow clip rects from this layer's containing-block
+    /// chain (outermost first). A lifted layer paints on a clean stack, so it
+    /// loses the `PushClip` its clipping ancestors emitted for in-flow content;
+    /// [`crate::paint_stacking::paint_layer`] re-applies these. Only ancestors
+    /// that establish the abs containing block (non-`static` position)
+    /// contribute, so an abs box still escapes a non-CB `overflow: hidden`
+    /// ancestor (CSS 2.1 §11.1.2).
+    pub(crate) ancestor_clip: Vec<LayoutRect>,
+}
+
+/// Whether `cv` establishes the containing block for an `absolute` descendant
+/// (a non-`static` position). Such an ancestor's `overflow` clip applies to its
+/// abs descendants; a `static` ancestor's does not (they escape it).
+pub(crate) fn establishes_abs_cb(cv: &ComputedValues) -> bool {
+    use style::values::computed::PositionProperty;
+    !matches!(cv.get_box().position, PositionProperty::Static)
 }
 
 /// Whether `id` is out of normal flow (`position: absolute`/`fixed`). Out-of-flow
@@ -993,6 +1010,9 @@ pub(crate) fn walk<Id>(
     // folds this into its recorded `origin` to scroll *with* its container rather than staying
     // pinned. The scroll twin of `ancestor_transform`. (Absolute-in-scroll fix.)
     accumulated_scroll: (f32, f32),
+    // Absolute-scene overflow clips from the containing-block chain that apply to
+    // an abs/fixed descendant deferred here (see `Deferred::ancestor_clip`).
+    abs_clips: &[LayoutRect],
 ) where
     Id: Copy + Eq + Hash,
 {
@@ -1014,6 +1034,24 @@ pub(crate) fn walk<Id>(
     // `is_root` is the one node we always emit — the context root the painter
     // entered on, which would otherwise re-defer itself into an infinite loop.
     if !is_root && crate::paint_stacking::defers_to_stacking(cv) {
+        // Carry only the clips this layer's own box actually violates. A lifted
+        // layer fully inside its clips needs none, so a board of thousands of
+        // in-bounds abs tiles adds no clip-layers (each clip is a scene layer;
+        // per-tile clip-layers would overwhelm the rasterizer). Only a box that
+        // spills its clip (a scrolled grid row) keeps the clip.
+        let nl = node.final_layout;
+        let (bx0, by0) = (origin.0 + nl.location.x, origin.1 + nl.location.y);
+        let (bx1, by1) = (bx0 + nl.size.width, by0 + nl.size.height);
+        let ancestor_clip: Vec<LayoutRect> = abs_clips
+            .iter()
+            .filter(|c| {
+                bx0 < c.min.x - 0.5
+                    || by0 < c.min.y - 0.5
+                    || bx1 > c.max.x + 0.5
+                    || by1 > c.max.y + 0.5
+            })
+            .copied()
+            .collect();
         deferred.push(Deferred {
             node: arena,
             // Fold in the scroll of this layer's scroll-container ancestors, so it scrolls
@@ -1027,6 +1065,7 @@ pub(crate) fn walk<Id>(
             seq: deferred.len(),
             ancestor_transform,
             attaches_to_viewport: is_fixed(cv),
+            ancestor_clip,
         });
         return;
     }
@@ -1451,6 +1490,23 @@ pub(crate) fn walk<Id>(
         None => accumulated_scroll,
     };
 
+    // An abs/fixed descendant is clipped by this node's overflow only if this
+    // node establishes its containing block; otherwise it escapes (CSS 2.1
+    // §11.1.2). Accumulate in absolute scene coords for the clean-stack painter.
+    let child_abs_clips: Vec<LayoutRect> = match clip_rect {
+        Some(r) if establishes_abs_cb(cv) => {
+            // The clip rect is relative to this node's border box, whose absolute
+            // top-left is `child_origin` (parent origin + this node's location).
+            let mut v = abs_clips.to_vec();
+            v.push(LayoutRect::new(
+                LayoutPoint::new(child_origin.0 + r.min.x, child_origin.1 + r.min.y),
+                LayoutPoint::new(child_origin.0 + r.max.x, child_origin.1 + r.max.y),
+            ));
+            v
+        }
+        _ => abs_clips.to_vec(),
+    };
+
     for &child in &node.children {
         walk(
             em,
@@ -1463,6 +1519,7 @@ pub(crate) fn walk<Id>(
             false,
             child_transform,
             child_scroll,
+            &child_abs_clips,
         );
     }
 
