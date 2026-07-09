@@ -104,8 +104,8 @@ pub use highlight::{
     role_class, styles_for, syntax_css,
 };
 pub use controls::{
-    Checkbox, TextField, TextInput, button, checkbox, checkbox_typed, text_field, text_field_typed,
-    textarea, textarea_typed, toggle,
+    Checkbox, TextField, TextInput, button, button_with, checkbox, checkbox_typed, text_field,
+    text_field_typed, textarea, textarea_typed, toggle,
 };
 pub use element::{El, Element, ElementView, el};
 pub use event::{OnClick, OnClickState, PointerClick, clickable, on_click};

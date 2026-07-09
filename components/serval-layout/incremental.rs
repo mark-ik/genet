@@ -35,6 +35,7 @@ use crate::cascade::{
     build_stylist, restyle_for_animation_tick, restyle_for_interaction, restyle_structural,
     restyle_with_snapshots, run_cascade_with_stylist, set_stylist_color_scheme,
 };
+use crate::animation_events::{AnimationEventRecord, harvest_animation_events};
 use crate::transition_events::{TransitionEventRecord, harvest_transition_events};
 use crate::fragment::FragmentPlane;
 use crate::image_decode::{BackgroundImagePlane, DecodedImage, ImagePlane};
@@ -214,6 +215,11 @@ pub struct IncrementalLayout<Id: Copy + Eq + Hash> {
     /// by [`take_transition_events`](Self::take_transition_events) to derive
     /// lifecycle events (`crate::transition_events`).
     transition_tracker: crate::transition_events::TransitionTracker,
+    /// Per-animation last-observed phase + iteration index, keyed by
+    /// `(opaque node id, `@keyframes` name)`. Diffed by
+    /// [`take_animation_events`](Self::take_animation_events)
+    /// (`crate::animation_events`).
+    animation_tracker: crate::animation_events::AnimationTracker,
     /// Whether transitions animate or complete instantly (reduced motion).
     animation_mode: AnimationMode,
 }
@@ -281,6 +287,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             last_damage: RestyleDamage::empty(),
             last_batch_stats,
             transition_tracker: crate::transition_events::TransitionTracker::default(),
+            animation_tracker: crate::animation_events::AnimationTracker::default(),
             animation_mode: AnimationMode::default(),
         }
     }
@@ -1151,16 +1158,17 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     where
         D: LayoutDom<NodeId = Id>,
     {
-        // Reduced motion: jump the clock past every transition's end so this
-        // single frame lands the final value with no interpolation. Monotonic —
-        // the completion clock is `start + duration` of the last-created
-        // transition, always >= the current clock. `take_transition_events`
-        // then cleans the finished transitions up (silently, in this mode).
+        // Reduced motion: jump the clock past the end of every transition and
+        // every finite animation, so this single frame lands the final value with
+        // no interpolation. Monotonic (the jump target is always >= the current
+        // clock). `take_transition_events` / `take_animation_events` then clean up
+        // silently in this mode.
         let effective_now = match self.animation_mode {
             AnimationMode::Full => now_s,
-            AnimationMode::Disabled => self.max_transition_end().unwrap_or(now_s).max(now_s),
+            AnimationMode::Disabled => self.max_animation_end().unwrap_or(now_s).max(now_s),
         };
         self.styles.set_animation_clock(effective_now);
+        self.advance_css_animations(effective_now);
         // Re-cascade while any transition is still in the set, including the
         // frame that crosses a transition's end (it must land the final value)
         // and any that linger until the host drains them via
@@ -1202,20 +1210,75 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         }
     }
 
-    /// Whether the session has any CSS transition (or, later, CSS animation)
-    /// still live as of the current animation clock — i.e. not canceled and
-    /// with its end time in the future. Terminal transitions that linger until
-    /// the host drains their events
-    /// ([`take_transition_events`](Self::take_transition_events)) do not count,
-    /// so this is the true idle signal: hosts request frames only while it is
-    /// true, and a steady surface stops ticking entirely.
+    /// Drive the CSS-animation lifecycle that Stylo leaves to its embedder.
+    ///
+    /// Stylo creates every `@keyframes` animation `Pending` and never promotes
+    /// it (Servo does this from its script thread). That single omission cascades:
+    /// [`Animation::iterate_if_necessary`] refuses to advance anything that is not
+    /// `Running`, so the animation stays on iteration 0 forever, and
+    /// [`Animation::has_ended`] returns `false` while `Pending`, so
+    /// `get_property_declaration_at_time`'s fill-mode branch never fires and the
+    /// element freezes at its first iteration's end value. Promoting to `Running`
+    /// is what makes `animation-iteration-count`, `animation-direction`, and
+    /// `animation-fill-mode` work at all.
+    ///
+    /// `Paused` is left alone (a paused animation holds its value and must not be
+    /// promoted). The loop bound handles a coarse tick that skips whole iterations.
+    ///
+    /// **An ended animation is never marked `Finished`.** Stylo's
+    /// `process_animations_for_style` does
+    /// `animations.retain(|a| a.state != Finished)` during the cascade, so storing
+    /// `Finished` here makes Stylo delete the animation in the very restyle this
+    /// tick triggers: `animationend` could never be harvested afterwards, and a
+    /// `fill-mode: forwards` animation would lose the value it is supposed to hold.
+    /// This is the same trap `restyle_for_animation_tick` documents for
+    /// transitions. Instead the terminal phase is derived from the clock:
+    /// `Animation::has_ended(now)` is true for a `Running` animation past its end,
+    /// which is all that Stylo's fill-mode branch, this session's
+    /// [`has_active_animations`](Self::has_active_animations), and
+    /// [`crate::animation_events`]'s phase derivation need.
+    fn advance_css_animations(&mut self, now: f64) {
+        use style::animation::AnimationState;
+        // A tick can jump several iterations at once (a slow frame, or a host that
+        // ticks lazily); iterate until the animation catches up. Bounded so a
+        // zero-duration animation cannot spin.
+        const MAX_ITERATIONS_PER_TICK: usize = 64;
+        let mut sets = self.styles.animations().sets.write();
+        for set in sets.values_mut() {
+            for animation in set.animations.iter_mut() {
+                if animation.state == AnimationState::Pending {
+                    animation.state = AnimationState::Running;
+                }
+                if animation.state != AnimationState::Running {
+                    continue;
+                }
+                let mut guard = 0;
+                while animation.iterate_if_necessary(now) && guard < MAX_ITERATIONS_PER_TICK {
+                    guard += 1;
+                }
+            }
+        }
+    }
+
+    /// Whether the session has any CSS transition or CSS animation still live as
+    /// of the current animation clock — i.e. not canceled and with its end time in
+    /// the future. Terminal transitions that linger until the host drains their
+    /// events ([`take_transition_events`](Self::take_transition_events)) do not
+    /// count, and neither does a `Finished` animation still supplying a
+    /// `fill-mode: forwards` value, nor a `Paused` one (it holds a constant value,
+    /// so there is nothing to redraw). So this is the true idle signal: hosts
+    /// request frames only while it is true, and a steady surface stops ticking
+    /// entirely.
     pub fn has_active_animations(&self) -> bool {
-        use style::animation::AnimationState::Canceled;
+        use style::animation::AnimationState::{Canceled, Pending, Running};
         let now = self.styles.animation_clock();
         self.styles.animations().sets.read().values().any(|set| {
             set.transitions.iter().any(|t| {
                 t.state != Canceled && t.start_time + t.property_animation.duration > now
-            }) || set.animations.iter().any(|a| a.state != Canceled)
+            }) || set
+                .animations
+                .iter()
+                .any(|a| matches!(a.state, Pending | Running) && !a.has_ended(now))
         })
     }
 
@@ -1230,17 +1293,34 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         self.animation_mode
     }
 
-    /// The latest end time (`start_time + duration`, seconds) across all live
-    /// transitions, or `None` when the set is empty. Reduced motion jumps the
-    /// clock here to complete everything in one frame.
-    fn max_transition_end(&self) -> Option<f64> {
-        self.styles
-            .animations()
-            .sets
-            .read()
+    /// The latest end time (seconds) across everything live in the set, or `None`
+    /// when nothing has an end. Reduced motion jumps the clock here to complete
+    /// everything in one frame.
+    ///
+    /// Covers transitions **and** finite `@keyframes` animations: an animation's
+    /// end is its current iteration's start plus the whole remaining active
+    /// duration. An `infinite` animation contributes nothing — it has no end to
+    /// jump to. Under reduced motion an infinite animation therefore keeps
+    /// looping; suppressing it needs a policy decision (hold the first frame? the
+    /// fill value?) rather than a clock jump, and is left open.
+    fn max_animation_end(&self) -> Option<f64> {
+        use style::animation::KeyframesIterationState;
+        let sets = self.styles.animations().sets.read();
+        let transitions = sets
             .values()
             .flat_map(|set| set.transitions.iter())
-            .map(|t| t.start_time + t.property_animation.duration)
+            .map(|t| t.start_time + t.property_animation.duration);
+        let animations = sets
+            .values()
+            .flat_map(|set| set.animations.iter())
+            .filter_map(|a| match a.iteration_state {
+                KeyframesIterationState::Infinite(_) => None,
+                KeyframesIterationState::Finite(current, total) => {
+                    Some(a.started_at + (total - current) * a.duration)
+                },
+            });
+        transitions
+            .chain(animations)
             .fold(None, |acc, end| Some(acc.map_or(end, |a: f64| a.max(end))))
     }
 
@@ -1270,6 +1350,35 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         match self.animation_mode {
             AnimationMode::Full => events,
             // Pruning already happened inside the harvest; drop the events.
+            AnimationMode::Disabled => Vec::new(),
+        }
+    }
+
+    /// Drain the CSS **animation** lifecycle events (`animationstart` /
+    /// `animationiteration` / `animationend` / `animationcancel`) accumulated
+    /// since the last drain, and prune canceled animations from the live set.
+    ///
+    /// The `@keyframes` twin of [`take_transition_events`](Self::take_transition_events),
+    /// with the same contract: the host calls it after every [`apply`](Self::apply)
+    /// and [`tick_animations`](Self::tick_animations), then dispatches each event
+    /// through the JS runtime off the cascade. Each harvest prunes only its own
+    /// kind, so the two may be drained in either order. Cheap and empty when
+    /// nothing has animated since the last drain.
+    ///
+    /// In [`AnimationMode::Disabled`] the pruning still happens but no events are
+    /// returned — reduced motion is silent, exactly as for transitions.
+    pub fn take_animation_events<D>(&mut self, dom: &D) -> Vec<AnimationEventRecord<Id>>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        if self.animation_tracker.is_empty() && self.styles.animations().sets.read().is_empty() {
+            return Vec::new();
+        }
+        let now = self.styles.animation_clock();
+        let events =
+            harvest_animation_events(dom, &self.styles, &mut self.animation_tracker, now);
+        match self.animation_mode {
+            AnimationMode::Full => events,
             AnimationMode::Disabled => Vec::new(),
         }
     }
@@ -2203,6 +2312,98 @@ mod tests {
         assert_eq!(applied, Applied::Unchanged);
     }
 
+    /// The WHATWG rendering spec renders form controls as `inline-block`, and
+    /// never renders `input[type=hidden]`. serval shipped no UA `display` for any
+    /// of them, leaving them `inline`, where CSS `width` / `height` are ignored
+    /// outright. This pins the UA rule; the used size it unlocks is asserted
+    /// end-to-end in `paint_emit`'s `a_sized_input_paints_at_its_css_size`.
+    ///
+    /// Note the control itself has no fragment: an `inline-block` gets no
+    /// `BoxNode`, it rides as an `InlineBoxItem` in its parent's inline content.
+    #[test]
+    fn form_controls_get_the_inline_block_ua_display() {
+        fn display_of(tag: &str, ty: Option<&str>) -> Option<String> {
+            let mut dom = ScriptedDom::new();
+            let root = dom.document();
+            let h = dom.create_element(html("html"));
+            dom.append_child(root, h);
+            let body = dom.create_element(html("body"));
+            dom.append_child(h, body);
+            let ctl = dom.create_element(html(tag));
+            if let Some(t) = ty {
+                dom.set_attribute(ctl, attr("type"), t);
+            }
+            dom.append_child(body, ctl);
+            IncrementalLayout::new(&dom, &[], W, H).computed_value(ctl, "display")
+        }
+
+        for tag in ["button", "input", "select", "textarea"] {
+            assert_eq!(
+                display_of(tag, None).as_deref(),
+                Some("inline-block"),
+                "<{tag}> must be inline-block so authored CSS can size it",
+            );
+        }
+        assert_eq!(
+            display_of("input", Some("hidden")).as_deref(),
+            Some("none"),
+            "a hidden input must never render",
+        );
+        // The type-selector rule must not swallow the other input types.
+        assert_eq!(display_of("input", Some("text")).as_deref(), Some("inline-block"));
+    }
+
+    /// A `<chisel-leaf>` nested inside a native `<button>` (the widget catalog's
+    /// "native button wrapping a `GraphGlyph` leaf") is reported to the host
+    /// whatever the button's `display`.
+    ///
+    /// A leaf reaches paint only if the host renders it, and the host renders
+    /// what `chisel_leaf_boxes` reports. A block button gives the leaf its own
+    /// `BoxNode` (the replaced-leaf path). An `inline` or `inline-block` button
+    /// establishes an inline formatting context, where the leaf gets no `BoxNode`
+    /// and instead rides as an `InlineBoxItem` carrying the same key. Both are
+    /// reported, so the leaf paints in all three cases.
+    ///
+    /// Before 2026-07-09 only the block case worked; the inline cases silently
+    /// dropped the leaf. Keep all three pinned — the inline-block case is the one
+    /// that matters, since that is `<button>`'s standards-correct display.
+    #[test]
+    fn a_chisel_leaf_inside_a_button_is_reported_at_every_button_display() {
+        fn dom_with_leaf_in_button() -> ScriptedDom {
+            let mut dom = ScriptedDom::new();
+            let root = dom.document();
+            let h = dom.create_element(html("html"));
+            dom.append_child(root, h);
+            let body = dom.create_element(html("body"));
+            dom.append_child(h, body);
+            let button = dom.create_element(html("button"));
+            dom.append_child(body, button);
+            let leaf = dom.create_element(QualName::new(None, ns!(html), "chisel-leaf".into()));
+            dom.set_attribute(leaf, attr("key"), "7");
+            dom.append_child(button, leaf);
+            dom
+        }
+
+        let dom = dom_with_leaf_in_button();
+        const LEAF: &str = "chisel-leaf { display: block; width: 20px; height: 20px; }";
+        let want = vec![(7u64, (20.0, 20.0))];
+
+        // Block button: the leaf takes the block replaced-leaf path (its own BoxNode).
+        let block = IncrementalLayout::new(&dom, &[LEAF, "button { display: block; }"], W, H);
+        assert_eq!(block.chisel_leaf_boxes(), want, "block button");
+
+        // inline-block button: the leaf rides inside the button's InlineBlockBox
+        // content as an InlineBoxItem. This is `<button>`'s real UA display.
+        let inline_block =
+            IncrementalLayout::new(&dom, &[LEAF, "button { display: inline-block; }"], W, H);
+        assert_eq!(inline_block.chisel_leaf_boxes(), want, "inline-block button");
+
+        // Unstyled button: serval gives `<button>` no UA display, so it is `inline`
+        // and the leaf lands directly in the body's inline content.
+        let unstyled = IncrementalLayout::new(&dom, &[LEAF], W, H);
+        assert_eq!(unstyled.chisel_leaf_boxes(), want, "inline (unstyled) button");
+    }
+
     /// A color-only change: incremental restyle, layout skipped
     /// (`RepaintOnly`), the `<p>` recolors, and its rect is unchanged
     /// (color doesn't move boxes).
@@ -2258,7 +2459,344 @@ mod tests {
         );
     }
 
-    /// A `transition: opacity 2s linear` style flip interpolates across
+    /// Drive a `@keyframes fade` animation with `decl` on `<p>` through `ticks`
+    /// (seconds on the session's animation clock), returning the computed
+    /// `opacity` at t=0 and after each tick, plus the final idle signal.
+    fn animate_opacity(decl: &str, ticks: &[f64]) -> (Vec<f32>, bool) {
+        let kf = "@keyframes fade { from { opacity: 1 } to { opacity: 0 } }".to_string();
+        let rule = format!("p{{width:100px;height:20px;{decl}}}");
+        let sheet: Vec<&str> = vec![&kf, &rule];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+
+        let mut layout = IncrementalLayout::new(&dom, &sheet, W, H);
+        let read = |l: &IncrementalLayout<<ScriptedDom as LayoutDom>::NodeId>| -> f32 {
+            l.computed_value(p, "opacity")
+                .expect("opacity supported")
+                .parse()
+                .expect("numeric opacity")
+        };
+        let mut out = vec![read(&layout)];
+        for t in ticks {
+            layout.tick_animations(&dom, *t);
+            out.push(read(&layout));
+        }
+        (out, layout.has_active_animations())
+    }
+
+    fn assert_close(got: f32, want: f32, what: &str) {
+        assert!((got - want).abs() < 0.01, "{what}: expected ~{want}, got {got}");
+    }
+
+    /// A `@keyframes` animation interpolates across animation-clock ticks and then
+    /// **finishes**: with the default `fill-mode: none` the element reverts to its
+    /// base style, and the session reports idle so the host stops requesting
+    /// frames. Stylo creates animations `Pending` and never promotes them, so
+    /// without `advance_css_animations` the animation freezes at its first
+    /// iteration's end value and `has_active_animations` stays true forever.
+    #[test]
+    fn css_animation_interpolates_then_finishes_and_goes_idle() {
+        let (v, active) = animate_opacity("animation:fade 2s linear", &[1.0, 3.0]);
+        assert_close(v[0], 1.0, "t=0 sits at the `from` keyframe");
+        assert_close(v[1], 0.5, "t=1s is halfway through a 2s linear fade");
+        assert_close(v[2], 1.0, "past the end, fill-mode:none reverts to the base style");
+        assert!(!active, "a finished animation must report idle");
+    }
+
+    /// `animation-iteration-count` and `animation-direction`. Sampled at t=2.5s,
+    /// one quarter into the second iteration of a 2s fade, where `normal` and
+    /// `alternate` disagree (a midpoint sample cannot tell them apart).
+    #[test]
+    fn css_animation_honors_iteration_count_and_direction() {
+        let (normal, _) = animate_opacity("animation:fade 2s linear 0s 2 normal", &[2.5]);
+        assert_close(normal[1], 0.75, "2nd iteration replays forward (1 -> 0)");
+
+        let (alternate, _) = animate_opacity("animation:fade 2s linear 0s 2 alternate", &[2.5]);
+        assert_close(alternate[1], 0.25, "2nd iteration runs backward (0 -> 1)");
+
+        let (reverse, _) = animate_opacity("animation:fade 2s linear 0s 1 reverse", &[0.5]);
+        assert_close(reverse[0], 0.0, "`reverse` starts at the `to` keyframe");
+        assert_close(reverse[1], 0.25, "`reverse` runs the keyframes backward");
+
+        let (infinite, active) = animate_opacity("animation:fade 2s linear 0s infinite", &[3.0]);
+        assert_close(infinite[1], 0.5, "an infinite animation keeps iterating");
+        assert!(active, "an infinite animation never goes idle");
+    }
+
+    /// `animation-fill-mode`, `animation-delay`, and `animation-play-state`. A
+    /// `forwards` fill keeps supplying its final value from the `Finished` state,
+    /// which is why finished animations are not pruned from the set.
+    #[test]
+    fn css_animation_honors_fill_mode_delay_and_play_state() {
+        let (forwards, active) =
+            animate_opacity("animation:fade 2s linear 0s 1 normal forwards", &[5.0]);
+        assert_close(forwards[1], 0.0, "fill-mode:forwards holds the final value");
+        assert!(!active, "a filled-forwards animation is still idle");
+
+        let (delayed, _) = animate_opacity("animation:fade 2s linear 1s", &[0.5, 2.0]);
+        assert_close(delayed[1], 1.0, "still inside the 1s delay");
+        assert_close(delayed[2], 0.5, "1s past the delay is halfway through");
+
+        let (paused, active) =
+            animate_opacity("animation:fade 2s linear;animation-play-state:paused", &[1.0]);
+        assert_close(paused[1], 1.0, "a paused animation holds its value");
+        assert!(!active, "a paused animation redraws nothing, so it is idle");
+    }
+
+    /// Drive `decl` on `<p>` through `ticks`, draining animation events after each
+    /// pass (as a host does). Returns `(event type, elapsedTime)` in order.
+    fn animation_events(decl: &str, ticks: &[f64]) -> Vec<(String, f64)> {
+        let kf = "@keyframes fade { from { opacity: 1 } to { opacity: 0 } }".to_string();
+        let rule = format!("p{{width:100px;height:20px;{decl}}}");
+        let sheet: Vec<&str> = vec![&kf, &rule];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+
+        let mut layout = IncrementalLayout::new(&dom, &sheet, W, H);
+        let mut out: Vec<(String, f64)> = Vec::new();
+        let mut drain = |l: &mut IncrementalLayout<<ScriptedDom as LayoutDom>::NodeId>,
+                         dom: &ScriptedDom,
+                         out: &mut Vec<(String, f64)>| {
+            for e in l.take_animation_events(dom) {
+                out.push((e.kind.event_type().to_string(), e.elapsed_time));
+            }
+        };
+        drain(&mut layout, &dom, &mut out);
+        for t in ticks {
+            layout.tick_animations(&dom, *t);
+            drain(&mut layout, &dom, &mut out);
+        }
+        out
+    }
+
+    fn kinds(events: &[(String, f64)]) -> Vec<&str> {
+        events.iter().map(|(k, _)| k.as_str()).collect()
+    }
+
+    /// `animationstart` fires once the delay elapses (not at creation), then
+    /// `animationend` at the end. A `fill-mode: none` animation still emits both.
+    #[test]
+    fn animation_events_fire_start_then_end() {
+        let e = animation_events("animation:fade 2s linear", &[1.0, 3.0]);
+        assert_eq!(kinds(&e), ["animationstart", "animationend"]);
+        assert!((e[0].1 - 0.0).abs() < 0.01, "start elapsedTime is 0, got {}", e[0].1);
+        assert!((e[1].1 - 2.0).abs() < 0.01, "end elapsedTime is the active duration");
+    }
+
+    /// `animationstart` waits for `animation-delay`: a tick inside the delay emits
+    /// nothing at all.
+    #[test]
+    fn animation_start_waits_for_the_delay() {
+        let e = animation_events("animation:fade 2s linear 1s", &[0.5]);
+        assert!(e.is_empty(), "still inside the delay, got {:?}", kinds(&e));
+
+        let e = animation_events("animation:fade 2s linear 1s", &[0.5, 1.5]);
+        assert_eq!(kinds(&e), ["animationstart"], "start once the delay elapses");
+    }
+
+    /// `animationiteration` fires at each iteration boundary *except* the last, so
+    /// a two-iteration animation emits exactly one, between start and end. Its
+    /// `elapsedTime` is the active time consumed at that boundary.
+    #[test]
+    fn animation_iteration_fires_on_every_boundary_but_the_last() {
+        let e = animation_events("animation:fade 2s linear 0s 2", &[1.0, 2.5, 5.0]);
+        assert_eq!(
+            kinds(&e),
+            ["animationstart", "animationiteration", "animationend"],
+        );
+        assert!((e[1].1 - 2.0).abs() < 0.01, "the boundary is 2s of active time in");
+        assert!((e[2].1 - 4.0).abs() < 0.01, "end elapsedTime is 2 iterations x 2s");
+
+        // Three iterations => two boundaries.
+        let e = animation_events("animation:fade 1s linear 0s 3", &[0.5, 1.5, 2.5, 4.0]);
+        assert_eq!(
+            kinds(&e),
+            ["animationstart", "animationiteration", "animationiteration", "animationend"],
+        );
+    }
+
+    /// A coarse tick that jumps a boundary and the end in one pass still emits them
+    /// in time order: the boundary happened before the end.
+    #[test]
+    fn a_coarse_tick_emits_the_iteration_boundary_before_the_end() {
+        let e = animation_events("animation:fade 2s linear 0s 2", &[5.0]);
+        assert_eq!(
+            kinds(&e),
+            ["animationstart", "animationiteration", "animationend"],
+            "one tick from 0s to 5s crosses start, the 2s boundary, and the 4s end",
+        );
+    }
+
+    /// An `infinite` animation never ends, so it emits a boundary per iteration and
+    /// no `animationend`.
+    #[test]
+    fn an_infinite_animation_emits_iterations_and_never_ends() {
+        let e = animation_events("animation:fade 1s linear 0s infinite", &[0.5, 1.5, 2.5]);
+        assert_eq!(
+            kinds(&e),
+            ["animationstart", "animationiteration", "animationiteration"],
+        );
+    }
+
+    /// A finished animation lingers in the set to supply a `fill-mode: forwards`
+    /// value; it must not re-emit its events on later drains.
+    #[test]
+    fn a_finished_forwards_animation_does_not_re_emit() {
+        let e = animation_events(
+            "animation:fade 2s linear 0s 1 normal forwards",
+            &[3.0, 4.0, 5.0],
+        );
+        assert_eq!(
+            kinds(&e),
+            ["animationstart", "animationend"],
+            "the lingering forwards fill must not look like a fresh animation",
+        );
+    }
+
+    /// A `fill-mode: forwards` animation keeps supplying its final value after it
+    /// ends, including across an unrelated restyle that re-cascades the element.
+    ///
+    /// Note for anyone hardening this: storing `AnimationState::Finished` on the
+    /// tick makes Stylo's `process_animations_for_style` delete the animation
+    /// (`animations.retain(|a| a.state != Finished)`), but this test does **not**
+    /// catch that — the primary cascade reads the animation before
+    /// `process_animations` removes it, so the value measured here stays correct.
+    /// The guard that does catch it is `animation_events_fire_start_then_end`,
+    /// which loses `animationend` outright.
+    #[test]
+    fn a_forwards_fill_survives_an_unrelated_restyle_after_the_end() {
+        const SHEET: &[&str] = &[
+            "@keyframes fade { from { opacity: 1 } to { opacity: 0 } }",
+            "p{width:100px;height:20px;animation:fade 2s linear 0s 1 normal forwards}",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let opacity = |l: &IncrementalLayout<<ScriptedDom as LayoutDom>::NodeId>| -> f32 {
+            l.computed_value(p, "opacity").expect("opacity").parse().expect("numeric")
+        };
+
+        layout.tick_animations(&dom, 3.0);
+        assert_close(opacity(&layout), 0.0, "past the end, forwards holds the final value");
+        assert!(!layout.has_active_animations(), "a filled-forwards animation is idle");
+
+        // An unrelated inline-style change re-cascades `p`. The animation must
+        // still be in the set to supply its `forwards` value.
+        let _ = drain(&mut dom);
+        dom.set_attribute(p, attr("style"), "color: rgb(1, 2, 3)");
+        let muts = drain(&mut dom);
+        layout.apply(&dom, SHEET, &muts);
+        assert_close(opacity(&layout), 0.0, "the forwards fill survives an unrelated restyle");
+    }
+
+    /// Reduced motion completes a `@keyframes` animation on the first tick and
+    /// emits no events, matching the transition behavior. The clock jumps past the
+    /// animation's end (`max_animation_end`), so a `forwards` fill lands its final
+    /// value immediately and a `none` fill lands the base style, with no
+    /// intermediate frame.
+    #[test]
+    fn disabled_mode_completes_animations_instantly_and_silently() {
+        const SHEET: &[&str] = &[
+            "@keyframes fade { from { opacity: 1 } to { opacity: 0 } }",
+            "p{width:100px;height:20px;animation:fade 10s linear 0s 3 normal forwards}",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        layout.set_animation_mode(AnimationMode::Disabled);
+        // Discard the creation-time `animationstart` the Full-mode harvest would
+        // have produced; Disabled mode returns nothing.
+        assert!(layout.take_animation_events(&dom).is_empty());
+
+        // One tick at t=0: the clock jumps past 3 x 10s of animation.
+        layout.tick_animations(&dom, 0.0);
+        let opacity: f32 = layout
+            .computed_value(p, "opacity")
+            .expect("opacity")
+            .parse()
+            .expect("numeric");
+        assert_close(opacity, 0.0, "the forwards fill lands on the first tick");
+        assert!(
+            layout.take_animation_events(&dom).is_empty(),
+            "reduced motion is silent"
+        );
+        assert!(!layout.has_active_animations(), "and immediately idle");
+    }
+
+    /// `animationcancel` fires when the animation is removed from the element's
+    /// style before it completes, and no `animationend` follows.
+    #[test]
+    fn animation_cancel_fires_when_the_animation_is_removed() {
+        const SHEET: &[&str] = &[
+            "@keyframes fade { from { opacity: 1 } to { opacity: 0 } }",
+            "p{width:100px;height:20px;animation:fade 4s linear}",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let started: Vec<String> = layout
+            .take_animation_events(&dom)
+            .into_iter()
+            .map(|e| e.kind.event_type().to_string())
+            .collect();
+        assert_eq!(started, ["animationstart"]);
+
+        layout.tick_animations(&dom, 1.0);
+        assert!(layout.take_animation_events(&dom).is_empty(), "mid-flight is quiet");
+
+        // Take the animation off the element: Stylo cancels it during the cascade.
+        let _ = drain(&mut dom);
+        dom.set_attribute(p, attr("style"), "animation:none");
+        let muts = drain(&mut dom);
+        layout.apply(&dom, SHEET, &muts);
+
+        let events = layout.take_animation_events(&dom);
+        let kinds: Vec<&str> = events.iter().map(|e| e.kind.event_type()).collect();
+        assert_eq!(kinds, ["animationcancel"], "cancel, and no end");
+        assert!(
+            (events[0].elapsed_time - 1.0).abs() < 0.01,
+            "elapsedTime is the active time already run, got {}",
+            events[0].elapsed_time
+        );
+        assert!(!layout.has_active_animations(), "a canceled animation is idle");
+        // The canceled animation is pruned, so a later drain is silent.
+        assert!(layout.take_animation_events(&dom).is_empty());
+    }
+
+    /// A CSS transition's interpolated value is observable through the plane at
     /// explicit animation-clock ticks (the CSS transitions plan's T1
     /// done-condition, layout half): the flip pass starts the transition and
     /// holds the start value, a mid tick re-splices the interpolated value,

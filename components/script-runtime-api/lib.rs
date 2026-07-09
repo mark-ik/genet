@@ -356,6 +356,33 @@ impl<E: ScriptEngine> Runtime<E> {
         Ok(())
     }
 
+    /// Dispatch a CSS animation lifecycle event (`animationstart` /
+    /// `animationiteration` / `animationend` / `animationcancel`) at
+    /// `raw_node_id`, carrying `animation_name` (the `@keyframes` rule's name) and
+    /// `elapsed_time` (seconds). The `@keyframes` twin of
+    /// [`dispatch_transition_event`](Self::dispatch_transition_event): the host
+    /// drives it from the layout tick's harvested events, off the cascade. Bubbles,
+    /// not cancelable; a microtask checkpoint runs after so listener-scheduled
+    /// continuations settle. An unknown id is a no-op.
+    pub fn dispatch_animation_event(
+        &mut self,
+        raw_node_id: usize,
+        event_type: &str,
+        animation_name: &str,
+        elapsed_time: f64,
+    ) -> Result<(), E::Error> {
+        // Node id as a *string* literal: a tagged raw NodeId can exceed 2^53 and
+        // lose precision as a JS f64. `{:?}` renders each &str as a quoted, escaped
+        // literal, so a name or event type cannot break out of the call expression.
+        let expr = format!(
+            "__dispatchAnimation(\"{raw_node_id}\", {event_type:?}, {animation_name:?}, {elapsed_time})"
+        );
+        self.engine.eval(&expr)?;
+        self.flush_host_trace_events();
+        self.perform_microtask_checkpoint();
+        Ok(())
+    }
+
     /// The scripted-tier GC tick (G3): retire the reflectors the engine reports
     /// dead (unpinning their nodes), then mark-sweep the live document with the
     /// surviving pins as extra roots. An orphan script can no longer reach is

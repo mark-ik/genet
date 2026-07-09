@@ -2125,6 +2125,101 @@ mod tests {
         assert!(!session.borrow().has_active_animations());
     }
 
+    /// End to end: a page's `animationstart` / `animationiteration` /
+    /// `animationend` listeners fire, in order, with the right `animationName` and
+    /// `elapsedTime`, when the host drives the layout tick and dispatches the
+    /// harvested lifecycle events through the runtime. A `1s` delay separates the
+    /// creation of the animation from `animationstart`, and `iteration-count: 2`
+    /// puts exactly one `animationiteration` between start and end.
+    fn animation_events_dispatch_to_listeners<E: ScriptEngine>() {
+        use layout_dom_api::LayoutDomMut;
+
+        const SHEETS: &[&str] = &[
+            "@keyframes fade { from { opacity: 1 } to { opacity: 0 } }",
+            "#d{width:10px;height:10px;animation:fade 2s linear 1s 2}",
+        ];
+
+        let mut rt = script_runtime_api::Runtime::<E>::new().expect("runtime");
+        rt.eval(
+            "var h = document.createElement('html'); \
+             var b = document.createElement('body'); \
+             var d = document.createElement('div'); d.setAttribute('id','d'); \
+             b.appendChild(d); h.appendChild(b); document.appendChild(h); \
+             d.addEventListener('animationstart', function(e){ console.log('start:'+e.animationName+':'+e.elapsedTime); }); \
+             d.addEventListener('animationiteration', function(e){ console.log('iter:'+e.animationName+':'+e.elapsedTime); }); \
+             d.addEventListener('animationend', function(e){ console.log('end:'+e.animationName+':'+e.elapsedTime); });",
+        )
+        .expect("build dom + listeners");
+        {
+            let mut host = rt.host().borrow_mut();
+            let mut v = Vec::new();
+            host.dom.drain_mutations(&mut v);
+        }
+        let session = {
+            let host = rt.host().borrow();
+            Rc::new(RefCell::new(IncrementalLayout::new(&host.dom, SHEETS, 400.0, 300.0)))
+        };
+
+        fn pump<E: ScriptEngine>(
+            rt: &mut script_runtime_api::Runtime<E>,
+            session: &Rc<RefCell<IncrementalLayout<NodeId>>>,
+        ) {
+            let events = {
+                let host = rt.host().borrow();
+                session.borrow_mut().take_animation_events(&host.dom)
+            };
+            for ev in events {
+                rt.dispatch_animation_event(
+                    ev.node.raw(),
+                    ev.kind.event_type(),
+                    &ev.animation_name,
+                    ev.elapsed_time,
+                )
+                .expect("dispatch");
+            }
+        }
+
+        // The animation exists from the first cascade, but is inside its 1s delay.
+        pump(&mut rt, &session);
+        assert!(
+            rt.host().borrow().console.is_empty(),
+            "no event while the animation is still in its delay"
+        );
+
+        // t=2s: 1s past the delay -> animationstart (fired once).
+        {
+            let host = rt.host().borrow();
+            session.borrow_mut().tick_animations(&host.dom, 2.0);
+        }
+        pump(&mut rt, &session);
+
+        // t=3.5s: crossed the first iteration boundary (delay 1s + 2s duration).
+        {
+            let host = rt.host().borrow();
+            session.borrow_mut().tick_animations(&host.dom, 3.5);
+        }
+        pump(&mut rt, &session);
+
+        // t=6s: past delay + 2 iterations -> animationend.
+        {
+            let host = rt.host().borrow();
+            session.borrow_mut().tick_animations(&host.dom, 6.0);
+        }
+        pump(&mut rt, &session);
+
+        let console = rt.host().borrow().console.clone();
+        assert_eq!(
+            console,
+            vec![
+                "start:fade:0".to_string(),
+                "iter:fade:2".to_string(),
+                "end:fade:4".to_string(),
+            ],
+            "animation events fired in order with animationName/elapsedTime: {console:?}"
+        );
+        assert!(!session.borrow().has_active_animations());
+    }
+
     /// The input → event bridge end to end: a `click_at` over a laid-out element
     /// hit-tests it and dispatches a `click` that runs the page's listener. This is
     /// the path a host (meerkat) drives when forwarding a pointer click to a scripted
@@ -2248,6 +2343,10 @@ mod tests {
     #[test]
     fn transition_events_dispatch_to_listeners_on_boa() {
         transition_events_dispatch_to_listeners::<BoaEngine>();
+    }
+    #[test]
+    fn animation_events_dispatch_to_listeners_on_boa() {
+        animation_events_dispatch_to_listeners::<BoaEngine>();
     }
     #[test]
     fn external_script_runs_on_boa() {
@@ -2398,6 +2497,10 @@ mod tests {
         #[test]
         fn transition_events_dispatch_to_listeners_on_nova() {
             transition_events_dispatch_to_listeners::<NovaEngine>();
+        }
+        #[test]
+        fn animation_events_dispatch_to_listeners_on_nova() {
+            animation_events_dispatch_to_listeners::<NovaEngine>();
         }
         #[test]
         fn scripted_content_scrolls_on_nova() {

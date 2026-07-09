@@ -202,11 +202,16 @@ where
     });
 
     // Drop terminal transitions from the live set so the session goes idle.
+    //
+    // `@keyframes` animations are **not touched here**: they are owned by
+    // [`crate::animation_events::harvest_animation_events`], which must see a
+    // canceled animation to emit `animationcancel` before pruning it, and which
+    // deliberately keeps `Finished` ones so a `fill-mode: forwards` animation goes
+    // on supplying its final value. Each harvest prunes only its own kind, so the
+    // two can be drained in either order.
     for set in sets.values_mut() {
         set.transitions
             .retain(|t| !matches!(phase_at(t, now), AnimationState::Finished | AnimationState::Canceled));
-        set.animations
-            .retain(|a| !matches!(a.state, AnimationState::Finished | AnimationState::Canceled));
     }
     sets.retain(|_, set| !set.is_empty());
 

@@ -176,6 +176,11 @@ pub struct InlineBoxItem<NodeId> {
     /// `Some` for an `inline-block` (its content + box style); `None` for a
     /// replaced `<img>` (sized intrinsically, painted as the image).
     pub block: Option<Box<InlineBlockBox<NodeId>>>,
+    /// `Some` when the source is a `<chisel-leaf key="…">` flowing inline. The
+    /// block replaced path stamps the same key onto its `BoxNode`; an inline leaf
+    /// gets no box of its own, so it carries the key here instead, and paint
+    /// splices the leaf's Path-A commands at this item's laid-out rect.
+    pub chisel_leaf_key: Option<u64>,
 }
 
 /// An `inline-block`'s own content and box style. Its size is measured from

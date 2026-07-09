@@ -50,6 +50,16 @@ $baselines = @(
         Subset = "css/mediaqueries"
         Engine = "boa"
         Expectations = "ports/serval-wpt/expectations/testharness/css_mediaqueries_boa.json"
+    },
+    @{
+        # `@keyframes` parsing + computed values. The event-order and
+        # interpolation-over-time tests in this corpus cannot pass yet: the
+        # testharness lane drives no layout session, so it has no animation clock
+        # and no rAF pump (see the CSS animations plan, A3). Pinned so the corpus
+        # moves visibly when that lands.
+        Subset = "css/css-animations"
+        Engine = "boa"
+        Expectations = "ports/serval-wpt/expectations/testharness/css_animations_boa.json"
     }
 )
 

@@ -239,7 +239,25 @@ impl<Id: Copy + Eq + Hash> BoxTree<Id> {
     /// `paint_emit` splices the leaf into. See
     /// `docs/2026-07-07_chisel_widget_leaf_design.md`.
     pub fn chisel_leaf_boxes(&self) -> Vec<(u64, (f32, f32))> {
-        self.nodes
+        /// Walk an inline formatting context's boxes, reporting every inline
+        /// `<chisel-leaf>`. Recurses through inline-blocks, whose own inline
+        /// content may host further leaves.
+        fn collect_inline_leaf_boxes<Id: Copy + Eq + Hash>(
+            content: &InlineContent<Id>,
+            out: &mut Vec<(u64, (f32, f32))>,
+        ) {
+            for item in &content.boxes {
+                if let Some(key) = item.chisel_leaf_key {
+                    out.push((key, (item.width, item.height)));
+                }
+                if let Some(block) = &item.block {
+                    collect_inline_leaf_boxes(&block.content, out);
+                }
+            }
+        }
+
+        let mut out: Vec<(u64, (f32, f32))> = self
+            .nodes
             .iter()
             .filter_map(|n| {
                 let key = n.chisel_leaf_key?;
@@ -258,7 +276,19 @@ impl<Id: Copy + Eq + Hash> BoxTree<Id> {
                     .max(0.0);
                 Some((key, (w, h)))
             })
-            .collect()
+            .collect();
+        // Leaves that flow inline get no `BoxNode`; they live as `InlineBoxItem`s in
+        // some node's inline content, already sized by construction. Report them too,
+        // or the host never renders them and they paint nothing.
+        for n in &self.nodes {
+            if let Some(content) = &n.inline_content {
+                collect_inline_leaf_boxes(content, &mut out);
+            }
+            if let Some(marker) = &n.marker {
+                collect_inline_leaf_boxes(marker, &mut out);
+            }
+        }
+        out
     }
 
     /// The byte-range → source-element index for inline-formatting leaf `id` (keyed

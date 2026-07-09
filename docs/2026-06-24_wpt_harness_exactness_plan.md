@@ -46,7 +46,7 @@ Turn measurement into a guardrail.
 - Re-run hostable testharness subsets on H1 and publish current aggregates. Fetch remains a server-mode/netfetch lane because it needs `wpt serve`, the `netfetch` feature, and local host mapping; it does not belong in the default disk-mode guard. The CSS re-score is already carried by the CSS conformance scoreboard.
 - Landed mechanism: `testharness` accepts `--write-expectations <file>` and `--expectations <file>`. The JSON format is per-test URL -> coarse status (`pass`, `fail`, `error`, `no-results`, `skip`) with optional pinned `reason`; the check fails on changed status, changed pinned reason, missing expectation, or stale expectation so `unexpected=0` is enforceable.
 - Checked baselines:
-  - `ports/serval-wpt/expectations/testharness/dom_boa.json` pins the full hostable `dom` manifest subset on Boa in release mode: 88 all-pass, 365 with-failures, 72 errored, 84 no-results, 51 skipped; subtests 2122/6671 passed.
+  - `ports/serval-wpt/expectations/testharness/dom_boa.json` pins the full hostable `dom` manifest subset on Boa in release mode. **Corrected 2026-07-09 by reading the file:** 91 all-pass, 363 with-failures, 71 errored, 84 no-results, 51 skipped, over 660 tests. (The "88 / 365 / 72" figures quoted here and in the grand audit predate the file's 2026-07-05 rebase.) The errored + no-results set is triaged in H6.
   - `ports/serval-wpt/expectations/testharness/dom_abort_boa.json` keeps the focused abort slice pinned: 2 all-pass, 4 with-failures, 0 errored, 0 no-results, 3 skipped; subtests 29/37 passed.
   - `ports/serval-wpt/expectations/testharness/dom_nodes_boa.json` keeps the focused DOM-nodes slice pinned: 57 all-pass, 205 with-failures, 12 errored, 14 no-results, 42 skipped; subtests 1655/5365 passed.
   - `ports/serval-wpt/expectations/testharness/html_webappapis_timers_boa.json` pins the timer/event-loop smoke slice: 4 all-pass, 0 with-failures, 8 errored, 0 no-results, 0 skipped; subtests 7/7 passed.
@@ -59,13 +59,14 @@ Turn measurement into a guardrail.
 
 ## Sequencing
 
-The practical sequence is now H4 policy metadata plus H2 Nova broad-corpus stability. H1/H3/H5 are done for their current lanes, and H2a's snapshot seam is wired. Fetch coverage is a separate server-mode/netfetch guard because the default disk-mode harness cannot own the required WPT server + host mapping setup.
+**H6 triage ran 2026-07-09** and reordered what follows. Of the 155 dom dead tests, only 6% are iframe-blocked, so iframe/second-realm drops down the list on `dom` evidence. 55% correlate with `test_driver`, but tracing one cluster showed a shim is the *last* of six prerequisites, not the lever (see H6) — so the leading candidates are now the DOM-conformance prerequisites it sits on (**window `EventTarget`, `onX` event-handler attributes, the `load` event**), which pay off well beyond WPT, plus a harness rAF pump. Those are engine work, so this plan's own remaining phases stay **H4 policy metadata plus H2 Nova broad-corpus stability**. H1/H3/H5 are done for their current lanes, and H2a's snapshot seam is wired. Fetch coverage is a separate server-mode/netfetch guard because the default disk-mode harness cannot own the required WPT server + host mapping setup.
 
 ## Non-goals
 
 - Engine fixes (owned by the CSS conformance + HTML interface-table plans).
 - A full `wpt serve` orchestration rewrite; the live-server fetch slice already works in server mode.
-- iframe/second-realm execution (a larger harness capability; note it as a known wall, do not scope it here).
+- iframe/second-realm execution (a larger harness capability; note it as a known wall, do not scope it here). **H6 sized this wall for `dom`: 9 of 155 dead tests.** So `dom` scoreboard recovery does not justify it; any case for iframe must now come from `html/` or `fetch/`, which H6 did not measure.
+- `test_driver` input injection, previously unnamed here. It correlates with 85 of the 155 dom dead tests, but H6 traced the execution and found a shim is the last of six prerequisites: the tests die at `document.body.onload` long before reaching it. The real prerequisites (window `EventTarget`, `onX` handler attributes, the `load` event) are DOM-conformance work owned by the engine plans, not harness work. Only the rAF pump belongs here, and it is worthless alone.
 
 ## H4 — Governance: green-by-default, with sub-WPT micro-tests (from the formal-web harvest)
 
@@ -162,6 +163,115 @@ Of the 47,563 that ran on both engines: **Nova 76.5%, Boa 91.8%** (matches the a
   `decodeURI`/`decodeURIComponent`, a Date caching test).
 - **8 Boa** — `staging/sm/Date/dst-offset-caching` (7) + `String/replace-math` (1). So **Boa
   is not a flawless oracle** (the 513 nova-only confirm it); the diff catches both directions.
+
+## H6: dom errored / no-results triage (scoreboard recovery + iframe-lever sizing)
+
+Added 2026-07-09. **Ran 2026-07-09; the result re-ranks the WPT levers.**
+
+The checked `dom_boa.json` baseline pins **71 errored + 84 no-results = 155**
+hostable `dom` tests contributing **zero scored subtests** on the scored default
+engine. They fail *before* any engine correctness is measured, so recovering them
+is harness work, exactly H3's "re-score restores prioritization" doctrine applied
+to the tests that score nothing.
+
+*Number correction:* the grand audit and H3 above quote `dom_boa.json` as 88
+all-pass / 365 with-failures / 72 errored. Those are stale against the file's
+2026-07-05 rebase, which actually holds **91 pass / 363 fail / 71 error / 84
+no-results / 51 skip over 660 tests**. Trust the file, not the prose.
+
+**Why it went first:** the load-bearing question was how much of the 155 sits
+behind the iframe/second-realm wall, since that wall's payoff cannot be sized
+without it (see Non-goals). The answer is: almost none.
+
+Each dead test was resolved to its source file (generated `.any.html` /
+`.window.html` variants resolved back to the backing `.js`) and classified by the
+capability it loads:
+
+| Count | Share | Blocked on |
+| --- | --- | --- |
+| 85 | 55% | **`testdriver.js` / `testdriver-actions.js`** — WebDriver-style input injection |
+| 60 | 39% | no capability marker: ordinary engine/platform gaps (`nodes` 23, `ranges` 22, `events` 9, `traversal` 3) |
+| 9 | 6% | second-realm: iframe / `srcdoc` |
+| 1 | 1% | frameset / `beforeunload` |
+
+**Findings, in the order they change decisions:**
+
+1. **iframe/second-realm is not the `dom` lever.** It gates **9 of 155**. The
+   audit's claim that the wall "walls off chunks of fetch/ and most of html/" is
+   *untested by this triage*, which is `dom`-only, and may still hold there. But
+   iframe can no longer be justified by `dom` scoreboard recovery.
+2. **`testdriver` correlates with the dead set (85 tests), but a `test_driver`
+   shim is *not* the unlock.** *Corrected 2026-07-09 after tracing the actual
+   execution of `dom/events/non-cancelable-when-passive` (40 tests, every one
+   `no-results`).* Those tests call `runTest` from `document.body.onload`, then
+   `await` two `requestAnimationFrame` turns, then `test_driver.Actions()…send()`,
+   then poll via rAF. Six layers must exist before the last one matters, and
+   serval has **none** of the first four:
+   - **No window `EventTarget`.** `lib.rs` does `var window = globalThis`, and
+     `addEventListener` is defined only on `Node.prototype` (`dom/bootstrap.js`),
+     so `window.addEventListener` is not a function.
+   - **No event-handler IDL attributes.** There is no `onX` property mechanism at
+     all, so `document.body.onload = fn` sets an inert expando. `runTest` is never
+     called, so `promise_test` never registers: hence `no-subtests`, before
+     testdriver is ever reached.
+   - **No `load` event.** Nothing in `script-runtime-api` ever fires one.
+   - **No rAF pump in the harness.** `Runtime::run_animation_frame_callbacks`
+     exists (landed with the event-loop rigor follow-ups) but `serval-wpt` never
+     calls it, so `waitForCompositorCommit` / `waitFor` can never progress.
+   - Only then: no `test_driver_internal` backend (WPT's `testdriver-vendor.js` is
+     deliberately blank; the vendor supplies it), and no Touch/Pointer synthesis
+     with the passive/`cancelable` semantics these tests actually assert.
+
+   So the ordered prerequisites are: window EventTarget → `onX` handlers →
+   `load` → harness rAF pump → `test_driver_internal` → touch/pointer events.
+   The first three are ordinary DOM conformance work with payoff well beyond WPT;
+   the shim by itself buys nothing. **Do not scope "a test_driver shim" as a
+   lever.**
+
+3. **60 are plain engine gaps**, not harness gaps. They already belong to the
+   DOM/engine levers and should be routed there, not counted as harness debt.
+
+4. **The harness half of this is one capability, and it gates three separate
+   plans** (found 2026-07-09 while wiring the CSS-animations WPT slice). The
+   `testharness` lane builds a `Runtime` over a `StaticDocument` and **never
+   constructs an `IncrementalLayout`** — no animation clock, no `tick_animations`,
+   no rAF pump, no `load` event. Consequences, all the same root cause:
+   - the 85 `testdriver` dom tests cannot run (they need `load` + rAF);
+   - the `css/css-animations` event-order and interpolation-over-time tests cannot
+     pass, so that corpus is pinned status-only
+     (`2026-07-09_css_animations_plan.md`, A3);
+   - the CSS **transitions** plan's T3 WPT slice was never wired, for exactly this
+     reason (`2026-07-05_css_transitions_plan.md`, T3).
+
+   A driven rendering loop in `serval-wpt` (construct a session over the test DOM;
+   per turn: fire `load` once, drain rAF callbacks, tick animations, harvest and
+   dispatch transition + animation events) is the single harness capability that
+   unblocks all three. It belongs to this plan; the DOM prerequisites above do not.
+
+**H4a's `reason` vocabulary cannot express this triage.** The plan assumed the
+155 could be "bucketed by pinned `reason`". Verified against a live
+`--write-expectations` run: every one of the 155 carries exactly one of two
+reasons, `no-subtests` (84, all the no-results) or `evaluation-threw` (71, all
+the errors). Those name the *symptom*, not the cause, and they cut across the
+capability buckets rather than aligning with them:
+
+| | `no-subtests` | `evaluation-threw` |
+| --- | --- | --- |
+| testdriver | 58 | 27 |
+| no marker | 24 | 37 |
+| iframe | 2 | 7 |
+
+So the capability classification above is the load-bearing artifact, and the
+reason field adds nothing to it. Notably a `testdriver`-blocked test does **not**
+reliably land in `no-subtests`: a third of them throw instead.
+
+- **Done when** ~~the 155 are bucketed by pinned `reason`~~ **done 2026-07-09**
+  via the capability bucketing above (the reason field turned out to be too
+  coarse; see the cross-tab). Residual, to make the buckets a checked artifact
+  rather than a one-off analysis: teach the runner a `testdriver-unsupported`
+  reason (detect `/resources/testdriver.js` in the test source) and rebase
+  `dom_boa.json` with it pinned. That touches a CI-enforced baseline, so it is
+  its own change.
 
 ## Findings
 

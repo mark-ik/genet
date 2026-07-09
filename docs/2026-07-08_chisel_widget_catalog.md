@@ -135,10 +135,23 @@ sheet). Pure views-layer sugar crate, zero engine changes.
 
 1. **PaintCx path helpers.** `stroke_path` / `fill_path` / `arc` on `PaintCx`;
    done when a polyline leaf reads as three lines of leaf code.
-2. **First glyph leaves: GraphGlyph, Meter, Knob.** Done when each renders via
+2. **First glyph leaves: GraphGlyph, Meter, Knob.** ~~Done when each renders via
    the serval-render `_with_leaves` test path, Knob proves the
    pointer-wrap-around-leaf pattern, and GraphGlyph draws inside a native
-   button.
+   button.~~ **Landed 2026-07-09.** The leaves themselves already existed in
+   `chisel::glyphs`; this closed the three done-conditions:
+   - *renders via `_with_leaves`*: `ports/pelt-desktop/smoke_chisel.rs` paints all
+     three through `scene_from_session_dom_with_leaves`.
+   - *Knob proves pointer-wrap-around-leaf*: `on_pointer(chisel_leaf(..))` drives
+     `Knob::set_value` from the view layer; the leaf implements no `Leaf::event`.
+     Guard `dragging_a_pointer_wrapped_leaf_drives_the_knob_from_the_view_layer`
+     (xilem-serval) covers capture, clamping, and release.
+   - *GraphGlyph inside a native button*: added `xilem_serval::button_with(child,
+     handler)`; the existing `button` took only a text label, so a leaf could not
+     ride inside a native control. Guard
+     `graph_glyph_leaf_draws_inside_a_native_button_and_the_button_owns_the_click`.
+     **Caveat, a real engine gap:** the button must be `display: block`. See open
+     question 5.
 3. **Arrangement leaf.** ~~Done when a card frame drags/stacks with DOM
    content, and a 10k-row list materializes only visible rows.~~ **Landed
    2026-07-08:** `chisel::arrange` (`Placement`, `VirtualWindow`) +
@@ -167,6 +180,47 @@ sheet). Pure views-layer sugar crate, zero engine changes.
 5. **Family crates.** Split `chisel-glyphs` out of chisel core once ≥3 leaves
    exist; audio family per the Strophe promotion rule.
 
+## Next actions (2026-07-09)
+
+The 2026-07-08 session landed the two hard mechanisms out of build order: tier 3
+(arrangement leaf) and tier 4 (Path-B seam, both shapes) shipped, jumping over
+build-order item 2 (the cheap tier-2 glyph leaves). Path-B is spent for the
+orrery: the orrery/gloss port chose the **host texture registry** path (host
+`netrender::Scene` rasterized by `rasterize_for`), not a chisel leaf, and
+already retired `ORRERY_SCENE_KEY` / `GLOSS_MINIMAP_SCENE_KEY`. So the orrery is
+not a remaining Path-B *leaf* consumer; the first `SceneSlot` **leaf** consumer
+is a future Strophe waveform's zoomed view, not Mere. That leaves two Mere GUI
+items, ranked:
+
+1. **NODE_SHEET colors → CSS custom properties (highest leverage, tier 1).**
+   ~~A one-time move, independent of the leaf ladder.~~ **Landed 2026-07-09.**
+   `orrery::palette` is now the single source of truth (`NodeAccent` per state,
+   selection-wins in one place). It emits `--node-*` custom-property
+   declarations that `.stage` (the canvas node document) and `.gloss-outline`
+   (a chrome panel root) paste into their root rule; descendant rules `var()`
+   them, so the sheet names no color. Retired four copies of the palette
+   (NODE_SHEET literals, `accent_rgb`, `cluster::state_color`, workbench's
+   `TabAccent` arms). Guards: `gnode_fill_resolves_from_the_palette_custom_properties`
+   and `each_gnode_state_class_resolves_its_own_palette_entry` assert the
+   **resolved** computed color, because an undefined `var()` degrades silently to
+   `rgba(0, 0, 0, 0)` rather than erroring (verified by falsification).
+
+   *Structural finding:* "every representation inherits for free" holds only for
+   DOM consumers. Chisel leaves and the `TabAccent` contract paint outside the
+   cascade and cannot resolve a `var()`, so they read the same Rust table
+   directly. The single source of truth is therefore the palette **module**, with
+   custom properties as its CSS projection, not the custom properties themselves.
+   Any future leaf that wants node identity takes `palette::accent`, not a var.
+2. **GraphGlyph tier-2 family (build-order item 2).** **Landed 2026-07-09.**
+   *Correction to this section's first draft:* it claimed `Swatch` was the only
+   glyph leaf. Wrong — `chisel::glyphs` already exported `GraphGlyph`,
+   `GraphGlyphNode`, `Meter`, and `Knob`, and `smoke_chisel` already painted all
+   three. The claim came from reading item 2's unticked checkbox instead of the
+   code. What was actually missing were item 2's *composition* proofs, not its
+   leaves: nothing anywhere wrapped a leaf with pointer handling, and `button`
+   accepted only a text label. Both are now closed (see build order item 2), and
+   the attempt surfaced open question 5.
+
 ## Open questions
 
 1. Where does `GraphGlyph`'s layout come from: caller-precomputed (lean this;
@@ -178,3 +232,39 @@ sheet). Pure views-layer sugar crate, zero engine changes.
    full-screen-app mode may be pragmatic.
 4. gpui-style sugar: `style` attribute strings (simple, stringly) vs generated
    class + sheet (cacheable, one indirection). Lean attribute first, measure.
+5. ~~**Inline leaves get no box.**~~ **Found and fixed 2026-07-09.** Leaves now
+   paint in inline formatting contexts, so a leaf works at any host display.
+   - *Was:* `chisel_leaf_key` was stamped only on the block replaced-leaf path
+     (`box_tree.rs`). A `<chisel-leaf>` in any inline formatting context was
+     gathered into `InlineContent`, never minted a box, and painted nothing. A
+     leaf inside a `<button>` therefore worked only if the button was
+     `display: block`.
+   - *Fix (engine, not a host workaround):* `InlineBoxItem` gained a
+     `chisel_leaf_key`, populated for inline replaced elements in
+     `construct/gather.rs` exactly as `BoxNode` does on the block path.
+     `BoxTree::chisel_leaf_boxes` now also walks inline content (recursing
+     through inline-blocks) so the host renders those leaves, and `paint_emit`'s
+     inline-box arm splices their Path-A commands at the laid-out inline rect,
+     chained onto the same replaced-payload `if`/`else if` as the inline `<img>`.
+   - *Unblocked, and a bug fix in its own right:* `<button>` now gets its
+     standards-correct `button { display: inline-block }` UA default. serval
+     previously shipped **no** `display` rule for `<button>`, leaving it `inline`,
+     which silently ignored CSS `width`/`height` on every button.
+   - Guards: `a_chisel_leaf_inside_a_button_is_reported_at_every_button_display`
+     (block / inline-block / inline all report the leaf) and
+     `inline_chisel_leaf_splices_its_path_a_commands_at_its_inline_rect` (the
+     paint half, with a translate to the inline origin).
+   - *Form-control pass, done 2026-07-09:* `<input>`, `<select>`, and `<textarea>`
+     had no UA `display` either, so they were `inline` and unsizable too. All four
+     now get `display: inline-block`, plus `input[type=hidden] { display: none }`.
+     Guards: `form_controls_get_the_inline_block_ua_display` (the UA rule, incl.
+     that the type selector does not swallow other input types) and
+     `a_sized_input_paints_at_its_css_size` (end-to-end: an inline-block paints its
+     background at its used rect, so a sized input yields a 200x30 rect; falsified
+     by dropping `input` from the rule).
+   - *Still open:* intrinsic sizing. An unsized control shrink-to-fits its content
+     rather than honoring `<input size>` / `<textarea rows cols>`, and serval draws
+     no control widgets at all (no border, no `<select>` popup); a `<select>` just
+     flows its `<option>` text. Authored CSS sizing now works, which is what the
+     leaf work needed. The TUI open question (3) is unaffected — that one is about
+     reshaping churn, not boxes.

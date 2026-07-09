@@ -74,6 +74,26 @@ fieldset, form, details, summary, dialog, menu {
     display: block;
 }
 
+/* Form controls the WHATWG rendering spec renders as `inline-block`. serval
+   shipped no `display` for any of them, leaving them `inline`, where CSS
+   `width` / `height` are ignored outright and an empty control (`<input>`) takes
+   no box at all. `<button>` additionally hosts children: a replaced child (an
+   `<img>`, an `<external-texture>`, a `<chisel-leaf>`) flows in its inline
+   formatting context, which is now handled — inline replaced elements carry
+   their leaf/texture payload as an `InlineBoxItem`.
+
+   Intrinsic sizing (an `<input>`'s `size` attribute, a `<textarea>`'s
+   `rows`/`cols`) is a separate concern and still absent: an unsized control
+   shrink-to-fits its content. This rule only makes authored CSS sizing work. */
+button, input, select, textarea {
+    display: inline-block;
+}
+
+/* A hidden input never renders. */
+input[type="hidden"] {
+    display: none;
+}
+
 /* Table box hierarchy. serval lays a `display: table` box out as a CSS grid
    (`stylo_taffy` maps table -> grid; `box_tree` flattens the row-group / row
    nesting and gives each cell an explicit grid position). These real display

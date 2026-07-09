@@ -2027,6 +2027,34 @@
     return node.dispatchEvent(ev);
   };
 
+  // AnimationEvent (css-animations): the `@keyframes` twin of TransitionEvent.
+  // Carries `animationName` (the @keyframes rule's name) rather than a property
+  // name, plus `elapsedTime` and `pseudoElement`. Bubbles, not cancelable.
+  globalThis.AnimationEvent = function(type, init) {
+    init = init || {};
+    var ev = new Event(String(type), {
+      bubbles: init.bubbles !== undefined ? !!init.bubbles : true,
+      cancelable: !!init.cancelable,
+    });
+    ev.animationName = init.animationName !== undefined ? String(init.animationName) : '';
+    ev.elapsedTime = init.elapsedTime !== undefined ? Number(init.elapsedTime) : 0;
+    ev.pseudoElement = init.pseudoElement !== undefined ? String(init.pseudoElement) : '';
+    return ev;
+  };
+
+  // Host bridge: dispatch an animation* event at a node (from the layout tick's
+  // harvested lifecycle events). `type` is one of animationstart /
+  // animationiteration / animationend / animationcancel.
+  globalThis.__dispatchAnimation = function(rawId, type, animationName, elapsedTime) {
+    var node = wrapNode(__reflectNode(String(rawId)));
+    if (!node) { return false; }
+    var ev = new globalThis.AnimationEvent(String(type), {
+      animationName: animationName,
+      elapsedTime: elapsedTime,
+    });
+    return node.dispatchEvent(ev);
+  };
+
   // window.matchMedia (css-mediaqueries): a MediaQueryList over the host's
   // media-query evaluation. `.matches` / `.media` are LIVE (re-evaluated against
   // the current device on each access). `change` fires (addEventListener /

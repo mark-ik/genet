@@ -1,0 +1,592 @@
+{
+  "command": "testharness",
+  "engine": "boa",
+  "tests": {
+    "css/css-animations/AnimationEffect-getComputedTiming.tentative.html": "fail",
+    "css/css-animations/AnimationEffect-updateTiming.tentative.html": "fail",
+    "css/css-animations/CSSAnimation-animationName.tentative.html": "fail",
+    "css/css-animations/CSSAnimation-canceling.tentative.html": "fail",
+    "css/css-animations/CSSAnimation-compositeOrder.tentative.html": "fail",
+    "css/css-animations/CSSAnimation-effect.tentative.html": "fail",
+    "css/css-animations/CSSAnimation-finished.tentative.html": "fail",
+    "css/css-animations/CSSAnimation-getCurrentTime.tentative.html": "fail",
+    "css/css-animations/CSSAnimation-getKeyframes-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/CSSAnimation-id.tentative.html": "fail",
+    "css/css-animations/CSSAnimation-pausing.tentative.html": "fail",
+    "css/css-animations/CSSAnimation-playState.tentative.html": "fail",
+    "css/css-animations/CSSAnimation-ready.tentative.html": "fail",
+    "css/css-animations/CSSAnimation-startTime.tentative.html": "fail",
+    "css/css-animations/Document-getAnimations.tentative.html": "fail",
+    "css/css-animations/Element-getAnimations-dynamic-changes.tentative.html": "fail",
+    "css/css-animations/Element-getAnimations.tentative.html": "fail",
+    "css/css-animations/KeyframeEffect-getKeyframes.tentative.html": "fail",
+    "css/css-animations/KeyframeEffect-setKeyframes.tentative.html": "fail",
+    "css/css-animations/KeyframeEffect-target.tentative.html": "fail",
+    "css/css-animations/animate-font-size-with-margin-override.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animate-with-background-color-hsla-to-legacy-rgb.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animate-with-background-color-oklch-001.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animate-with-background-color-oklch-002.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "css/css-animations/animate-with-color-mix-2.html": "fail",
+    "css/css-animations/animate-with-color-mix.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "css/css-animations/animate-with-relative-color.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "css/css-animations/animation-base-response-001.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "css/css-animations/animation-base-response-002.html": "fail",
+    "css/css-animations/animation-base-response-003.html": "fail",
+    "css/css-animations/animation-base-response-004.html": "fail",
+    "css/css-animations/animation-before-initial-box-construction-001.html": "fail",
+    "css/css-animations/animation-change-underlying-value-changed-in-flight.html": "fail",
+    "css/css-animations/animation-composition-keyframes.html": "fail",
+    "css/css-animations/animation-composition.html": "fail",
+    "css/css-animations/animation-css-variable-dependent-property.html": "fail",
+    "css/css-animations/animation-css-variable-in-keyframe-adjusted.html": "fail",
+    "css/css-animations/animation-delay-001-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-delay-002-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-delay-003-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-delay-004-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-delay-005-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-delay-006-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-delay-007-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-delay-008.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-delay-009.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-delay-010.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-delay-011.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-direction-001-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-direction-002-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-direction-003-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-direction-004-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-direction-005-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-direction-006-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-display-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-duration-001-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-duration-002-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-duration-003-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-duration-004-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-duration-005-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-duration-006-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-duration-007-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-duration-008-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-duration-infinite.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-fill-mode-001-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-fill-mode-002-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-fill-mode-003-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-fill-mode-004-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-fill-mode-005-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-fill-mode-006-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-important-001.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "css/css-animations/animation-important-002.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-important-with-transition.html": "fail",
+    "css/css-animations/animation-iteration-count-001-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-iteration-count-002-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-iteration-count-003-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-iteration-count-004-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-iteration-count-005-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-iteration-count-006-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-iteration-count-007-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-iteration-count-008-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-iteration-count-009.html": "fail",
+    "css/css-animations/animation-iteration-count-calc.html": "fail",
+    "css/css-animations/animation-iteration-event-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-keyframes-001-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-keyframes-002-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-keyframes-003-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-multiple-from-to-keyframes-with-only-timing-function.html": "fail",
+    "css/css-animations/animation-name-001-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-name-002-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-name-003-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-name-004-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-name-005-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-name-006-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-name-in-nested-shadow.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-name-in-shadow-part-inner-match.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-name-in-shadow-part-outer-match.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-name-in-shadow-part.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-name-inline-style.html": "fail",
+    "css/css-animations/animation-offscreen-to-onscreen.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-opacity-pause-and-set-time.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-play-state-001-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-play-state-002-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-play-state-003-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-play-state-004-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-play-state-005.tentative.html": "fail",
+    "css/css-animations/animation-pseudo-dynamic-001.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-restarted-after-changing-iteration-count-after-completion.html": "fail",
+    "css/css-animations/animation-shorthand-001-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-shorthand-002-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-shorthand-003-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-style-element-replaced-with-keyframes-rule-of-same-name.html": "fail",
+    "css/css-animations/animation-timing-function-001-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-timing-function-002-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-timing-function-003-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-timing-function-004-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-timing-function-005-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-timing-function-006-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-timing-function-007-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-timing-function-008-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-timing-function-009-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-timing-function-010-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-timing-function-011-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-timing-function-012-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animation-transform-pause-and-set-time.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/animationevent-interface.html": "fail",
+    "css/css-animations/animationevent-marker-pseudoelement.html": "fail",
+    "css/css-animations/animationevent-pseudoelement.html": "fail",
+    "css/css-animations/animationevent-types.html": "fail",
+    "css/css-animations/animationstart-and-animationend-events-manual.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/cancel-animation-shadow-slot-invalidation.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/computed-style-animation-parsing.html": "fail",
+    "css/css-animations/crashtests/add-pseudo-while-animating-001.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/crashtests/cancel-update.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/crashtests/chrome-bug-404743651.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/crashtests/chrome-bug-405795970.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/crashtests/chrome-bug-415627003.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/crashtests/keyframe-easing-var-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/crashtests/pseudo-element-animation-with-marker.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/crashtests/replace-keyframes-animating-filter-001.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/crashtests/transform-properties-from-none-to-none-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/dialog-animation.html": "fail",
+    "css/css-animations/dialog-backdrop-animation.html": "fail",
+    "css/css-animations/display-contents-animates.html": "fail",
+    "css/css-animations/display-interpolation.html": "fail",
+    "css/css-animations/display-none-dont-cancel-pseudo.tentative.html": "fail",
+    "css/css-animations/display-none-dont-cancel.tentative.html": "fail",
+    "css/css-animations/display-none-prevents-starting-in-subtree.html": "fail",
+    "css/css-animations/display-none-to-display-block-dont-cancel.tentative.html": "fail",
+    "css/css-animations/display-none-to-display-block.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/display-via-custom-prop-animation-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/empty-pseudo-class-with-animation.html": "fail",
+    "css/css-animations/event-dispatch.tentative.html": "fail",
+    "css/css-animations/event-order.tentative.html": "fail",
+    "css/css-animations/flip-running-animation-via-variable.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/historical.html": "pass",
+    "css/css-animations/idlharness.html": "fail",
+    "css/css-animations/inheritance-pseudo-element.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/inheritance.html": "fail",
+    "css/css-animations/jump-start-animation-before-phase.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/keyframes-remove-documentElement-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/keyframes-unrelated-custom-property.html": "fail",
+    "css/css-animations/keyframes-zero-angle-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/missing-values-first-keyframe.html": "fail",
+    "css/css-animations/missing-values-last-keyframe.html": "fail",
+    "css/css-animations/missing-values-middle-keyframe.html": "fail",
+    "css/css-animations/nested-scale-animations.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/neutral-var-keyframe-cycle-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/neutral-var-keyframe-cycle-registered-additive-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/neutral-var-keyframe-cycle-registered-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/parent-after-change-style-pseudo-element-flicker.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/parsing/animation-composition-computed.tentative.html": "fail",
+    "css/css-animations/parsing/animation-composition-invalid.tentative.html": "fail",
+    "css/css-animations/parsing/animation-composition-valid.tentative.html": "pass",
+    "css/css-animations/parsing/animation-computed.html": "fail",
+    "css/css-animations/parsing/animation-delay-computed.html": "fail",
+    "css/css-animations/parsing/animation-delay-invalid.html": "fail",
+    "css/css-animations/parsing/animation-delay-valid.html": "pass",
+    "css/css-animations/parsing/animation-direction-computed.html": "fail",
+    "css/css-animations/parsing/animation-direction-invalid.html": "fail",
+    "css/css-animations/parsing/animation-direction-valid.html": "pass",
+    "css/css-animations/parsing/animation-duration-computed.html": "fail",
+    "css/css-animations/parsing/animation-duration-invalid.html": "fail",
+    "css/css-animations/parsing/animation-duration-valid.html": "pass",
+    "css/css-animations/parsing/animation-fill-mode-computed.html": "fail",
+    "css/css-animations/parsing/animation-fill-mode-invalid.html": "fail",
+    "css/css-animations/parsing/animation-fill-mode-valid.html": "pass",
+    "css/css-animations/parsing/animation-invalid.html": "fail",
+    "css/css-animations/parsing/animation-iteration-count-computed.html": "fail",
+    "css/css-animations/parsing/animation-iteration-count-invalid.html": "fail",
+    "css/css-animations/parsing/animation-iteration-count-valid.html": "pass",
+    "css/css-animations/parsing/animation-name-computed.html": "fail",
+    "css/css-animations/parsing/animation-name-edge-cases.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/parsing/animation-name-invalid.html": "fail",
+    "css/css-animations/parsing/animation-name-valid.html": "fail",
+    "css/css-animations/parsing/animation-play-state-computed.html": "fail",
+    "css/css-animations/parsing/animation-play-state-invalid.html": "fail",
+    "css/css-animations/parsing/animation-play-state-valid.html": "pass",
+    "css/css-animations/parsing/animation-range-end-computed.html": "fail",
+    "css/css-animations/parsing/animation-range-end-invalid.html": "fail",
+    "css/css-animations/parsing/animation-range-end-valid.html": "fail",
+    "css/css-animations/parsing/animation-range-shorthand.html": "fail",
+    "css/css-animations/parsing/animation-range-start-computed.html": "fail",
+    "css/css-animations/parsing/animation-range-start-invalid.html": "fail",
+    "css/css-animations/parsing/animation-range-start-valid.html": "fail",
+    "css/css-animations/parsing/animation-shorthand.html": "fail",
+    "css/css-animations/parsing/animation-timing-function-invalid.html": "fail",
+    "css/css-animations/parsing/animation-valid.html": "fail",
+    "css/css-animations/parsing/keyframe-selectors.html": "fail",
+    "css/css-animations/parsing/keyframes-allowed-properties.html": "fail",
+    "css/css-animations/parsing/keyframes-name-invalid.html": "fail",
+    "css/css-animations/parsing/keyframes-name-valid.html": "fail",
+    "css/css-animations/pending-style-changes-001.html": "fail",
+    "css/css-animations/responsive/column-rule-color-001.html": "fail",
+    "css/css-animations/responsive/column-width-001.html": "fail",
+    "css/css-animations/responsive/fill-forwards-viewport-units.html": "fail",
+    "css/css-animations/responsive/line-height.html": "fail",
+    "css/css-animations/revert-rule-keyframes-dynamic.html": "fail",
+    "css/css-animations/revert-rule-keyframes.html": "fail",
+    "css/css-animations/sample-on-last-keyframe.html": "fail",
+    "css/css-animations/simultaneous-animations-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/stability/animation-event-destroy-renderer.html?animationiteration": "fail",
+    "css/css-animations/stability/animation-event-destroy-renderer.html?animationstart": "fail",
+    "css/css-animations/style-animation-parsing.html": "fail",
+    "css/css-animations/svg-transform-animation.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/transform-animation-under-large-scale.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/transition-properties-not-animatable.html": "fail",
+    "css/css-animations/transition-ready-time-offscreen.html": "fail",
+    "css/css-animations/translation-animation-on-important-property.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/translation-animation-subpixel-offset.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "css/css-animations/webkit-writing-mode-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    }
+  },
+  "version": 1
+}

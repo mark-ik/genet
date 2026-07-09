@@ -49,6 +49,7 @@ mod paint_emit;
 mod paint_stacking;
 mod serval_lane;
 mod snapshot;
+mod animation_events;
 mod style;
 mod subtree;
 mod text_measure;
@@ -96,6 +97,7 @@ pub use serval_lane::{
 pub use snapshot::build_snapshot_map;
 pub use style::{StyleEntry, StylePlane};
 pub use subtree::{SubtreeView, render_subtree};
+pub use animation_events::{AnimationEventKind, AnimationEventRecord};
 pub use transition_events::{TransitionEventKind, TransitionEventRecord};
 pub use text_measure::{
     FontFamilySpec, GenericFamilyKind, InlineContent, InlineRun, TextMeasureCtx,

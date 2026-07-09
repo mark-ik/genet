@@ -1,7 +1,7 @@
 # CSS transitions plan
 
 **Date:** 2026-07-05
-**Status:** v1 landed 2026-07-06 (`507f1331989`: transitions + transition events + WPT slices; T1/T2 and reduced-motion marked landed inline below). Deferred phases (CSS animations `@keyframes`, renderer-side fast path) remain open.
+**Status:** v1 landed 2026-07-06 (`507f1331989`: transitions + transition events + WPT slices; T1/T2 and reduced-motion marked landed inline below). CSS animations (`@keyframes`) spun to its own plan 2026-07-09 (`2026-07-09_css_animations_plan.md`), reusing this plan's tick machinery; the renderer-side fast path remains deferred here.
 **Scope:** CSS transitions in serval's Boa/Nova lane, style-tier, host-clocked.
 CSS animations (`@keyframes`) and any renderer-side fast path are explicitly
 deferred phases, not part of the v1 done-condition.
@@ -197,6 +197,15 @@ reports no active animations and produces no dirty tiles.
 - **Remaining in T3:**
   - Wire a `css/css-transitions` slice into the WPT runner under the existing
     `unexpected=0` governance; record the baseline pass set in `meta/`.
+    **Blocked (established 2026-07-09):** the WPT `testharness` lane builds a
+    `Runtime` over a `StaticDocument` and never constructs an `IncrementalLayout`,
+    so it has no animation clock, no `tick_animations`, no rAF pump, and no `load`
+    event. Nothing in that lane can drive a transition over time. The
+    `css/css-animations` slice hit the same wall and was pinned as a
+    status-only baseline instead (see `2026-07-09_css_animations_plan.md`, A3);
+    the same capability also gates 85 of the 155 dead `dom` tests
+    (`2026-06-24_wpt_harness_exactness_plan.md`, H6). One driven rendering loop in
+    `serval-wpt` unblocks all three.
   - Stricter task-source queueing: events dispatch off the cascade today (post
     apply/tick), which satisfies "not synchronously inside the cascade"; routing
     them through a named task source is a rigor follow-up.
@@ -207,9 +216,11 @@ cancel-on-detach) are in the expected-pass set.
 
 ## Deferred (not v1)
 
-- **CSS animations (`@keyframes`).** Same machinery, sibling hook
-  (`animation_rule`), plus keyframe parsing and iteration/fill semantics. A
-  second phase after transitions prove the tick; spin a plan then.
+- **CSS animations (`@keyframes`). *Promoted 2026-07-09 to
+  `2026-07-09_css_animations_plan.md`.*** Same machinery, sibling hook
+  (`animation_rule`, knocked out alongside `transition_rule` and left `None`
+  until this phase), plus keyframe parsing and iteration/fill semantics. The
+  tick is now proven, so this is an active plan, not a deferral.
 - **Compositor-style fast path** (paint-list property bindings so
   opacity/transform ticks skip the cascade). Only if profiling shows the
   restyle tick hot; the orrery already sustains per-frame transform restyles,

@@ -729,8 +729,11 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
         &self,
         ctx: &SharedStyleContext,
     ) -> Option<Arc<Locked<PropertyDeclarationBlock>>> {
-        // Interpolated CSS-animation declarations at the context's clock, from
-        // the document's animation set (empty until keyframes support lands).
+        // Interpolated CSS-animation declarations at the context's clock, from the
+        // document's `@keyframes` animation set. Stylo owns keyframe parsing and
+        // the value map; the embedder owns the lifecycle that advances it (see
+        // `IncrementalLayout::advance_css_animations`), because Stylo never
+        // promotes an animation out of `Pending` on its own.
         ctx.animations.get_animation_declarations(
             &style::animation::AnimationSetKey::new_for_non_pseudo(style::dom::TNode::opaque(&style::dom::TElement::as_node(self))),
             ctx.current_time_for_animations,

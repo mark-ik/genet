@@ -1432,6 +1432,7 @@ pub(crate) fn walk<Id>(
         ellipsis,
         em.styles,
         em.images_plane,
+        em.leaves,
         &mut em.fonts,
         &mut em.images,
         commands,
@@ -1618,6 +1619,7 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
     ellipsis: Option<f32>,
     styles: &StylePlane<NodeId>,
     images_plane: &ImagePlane<NodeId>,
+    leaves: Option<&dyn LeafPaintSource>,
     fonts: &mut FontCollector,
     images: &mut ImageCollector,
     commands: &mut Vec<PaintCmd>,
@@ -1831,6 +1833,23 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
                             emit_image_rect(rect, decoded, ImageRendering::Auto, images, commands);
                         }
                         emitted = true;
+                    } else if let Some(leaf_key) = item.chisel_leaf_key {
+                        // An inline `<chisel-leaf>`: splice its Path-A commands at the
+                        // laid-out inline rect. The commands are in the leaf's local
+                        // coordinates with (0,0) at its own origin, so translate to the
+                        // box origin — the inline twin of the block path's
+                        // content-offset transform. Chained onto the replaced-payload
+                        // chain so an item paints at most one payload.
+                        if let Some(cmds) = leaves.and_then(|src| src.leaf_commands(leaf_key)) {
+                            commands.push(PaintCmd::PushTransform(TransformSpec {
+                                origin: LayoutPoint::new(ox, oy),
+                                transform: LayoutTransform::identity(),
+                                kind: TransformKind::Standard,
+                            }));
+                            commands.extend_from_slice(cmds);
+                            commands.push(PaintCmd::PopTransform);
+                            emitted = true;
+                        }
                     }
                 },
             }
@@ -4156,6 +4175,157 @@ mod tests {
         assert!(
             matches!(&cmds[gi + 1], PaintCmd::PopTransform),
             "a PopTransform should follow the leaf commands"
+        );
+    }
+
+    /// An **inline** `<chisel-leaf>` — one flowing beside text, so it gets no
+    /// `BoxNode` and rides as an `InlineBoxItem` — still splices its Path-A
+    /// commands, translated to its laid-out inline rect. Before 2026-07-09 the
+    /// inline path dropped the leaf silently: no box, no key, no paint.
+    #[test]
+    fn inline_chisel_leaf_splices_its_path_a_commands_at_its_inline_rect() {
+        // The leading text forces `<body>` into an inline formatting context, so
+        // the leaf flows inline instead of taking the block replaced-leaf path.
+        let document = StaticDocument::parse(
+            "<html><body>hi <chisel-leaf key='7' style='width:20px;height:10px'></chisel-leaf></body></html>",
+        );
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[],
+            None,
+        );
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
+
+        // The inline leaf is reported for host rendering at its reserved size.
+        assert_eq!(
+            built.chisel_leaf_boxes(),
+            vec![(7u64, (20.0, 10.0))],
+            "an inline leaf is reported to the host, or it never gets rendered",
+        );
+
+        let green = ColorF {
+            r: 0.1,
+            g: 0.9,
+            b: 0.2,
+            a: 1.0,
+        };
+        let leaves = StubLeaves(vec![PaintCmd::DrawRect(RectItem {
+            placement: CommonPlacement::new(LayoutRect::new(
+                LayoutPoint::new(0.0, 0.0),
+                LayoutPoint::new(20.0, 10.0),
+            )),
+            color: green,
+        })]);
+        let plist = emit_paint_list_with_leaves(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &FxHashMap::default(),
+            DeviceIntSize::new(800, 600),
+            &leaves,
+        );
+
+        let cmds = plist.commands();
+        let gi = cmds
+            .iter()
+            .position(|c| {
+                matches!(c, PaintCmd::DrawRect(r)
+                    if (r.color.r - 0.1).abs() < 0.05
+                        && (r.color.g - 0.9).abs() < 0.05
+                        && (r.color.b - 0.2).abs() < 0.05)
+            })
+            .expect("the inline leaf's Path-A command should appear in the paint list");
+        // The splice sits at the inline box origin, which is to the right of the
+        // "hi " run, so the translate is non-zero on x.
+        assert!(
+            matches!(&cmds[gi - 1], PaintCmd::PushTransform(spec) if spec.origin.x > 0.0),
+            "a PushTransform at the inline box origin should precede the leaf, got {:?}",
+            cmds[gi - 1]
+        );
+        assert!(
+            matches!(&cmds[gi + 1], PaintCmd::PopTransform),
+            "a PopTransform should follow the inline leaf commands"
+        );
+
+        // A source with no matching key splices nothing.
+        let empty = StubLeaves(Vec::new());
+        let plist2 = emit_paint_list_with_leaves(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &FxHashMap::default(),
+            DeviceIntSize::new(800, 600),
+            &empty,
+        );
+        assert!(
+            !has_rect_rgb(&plist2, (0.1, 0.9, 0.2)),
+            "no leaf commands for an unregistered key"
+        );
+    }
+
+    /// The payoff of the `inline-block` UA display for form controls: an authored
+    /// `width`/`height` on an `<input>` reaches layout and paint. An `inline-block`
+    /// paints its background at its used rect, so a sized, colored input must
+    /// produce a rect of exactly that size. As an `inline` element (serval's
+    /// behavior before 2026-07-09) the size was ignored and nothing painted.
+    #[test]
+    fn a_sized_input_paints_at_its_css_size() {
+        let document = StaticDocument::parse(
+            "<html><body><input style='width:200px;height:30px;background-color:rgb(26,230,51)'></body></html>",
+        );
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            &[],
+            None,
+        );
+        let viewport = Size {
+            width: AvailableSpace::Definite(800.0),
+            height: AvailableSpace::Definite(600.0),
+        };
+        let (fragments, built, text_ctx) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let plist = emit_paint_list_with_leaves(
+            &document,
+            &styles,
+            &fragments,
+            &built,
+            &text_ctx,
+            &ImagePlane::new(),
+            &BackgroundImagePlane::new(),
+            &FxHashMap::default(),
+            DeviceIntSize::new(800, 600),
+            &StubLeaves(Vec::new()),
+        );
+
+        let sized = plist.commands().iter().any(|c| {
+            matches!(c, PaintCmd::DrawRect(r)
+                if (r.color.r - 0.1).abs() < 0.05
+                    && (r.color.g - 0.9).abs() < 0.05
+                    && (r.color.b - 0.2).abs() < 0.05
+                    && ((r.placement.bounds.max.x - r.placement.bounds.min.x) - 200.0).abs() < 0.5
+                    && ((r.placement.bounds.max.y - r.placement.bounds.min.y) - 30.0).abs() < 0.5)
+        });
+        assert!(
+            sized,
+            "the input's background should paint at its authored 200x30 size; commands: {:?}",
+            plist.commands()
         );
     }
 

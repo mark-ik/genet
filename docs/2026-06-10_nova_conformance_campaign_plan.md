@@ -79,6 +79,11 @@ Two masses dominate, and both are **shared-upstream-crate** stories, not hand-ro
   calendars — most of the 4,257) are a multi-quarter upstream grind. The fork (pinned
   2026-06-02) is roughly current with that, so there is **no rebase windfall today**; the
   54% mass clears gradually as upstream lands more. Ride it, do not duplicate it.
+  *(2026-07-09: "no windfall today" is a 2026-06-11 reading with the fork pinned
+  2026-06-02. Upstream binds `temporal_rs` method-by-method and a month-plus has since
+  accrued, so re-measure the rebase delta before opening any Temporal work and harvest
+  what upstream landed rather than hand-binding in-fork. See the rebase precondition in
+  the work program below.)*
 - **Intl/402 (skipped): Nova does *not* bind ICU4X** (no `icu_*` in `nova_vm`). This is
   the one Boa genuinely has and Nova lacks. Closing it means adding an ICU4X binding to
   Nova (a larger, fullweb-tier lift), not copying Boa.
@@ -116,6 +121,31 @@ fullweb feature gate, so it never weighs the lower tiers.
 
 Reordered from the original seven so architectural clusters precede leaves, and scoped
 per the split above.
+
+**Precondition (2026-07-09): rebase the fork onto upstream trynova first,
+snapshot-clone-preserving.** Before opening any Temporal or built-ins cluster,
+re-measure the rebase delta (the "no windfall" reading is a month stale, above)
+and harvest upstream's accrued `temporal_rs` + built-in bindings rather than
+hand-binding in-fork. The rebase is **gated on preserving the fork-local
+patches**, which are serval's fork identity, and one of which is load-bearing for
+another lane:
+
+- `GcAgent::snapshot_clone` + the actual-stack-use guard
+  (`AgentOptions::stack_limit_bytes`, nova `cce0f09b`): the WPT harness plan's
+  H2a / Nova-scored throughput lane depends on it, so a rebase that drops it
+  regresses broad `dom --engine nova`
+  (`2026-06-24_wpt_harness_exactness_plan.md`, H2). This is the coupling that
+  makes the rebase "snapshot-clone-preserving," not merely a version bump.
+- the `regress` regex swap (2026-06-02, 244 improvements) and the WTF-8/UTF-16
+  lone-surrogate indexing fixes (2026-06-02).
+- the Promise-combinator iterator-close fix (nova `e9765334` + `b5201d12`,
+  which closed the hang family + 16 gaps with zero regressions).
+- the wasm64 `Value`-size lane (the fork identity per the vano fork posture).
+
+**Rebase done-condition:** every fork-local patch carried forward or upstreamed,
+and both guards green post-rebase: the WPT `dom --engine nova` baseline and the
+test262 committed `expectations.json`. Fold work item 5's `regress` upstreaming
+into this so the fork stops re-carrying the swap across future rebases.
 
 1. **Make test262 the steering wheel, by category.** Run the fork tree, diff against
    the committed `expectations.json`, and drive the campaign off the category
