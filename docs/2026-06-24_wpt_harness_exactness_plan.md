@@ -248,6 +248,22 @@ capability it loads:
    dispatch transition + animation events) is the single harness capability that
    unblocks all three. It belongs to this plan; the DOM prerequisites above do not.
 
+5. **The fifth link in item 2's chain, `test_driver_internal`, has an owner:** the
+   native automation plan (`2026-07-09_native_automation_plan.md`, finding 11). Its
+   phase-1 core is reachable **in-process**, because `test_driver` is an embedder
+   hook rather than a protocol: `testdriver.js` routes every command through
+   `window.test_driver_internal`, whose shipped defaults throw and whose
+   `testdriver-vendor.js` is a blank file by design. So `serval-wpt` supplies that
+   object and binds it to the core, the way the runtime already exposes
+   `__matchMedia` / `__dispatchSynthetic`. No HTTP and no WebDriver adapter on this
+   path; the adapter is needed only to run WPT's own `webdriver/` conformance
+   suite. Two constraints fall out, both now recorded in that plan: the WebDriver
+   Actions tick interpreter must live in the core (it is what `action_sequence` is
+   handed), and the core's actuate side must be defined against a surface seam
+   rather than winit, because this lane is headless. The sixth link
+   (`TouchEvent` / `WheelEvent`, absent from `dom/bootstrap.js`, though `passive`
+   listener options already exist) stays DOM work.
+
 **H4a's `reason` vocabulary cannot express this triage.** The plan assumed the
 155 could be "bucketed by pinned `reason`". Verified against a live
 `--write-expectations` run: every one of the 155 carries exactly one of two

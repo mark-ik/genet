@@ -17,7 +17,44 @@ use accesskit::{
 };
 use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
 
+use crate::construct::chisel_leaf_key_of;
 use crate::fragment::FragmentPlane;
+
+/// Host-side source of chisel-leaf accessibility semantics.
+///
+/// Mirrors [`LeafPaintSource`](crate::LeafPaintSource): serval-layout knows
+/// `<chisel-leaf key="…">` as an element, not chisel's types, so the host
+/// bridges a leaf key to its registered leaf. A leaf fills its own AccessKit
+/// node (a knob announces as a slider carrying its value) and may override the
+/// role the tag walk assigned, since a leaf's interior is invisible to the DOM.
+///
+/// Geometry is not the leaf's to set: the walk stamps absolute bounds after the
+/// leaf has spoken, so a leaf can never disagree with layout about where it is.
+pub trait LeafA11ySource {
+    /// Fill `node` with the semantics of the leaf registered under `key`. An
+    /// absent key must leave `node` untouched (the leaf stays an opaque box).
+    fn describe_leaf(&mut self, key: u64, node: &mut AccessNode);
+}
+
+/// A source with no leaves: every `<chisel-leaf>` stays an opaque container.
+/// What [`accesskit_tree`] and [`build_subtree`] use when the caller has none.
+pub struct NoLeafA11y;
+
+impl LeafA11ySource for NoLeafA11y {
+    fn describe_leaf(&mut self, _key: u64, _node: &mut AccessNode) {}
+}
+
+/// The actions a host can route back to a node. A node advertising any of these
+/// is handed back to the caller, whether it acquired the action from its role
+/// (a `<button>` takes `Click`) or from a leaf declaring its own (a slider takes
+/// `SetValue` / `Increment` / `Decrement`).
+const ROUTABLE_ACTIONS: [Action; 5] = [
+    Action::Click,
+    Action::Focus,
+    Action::SetValue,
+    Action::Increment,
+    Action::Decrement,
+];
 
 fn access_id<D: LayoutDom>(dom: &D, node: D::NodeId) -> AccessNodeId {
     AccessNodeId(dom.opaque_id(node))
@@ -79,10 +116,10 @@ where
 /// The shared subtree walk behind both [`accesskit_tree`] (the sealed engine
 /// tree) and [`build_subtree`] (a host stitching several subtrees). `id_of`
 /// assigns each node its id, `skip` prunes element subtrees the caller projects
-/// elsewhere, and `advertise_actions` gates whether controls declare the host
-/// action they accept (recording them in `actionable`) — off for the engine
-/// tree so hosts that don't route actions don't promise affordances they can't
-/// honor.
+/// elsewhere, `leaves` fills in each `<chisel-leaf>`'s interior semantics, and
+/// `advertise_actions` gates whether controls declare the host action they
+/// accept (recording them in `actionable`) — off for the engine tree so hosts
+/// that don't route actions don't promise affordances they can't honor.
 #[allow(clippy::too_many_arguments)]
 fn walk<D, I, S>(
     dom: &D,
@@ -91,6 +128,7 @@ fn walk<D, I, S>(
     node: D::NodeId,
     id_of: &I,
     skip: &S,
+    leaves: &mut dyn LeafA11ySource,
     advertise_actions: bool,
     out: &mut Vec<(AccessNodeId, AccessNode)>,
     actionable: &mut Vec<D::NodeId>,
@@ -102,8 +140,7 @@ where
     S: Fn(&D, D::NodeId) -> bool,
 {
     let id = id_of(dom, node);
-    let role = role_for(dom, node);
-    let mut access = AccessNode::new(role);
+    let mut access = AccessNode::new(role_for(dom, node));
 
     // Accessible name: `aria-label` wins (ARIA semantics), else the node's direct
     // text. Icon-only or nested controls carry no direct text, so `aria-label` is
@@ -124,11 +161,21 @@ where
         access.set_toggled(toggled);
     }
 
+    // A chisel leaf is a replaced element: its interior is invisible to the DOM,
+    // so the leaf speaks for itself here. It may override the role the tag walk
+    // assigned, name itself, carry a value, and declare its own actions. It runs
+    // after the DOM-derived semantics (so a leaf wins) and before bounds (so
+    // layout wins on geometry).
+    if let Some(key) = chisel_leaf_key_of(dom, node) {
+        leaves.describe_leaf(key, &mut access);
+    }
+
     if advertise_actions {
         // Toggle controls (switch / checkbox / radio) are invoked via `Click` in
-        // AccessKit, same as a button; a text field takes `Focus`. Anything that
-        // advertises an action is recorded so the host can route the request.
-        let action = match role {
+        // AccessKit, same as a button; a text field takes `Focus`. Read the role
+        // back off the node, not from the tag, so a leaf that promoted itself to
+        // a control is treated as one.
+        let action = match access.role() {
             Role::Button | Role::Switch | Role::CheckBox | Role::RadioButton => {
                 Some(Action::Click)
             }
@@ -137,6 +184,13 @@ where
         };
         if let Some(action) = action {
             access.add_action(action);
+        }
+        // Hand back anything routable, however it acquired its action: from its
+        // role above, or from a leaf declaring `SetValue` on itself.
+        if ROUTABLE_ACTIONS
+            .iter()
+            .any(|action| access.supports_action(*action))
+        {
             actionable.push(node);
         }
     }
@@ -161,6 +215,7 @@ where
                 child,
                 id_of,
                 skip,
+                leaves,
                 advertise_actions,
                 out,
                 actionable,
@@ -205,6 +260,7 @@ where
         root,
         &|d: &D, n: D::NodeId| access_id(d, n),
         &|_d: &D, _n: D::NodeId| false,
+        &mut NoLeafA11y,
         false,
         &mut nodes,
         &mut actionable,
@@ -230,6 +286,9 @@ where
 /// it gives richer, actionable a11y of its own). Roles honor ARIA `role=` then
 /// tag, and `aria-checked` sets toggled state — the same leaf logic as the
 /// engine tree, so a host subtree never drifts behind on standards support.
+///
+/// Chisel leaves stay opaque containers here. A host with leaves calls
+/// [`build_subtree_with_leaves`] instead.
 #[allow(clippy::type_complexity)]
 pub fn build_subtree<D, I, S>(
     dom: &D,
@@ -244,11 +303,46 @@ where
     I: Fn(&D, D::NodeId) -> AccessNodeId,
     S: Fn(&D, D::NodeId) -> bool,
 {
+    build_subtree_with_leaves(dom, fragments, root, id_of, skip, &mut NoLeafA11y)
+}
+
+/// [`build_subtree`], with each `<chisel-leaf>`'s interior filled in by `leaves`.
+///
+/// A leaf is a replaced element, so nothing about its interior reaches the DOM;
+/// without a source it projects as an unlabeled container. With one, a `Knob`
+/// announces as a slider carrying its value, a `Meter` as a meter, and a leaf
+/// that declares an action (`SetValue`, `Click`) is handed back in the
+/// actionable list exactly like a `<button>`, so one routing path serves DOM
+/// controls and leaf interiors alike.
+#[allow(clippy::type_complexity)]
+pub fn build_subtree_with_leaves<D, I, S>(
+    dom: &D,
+    fragments: &FragmentPlane<D::NodeId>,
+    root: D::NodeId,
+    id_of: &I,
+    skip: &S,
+    leaves: &mut dyn LeafA11ySource,
+) -> (Vec<(AccessNodeId, AccessNode)>, AccessNodeId, Vec<D::NodeId>)
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+    I: Fn(&D, D::NodeId) -> AccessNodeId,
+    S: Fn(&D, D::NodeId) -> bool,
+{
     let origins = origins_of(dom, fragments);
     let mut nodes = Vec::new();
     let mut actionable = Vec::new();
     let root_id = walk(
-        dom, fragments, &origins, root, id_of, skip, true, &mut nodes, &mut actionable,
+        dom,
+        fragments,
+        &origins,
+        root,
+        id_of,
+        skip,
+        leaves,
+        true,
+        &mut nodes,
+        &mut actionable,
     );
     (nodes, root_id, actionable)
 }
@@ -288,6 +382,72 @@ mod tests {
             height: taffy::AvailableSpace::Definite(600.0),
         };
         layout(dom, &styles, &ImagePlane::new(), viewport).0
+    }
+
+    /// A `LeafA11ySource` standing in for chisel's registry: key 7 is a knob.
+    struct KnobAt7;
+
+    impl LeafA11ySource for KnobAt7 {
+        fn describe_leaf(&mut self, key: u64, node: &mut AccessNode) {
+            if key != 7 {
+                return;
+            }
+            node.set_role(Role::Slider);
+            node.set_label("Gain");
+            node.set_numeric_value(0.25);
+            node.add_action(Action::SetValue);
+        }
+    }
+
+    /// A `<chisel-leaf>` is a replaced element, so nothing about its interior
+    /// reaches the DOM. Without a source it projects as an opaque, unlabeled
+    /// container; with one, the leaf names itself, promotes its own role, carries
+    /// its value, and lands in the routable set on the strength of the action it
+    /// declared — the same handback a `<button>` gets. Layout still owns bounds.
+    #[test]
+    fn chisel_leaf_interior_reaches_the_tree_through_its_source() {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let leaf = dom.create_element(html("chisel-leaf"));
+        dom.set_attribute(leaf, attr_name("key"), "7");
+        dom.append_child(root, leaf);
+
+        let fragments = fragments_from_scripted_dom(&dom);
+        let id_of = |d: &ScriptedDom, n: NodeId| access_id(d, n);
+        let no_skip = |_d: &ScriptedDom, _n: NodeId| false;
+
+        // Without a source: opaque. The leaf is not a control and not routable.
+        let (nodes, _, actionable) = build_subtree(&dom, &fragments, root, &id_of, &no_skip);
+        let bare = nodes
+            .iter()
+            .find(|(id, _)| *id == access_id(&dom, leaf))
+            .map(|(_, n)| n)
+            .expect("leaf node present");
+        assert_eq!(bare.role(), Role::GenericContainer, "opaque without a source");
+        assert_eq!(bare.label(), None);
+        assert!(actionable.is_empty(), "an opaque leaf advertises nothing");
+
+        // With a source: the leaf speaks for itself.
+        let (nodes, _, actionable) =
+            build_subtree_with_leaves(&dom, &fragments, root, &id_of, &no_skip, &mut KnobAt7);
+        let knob = nodes
+            .iter()
+            .find(|(id, _)| *id == access_id(&dom, leaf))
+            .map(|(_, n)| n)
+            .expect("leaf node present");
+        assert_eq!(knob.role(), Role::Slider, "the leaf promoted its own role");
+        assert_eq!(knob.label(), Some("Gain"));
+        assert_eq!(knob.numeric_value(), Some(0.25));
+        assert!(knob.supports_action(Action::SetValue));
+        assert!(
+            knob.bounds().is_some(),
+            "layout owns geometry, not the leaf"
+        );
+        assert_eq!(
+            actionable,
+            vec![leaf],
+            "a leaf that declares an action is routable, like a button"
+        );
     }
 
     #[test]

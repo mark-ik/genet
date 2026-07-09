@@ -57,7 +57,9 @@ mod transition_events;
 mod ua_defaults;
 mod viewport;
 
-pub use a11y::{accesskit_tree, build_subtree};
+pub use a11y::{
+    LeafA11ySource, NoLeafA11y, accesskit_tree, build_subtree, build_subtree_with_leaves,
+};
 pub use adapter::NodeRef;
 pub use adapter_stylo::StyleNodeRef;
 pub use box_tree::{BoxTree, build_box_tree, layout_via_box_tree};

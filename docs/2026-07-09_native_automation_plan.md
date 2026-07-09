@@ -2,7 +2,8 @@
 
 **Date:** 2026-07-09
 **Status:** plan, proposed. Findings verified against source 2026-07-09 (see
-Progress); no code yet.
+Progress). Phase 2's step zero has landed (the leaf hook is wired and the
+declared contract is now true); phases 1 and 3-5 have no code yet.
 
 Companion to [2026-07-07_chisel_widget_leaf_design.md](./2026-07-07_chisel_widget_leaf_design.md)
 (the leaf contract this plan extends with automation semantics) and
@@ -148,6 +149,55 @@ The survey that motivated this plan found the skeleton largely standing:
     and harnesses keep calling the core directly; they are not inside the
     agent loop's consent model.
 
+11. **WPT reaches the core directly, but the core is one link in a six-link
+    chain, and its actuate side assumes a host surface `serval-wpt` does not
+    have.** (Added 2026-07-09, verified against the tree and against the WPT
+    harness-exactness plan's H6 triage.)
+
+    - **The `test_driver` seam is an embedder hook, not a protocol.**
+      `tests/wpt/tests/resources/testdriver.js` routes every command through
+      `window.test_driver_internal`; the shipped default object's methods throw
+      `"… is not implemented by testdriver-vendor.js"`, and WPT's own
+      `testdriver-vendor.js` is a one-line blank file by design. So the phase-1
+      core is reachable in-process; the phase-4 adapter is not on this path.
+    - **`action_sequence` receives the WebDriver Actions tick JSON**, so
+      implementing it *is* implementing the Actions tick model. This plan
+      currently places the tick model in phase 4 ("the Actions tick model onto
+      sequenced input synthesis") while the synthesis primitives sit in phase 1.
+      For WPT the **tick interpreter must live in the core**, with phase 4's
+      adapter and `serval-wpt`'s `test_driver_internal` as two consumers of it.
+      Phase 1's actuate bullet now says so.
+    - **The core supplies link 5 of 6.** The harness-exactness plan's H6 traced
+      `dom/events/non-cancelable-when-passive` (40 tests, all `no-results`) and
+      found the ordered prerequisites to be: window `EventTarget` -> `onX`
+      event-handler attributes -> the `load` event -> a harness rAF pump ->
+      `test_driver_internal` -> Touch/Pointer event types. serval has none of the
+      first four (`var window = globalThis` with `addEventListener` only on
+      `Node.prototype`; no `onX` mechanism, so `document.body.onload = fn` is an
+      inert expando; no `load` event fired anywhere; `serval-wpt` never calls
+      `Runtime::run_animation_frame_callbacks`). On link 6: `passive` listener
+      options **are** implemented (`preventDefault` ignored), but `TouchEvent` and
+      `WheelEvent` do not exist in `dom/bootstrap.js` at all, and those tests
+      assert `event.cancelable` on `touchstart` / `touchmove` / `mousewheel`. The
+      core supplies the injection; the DOM must still supply the event types.
+    - **Hosted-surface assumption.** Phase 1 actuate synthesizes "into the same
+      input path winit events take" and resolves handles "to in-view center via
+      serval-layout geometry, scroll-into-view if needed." That presumes a window,
+      an input path, a layout session, and hit-testing. The `serval-wpt`
+      testharness lane has none: it builds a `Runtime` over a `StaticDocument` and
+      **never constructs an `IncrementalLayout`**. There is no geometry to resolve
+      a handle against and no input path to inject into. Driving the core from WPT
+      therefore requires the harness's driven rendering loop (layout session,
+      `load`, rAF pump, virtual clock) plus a headless surface for the core to
+      actuate against. That same capability also unblocks the CSS-animations
+      event tests and the CSS-transitions T3 WPT slice; see
+      `2026-06-24_wpt_harness_exactness_plan.md` H6 and
+      `2026-07-09_css_animations_plan.md` A3.
+    - **`settled()` is not the WPT primitive.** WPT tests drive their own rAF
+      loops and never call it, so the perpetual-source exclusion is irrelevant
+      here. What WPT needs from the harness is a virtual clock plus an rAF pump,
+      not quiescence.
+
 ## Architecture
 
 Five layers, each a phase. Lower layers never depend on higher ones.
@@ -217,6 +267,16 @@ founding) exposing a direct Rust API. Everything else is a view onto this.
   into the same input path winit events take (host converts via the existing
   `key_event_from_winit`-adjacent types, so synthetic and real events are
   indistinguishable downstream).
+  - **The surface is a seam, not winit.** Actuate must be defined against a
+    trait the winit host implements and a headless surface (geometry + event
+    sink, no window) also implements, or `serval-wpt` cannot use the core at all
+    (finding 11). Do not bake winit into the core's actuate signature.
+- **The WebDriver Actions tick model lives here, in the core**, not in the
+  phase-4 adapter: ordered input sources, per-tick dispatch, pointer/key/wheel
+  source state. WPT's `test_driver.action_sequence` hands over exactly this JSON,
+  so the classic adapter and `serval-wpt`'s `test_driver_internal` are two
+  consumers of one interpreter (finding 11). Phase 4 translates HTTP onto it; it
+  does not own it.
 - Action routing: reuse the a11y `ActionRequest` drain for semantic actions
   (focus, activate, set value), so automation actions and screen-reader
   actions share one code path.
@@ -244,12 +304,28 @@ needs both. They are not interchangeable, and choosing by who owns the state:
   This is what `Leaf::accessibility()` was declared for and what nothing
   implements today.
 
-**Step zero: make the declared contract true.** `build_subtree` must call
-`Leaf::accessibility()` when it walks a `<chisel-leaf>` (the leaf key is already
-an attribute on the element, and the walk already computes the node's absolute
-bounds), and `Knob` / `Meter` must implement it. That is the smallest change
-that turns finding 3's unwired promise into working code, and it delivers the
-doc's own example: a knob announcing as a slider with its value.
+**Step zero — landed 2026-07-09.** The declared contract is now true.
+serval-layout gained a `LeafA11ySource` trait mirroring `LeafPaintSource` (the
+walk knows `<chisel-leaf key="…">` as an element, not chisel's types, so the
+host bridges the key to its leaf), and `build_subtree_with_leaves` threads it
+through the walk via the existing `construct::chisel_leaf_key_of`. A leaf runs
+*after* the DOM-derived semantics, so it may override its role and name itself,
+and *before* bounds, so layout keeps sole authority over geometry. `Knob` now
+announces as `Role::Slider` with its normalized value and declares
+`SetValue`/`Increment`/`Decrement`; `Meter` announces as `Role::Meter` and
+declares nothing, because a meter reports rather than actuates.
+
+Actionability generalized with it: the walk hands back any node advertising a
+routable action, whether it acquired one from its role (a `<button>` takes
+`Click`) or from a leaf declaring its own. So a leaf interior is actuated
+through the same routing path a DOM control is, which is the property phase 1
+and phase 4 both need. `build_subtree` keeps its old signature and delegates
+with a `NoLeafA11y` source, so leaves stay opaque for callers that have none.
+
+Strophe is the first consumer: its output meters are `<chisel-leaf>`s and now
+announce their level instead of projecting as unlabeled boxes. Meerkat's chrome
+also carries leaves (the toolbar cluster) and is the obvious next adopter; it
+compiles unchanged because the old entry point kept its shape.
 
 Then two additions to the leaf contract (extending, not replacing,
 `Leaf::accessibility()`):
@@ -296,16 +372,22 @@ translating spec commands onto the core. Sessions and capability negotiation;
 element refs from the handle registry; Find Element onto element query;
 Element Click / Send Keys onto actuate (the spec's interactability checks:
 in-view center, obscured test, scroll-into-view, implemented once in the core,
-phase 1); the Actions tick model onto sequenced input synthesis; Execute
-Script onto eval plus the spec's JSON clone serialization; navigation and
-screenshots onto existing engine paths; cookies onto the net component;
-prompts onto the surviving prompt types. Commands whose substrate does not
-exist yet return spec-correct `unsupported operation` rather than fakes.
+phase 1); the Actions endpoint onto the core's tick interpreter (which is phase-1
+work, not this phase's — finding 11); Execute Script onto eval plus the spec's
+JSON clone serialization; navigation and screenshots onto existing engine paths;
+cookies onto the net component; prompts onto the surviving prompt types. Commands
+whose substrate does not exist yet return spec-correct `unsupported operation`
+rather than fakes.
+
+**Scope note:** this phase is **not** what lets `serval-wpt` run the ordinary
+`test_driver` corpus; that rides phase 1 in-process (finding 11). What needs an
+adapter is WPT's own `webdriver/` conformance suite, which tests this phase.
 
 **Done when:** thirtyfour, unpatched, runs a session against pelt: navigate,
-find by CSS, click, read text. WPT's webdriver conformance suite runs under
-`ports/serval-wpt` with a recorded pass/fail baseline (a baseline, not a
-target; gaps become follow-on items with the spec section named).
+find by CSS, click, read text. WPT's `webdriver/` conformance suite (vendored at
+`tests/wpt/tests/webdriver/`) runs under `ports/serval-wpt` with a recorded
+pass/fail baseline (a baseline, not a target; gaps become follow-on items with
+the spec section named).
 
 ### Phase 5 — BiDi adapter
 
@@ -339,8 +421,22 @@ live session and drives an interaction loop with no polling.
   parallel ungated channel either.
 - **A11y:** phases 1 and 2 force the AccessKit projection to be complete and
   truthful, because tests now depend on it.
-- **WPT:** the classic adapter is the substrate `serval-wpt` needs for
-  harness-driven conformance runs.
+- **WPT: two distinct uses, and only one of them is the classic adapter**
+  (corrected 2026-07-09; see finding 11).
+  - *Running ordinary WPT tests that need synthetic input* (the `test_driver`
+    corpus) needs **phase 1 only**, on the same "no adapter: direct calls" lane
+    as in-process agents. WPT's `testdriver.js` resolves every command through
+    `window.test_driver_internal`, whose default methods merely throw
+    `"… is not implemented by testdriver-vendor.js"`. The embedder supplies that
+    object. `serval-wpt` binds it straight to host functions, exactly as the
+    runtime already exposes `__matchMedia` / `__dispatchSynthetic`. No HTTP, no
+    session negotiation, no `webdriver` crate. **This payoff lands three phases
+    earlier than this plan previously implied.**
+  - *Running WPT's own `webdriver/` conformance suite* (present in the checkout at
+    `tests/wpt/tests/webdriver/`) exercises **our WebDriver implementation** and
+    genuinely needs phase 4. That proves the adapter rather than using it.
+  - Necessary, not sufficient: the core supplies one link in a six-link chain.
+    See finding 11.
 
 ## Non-goals
 
@@ -377,6 +473,14 @@ live session and drives an interaction loop with no polling.
   are DOM divs projected from the graph model, and the chrome walk already skips
   the `.orrery` subtree so the frame tree can project it richly. Pick a
   genuinely dense leaf (isometry's map) instead.
+
+- **Shape of the surface seam.** Actuate needs geometry and an event sink. The
+  winit host has both; `serval-wpt`'s testharness lane has neither today (no
+  layout session at all). Does the core take a `Surface` trait (geometry +
+  event sink + rasterize), or does it require callers to hand it an
+  `IncrementalLayout` plus an input sink? Settle before phase 1's actuate API
+  freezes, because `serval-wpt` is the second consumer and it is headless
+  (finding 11).
 
 - **Does the core need its own crate?** Finding 1 says the read side grows
   `engine-observables-api` rather than founding a crate; phase 1 then founds
@@ -436,3 +540,36 @@ live session and drives an interaction loop with no polling.
     is at the cited path; `WebDriverJSResult` is at `webdriver.rs:273` over
     serval's own `JSValue`; the four script-engine crates exist; `webdriver`
     v0.53 is still a pinned workspace dep.
+- 2026-07-09: **phase 2 step zero implemented.** `LeafA11ySource` +
+  `NoLeafA11y` + `build_subtree_with_leaves` in serval-layout, wired into the
+  walk through `construct::chisel_leaf_key_of`; `Knob` announces as a slider
+  (value + `SetValue`/`Increment`/`Decrement`), `Meter` as a read-only meter.
+  The actionable handback now records any node advertising a routable action,
+  so leaf interiors route exactly like DOM controls. `build_subtree` unchanged,
+  delegating with `NoLeafA11y`. Test `chisel_leaf_interior_reaches_the_tree_
+  through_its_source` asserts both directions (opaque without a source; role,
+  name, value, routability, and layout-owned bounds with one). Strophe wired as
+  the first consumer (its output meters). Finding 3's caveat is now historical
+  rather than current; it stays recorded because the plan was written against
+  the false version.
+- 2026-07-09: **reconciled against the WPT harness-exactness plan's H6 triage**
+  (finding 11 added; the per-consumer WPT bullet, phase 1 actuate, and phase 4
+  scope corrected). Three changes, in decreasing order of consequence:
+  - The WPT payoff was mis-phased. `test_driver` is an embedder hook
+    (`window.test_driver_internal`, whose shipped defaults throw and whose
+    `testdriver-vendor.js` is deliberately blank), so `serval-wpt` reaches the
+    core **in-process at phase 1**. Phase 4 is needed only to run WPT's own
+    `webdriver/` conformance suite. The plan previously pointed all of WPT at
+    phase 4.
+  - The Actions tick model was mis-layered. `test_driver.action_sequence` receives
+    WebDriver Actions tick JSON, so the interpreter belongs in the phase-1 core
+    with phase 4 and `test_driver_internal` as two consumers, not in the adapter.
+  - Phase 1 actuate silently assumed a hosted (winit) surface. `serval-wpt` has no
+    window, no input path, and no `IncrementalLayout` at all, so the actuate API
+    must be defined against a surface seam. Added as an open question, since it
+    constrains the API before it freezes.
+
+  Also recorded: the core supplies one of six prerequisites for the 85
+  `test_driver`-blocked `dom` tests. `passive` listener options already exist;
+  `TouchEvent` / `WheelEvent` do not exist at all, and those tests assert
+  `event.cancelable` on them. The core supplies injection, not event types.

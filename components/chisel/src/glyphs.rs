@@ -139,6 +139,16 @@ impl Meter {
 }
 
 impl Leaf for Meter {
+    /// A level meter announces as [`Role::Meter`] carrying its normalized level.
+    /// Read-only: a meter reports, it is not actuated, so it declares no action
+    /// and never lands in the host's routable set.
+    fn accessibility(&mut self, node: &mut accesskit::Node) {
+        node.set_role(accesskit::Role::Meter);
+        node.set_numeric_value(self.value as f64);
+        node.set_min_numeric_value(0.0);
+        node.set_max_numeric_value(1.0);
+    }
+
     fn measure(&mut self, _known: SizeHint, _available: SizeHint) -> Size {
         self.intrinsic
     }
@@ -218,6 +228,20 @@ impl Knob {
 }
 
 impl Leaf for Knob {
+    /// A knob announces as [`Role::Slider`] carrying its normalized value, and
+    /// declares the actions assistive tech and automation invoke on a slider.
+    /// Declaring them here is what puts the knob in the host's routable set, so
+    /// a leaf interior is actuated through the same path a `<button>` is.
+    fn accessibility(&mut self, node: &mut accesskit::Node) {
+        node.set_role(accesskit::Role::Slider);
+        node.set_numeric_value(self.value as f64);
+        node.set_min_numeric_value(0.0);
+        node.set_max_numeric_value(1.0);
+        node.add_action(accesskit::Action::SetValue);
+        node.add_action(accesskit::Action::Increment);
+        node.add_action(accesskit::Action::Decrement);
+    }
+
     fn measure(&mut self, _known: SizeHint, _available: SizeHint) -> Size {
         self.intrinsic
     }
