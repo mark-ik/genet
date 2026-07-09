@@ -67,12 +67,15 @@ pub fn run_tile_viewer(
 }
 
 mod windowed {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
+    use accesskit::{Action, NodeId as AccessNodeId};
     use netrender::external_texture::ExternalTexturePlacement;
     use netrender::{ColorLoad, NetrenderOptions};
     use pelt_core::tile::TileTree;
-    use serval_winit_host::{SurfaceHost, wheel_delta_from_winit};
+    use serval_scripted_dom::NodeId;
+    use serval_winit_host::{AccessKitBridge, BridgeStatus, SurfaceHost, wheel_delta_from_winit};
     use winit::application::ApplicationHandler;
     use winit::dpi::PhysicalSize;
     use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -105,6 +108,13 @@ mod windowed {
         width: u32,
         height: u32,
         redraws: u32,
+        /// OS accessibility bridge: the frame DOM pelt renders is projected to an
+        /// AccessKit tree each frame and pushed here, so a screen reader reads the
+        /// tab bars and the status bar's leaves. `None` until the window exists.
+        a11y: Option<AccessKitBridge>,
+        /// Actionable node ids from the last projection, so a screen reader's
+        /// `Click` routes back to the same handler a tab press takes.
+        a11y_route: HashMap<AccessNodeId, NodeId>,
     }
 
     impl TileApp {
@@ -117,6 +127,45 @@ mod windowed {
                 width: 1100,
                 height: 750,
                 redraws: 0,
+                a11y: None,
+                a11y_route: HashMap::new(),
+            }
+        }
+
+        /// Apply the screen-reader actions the OS queued since the last frame. The
+        /// route map is from the previous projection, which is what the OS acted
+        /// against.
+        fn pump_a11y_actions(&mut self) {
+            let requests = match self.a11y.as_mut() {
+                Some(bridge) => bridge.drain_actions(),
+                None => return,
+            };
+            for request in requests {
+                if request.action == Action::Click {
+                    if let Some(&node) = self.a11y_route.get(&request.target_node) {
+                        self.shell.activate(node);
+                    }
+                }
+            }
+        }
+
+        /// Project the current frame into the OS accessibility tree, installing the
+        /// adapter on the first laid-out frame. Best-effort: a platform without an
+        /// adapter simply goes without.
+        fn sync_a11y(&mut self) {
+            if self.a11y.is_none() {
+                return;
+            }
+            let (tree, route) = self.shell.a11y_tree();
+            self.a11y_route = route.into_iter().collect();
+            let (Some(bridge), Some(window)) = (self.a11y.as_mut(), self.window.as_ref()) else {
+                return;
+            };
+            match bridge.status() {
+                BridgeStatus::Installed => bridge.update(tree),
+                BridgeStatus::Unavailable => {
+                    let _ = bridge.install(window, tree);
+                }
             }
         }
 
@@ -129,12 +178,16 @@ mod windowed {
         }
 
         fn render(&mut self) {
+            // A screen reader's request lands on the previous frame's tree; apply it
+            // first so its effect shows in the frame we are about to build.
+            self.pump_a11y_actions();
             // Time the whole frame (produce + rasterize + compose) and feed the
             // status bar's meter for the NEXT frame: real measured wall time.
             let frame_t0 = std::time::Instant::now();
             let (win_w, win_h) = (self.width.max(1), self.height.max(1));
             self.shell.resize(win_w, win_h);
             let frame = self.shell.frame();
+            self.sync_a11y();
 
             let Some(host) = self.host.as_ref() else {
                 return;
@@ -242,6 +295,11 @@ mod windowed {
             self.width = size.width.max(1);
             self.height = size.height.max(1);
             self.shell.resize(self.width, self.height);
+            // A screen-reader action wakes the loop so the next frame drains and
+            // routes it. The adapter installs on the first laid-out frame, in
+            // `sync_a11y`, once there is a tree to hand it.
+            let wake_window = window.clone();
+            self.a11y = Some(AccessKitBridge::new(move || wake_window.request_redraw()));
             let options = NetrenderOptions {
                 tile_cache_size: Some(64),
                 enable_vello: true,

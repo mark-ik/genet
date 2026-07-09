@@ -27,6 +27,7 @@ use pelt_core::tile::{
     ContentSource, DocumentRef, DropTarget, SplitAxis, TabStack, TileEvent, TileId, TilePath,
     TileTree,
 };
+use accesskit::{NodeId as AccessNodeId, Tree, TreeId, TreeUpdate};
 use chisel::{ColorF, GraphGlyph, GraphGlyphNode, LeafRegistry, Meter, RenderedLeaves, Size};
 use serval_layout::IncrementalLayout;
 use serval_render::{ContentReport, scene_from_session_dom, scene_from_session_dom_with_leaves};
@@ -331,6 +332,19 @@ const DEFAULT_TILE_CSS: &str = "\
 /// content-area rects of the active *external-texture* tiles (the host composites the
 /// producer's texture into each), and an optional drag ghost (the dragged tab's
 /// preview) the host composites on top.
+/// Bridges chisel's `Leaf::accessibility` into serval-layout's a11y walk, which
+/// knows `<chisel-leaf>` as an element but not chisel's types. A newtype because
+/// both traits are foreign here (orphan rule), the same shape every host uses.
+struct LeafA11y<'a>(&'a mut LeafRegistry<u64>);
+
+impl serval_layout::LeafA11ySource for LeafA11y<'_> {
+    fn describe_leaf(&mut self, key: u64, node: &mut accesskit::Node) {
+        if let Some(leaf) = self.0.get_mut(&key) {
+            leaf.accessibility(node);
+        }
+    }
+}
+
 pub struct TileFrame {
     pub frame_scene: Scene,
     pub tiles: Vec<TileLayer>,
@@ -596,6 +610,46 @@ impl TileSurface {
             external_tiles,
             ghost: None,
         }
+    }
+
+    /// Project the laid-out frame DOM into an AccessKit tree, with each
+    /// `<chisel-leaf>`'s interior filled in by the leaf itself: the status bar's
+    /// frame meter announces as a meter carrying its level, the tree glyph as a
+    /// graphics object. Returns the tree plus the actionable nodes paired with
+    /// their AccessKit ids, so the host can route a screen reader's request back
+    /// to [`dispatch_click`](Self::dispatch_click), the same path a tab press takes.
+    ///
+    /// Deliberately not folded into [`TileFrame`](crate::tile_surface::TileFrame):
+    /// that struct is the seam meerkat consumes through the GPU-free
+    /// `tile-surface` feature, and it should not grow a field only the windowed
+    /// viewer reads. Layout is rebuilt here for the same reason the hit-test
+    /// entries rebuild it — the surface retains no session between calls.
+    pub fn a11y_tree(&mut self, width: u32, height: u32) -> (TreeUpdate, Vec<(AccessNodeId, NodeId)>) {
+        let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
+        let dom_handle = self.runner.dom();
+        let dom = dom_handle.borrow();
+        let session =
+            IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32);
+        let root = dom.document();
+        let (nodes, root_id, actionable) = serval_layout::build_subtree_with_leaves(
+            &*dom,
+            session.fragments(),
+            root,
+            &|d: &ScriptedDom, n: NodeId| AccessNodeId(d.opaque_id(n)),
+            &|_d: &ScriptedDom, _n: NodeId| false,
+            &mut LeafA11y(&mut self.leaves),
+        );
+        let route = actionable
+            .into_iter()
+            .map(|node| (AccessNodeId(dom.opaque_id(node)), node))
+            .collect();
+        let tree = TreeUpdate {
+            nodes,
+            tree: Some(Tree::new(root_id)),
+            tree_id: TreeId::ROOT,
+            focus: root_id,
+        };
+        (tree, route)
     }
 
     /// The shared frame DOM handle (for the host's hit-testing of tab bars / dividers).

@@ -13,9 +13,11 @@
 //! the same seam the lib-first plan applies to rendering, applied to interaction, so a
 //! gesture can be verified without a human at the screen.
 
+use accesskit::{NodeId as AccessNodeId, TreeUpdate};
 use pelt_core::tile::{DropTarget, Edge, TileEvent, TileId, TilePath, TileTree};
 use serval_render::ContentReport;
-use xilem_serval::PointerClick;
+use serval_scripted_dom::NodeId;
+use xilem_serval::{PointerClick, Propagation};
 
 use crate::tile_surface::{GhostLayer, TileFrame, TileSurface};
 
@@ -133,6 +135,27 @@ impl TileShell {
     /// [`TileSurface::set_status_bar`]). Default on.
     pub fn set_status_bar(&mut self, on: bool) {
         self.surface.set_status_bar(on);
+    }
+
+    /// The accessibility projection of the frame at the current size: the same
+    /// laid-out DOM the frame renders, with chisel leaf interiors filled in.
+    /// Paired with the actionable nodes' AccessKit ids so the host can route a
+    /// screen reader's request back through [`activate`](Self::activate).
+    pub fn a11y_tree(&mut self) -> (TreeUpdate, Vec<(AccessNodeId, NodeId)>) {
+        self.surface.a11y_tree(self.width, self.height)
+    }
+
+    /// Activate the frame node an assistive technology asked us to click (a tab).
+    /// The shell's own pointer path resolves tabs geometrically (`tab_at`), so this
+    /// is the semantic entry: no coordinates, just the node.
+    pub fn activate(&mut self, node: NodeId) {
+        self.surface.dispatch_click(
+            node,
+            PointerClick {
+                local: (0.0, 0.0),
+                prop: Propagation::new(),
+            },
+        );
     }
 
     /// Render the frame at the current size, caching the tile content rects for input

@@ -26,7 +26,7 @@ default = ["viewer"]
 tile-surface = [
     "dep:netrender", "dep:serval-render", "dep:serval-static-dom", "dep:serval-layout",
     "dep:serval-scripted-dom", "dep:layout-dom-api", "dep:xilem-serval", "dep:data-url",
-    "dep:chisel",
+    "dep:chisel", "dep:accesskit",
 ]
 # The on-screen static-document viewer (V1): the GPU-free `tile-surface` lib plus the
 # windowed present stack (`serval-winit-host` + `wgpu`). Default-on so `pelt --engine
@@ -149,6 +149,10 @@ serval-winit-host = { path = "../../components/serval-winit-host", optional = tr
 # Chisel widget leaves (png-reftest feature): the first-pixels smoke renders
 # Knob/Meter/GraphGlyph leaves through the session leaf path to an offscreen PNG.
 chisel = { path = "../../components/chisel", optional = true }
+# The tile surface projects its laid-out frame DOM (chisel leaf interiors
+# included) into an AccessKit tree; the windowed viewer pushes it to the OS
+# through `serval_winit_host::AccessKitBridge`.
+accesskit = { workspace = true, optional = true }
 # Spec `data:` URL decoding for the LocalFetcher (percent-encoded + base64 bodies).
 data-url = { workspace = true, optional = true }
 
