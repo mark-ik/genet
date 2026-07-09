@@ -33,6 +33,12 @@ impl SceneSlot {
 }
 
 impl Leaf for SceneSlot {
+    // No `accessibility()` on purpose. A scene slot is a blank surface the host
+    // hands an arbitrary vello `Scene`; the slot itself knows nothing about what
+    // was drawn into it, so any role or name it invented would be a guess. It
+    // stays a plain container that the host names with `aria-label`, which is
+    // strictly better than announcing an unnamed `Role::Image`.
+
     fn measure(&mut self, _known: SizeHint, _available: SizeHint) -> Size {
         self.intrinsic
     }

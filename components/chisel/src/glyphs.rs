@@ -54,6 +54,27 @@ impl GraphGlyph {
 }
 
 impl Leaf for GraphGlyph {
+    /// A node-link glyph announces as a graphics object. Its interior structure
+    /// (which node, which link) is not reachable through a single AccessKit node;
+    /// publishing the nodes as semantic children is the leaf-publication work the
+    /// native-automation plan scopes to phase 2 proper. Until then a screen reader
+    /// at least learns that this is a graph and how big it is.
+    ///
+    /// The name is a **fallback only**. This glyph is reused as a button face, a
+    /// link preview, and a breadcrumb thumbnail, so the author who placed it knows
+    /// what it depicts and says so with `aria-label`; a generic self-description
+    /// must never overwrite that.
+    fn accessibility(&mut self, node: &mut accesskit::Node) {
+        node.set_role(accesskit::Role::GraphicsObject);
+        if node.label().is_none() {
+            node.set_label(format!(
+                "graph: {} nodes, {} links",
+                self.nodes.len(),
+                self.edges.len()
+            ));
+        }
+    }
+
     fn measure(&mut self, _known: SizeHint, _available: SizeHint) -> Size {
         self.intrinsic
     }

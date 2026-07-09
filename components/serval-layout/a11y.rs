@@ -28,8 +28,17 @@ use crate::fragment::FragmentPlane;
 /// node (a knob announces as a slider carrying its value) and may override the
 /// role the tag walk assigned, since a leaf's interior is invisible to the DOM.
 ///
-/// Geometry is not the leaf's to set: the walk stamps absolute bounds after the
-/// leaf has spoken, so a leaf can never disagree with layout about where it is.
+/// Two things are not the leaf's to decide:
+///
+/// - **Geometry.** The walk stamps absolute bounds after the leaf has spoken, so
+///   a leaf can never disagree with layout about where it is.
+/// - **A name the author gave it.** The walk resolves `aria-label` (then direct
+///   text) *before* calling the leaf, so an author who wrote
+///   `<chisel-leaf aria-label="Session graph">` has said what this instance is,
+///   and a leaf's generic self-description must not overwrite that. A leaf that
+///   wants a fallback name checks [`AccessNode::label`] first and only fills a
+///   gap. Roles and values carry no such rule: those are facts about the widget,
+///   not editorial choices, so a leaf always wins on them.
 pub trait LeafA11ySource {
     /// Fill `node` with the semantics of the leaf registered under `key`. An
     /// absent key must leave `node` untouched (the leaf stays an opaque box).
@@ -397,6 +406,71 @@ mod tests {
             node.set_numeric_value(0.25);
             node.add_action(Action::SetValue);
         }
+    }
+
+    /// A leaf offering a *fallback* name, the way `GraphGlyph` does: it fills the
+    /// gap only when the author named nothing.
+    struct FallbackNamed;
+
+    impl LeafA11ySource for FallbackNamed {
+        fn describe_leaf(&mut self, _key: u64, node: &mut AccessNode) {
+            node.set_role(Role::GraphicsObject);
+            if node.label().is_none() {
+                node.set_label("graph: 3 nodes, 2 links");
+            }
+        }
+    }
+
+    /// The author placing a leaf knows what this instance depicts; the leaf only
+    /// knows what kind of thing it is. So `aria-label` outranks a leaf's generic
+    /// self-description, while the leaf still wins on role, which is a fact about
+    /// the widget rather than an editorial choice.
+    #[test]
+    fn a_leaf_fallback_name_never_overwrites_the_authors_aria_label() {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+
+        let named = dom.create_element(html("chisel-leaf"));
+        dom.set_attribute(named, attr_name("key"), "1");
+        dom.set_attribute(named, attr_name("aria-label"), "Session graph");
+        dom.append_child(root, named);
+
+        let unnamed = dom.create_element(html("chisel-leaf"));
+        dom.set_attribute(unnamed, attr_name("key"), "2");
+        dom.append_child(root, unnamed);
+
+        let fragments = fragments_from_scripted_dom(&dom);
+        let (nodes, _, _) = build_subtree_with_leaves(
+            &dom,
+            &fragments,
+            root,
+            &|d: &ScriptedDom, n: NodeId| access_id(d, n),
+            &|_d: &ScriptedDom, _n: NodeId| false,
+            &mut FallbackNamed,
+        );
+        let node = |n: NodeId| {
+            nodes
+                .iter()
+                .find(|(id, _)| *id == access_id(&dom, n))
+                .map(|(_, node)| node)
+                .expect("leaf in tree")
+        };
+
+        assert_eq!(
+            node(named).label(),
+            Some("Session graph"),
+            "the author's aria-label survives the leaf"
+        );
+        assert_eq!(
+            node(unnamed).label(),
+            Some("graph: 3 nodes, 2 links"),
+            "the leaf fills a name only where the author left none"
+        );
+        assert_eq!(
+            node(named).role(),
+            Role::GraphicsObject,
+            "the leaf still wins on role, which is not the author's to state"
+        );
     }
 
     /// A `<chisel-leaf>` is a replaced element, so nothing about its interior
