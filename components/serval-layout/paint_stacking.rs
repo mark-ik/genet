@@ -40,8 +40,8 @@
 
 use std::hash::Hash;
 
-use paint_list_api::specs::{ClipKind, ClipSpec, TransformKind};
-use paint_list_api::{LayoutPoint, LayoutRect, LayoutTransform, PaintCmd, TransformSpec};
+use paint_list_api::specs::TransformKind;
+use paint_list_api::{LayoutPoint, LayoutTransform, PaintCmd, TransformSpec};
 use style::properties::ComputedValues;
 
 use crate::box_tree::BoxTree;
@@ -58,7 +58,6 @@ pub(crate) fn paint_context<Id>(
     node: usize,
     origin: (f32, f32),
     out: &mut Vec<PaintCmd>,
-    abs_clips: &[LayoutRect],
 ) where
     Id: Copy + Eq + Hash,
 {
@@ -82,7 +81,6 @@ pub(crate) fn paint_context<Id>(
         true,
         LayoutTransform::identity(),
         (0.0, 0.0),
-        abs_clips,
     );
     // Stable sort by (z, document order): same-z layers keep document order, the
     // Appendix E tiebreak.
@@ -127,14 +125,6 @@ fn paint_layer<Id>(
     // wrap here, so it cancels the document translate regardless of any ancestor
     // transform re-established below. `absolute` layers carry
     // `attaches_to_viewport == false` and scroll with the document.
-    // Re-apply the containing-block overflow clips this lifted layer lost by
-    // painting on a clean stack (see `Deferred::ancestor_clip`), outermost and in
-    // absolute scene coords so they bound the layer regardless of the wraps below.
-    for r in &d.ancestor_clip {
-        out.push(PaintCmd::PushClip(ClipSpec {
-            kind: ClipKind::Rect(*r),
-        }));
-    }
     let (vsx, vsy) = em.viewport_scroll();
     let counter = d.attaches_to_viewport && (vsx != 0.0 || vsy != 0.0);
     if counter {
@@ -152,15 +142,12 @@ fn paint_layer<Id>(
             kind: TransformKind::Standard,
         }));
     }
-    paint_context(em, tree, text_ctx, d.node, d.origin, out, &d.ancestor_clip);
+    paint_context(em, tree, text_ctx, d.node, d.origin, out);
     if wrap {
         out.push(PaintCmd::PopTransform);
     }
     if counter {
         out.push(PaintCmd::PopTransform);
-    }
-    for _ in &d.ancestor_clip {
-        out.push(PaintCmd::PopClip);
     }
 }
 
@@ -269,65 +256,6 @@ mod tests {
         assert!(
             red < blue,
             "z:-1 .behind (idx {red}) paints before in-flow .flow (idx {blue})"
-        );
-    }
-
-    /// Active clip nesting depth at command `index` (pushes minus pops before it).
-    fn clip_depth_at(cmds: &[PaintCmd], index: usize) -> i32 {
-        let mut depth = 0;
-        for c in &cmds[..index] {
-            match c {
-                PaintCmd::PushClip(_) => depth += 1,
-                PaintCmd::PopClip => depth -= 1,
-                _ => {}
-            }
-        }
-        depth
-    }
-
-    /// An absolutely-positioned box is clipped by an ancestor that both clips
-    /// (`overflow: hidden`) and is its containing block (`position: relative`).
-    /// The lifted layer paints on a clean stack, so `paint_layer` must re-apply
-    /// the ancestor's clip (Tier 1 dropped it, letting the box overflow the box).
-    #[test]
-    fn abs_child_clipped_by_positioned_overflow_ancestor() {
-        let cmds = paint(
-            "<html><body><div class=\"box\"><div class=\"item\"></div></div></body></html>",
-            &[
-                "html, body, div { display: block; margin: 0; }",
-                ".box { position: relative; width: 100px; height: 50px; overflow: hidden; \
-                    background-color: rgb(0, 0, 255); }",
-                ".item { position: absolute; top: 0; left: 0; width: 20px; height: 200px; \
-                    background-color: rgb(255, 0, 0); }",
-            ],
-        );
-        let item = rect_index(&cmds, 1.0, 0.0, 0.0, ".item");
-        assert!(
-            clip_depth_at(&cmds, item) >= 1,
-            "abs child of a positioned overflow:hidden ancestor paints under a clip",
-        );
-    }
-
-    /// An absolutely-positioned box *escapes* an `overflow: hidden` ancestor that
-    /// is not its containing block (a `static` box): the ancestor's clip must not
-    /// apply, or the box would be wrongly hidden (CSS 2.1 §11.1.2).
-    #[test]
-    fn abs_child_escapes_static_overflow_ancestor() {
-        let cmds = paint(
-            "<html><body><div class=\"box\"><div class=\"item\"></div></div></body></html>",
-            &[
-                "html, body, div { display: block; margin: 0; }",
-                ".box { width: 100px; height: 50px; overflow: hidden; \
-                    background-color: rgb(0, 0, 255); }",
-                ".item { position: absolute; top: 0; left: 0; width: 20px; height: 200px; \
-                    background-color: rgb(255, 0, 0); }",
-            ],
-        );
-        let item = rect_index(&cmds, 1.0, 0.0, 0.0, ".item");
-        assert_eq!(
-            clip_depth_at(&cmds, item),
-            0,
-            "abs child escapes a static (non-CB) overflow:hidden ancestor",
         );
     }
 
