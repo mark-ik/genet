@@ -405,7 +405,27 @@ impl Swatch {
     }
 }
 
+/// `ColorF` (linear-ish f32 channels) to AccessKit's 8-bit `Color`.
+fn access_color(color: ColorF) -> accesskit::Color {
+    let channel = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
+    accesskit::Color {
+        red: channel(color.r),
+        green: channel(color.g),
+        blue: channel(color.b),
+        alpha: channel(color.a),
+    }
+}
+
 impl Leaf for Swatch {
+    /// A swatch announces as [`Role::ColorWell`](accesskit::Role::ColorWell)
+    /// carrying the color it shows, which is the one fact assistive tech cannot
+    /// recover from the pixels. Presentational on its own: the host decides
+    /// whether a swatch is pickable and labels it, so no action is declared here.
+    fn accessibility(&mut self, node: &mut accesskit::Node) {
+        node.set_role(accesskit::Role::ColorWell);
+        node.set_color_value(access_color(self.color));
+    }
+
     fn measure(&mut self, _known: SizeHint, _available: SizeHint) -> Size {
         self.intrinsic
     }
