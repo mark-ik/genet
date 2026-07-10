@@ -97,16 +97,24 @@ The survey that motivated this plan found the skeleton largely standing:
    to the tree" are not the same predicate.
 
 7. **Missing, and load-bearing: a *unified* quiescence signal.** No single
-   signal says "loads, layout, and script have all settled." Partial prior art
-   exists engine-side, and the plan should build on it rather than start cold:
-   `script-engine-api` already drains pending microtasks *to quiescence*
-   (`pump` with `Budget::Unbounded`), and the boa / piccolo engines document
-   their drain semantics against it. What is missing is the cross-subsystem
-   join, not the script term. External drivers poll and sleep precisely because
-   they cannot know this; the engine can. This is the single highest-leverage
-   primitive in the plan. App-side prior art: mere's scenario vocabulary has a
-   `settle [<frames>]` verb, a frame-count approximation of what the engine can
-   report exactly.
+   signal says "loads, layout, and script have all settled." But every
+   per-source signal already exists (verified against the tree 2026-07-09), so
+   the missing piece is precisely the cross-subsystem join and its vocabulary,
+   nothing more:
+
+   - microtasks: `script-engine-api`'s `pump(Budget) -> PumpOutcome`
+     (`Quiescent` / `Pending`; boa and piccolo document their drain semantics)
+   - timers: the runtime's `next_timer_delay() -> Option<f64>`
+   - animation-frame callbacks: the runtime's `has_animation_frame_callbacks()`
+   - fetches: the runtime's `pending_fetches() -> usize`
+   - declared animations: `IncrementalLayout::has_active_animations()`
+   - loads: `LoadingState` is terminal at `Done` / `Failed`
+
+   External drivers poll and sleep precisely because they cannot see these; the
+   host can see all of them. This is the single highest-leverage primitive in
+   the plan. App-side prior art: mere's scenario vocabulary has a
+   `settle [<frames>]` verb, a frame-count approximation of what the host can
+   now report exactly.
 
 8. **Mere already has app-level automation; the core slots beneath it.**
    Mere's headed automation plan landed a scenario vocabulary over registry
@@ -311,15 +319,26 @@ trait, so it blocks nothing.
   handles; retrofitting the axis later would break the whole API.
 - State reads: text, attributes, geometry (from serval-layout), interaction
   state (`InteractionQuery`), loading state.
-- **Quiescence, scoped by source:** a `settled()` future the engine resolves
-  when loads, layout, and pending script microtasks are idle. Perpetual
-  sources are excluded from the default contract by design: declared CSS
+- **Quiescence, scoped by source — the contract landed 2026-07-09**
+  (`engine-observables-api::quiescence`): a `PendingWork` snapshot per surface
+  (loads, microtasks, dirty layout, next timer, rAF requested, declared
+  animations) with `settled()` as the default policy. Level-triggered, not a
+  future: the harness loop is "apply step, ask until settled, assert". The host
+  assembles it from the per-source signals in finding 7, since only the host
+  sees loads, script and layout at once.
+
+  Perpetual sources are excluded from `settled()` by design: declared CSS
   animations and physics fields (the orrery never stops breathing) would make
-  a naive `settled()` hang forever, and the first hung test would get "fixed"
-  with a timeout, which is a sleep wearing a suit. For the excluded category
-  the tool is condition-waits ("element exists," "attribute equals"), also
-  built here. Mere's `settle [<frames>]` frame counting is the symptom this
-  design answers, not a primitive it merely upgrades.
+  a naive settle hang forever, and the first hung test would get "fixed" with a
+  timeout, which is a sleep wearing a suit. **Animation-frame callbacks join
+  that category** (a correction found while writing the contract): a one-shot
+  rAF settles next frame, but a rAF loop — every game loop — re-requests
+  forever, and the two are statically indistinguishable, so rAF is reported but
+  never blocking. Timers likewise: a page holding `setTimeout(fn, 30_000)` is
+  not "busy" for thirty seconds. For the excluded category the tool is
+  condition-waits ("element exists," "attribute equals"), still to build. Mere's
+  `settle [<frames>]` frame counting is the symptom this design answers, not a
+  primitive it merely upgrades.
 - Screenshot: element- and viewport-scoped, via the existing paint/rasterize
   path (`SurfaceHost::rasterize`).
 
@@ -559,6 +578,18 @@ live session and drives an interaction loop with no polling.
   the second consumer, not before.
 
 ## Progress
+
+- 2026-07-09: **quiescence contract landed** in
+  `engine-observables-api::quiescence`: `PendingWork` (per-source snapshot) +
+  `settled()` / `fully_idle()` + the `QuiescenceQuery` trait. Verified first
+  that every per-source signal exists (finding 7 now lists them by name), so
+  the contract adds vocabulary only, no mechanism. One design correction fell
+  out: rAF callbacks are perpetual-capable (a loop is indistinguishable from a
+  one-shot), so they are reported but never block `settled()`, alongside timers
+  and declared animations. Tests pin the policy from both directions: a surface
+  that is only animating is settled (or every game loop hangs the harness), and
+  each self-finishing source blocks it. Remaining quiescence work is host
+  assembly per surface and the condition-wait built on top.
 
 - 2026-07-09: **phase 1 begun; handle identity settled by inverting it.** The
   `query` module landed in `serval-layout` (`ElementQuery` by role / accessible

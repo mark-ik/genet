@@ -33,6 +33,7 @@
 pub mod fragment;
 pub mod interaction;
 pub mod loading;
+pub mod quiescence;
 pub mod semantic;
 pub mod stats;
 pub mod types;
@@ -40,6 +41,7 @@ pub mod types;
 pub use fragment::*;
 pub use interaction::*;
 pub use loading::*;
+pub use quiescence::*;
 pub use semantic::*;
 pub use stats::*;
 pub use types::*;

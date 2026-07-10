@@ -243,7 +243,6 @@ changed.
 
 - Statements apply-half: RESOLVED 2026-07-10 (Mark). Moves into mere's
   `crates/graph/linked-data` as part of the inker move.
-- illume: family-internal component or public lib? (Decides its rehome.)
 - Smolweb lane unification: RESOLVED 2026-07-10 (Mark) against the
   fold-together candidate. Retargeting smolweb-views onto `DocumentBlock`
   was assessed and rejected: blocks are a *normalizing* reading vocabulary
@@ -255,14 +254,41 @@ changed.
   no alt field, so gemtext preformat alt text dies at the block boundary.
   Rendering the native lane from blocks would be gemtext-to-HTML mashing
   with extra steps, the exact path smolweb-views was built to refuse
-  ("Native, not gemtext-to-HTML"). Decision: per-format AST views remain
-  the idiom carriers; blocks remain the card/summary lane; the two lanes
-  are a feature, not a duplication. Native-lane coverage grows the honest
-  way: wrapper protocols whose bodies ARE gemtext/markdown by definition
-  (spartan, titan, misfin, guppy, scroll) route bodies through the existing
+  ("Native, not gemtext-to-HTML"). Decision: per-format AST views are the
+  idiom carriers. Native-lane coverage grows the honest way: wrapper
+  protocols whose bodies ARE gemtext/markdown by definition (spartan,
+  titan, misfin, guppy, scroll) route bodies through the existing
   gemtext/markdown views plus thin per-protocol chrome (status line, upload
   affordance, mail headers); genuinely distinct formats (nex, finger) get
   their own small AST views.
+
+  REVISED same day (Mark): blocks do not keep even the card/summary lane by
+  default. Historically `DocumentBlock` was knot's model: faithful embedding
+  of protocol formats and executable-fence outputs inside a note (web clips,
+  scripting languages; `script/rhai` producing EngineDocument is that
+  purpose in code). It drifted into an app-wide lowest-common-denominator
+  document model, and that drift is not wanted capping chisel card widgets.
+  Direction: native views are prioritized everywhere protocol content
+  renders, full documents and cards alike; blocks revert toward the
+  authored/stored model (knot notes, clips, script outputs — content that
+  must serialize). Knot's polyglot fences should render through the native
+  views too, fulfilling the original fidelity intent instead of expanding
+  through the lossy block engines.
+- Errand/nematic concern reorg (follow-on design doc, named 2026-07-10):
+  with both in serval, re-split the load to prioritize native views.
+  Sketch: errand owns ALL wire parsing (nematic never touches bytes);
+  nematic pivots from block-lowering to the native-view home, absorbing
+  smolweb-views; block lowering shrinks to the consumers that genuinely
+  need a serialized model. The deep cut to design honestly: inker's
+  `Engine` trait returns `EngineDocument`, so demoting blocks from
+  protocol rendering changes the document registry's contract for the
+  smolweb IDs (views are not serializable; the trait's output shape or the
+  dispatch path must account for a native-view lane). Block-consumer
+  census (2026-07-10, mere-side): gloss, uxtree, platen document_scene
+  (pane content as documents), meerkat cards/note surfaces/page_text/
+  inspector, import web_clip, script/rhai. Sequencing: move first
+  mechanically (this plan, everything stays green), reorg second once
+  colocated in serval — do not redesign mid-move.
 - document-canvas netrender pins: RESOLVED 2026-07-10 (Mark). Unify onto
   serval's existing workspace netrender entries during the move.
 - knot's home: RESOLVED 2026-07-09. The knot column lands in serval
