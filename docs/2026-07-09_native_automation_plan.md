@@ -359,6 +359,19 @@ trait, so it blocks nothing.
   so the classic adapter and `serval-wpt`'s `test_driver_internal` are two
   consumers of one interpreter (finding 11). Phase 4 translates HTTP onto it; it
   does not own it.
+
+  *Landed 2026-07-09* as `shared/embedder::webdriver_actions::interpret_actions`
+  (spec `ActionSequence`s in — the pinned `webdriver` crate was already a dep
+  there — per-tick `InputEvent`s out). Pure by construction: element origins
+  resolve through a caller closure (only the caller has the tree) and fail
+  loudly, never guessing a position; tick durations are reported, never slept,
+  so a headed consumer paces frames and a headless one collapses time. Stated
+  first-cut deviations: single event per pointer move (no interpolation), no
+  modifier tracking, mouse pointer type only, `Cancel` ignored. And the
+  premise-check paid out again: no new surface trait was needed for delivery,
+  because `WebDriverCommandMsg::InputEvent(WebViewId, InputEvent, ..)` already
+  survived the knockout — hosts and the wpt harness consume ticks through their
+  own dispatch, and a trait waits for a real second shape.
 - Action routing: reuse the a11y `ActionRequest` drain for semantic actions
   (focus, activate, set value), so automation actions and screen-reader
   actions share one code path.
@@ -592,6 +605,16 @@ live session and drives an interaction loop with no polling.
   the second consumer, not before.
 
 ## Progress
+
+- 2026-07-09: **Actions tick interpreter landed** in
+  `shared/embedder::webdriver_actions` (5 tests: element-click move/down/up at a
+  resolved center, loud failure on an unresolved origin, relative-move
+  accumulation + source zipping + pause pacing, the spec key table, wheel delta
+  sign flip). Delivery needs no new trait: `WebDriverCommandMsg::InputEvent`
+  survived the knockout and is the seam. With this, every phase-1 capability
+  except the composition façade has landed in an existing crate: query +
+  handles (serval-layout), quiescence contract (engine-observables-api), tick
+  interpretation (shared/embedder), semantic drive proven against pelt.
 
 - 2026-07-09: **quiescence contract landed** in
   `engine-observables-api::quiescence`: `PendingWork` (per-source snapshot) +

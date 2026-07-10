@@ -256,7 +256,7 @@ fn key_from_webdriver(value: &str) -> Key {
         '\u{E015}' => NamedKey::ArrowDown,
         '\u{E017}' => NamedKey::Delete,
         '\u{E03D}' => NamedKey::Meta,
-        '\u{E000}'..='\u{F8FF}' => return Key::Unidentified,
+        '\u{E000}'..='\u{F8FF}' => NamedKey::Unidentified,
         _ => return Key::Character(first.to_string()),
     };
     Key::Named(named)
@@ -348,10 +348,10 @@ mod tests {
                 ))],
             },
         };
-        assert_eq!(
+        assert!(matches!(
             interpret_actions(std::slice::from_ref(&sequence), &no_elements),
-            Err(ActionsError::UnresolvedElementOrigin("gone".into()))
-        );
+            Err(ActionsError::UnresolvedElementOrigin(id)) if id == "gone"
+        ));
     }
 
     /// Pointer-relative moves accumulate across ticks; parallel sources zip
@@ -442,7 +442,10 @@ mod tests {
             key(&ticks[2]),
             (KeyState::Down, Key::Character("q".into()))
         );
-        assert_eq!(key(&ticks[3]), (KeyState::Down, Key::Unidentified));
+        assert_eq!(
+            key(&ticks[3]),
+            (KeyState::Down, Key::Named(NamedKey::Unidentified))
+        );
     }
 
     /// Wheel deltas flip sign crossing the vocabulary boundary: the spec's

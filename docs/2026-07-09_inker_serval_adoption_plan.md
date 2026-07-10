@@ -210,7 +210,14 @@ changed.
 
 1. inker + nematic + document-canvas + knot-editor-host + three engine
    adapters build as serval workspace members; `cargo check` green across
-   serval's default and per-feature builds.
+   serval's default and per-feature builds. **DONE 2026-07-10** (serval
+   af674dbad): nematic at components/nematic (top-level), the rest under
+   components/inker; inker + nematic publish = true at 0.1.0 with
+   repository = mark-ik/serval; document-canvas's netrender deps unified
+   onto the workspace git pins (resolved question above); 314 family tests
+   green + document-canvas --features netrender checks. Two test-only
+   fixes for netrender's FontRecord Arc change (latent; libs were fine).
+   nematic's "static HTML" doc rot fixed in the description on the way.
 2. inker core has no kernel dependency; routing tests pass without kernel
    fixtures. **DONE 2026-07-10** (mere 7fde32b): NodeKey = petgraph
    NodeIndex direct, RouteViewId own uuid newtype in routing/ids.rs; every
