@@ -232,6 +232,14 @@ changed.
    check clean.
 4. mere's gloss/uxtree/import/meerkat build against the serval git dep;
    meerkat behavior unchanged (existing routing + registry tests green).
+   **DONE 2026-07-10** (mere 95b7391): crates/inker deleted; six
+   workspace deps flipped to serval git (member crates' `workspace = true`
+   lines untouched; knot-editor-host had no mere consumer, no entry);
+   local .cargo/config.toml patches extended. gloss / uxtree / import /
+   platen / content-contract / linked-data check green; meerkat 82+247.
+   NOTE: mere's committed manifests now need serval commit af674dbad
+   pushed to GitHub for a clean non-local build (the local patch file
+   covers the working-copy loop meanwhile).
 5. App-flavored routing constants live app-side; grep for
    `graphshell.internal` in serval returns nothing.
 6. Pelt's serval lanes registered as inker document engines behind pelt
