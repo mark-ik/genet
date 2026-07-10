@@ -107,6 +107,88 @@ impl ElementQuery {
     }
 }
 
+/// A durable reference to an element, minted from a projection and resolvable
+/// against a later one.
+///
+/// The handle *is* the DOM node id. That is sound, and it is sound for a reason
+/// worth stating, because the obvious alternative is unsound:
+///
+/// - **A rebuild does not invalidate it.** xilem-serval's `rebuild` reuses the
+///   existing node and diffs its attributes and children in place, so a view
+///   update that preserves an element preserves its id.
+/// - **A dead handle can never name a live element.** `ScriptedDom` allocates
+///   from a monotonic counter and never recycles an index on removal, so a
+///   removed node's id is never handed to a later node. Resolution therefore
+///   answers "live" or "stale", never "a different element".
+///
+/// A `role + name` anchor would *not* have that property: a second button
+/// labelled `"Delete"` silently satisfies an anchor minted against the first.
+/// Names locate an element; they do not identify one. So the captured role and
+/// name here are for **diagnosis only** ("this handle was: button \"Save
+/// draft\""), never for re-resolution. Re-finding is the caller's decision to
+/// make out loud, with a fresh query.
+///
+/// A handle is scoped to one document. `ScriptedDom` fences its ids with a
+/// document tag on 64-bit debug builds, so a cross-document handle trips an
+/// assertion there; in release, keep handles beside the surface they came from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Handle<Id> {
+    node: Id,
+    role: Role,
+    name: Option<String>,
+}
+
+impl<Id: Copy> Handle<Id> {
+    /// The DOM node this handle names. Prefer
+    /// [`resolve`](Projection::resolve), which reports staleness.
+    pub fn node(&self) -> Id {
+        self.node
+    }
+
+    /// What this handle was when it was minted, for error messages. Says nothing
+    /// about what it is now.
+    pub fn describe(&self) -> String {
+        match &self.name {
+            Some(name) => format!("{:?} {name:?}", self.role),
+            None => format!("unnamed {:?}", self.role),
+        }
+    }
+}
+
+/// The outcome of resolving a [`Handle`] against a projection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Resolution<Id> {
+    /// The element is still in the tree, and is the same element.
+    Live(Id),
+    /// The element is gone. It has not been replaced by something else wearing
+    /// its id; that cannot happen.
+    Stale,
+}
+
+impl<Id: Copy + Eq> Projection<Id> {
+    /// Mint a durable handle for a node found in this projection.
+    pub fn handle(&self, projected: &ProjectedNode<Id>) -> Handle<Id> {
+        Handle {
+            node: projected.dom,
+            role: projected.node.role(),
+            name: projected.node.label().map(str::to_string),
+        }
+    }
+
+    /// Resolve a handle against this projection.
+    ///
+    /// Linear in the projection's size. A host projecting every frame and
+    /// resolving many handles should index `nodes` by `dom` once; the honest
+    /// shape is a scan until that is measured to matter.
+    pub fn resolve(&self, handle: &Handle<Id>) -> Resolution<Id> {
+        if self.nodes.iter().any(|node| node.dom == handle.node) {
+            Resolution::Live(handle.node)
+        } else {
+            Resolution::Stale
+        }
+    }
+}
+
 impl<Id: Copy> Projection<Id> {
     /// Every node matching `query`, in the projection's own order (children
     /// before parents).
@@ -239,6 +321,74 @@ mod tests {
             projection.find_one(&query).is_none(),
             "two matches must not resolve to one"
         );
+    }
+
+    /// A view update that preserves an element preserves its id: xilem-serval's
+    /// `rebuild` reuses the node and diffs attributes in place. The DOM-level
+    /// equivalent is an attribute change, after which the handle still resolves to
+    /// the same element.
+    #[test]
+    fn a_handle_survives_an_update_that_preserves_the_element() {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let save = button(&mut dom, root, "Save");
+
+        let plane = fragments(&dom);
+        let projection = project_all(&dom, &plane, &mut NoLeafA11y);
+        let query = ElementQuery::role(Role::Button);
+        let handle = projection.handle(projection.find_one(&query).expect("button"));
+
+        // The kind of churn a rebuild produces: attributes change, node persists.
+        dom.set_attribute(save, attr_name("aria-label"), "Save draft");
+        let plane = fragments(&dom);
+        let reprojected = project_all(&dom, &plane, &mut NoLeafA11y);
+
+        assert_eq!(reprojected.resolve(&handle), Resolution::Live(save));
+        // The handle's captured name is a snapshot for diagnosis, not a live read.
+        assert_eq!(handle.describe(), "Button \"Save\"");
+    }
+
+    /// The invariant the whole handle design rests on: `ScriptedDom` allocates
+    /// from a monotonic counter and never recycles an index, so a removed node's
+    /// id is never reissued. A stale handle therefore cannot alias a live element.
+    ///
+    /// If someone ever adds a free list to the arena, this test fails, and the
+    /// `Handle` doc comment becomes a lie. That is the point of asserting it here
+    /// rather than trusting it.
+    #[test]
+    fn a_removed_element_goes_stale_and_its_id_is_never_reissued() {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let doomed = button(&mut dom, root, "Delete");
+
+        let plane = fragments(&dom);
+        let projection = project_all(&dom, &plane, &mut NoLeafA11y);
+        let handle = projection.handle(
+            projection
+                .find_one(&ElementQuery::role(Role::Button))
+                .expect("button"),
+        );
+
+        dom.remove(doomed);
+        let replacement = button(&mut dom, root, "Delete");
+        assert_ne!(
+            replacement, doomed,
+            "the arena must not reissue a removed node's id"
+        );
+
+        let plane = fragments(&dom);
+        let reprojected = project_all(&dom, &plane, &mut NoLeafA11y);
+        assert_eq!(
+            reprojected.resolve(&handle),
+            Resolution::Stale,
+            "a handle to a removed element is stale, never rebound"
+        );
+        // ...and the replacement, identically named, is a genuinely different
+        // element. A `role + name` anchor would have silently bound to it.
+        let fresh = reprojected
+            .find_one(&ElementQuery::role(Role::Button))
+            .expect("the replacement");
+        assert_eq!(fresh.dom, replacement);
     }
 
     /// The payoff of wiring `Leaf::accessibility`: a chisel leaf's interior is

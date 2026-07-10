@@ -285,15 +285,26 @@ trait, so it blocks nothing.
   tree until phase 2 wires `Leaf::accessibility()` (finding 3); phase 1 targets
   DOM and host-projected nodes only, and must not be specified against leaf
   children it cannot yet see.
-- Element query: selector and role/label/text queries via `query_traverse` and
-  `SemanticQuery`. Returns element handles.
-- Handle registry, with an identity rule: xilem-serval rebuilds and diffs the
-  view tree every update cycle, so a handle pinned to a raw NodeId goes stale
-  on any rebuild — Selenium's `StaleElementReference` wart, re-imported into
-  an engine we own. Handles anchor to semantic identity (keyed-view path,
-  role + label) so they survive rebuilds that preserve meaning; a handle
-  whose anchor is gone answers "stale," never a wrong node. The exact anchor
-  scheme is the plan's hardest open design question (see Open questions).
+- Element query: role / accessible-name / routability queries over the one
+  `Projection`, landed as `serval-layout`'s `query` module. CSS selector queries
+  ride serval-layout's existing stylo adapters, **not** `query_traverse`, which
+  would pull `script-engine-api` in through `script-runtime-api`. `find_one`
+  answers `None` on an ambiguous match rather than the first hit.
+- Handle registry. **The identity rule inverted once checked against the tree
+  (landed 2026-07-09).** The handle *is* the DOM node id, and that is sound:
+  xilem-serval's `rebuild` reuses the existing node and diffs attributes and
+  children in place, so an update preserving an element preserves its id; and
+  `ScriptedDom` allocates from a monotonic counter and never recycles an index on
+  removal, so a dead id is never reissued. Resolution answers `Live` or `Stale`,
+  never a different element, and it gets that for free from the DOM.
+
+  A `role + label` anchor would have been *worse than the raw id*: a second
+  button labelled "Delete" silently satisfies an anchor minted against the first,
+  which is precisely the "wrong node" this plan forbids. Names locate an element;
+  they do not identify one. A handle captures its role and name for **diagnosis
+  only** ("was: button \"Save draft\""); re-finding is the caller's decision to
+  make out loud with a fresh query. A test asserts the non-recycling invariant, so
+  adding a free list to the arena breaks the build rather than the guarantee.
 - Surface axis from day one: every observe/actuate call takes a surface
   handle (window / webview). Mere is one-state-N-windows, the scenario format
   already targets windows with `@<n>`, and WebDriver classic requires window
@@ -503,12 +514,19 @@ live session and drives an interaction loop with no polling.
 
 ## Open questions
 
-- **Handle identity anchoring.** What exactly a handle pins to across view
-  rebuilds: keyed-view path, role + label, a host-assigned automation id
-  attribute, or a layered fallback of these. The hardest design question in
-  the plan; settle it in phase 1 before the registry API freezes, with a
-  test that rebuilds the view and proves the handle survives or reports
-  stale (never resolves to a different node).
+- ~~**Handle identity anchoring.**~~ **Settled 2026-07-09, and it was not hard;
+  it was mis-stated.** Both premises were false. xilem-serval's `rebuild` reuses
+  the node rather than recreating it, and `ScriptedDom` never recycles an arena
+  index. So the raw DOM id already survives rebuilds and can never alias a live
+  element, and the proposed `role + label` anchor would have introduced the exact
+  rebinding hazard the requirement forbade. The handle is the node id; the
+  captured role and name are diagnostics. See phase 1 and the non-recycling test.
+
+  What remains open is narrower: a **host-assigned automation id attribute** is
+  still worth having, not for identity but for *addressability* — so a caller can
+  name a control that has no distinctive accessible name, instead of relying on
+  ambiguity-rejecting queries. That is a convenience layer above handles, not a
+  replacement for them.
 - **Quiescence scope boundaries.** Where the settled/perpetual line sits for
   sources that are neither (long transitions, media playback, streaming
   loads); whether a scope descriptor is per-call or per-session. Empirical;
@@ -541,6 +559,26 @@ live session and drives an interaction loop with no polling.
   the second consumer, not before.
 
 ## Progress
+
+- 2026-07-09: **phase 1 begun; handle identity settled by inverting it.** The
+  `query` module landed in `serval-layout` (`ElementQuery` by role / accessible
+  name / routability; `find_one` refuses an ambiguous match). The walk now retains
+  each node's DOM origin and returns a `Projection`, the single semantic
+  projection that `accesskit_tree`, `build_subtree` and queries are all views
+  onto; `actionable` is derived from the finished nodes, so a leaf declaring
+  `SetValue` counts exactly like a `<button>` that got `Click` from its role.
+
+  The handle question turned out mis-stated rather than hard. Checked against the
+  tree: `rebuild` reuses the node (xilem-serval `element.rs`), and `push` /
+  `drop_subtree` never recycle an arena index (`serval-scripted-dom`). So a raw
+  DOM id survives rebuilds and cannot alias a live element, while the proposed
+  `role + label` anchor would have rebound to a same-named sibling. Handles are
+  node ids; role and name are captured for diagnosis. A test asserts the
+  non-recycling invariant directly, so a future free list fails the build.
+
+  Chisel leaf interiors are queryable through the same path, which is phase 2's
+  step zero paying off inside phase 1: a `Knob` is found by `role = Slider`, and
+  the same DOM yields nothing without a leaf source.
 
 - 2026-07-09: **placement settled: no new crate.** Verified against the manifests
   rather than the layer diagram. `serval-layout` depends on
