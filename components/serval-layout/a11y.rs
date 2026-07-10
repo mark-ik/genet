@@ -127,6 +127,8 @@ where
                 "radio" => return Role::RadioButton,
                 "radiogroup" => return Role::RadioGroup,
                 "switch" => return Role::Switch,
+                "tab" => return Role::Tab,
+                "tablist" => return Role::TabList,
                 _ => {},
             }
         }
@@ -208,6 +210,15 @@ where
         access.set_toggled(toggled);
     }
 
+    // `aria-selected` maps to AccessKit's first-class selection flag (a tab, a
+    // listbox option, a roster row), so AT announces and queries selection as
+    // state rather than parsing it out of a description string.
+    match attr(dom, node, "aria-selected") {
+        Some("true") => access.set_selected(true),
+        Some("false") => access.set_selected(false),
+        _ => {},
+    }
+
     // A chisel leaf is a replaced element: its interior is invisible to the DOM,
     // so the leaf speaks for itself here. It may override the role the tag walk
     // assigned, name itself, carry a value, and declare its own actions. It runs
@@ -223,7 +234,7 @@ where
         // back off the node, not from the tag, so a leaf that promoted itself to
         // a control is treated as one.
         let action = match access.role() {
-            Role::Button | Role::Switch | Role::CheckBox | Role::RadioButton => {
+            Role::Button | Role::Switch | Role::CheckBox | Role::RadioButton | Role::Tab => {
                 Some(Action::Click)
             }
             Role::TextInput => Some(Action::Focus),
@@ -456,6 +467,47 @@ mod tests {
             height: taffy::AvailableSpace::Definite(600.0),
         };
         layout(dom, &styles, &ImagePlane::new(), viewport).0
+    }
+
+    /// ARIA tab semantics: `role="tab"` / `"tablist"` map to their AccessKit
+    /// roles, and `aria-selected` becomes the first-class selection flag — state
+    /// AT queries, not prose parsed out of a description.
+    #[test]
+    fn aria_tab_and_selected_reach_the_tree() {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let bar = dom.create_element(html("div"));
+        dom.set_attribute(bar, attr_name("role"), "tablist");
+        dom.append_child(root, bar);
+        let tab = dom.create_element(html("div"));
+        dom.set_attribute(tab, attr_name("role"), "tab");
+        dom.set_attribute(tab, attr_name("aria-selected"), "true");
+        dom.append_child(bar, tab);
+
+        let fragments = fragments_from_scripted_dom(&dom);
+        let (nodes, _, actionable) = build_subtree(
+            &dom,
+            &fragments,
+            root,
+            &|d: &ScriptedDom, n: NodeId| access_id(d, n),
+            &|_d: &ScriptedDom, _n: NodeId| false,
+        );
+        let node = |n: NodeId| {
+            nodes
+                .iter()
+                .find(|(id, _)| *id == access_id(&dom, n))
+                .map(|(_, node)| node)
+                .expect("node in tree")
+        };
+
+        assert_eq!(node(bar).role(), Role::TabList);
+        assert_eq!(node(tab).role(), Role::Tab);
+        assert_eq!(node(tab).is_selected(), Some(true));
+        assert!(
+            node(tab).supports_action(Action::Click),
+            "a tab is invoked via Click, like a button"
+        );
+        assert_eq!(actionable, vec![tab], "the tab is routable; the bar is not");
     }
 
     /// A `LeafA11ySource` standing in for chisel's registry: key 7 is a knob.

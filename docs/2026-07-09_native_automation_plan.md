@@ -369,6 +369,20 @@ trait, so it blocks nothing.
 click, wait settled, assert text, screenshot) with zero coordinate literals
 and zero sleeps.
 
+*Status 2026-07-09: the loop's core is proven headless.*
+`semantic_query_drives_a_tab_switch` (pelt's `tile_surface` tests, GPU-free
+feature) finds a tab by `role=Tab` + name on the semantic projection, activates
+it through the same dispatch path a pointer takes, and reads the switch back as
+`is_selected` state — zero coordinates, zero sleeps, and the handle resolves
+`Live` across the rebuild. Still open toward the full done-when: a *windowed*
+launch, a settled-wait over a document actually loading (this frame DOM has no
+async work), text assertion on page content, and the screenshot. Getting there
+also surfaced missing ARIA vocabulary: the walk now maps `role="tab"` /
+`"tablist"` and `aria-selected` (AccessKit's first-class `Selected` flag), and
+`Tab` joined the Click-routable roles — pelt's tab bar is the first annotated
+consumer, and meerkat's roster (which encodes selection in a description
+string today) should adopt `aria-selected` when it comes out of extraction.
+
 ### Phase 2 — leaf interiors join the tree
 
 Leaves are replaced elements; their interior is invisible to the DOM. But two

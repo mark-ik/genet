@@ -212,9 +212,17 @@ changed.
    adapters build as serval workspace members; `cargo check` green across
    serval's default and per-feature builds.
 2. inker core has no kernel dependency; routing tests pass without kernel
-   fixtures.
+   fixtures. **DONE 2026-07-10** (mere 7fde32b): NodeKey = petgraph
+   NodeIndex direct, RouteViewId own uuid newtype in routing/ids.rs; every
+   in-tree constructor passed view: None, so no call site changed; inker's
+   tree is serde + tracing + petgraph + uuid.
 3. statements apply-half relocated mere-side (or parked in a named follow-on
-   if the linked-data plan has not landed a consumer).
+   if the linked-data plan has not landed a consumer). **DONE 2026-07-10**
+   (same commit): resolve_rel + StatementOutcome + apply_link_statements
+   now in linked-data (apply takes `&[LinkStatement]`, so linked-data deps
+   inker only for the vocabulary); inker keeps the pure walk. Receipts:
+   inker 86 / linked-data 35 / meerkat 82+247 green, all inker consumers
+   check clean.
 4. mere's gloss/uxtree/import/meerkat build against the serval git dep;
    meerkat behavior unchanged (existing routing + registry tests green).
 5. App-flavored routing constants live app-side; grep for

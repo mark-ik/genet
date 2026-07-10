@@ -253,7 +253,12 @@ fn render_stack(stack: &TabStack, path: &[usize]) -> TileView {
             let label =
                 el::<_, TileState, ()>("span", tile.title.clone()).attr("class", "tile-label");
             let close = on_click(
-                el::<_, TileState, ()>("span", "\u{00d7}").attr("class", "tile-close"),
+                el::<_, TileState, ()>("span", "\u{00d7}")
+                    .attr("class", "tile-close")
+                    // Its own control, not part of the tab's name: an icon-only
+                    // button a screen reader announces as "Close <title>".
+                    .attr("role", "button")
+                    .attr("aria-label", format!("Close {}", tile.title)),
                 move |s: &mut TileState, ev: PointerClick| {
                     ev.stop_propagation();
                     s.pending.push(TileEvent::Closed(id));
@@ -278,6 +283,15 @@ fn render_stack(stack: &TabStack, path: &[usize]) -> TileView {
                 el::<_, TileState, ()>("div", (label, close))
                     .attr("class", class)
                     .attr("data-tabid", id.0.to_string())
+                    // ARIA tab semantics: the title lives in a child span, so the
+                    // tab names itself with aria-label; selection is real state,
+                    // not a class name.
+                    .attr("role", "tab")
+                    .attr("aria-label", tile.title.clone())
+                    .attr(
+                        "aria-selected",
+                        if i == stack.active { "true" } else { "false" },
+                    )
                     .attr("style", style),
                 move |s: &mut TileState, _: PointerClick| s.pending.push(TileEvent::Activated(id)),
             )) as TileView
@@ -287,6 +301,7 @@ fn render_stack(stack: &TabStack, path: &[usize]) -> TileView {
     // `DropTarget::Stack` (insert into this stack) rather than an edge split.
     let tab_bar = el::<_, TileState, ()>("div", tabs)
         .attr("class", "tile-tabbar")
+        .attr("role", "tablist")
         .attr("data-stack", encode_path(path));
 
     // The content-area placeholder for the active tile, marked with its id so the host
@@ -625,31 +640,52 @@ impl TileSurface {
     /// viewer reads. Layout is rebuilt here for the same reason the hit-test
     /// entries rebuild it — the surface retains no session between calls.
     pub fn a11y_tree(&mut self, width: u32, height: u32) -> (TreeUpdate, Vec<(AccessNodeId, NodeId)>) {
+        let projection = self.projection(width, height);
+        let route = projection
+            .nodes
+            .iter()
+            .filter(|projected| {
+                serval_layout::ROUTABLE_ACTIONS
+                    .iter()
+                    .any(|action| projected.node.supports_action(*action))
+            })
+            .map(|projected| (projected.id, projected.dom))
+            .collect();
+        let root = projection.root;
+        let tree = TreeUpdate {
+            nodes: projection
+                .nodes
+                .into_iter()
+                .map(|projected| (projected.id, projected.node))
+                .collect(),
+            tree: Some(Tree::new(root)),
+            tree_id: TreeId::ROOT,
+            focus: root,
+        };
+        (tree, route)
+    }
+
+    /// The frame's semantic projection at `width`×`height` — the observe
+    /// primitive [`a11y_tree`](Self::a11y_tree) seals for the OS, and the one
+    /// element queries run against (`serval_layout::ElementQuery`), so a test or
+    /// driver finds a tab the way a screen reader does and acts on the DOM node
+    /// it carries. Rebuilds layout like the hit-test entries do; the surface
+    /// retains no session between calls.
+    pub fn projection(&mut self, width: u32, height: u32) -> serval_layout::Projection<NodeId> {
         let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
         let dom_handle = self.runner.dom();
         let dom = dom_handle.borrow();
         let session =
             IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32);
-        let root = dom.document();
-        let (nodes, root_id, actionable) = serval_layout::build_subtree_with_leaves(
+        serval_layout::project(
             &*dom,
             session.fragments(),
-            root,
+            dom.document(),
             &|d: &ScriptedDom, n: NodeId| AccessNodeId(d.opaque_id(n)),
             &|_d: &ScriptedDom, _n: NodeId| false,
             &mut LeafA11y(&mut self.leaves),
-        );
-        let route = actionable
-            .into_iter()
-            .map(|node| (AccessNodeId(dom.opaque_id(node)), node))
-            .collect();
-        let tree = TreeUpdate {
-            nodes,
-            tree: Some(Tree::new(root_id)),
-            tree_id: TreeId::ROOT,
-            focus: root_id,
-        };
-        (tree, route)
+            true,
+        )
     }
 
     /// The shared frame DOM handle (for the host's hit-testing of tab bars / dividers).
@@ -1159,6 +1195,63 @@ mod tests {
         } else {
             panic!("expected a stack");
         }
+    }
+
+    /// The native-automation loop, headless, with zero coordinate literals and
+    /// zero sleeps: find a tab the way a screen reader does (role + name on the
+    /// semantic projection), act on the DOM node it carries, and read the state
+    /// change back as selection state — not a class name, not a pixel.
+    /// `tab_click_activates` above is the same gesture located by DOM-walking;
+    /// this is the query path the automation plan's phase 1 specifies.
+    #[test]
+    fn semantic_query_drives_a_tab_switch() {
+        use accesskit::Role;
+        use serval_layout::{ElementQuery, NameMatch, Resolution};
+
+        let stack = TileTree::stack(
+            vec![doc_tile(1, "<p>one</p>"), doc_tile(2, "<p>two</p>")],
+            0,
+        );
+        let mut surface = TileSurface::new(stack);
+
+        // Observe: tab2 is findable by role + name, and not selected.
+        let projection = surface.projection(800, 600);
+        let tab2_query = ElementQuery::role(Role::Tab).named(NameMatch::Exact("tab2".into()));
+        let tab2 = projection.find_one(&tab2_query).expect("tab2 in the tree");
+        assert_eq!(tab2.node.is_selected(), Some(false));
+        assert!(tab2.node.bounds().is_some(), "a laid-out tab has geometry");
+        let handle = projection.handle(tab2);
+
+        // Its close control is a distinct, named element — not folded into the tab.
+        assert!(
+            projection
+                .find_one(
+                    &ElementQuery::role(Role::Button)
+                        .named(NameMatch::Exact("Close tab2".into()))
+                )
+                .is_some(),
+            "the close x announces as its own button"
+        );
+
+        // Actuate through the same activation path a pointer takes.
+        surface.dispatch_click(handle.node(), PointerClick::at((0.0, 0.0)));
+        assert!(surface.pump(), "the activation changed the tree");
+
+        // Read back: selection moved, as state. The handle survived the rebuild
+        // (xilem diffs the tab in place), so it resolves to the same element.
+        let projection = surface.projection(800, 600);
+        let tab2 = projection.find_one(&tab2_query).expect("tab2 still present");
+        assert_eq!(tab2.node.is_selected(), Some(true), "tab2 is now selected");
+        assert_eq!(
+            projection
+                .find_one(&ElementQuery::role(Role::Tab).named(NameMatch::Exact("tab1".into())))
+                .expect("tab1")
+                .node
+                .is_selected(),
+            Some(false),
+            "tab1 gave up selection"
+        );
+        assert_eq!(projection.resolve(&handle), Resolution::Live(tab2.dom));
     }
 
     /// The host-authority path: a tab click queues a gesture that `take_events` returns
