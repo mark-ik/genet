@@ -1,0 +1,40 @@
+[package]
+name = "nematic"
+# Own version line (not workspace): published crate, 0.0.1 name-claim bumped to
+# 0.1.0 on first publish from this repo (inker-adoption plan, 2026-07-09).
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+# Not workspace: serval's workspace repository still points at upstream servo.
+repository = "https://github.com/mark-ik/serval"
+description = "Portable smolweb rendering engine — Gemini, Gopher, Markdown, feeds, and the knot note format, lowered to the inker document model."
+documentation = "https://docs.rs/nematic"
+readme = "README.md"
+keywords = ["smolweb", "gemini", "gopher", "rendering", "engine"]
+categories = ["web-programming", "rendering"]
+# Override serval's workspace-wide publish = false: nematic is a published crate.
+publish = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+inker = { workspace = true }
+# Smolweb parsers: the portable per-format ASTs the engines below lower into
+# `DocumentBlock`. The parse layer (gemtext/gopher/nex/feed) lives in errand
+# (transport + parse, one smolweb crate); nematic owns only the AST -> block
+# lowering. Git dep (the sibling-crate convention); a local `.cargo/config.toml`
+# path override speeds the cross-repo edit loop.
+errand = { git = "https://github.com/mark-ik/errand.git" }
+pulldown-cmark = { version = "0.13", default-features = false }
+# Djot pull-parser for the knot djot-substrate proof-of-concept (knot/djot.rs;
+# design doc §10). Additive alongside pulldown-cmark during the migration.
+jotdown = "0.10"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+# `test = true` runs the example's embedded round-trip tests under `cargo test`.
+[[example]]
+name = "knot-render"
+test = true

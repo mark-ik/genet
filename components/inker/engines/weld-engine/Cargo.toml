@@ -1,0 +1,25 @@
+[package]
+name = "weld-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "inker SurfaceEngine implementation backed by the wgpu-weld CEF (Chromium) accelerated-OSR embedding."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+inker.workspace = true
+tracing.workspace = true
+
+# NOTE: deliberately NO `welding` / `cef` dependency. weld's frame model imports
+# internally (OnAcceleratedPaint -> weld-owned shared texture -> wgpu
+# ImportedTexture), which does not fit inker's raw-handle SurfaceFrame, so — like
+# graft-engine — this crate defines the `WeldSurface` host-seam and the host
+# (meerkat, behind its `engine-weld` feature) implements it over `welding`'s
+# `CefSurfaceProducer` + `CefRuntime`. Keeping this crate inker-only avoids
+# resolving the CEF / Chromium distribution into the mere workspace. CEF joins the
+# build only when the host impl lands. See WeldSurface for the subprocess-tax
+# caveat the host must honor.

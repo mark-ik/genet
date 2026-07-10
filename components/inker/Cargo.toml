@@ -1,0 +1,28 @@
+[package]
+name = "inker"
+# Own version line (not workspace): published crate, 0.0.1 name-claim bumped to
+# 0.1.0 on first publish from this repo (inker-adoption plan, 2026-07-09).
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+# Not workspace: serval's workspace repository still points at upstream servo.
+repository = "https://github.com/mark-ik/serval"
+description = "Modular engine/renderer controller — selects and orchestrates content engines (serval HTML lanes, nematic smolweb, scrying/graft/weld surface engines)."
+documentation = "https://docs.rs/inker"
+readme = "README.md"
+keywords = ["engine", "renderer", "controller", "browser", "modular"]
+categories = ["web-programming"]
+# Override serval's workspace-wide publish = false: inker is a published crate.
+publish = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# Kernel-free by design (the seiche precedent): routing context takes petgraph's
+# NodeIndex directly (mere's kernel NodeKey is an alias of the same type) and an
+# own uuid-backed view-id newtype, so inker serves any host graph.
+petgraph = { version = "0.8.3", features = ["serde-1"] }
+serde = { workspace = true, features = ["derive"] }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }

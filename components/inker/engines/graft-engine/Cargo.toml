@@ -1,0 +1,26 @@
+[package]
+name = "graft-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "inker SurfaceEngine implementation backed by the wgpu-graft Servo embedding (GL-FBO / DX12-shared / Vulkan-external-memory / IOSurface interop)."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+inker.workspace = true
+tracing.workspace = true
+
+# NOTE: deliberately NO `grafting` / `servo-wgpu-interop-adapter` / `servo`
+# dependency. Unlike scrying (which exposes one `WebSurfaceProducer` library
+# trait this crate could adapt), graft's "producer" is a *composite* — a `Servo`
+# instance + `WebView` + `ServoWgpuInteropAdapter` — with no single library type
+# to wrap. So this crate defines the `GraftSurface` host-seam instead and the
+# host (meerkat, behind its `engine-graft` feature) implements it over the live
+# grafting API. Depending on Servo here, even optionally, would make *every*
+# `cargo` invocation in the mere workspace resolve + fetch the Servo git tree —
+# the exact build cost the per-engine gating exists to avoid. The grafting deps
+# join the graph only when the Servo lane is actually built (see GraftSurface).

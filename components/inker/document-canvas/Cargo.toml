@@ -1,0 +1,43 @@
+[package]
+name = "document-canvas"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+# Not workspace: serval's workspace repository still points at upstream servo.
+repository = "https://github.com/mark-ik/serval"
+description = "Document-view canvas — parley-driven layout for inker::EngineDocument; emits portable render packets parallel to graph-canvas."
+documentation = "https://docs.rs/document-canvas"
+readme = "README.md"
+keywords = ["layout", "text", "parley", "document", "renderer"]
+categories = ["text-processing", "rendering"]
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+# Netrender backend — turns a `DocumentRenderPacket` into a
+# `netrender::Scene` for the wgpu renderer. Behind a feature for
+# *modularity*, not portability: netrender itself is wasm32-portable, but
+# consumers that don't need it (gpui-native rendering, AccessKit-only
+# projection, isolated layout testing) shouldn't pay its compile cost.
+# This is the same separation the rest of the workspace uses — test each
+# part of the project in isolation or arbitrary combinations.
+netrender = ["dep:netrender", "dep:paint_list_render"]
+
+[dependencies]
+inker = { workspace = true }
+parley = { workspace = true }
+serde = { workspace = true }
+# Engine-facing PaintList vocabulary — portable (euclid + serde, no wgpu), so
+# the producer path (paint_list_from_packet) is unconditional. Workspace
+# entries: same netrender git source the rest of serval pins.
+paint_list_api = { workspace = true }
+netrender = { workspace = true, optional = true }
+# PaintCmd → netrender::Scene lowering. Behind the `netrender` feature
+# (pulls netrender transitively), same as the scene backend.
+paint_list_render = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Serde round-trip test for the document style sheet (config-shaped).
+serde_json = { workspace = true }

@@ -18,6 +18,17 @@ members = [
     "components/xilem-serval",
     "components/chisel",
     "components/verso-tile",
+    # The engine-management layer, adopted from mere 2026-07-10
+    # (docs/2026-07-09_inker_serval_adoption_plan.md): inker (contracts +
+    # document/surface registries) with its surface adapters + document-canvas
+    # + knot-editor-host nested, and nematic promoted to a top-level component.
+    "components/inker",
+    "components/inker/document-canvas",
+    "components/inker/knot-editor-host",
+    "components/inker/engines/scrying-engine",
+    "components/inker/engines/graft-engine",
+    "components/inker/engines/weld-engine",
+    "components/nematic",
     "components/smolweb-views",
     "components/serval-winit-host",
     "components/serval-render",
@@ -184,6 +195,15 @@ p384 = { version = "0.13", features = ["ecdh"] }
 p521 = { version = "0.13", features = ["ecdh"] }
 parking_lot = { version = "0.12", features = ["serde"] }
 parley = { version = "0.10.0", default-features = true }
+# The engine-management family, adopted from mere 2026-07-10 (inker-adoption
+# plan). inker + nematic publish (0.1.0); the rest inherit publish = false.
+inker = { version = "=0.1.0", path = "components/inker" }
+nematic = { version = "=0.1.0", path = "components/nematic" }
+document-canvas = { version = "=0.1.0", path = "components/inker/document-canvas" }
+knot-editor-host = { version = "=0.1.0", path = "components/inker/knot-editor-host" }
+scrying-engine = { version = "=0.2.0", path = "components/inker/engines/scrying-engine" }
+graft-engine = { version = "=0.2.0", path = "components/inker/engines/graft-engine" }
+weld-engine = { version = "=0.2.0", path = "components/inker/engines/weld-engine" }
 pelt-core = { version = "=0.2.0", path = "ports/pelt-core" }
 pelt-desktop = { version = "=0.2.0", path = "ports/pelt-desktop" }
 netrender = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }

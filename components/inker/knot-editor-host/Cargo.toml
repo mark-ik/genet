@@ -1,0 +1,26 @@
+[package]
+name = "knot-editor-host"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+# Not workspace: serval's workspace repository still points at upstream servo.
+repository = "https://github.com/mark-ik/serval"
+description = "Host-side reuse-lexers for the knot editor: precise inner-language injection over parsers the workspace already ships, layered as overrides on the portable illume pack. Markdown via pulldown-cmark today; CSS/HTML/JS/Turtle to follow."
+documentation = "https://docs.rs/knot-editor-host"
+keywords = ["djot", "editor", "syntax-highlighting", "injection"]
+categories = ["text-processing"]
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+illume = { workspace = true }
+# A parser the workspace already ships (nematic uses it for CommonMark knots).
+# Its offset-iter event stream maps to highlight spans the same way jotdown
+# does.
+pulldown-cmark = { version = "0.13", default-features = false }
+# The editor model ties source text to the rendered preview through the same
+# engine path the rest of the family uses: inker's EngineDocument + nematic's
+# DjotKnotEngine.
+inker = { workspace = true }
+nematic = { workspace = true }

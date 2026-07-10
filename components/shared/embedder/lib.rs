@@ -13,6 +13,7 @@ pub mod input_events;
 pub mod resources;
 pub mod user_contents;
 pub mod webdriver;
+pub mod webdriver_actions;
 
 use std::collections::HashMap;
 use std::ffi::c_void;
