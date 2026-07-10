@@ -1,0 +1,26 @@
+[package]
+name = "verso-tile"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository = "https://github.com/mark-ik/serval"
+publish = true
+description = "The engine-flip tile: re-present the same page through a different engine with the user's place and session carried across. Portable view-state + donor/back/receiver contracts (api), the one-hop degrade-never-block orchestrator (flip), the black-box system-WebView receiver (scry), and, behind the serval-donor feature, the glass-box serval donor. Consolidated 2026-07-09 from the mere workspace's verso / verso-api / verso-scry / verso-serval per the inker-serval adoption plan; the flip is the dynamic counterpart of inker's per-address multiplexer."
+keywords = ["browser", "engine", "webview", "flip", "compatibility"]
+categories = ["gui", "web-programming"]
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+# The default build is the contract + orchestrator + black-box receiver:
+# dependency-free on purpose, so an external black-box implementor reaches the
+# contracts without engine deps (verso-api's charter, preserved).
+default = []
+# The glass-box serval donor (`src/serval.rs`): bridges serval's scripted DOM
+# (DOM + form layers) plus host-fed runtime/session state to PortableViewState.
+serval-donor = ["dep:serval-scripted-dom", "dep:layout-dom-api"]
+
+[dependencies]
+serval-scripted-dom = { path = "../serval-scripted-dom", optional = true }
+layout-dom-api = { path = "../shared/layout-dom", optional = true }
