@@ -57,13 +57,52 @@ impl LeafA11ySource for NoLeafA11y {
 /// is handed back to the caller, whether it acquired the action from its role
 /// (a `<button>` takes `Click`) or from a leaf declaring its own (a slider takes
 /// `SetValue` / `Increment` / `Decrement`).
-const ROUTABLE_ACTIONS: [Action; 5] = [
+pub const ROUTABLE_ACTIONS: [Action; 5] = [
     Action::Click,
     Action::Focus,
     Action::SetValue,
     Action::Increment,
     Action::Decrement,
 ];
+
+/// One projected node: the AccessKit node, its id, and the DOM node it came from.
+///
+/// Keeping the DOM node is what lets a caller act on what it found. Automation
+/// queries the same tree a screen reader reads, then routes back through the DOM,
+/// so the two can never disagree about what is on screen.
+pub struct ProjectedNode<Id> {
+    pub dom: Id,
+    pub id: AccessNodeId,
+    pub node: AccessNode,
+}
+
+/// A laid-out subtree projected once: every node, in insertion order (children
+/// before parents), paired with its DOM origin.
+///
+/// This is the single semantic projection. [`accesskit_tree`] and
+/// [`build_subtree`] are views onto it, and element queries read it rather than
+/// re-deriving roles from the DOM, so a query can never drift from what assistive
+/// tech sees.
+pub struct Projection<Id> {
+    pub root: AccessNodeId,
+    pub nodes: Vec<ProjectedNode<Id>>,
+}
+
+impl<Id: Copy> Projection<Id> {
+    /// The DOM nodes advertising an action a host can route (see
+    /// [`ROUTABLE_ACTIONS`]), whether it came from a role or from a leaf.
+    pub fn actionable(&self) -> Vec<Id> {
+        self.nodes
+            .iter()
+            .filter(|projected| {
+                ROUTABLE_ACTIONS
+                    .iter()
+                    .any(|action| projected.node.supports_action(*action))
+            })
+            .map(|projected| projected.dom)
+            .collect()
+    }
+}
 
 fn access_id<D: LayoutDom>(dom: &D, node: D::NodeId) -> AccessNodeId {
     AccessNodeId(dom.opaque_id(node))
@@ -139,8 +178,7 @@ fn walk<D, I, S>(
     skip: &S,
     leaves: &mut dyn LeafA11ySource,
     advertise_actions: bool,
-    out: &mut Vec<(AccessNodeId, AccessNode)>,
-    actionable: &mut Vec<D::NodeId>,
+    out: &mut Vec<ProjectedNode<D::NodeId>>,
 ) -> AccessNodeId
 where
     D: LayoutDom,
@@ -194,14 +232,9 @@ where
         if let Some(action) = action {
             access.add_action(action);
         }
-        // Hand back anything routable, however it acquired its action: from its
-        // role above, or from a leaf declaring `SetValue` on itself.
-        if ROUTABLE_ACTIONS
-            .iter()
-            .any(|action| access.supports_action(*action))
-        {
-            actionable.push(node);
-        }
+        // Whether this node is routable is read back off the finished node by
+        // `Projection::actionable`, so a leaf that declared `SetValue` on itself
+        // counts exactly like a `<button>` that got `Click` from its role.
     }
 
     if let (Some(&(x0, y0)), Some(layout)) = (origins.get(&node), fragments.rect_of(node)) {
@@ -227,14 +260,55 @@ where
                 leaves,
                 advertise_actions,
                 out,
-                actionable,
             ));
         }
     }
     access.set_children(children);
 
-    out.push((id, access));
+    out.push(ProjectedNode {
+        dom: node,
+        id,
+        node: access,
+    });
     id
+}
+
+/// Project a laid-out subtree once. Everything else in this module is a view onto
+/// the result: the sealed engine tree, a host's stitchable subtree, and element
+/// queries all read the same nodes.
+#[allow(clippy::too_many_arguments)]
+pub fn project<D, I, S>(
+    dom: &D,
+    fragments: &FragmentPlane<D::NodeId>,
+    root: D::NodeId,
+    id_of: &I,
+    skip: &S,
+    leaves: &mut dyn LeafA11ySource,
+    advertise_actions: bool,
+) -> Projection<D::NodeId>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+    I: Fn(&D, D::NodeId) -> AccessNodeId,
+    S: Fn(&D, D::NodeId) -> bool,
+{
+    let origins = origins_of(dom, fragments);
+    let mut nodes = Vec::new();
+    let root_id = walk(
+        dom,
+        fragments,
+        &origins,
+        root,
+        id_of,
+        skip,
+        leaves,
+        advertise_actions,
+        &mut nodes,
+    );
+    Projection {
+        root: root_id,
+        nodes,
+    }
 }
 
 fn origins_of<D>(dom: &D, fragments: &FragmentPlane<D::NodeId>) -> HashMap<D::NodeId, (f32, f32)>
@@ -259,24 +333,22 @@ where
     D::NodeId: Copy + Eq + Hash,
 {
     let root = dom.document();
-    let origins = origins_of(dom, fragments);
-    let mut nodes = Vec::new();
-    let mut actionable = Vec::new();
-    walk(
+    let projection = project(
         dom,
         fragments,
-        &origins,
         root,
         &|d: &D, n: D::NodeId| access_id(d, n),
         &|_d: &D, _n: D::NodeId| false,
         &mut NoLeafA11y,
         false,
-        &mut nodes,
-        &mut actionable,
     );
 
     TreeUpdate {
-        nodes,
+        nodes: projection
+            .nodes
+            .into_iter()
+            .map(|projected| (projected.id, projected.node))
+            .collect(),
         tree: Some(Tree::new(access_id(dom, root))),
         tree_id: TreeId::ROOT,
         focus: access_id(dom, focus.unwrap_or(root)),
@@ -338,21 +410,14 @@ where
     I: Fn(&D, D::NodeId) -> AccessNodeId,
     S: Fn(&D, D::NodeId) -> bool,
 {
-    let origins = origins_of(dom, fragments);
-    let mut nodes = Vec::new();
-    let mut actionable = Vec::new();
-    let root_id = walk(
-        dom,
-        fragments,
-        &origins,
-        root,
-        id_of,
-        skip,
-        leaves,
-        true,
-        &mut nodes,
-        &mut actionable,
-    );
+    let projection = project(dom, fragments, root, id_of, skip, leaves, true);
+    let actionable = projection.actionable();
+    let root_id = projection.root;
+    let nodes = projection
+        .nodes
+        .into_iter()
+        .map(|projected| (projected.id, projected.node))
+        .collect();
     (nodes, root_id, actionable)
 }
 

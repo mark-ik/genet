@@ -26,6 +26,8 @@
 //! `render` and `paint_list_from_layout_dom` are the convenience entry points.
 
 mod a11y;
+/// Semantic element queries over the one projection assistive tech reads.
+mod query;
 mod adapter;
 mod adapter_stylo;
 mod box_tree;
@@ -58,8 +60,10 @@ mod ua_defaults;
 mod viewport;
 
 pub use a11y::{
-    LeafA11ySource, NoLeafA11y, accesskit_tree, build_subtree, build_subtree_with_leaves,
+    LeafA11ySource, NoLeafA11y, ProjectedNode, Projection, ROUTABLE_ACTIONS, accesskit_tree,
+    build_subtree, build_subtree_with_leaves, project,
 };
+pub use query::{ElementQuery, NameMatch};
 pub use adapter::NodeRef;
 pub use adapter_stylo::StyleNodeRef;
 pub use box_tree::{BoxTree, build_box_tree, layout_via_box_tree};

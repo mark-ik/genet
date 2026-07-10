@@ -43,8 +43,16 @@ The survey that motivated this plan found the skeleton largely standing:
    focused / selection, plus `Affordance` with kind + label + source node)
    traits, `LoadingState`/`LoadProgress`, stats, fragments. Generic over
    `NodeId`, so every lane (static, scripted, host UI) can publish it. This is
-   the native core's read side; the plan grows it rather than founding a new
-   crate.
+   the native core's read side.
+
+   It is a **contracts** crate and must stay one. `serval-layout`,
+   `serval-scripted-dom` and `serval-render` all depend on it and implement its
+   traits (`FragmentQuery`, `InteractionState`, `DomArenaStats`), so it sits
+   *below* the layout engine. The core needs `serval-layout` for geometry and the
+   semantic tree, so housing the core here would close a cycle
+   (`engine-observables-api` -> `serval-layout` -> `engine-observables-api`).
+   Grow it for read contracts, including the quiescence contract; never for
+   mechanism. See "Where the core lives" below.
 
 2. **Element location.** `script-runtime-api/dom/query_traverse.rs` already
    implements querySelector-style traversal. Selector matching also lives in
@@ -221,8 +229,52 @@ Five layers, each a phase. Lower layers never depend on higher ones.
 
 ### Phase 1 — the automation core
 
-A new component (working name `serval-drive`; naming pass with Mark before
-founding) exposing a direct Rust API. Everything else is a view onto this.
+#### Where the core lives: no new crate
+
+The core is a set of capabilities, not an object, and each one already has a home
+that needs **no new dependency**. Founding `serval-drive` up front was the wrong
+instinct: it would freeze a public API before the plan's own hardest question
+(handle-identity anchoring) is answered, and force a naming and licensing
+decision that buys nothing yet.
+
+- **`serval-layout` takes the observe and geometry half.** It already carries the
+  semantic tree (`build_subtree`), stylo's selector machinery over the DOM
+  (`adapter_stylo.rs` implements `selectors::Element` / `OpaqueElement`), the
+  fragment plane for bounds and in-view centers, hit-testing, caret and
+  selection. It is already the "queries over a laid-out DOM" crate. Element
+  query, the handle registry, and staleness resolution land here as a `query`
+  module, adding nothing to the manifest. Note this also means CSS queries do
+  **not** need `query_traverse` (finding 2), which would drag `script-engine-api`
+  in through `script-runtime-api`.
+- **`shared/embedder` takes the actuate seam.** It already holds `input_events.rs`
+  and `webdriver.rs` (`WebDriverCommandMsg`, `WebDriverScriptCommand`,
+  `WebDriverJSResult`) and already depends on `accesskit`, `keyboard-types` and
+  `euclid`. It depends on no window, and `serval-wpt` already depends on it. The
+  surface trait and the Actions tick interpreter belong beside the seam types
+  that survived the knockout.
+- **`engine-observables-api` takes quiescence as a contract**, beside
+  `LoadingState` / `LoadProgress`. `script-engine-api` already drains microtasks
+  to quiescence and layout knows when it is idle; only the host sees all three,
+  so `settled()` is a trait implemented per lane and joined by the host.
+- **The WebDriver endpoint is a port**, not a core crate. It belongs beside
+  `serval-wpt`.
+
+`serval-layout` and `shared/embedder` are siblings; neither depends on the other.
+That is correct, because the thing that composes geometry with input is the
+consumer, which has both.
+
+**What a crate would eventually buy** is only the composition façade: resolve a
+handle, find its in-view center, scroll it into view, synthesize the tick, await
+settled. A few hundred lines, eventually shared by pelt, strophe, `serval-wpt`
+and the classic adapter. Extract it when the *second* consumer wants the same
+composition; by then its shape is known, and lifting a façade off crates that are
+already libraries is mechanical. Naming waits for that moment.
+
+One thing could still force a crate: `shared/embedder` is Servo-derived and MPL,
+so new automation logic added there inherits MPL. If this lane should be
+MIT/Apache, the seam wants a different house. That is a licensing choice, not a
+technical necessity, and it touches only the tick interpreter and the surface
+trait, so it blocks nothing.
 
 **Observe:**
 
@@ -482,19 +534,27 @@ live session and drives an interaction loop with no polling.
   freezes, because `serval-wpt` is the second consumer and it is headless
   (finding 11).
 
-- **Does the core need its own crate?** Finding 1 says the read side grows
-  `engine-observables-api` rather than founding a crate; phase 1 then founds
-  `serval-drive` anyway. State what the core holds that observables plus an
-  actuation module could not, before founding it. Workspace convention is to
-  check existing crates and extend rather than duplicate.
-
-- **License for a new component.** `serval-drive` would carry no Servo lineage,
-  while every file it would sit beside inherits MPL. The founding convention for
-  new, non-Servo-derived crates is MIT/Apache plus edition 2024. Decide before
-  founding, not after; relicensing a crate with consumers is the expensive
-  order.
+- ~~**Does the core need its own crate?**~~ **Settled 2026-07-09: no.** Every
+  capability has an existing home needing no new dependency; see "Where the core
+  lives". The open remainder is narrower: *when* the composition façade earns its
+  own crate, and under which license, given `shared/embedder` is MPL. Revisit at
+  the second consumer, not before.
 
 ## Progress
+
+- 2026-07-09: **placement settled: no new crate.** Verified against the manifests
+  rather than the layer diagram. `serval-layout` depends on
+  `engine-observables-api`, so the core cannot live there (cycle). No existing
+  crate occupies the slot above `serval-layout` and below both the windowed hosts
+  and the headless `serval-wpt` (which deps `script-engine-api`/`-boa`/`-nova`
+  and neither `winit` nor `xilem-serval`) — but none is needed, because the core
+  decomposes into capabilities that already have homes: observe/geometry/handles
+  into `serval-layout` (whose stylo selector adapters make `query_traverse`
+  unnecessary), the surface trait and Actions tick interpreter into
+  `shared/embedder` beside `webdriver.rs` and `input_events.rs`, and `settled()`
+  as a contract into `engine-observables-api`. Only the composition façade would
+  ever want a crate; defer it to the second consumer. Phase 1 is therefore
+  unblocked: it needs no naming pass and no licensing decision to begin.
 
 - 2026-07-09: plan drafted from seam survey (observables API, a11y bridge,
   query_traverse, webdriver seam types, script engines, chisel leaf contract).
