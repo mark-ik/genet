@@ -259,6 +259,19 @@ changed.
    for the serval lanes: forcing them through EngineDocument is the block
    mash already rejected.
 7. crates.io: inker + nematic republished from mark-ik/serval.
+   **PREPARED + PARTIALLY BLOCKED, 2026-07-11** (serval 66d88be5efa):
+   versions bumped and package-verified for inker 0.1.0, illume 0.0.2,
+   tinct 0.1.2, nex/spartan/guppy-protocol 0.1.1, then errand 0.1.3 (its
+   =0.1.1 pins resolve once the protocols land — publish order matters).
+   The publish itself awaits Mark's hand (permission boundary). nematic
+   and verso-tile CANNOT publish yet: their optional path deps
+   (xilem-serval, layout-dom-api/serval-scripted-dom) are unpublished
+   serval components, and cargo requires every dependency versioned and
+   registry-resolvable — their 0.0.1 name claims stand meanwhile.
+   **Archive half DONE 2026-07-11**: errand, nex/spartan/guppy-protocol,
+   illume, tincture all pushed-final, tombstone-described, archived on
+   GitHub, each with a homepage link to its serval path (links resolve
+   once serval is pushed).
 8. errand joins serval (companion step; may land separately). **DONE
    2026-07-10** (serval e4487163ed0, mere 00cf124): components/errand with
    nex/spartan/guppy-protocol as members under protocols/, each keeping
