@@ -211,7 +211,18 @@ architecture plan's sequencing note. It never learns the ladder existed.
    session in serval-documents consumes nematic views for all formats it has
    views for. Done when smolweb-views is retired as a separate component
    and native coverage includes the wrapper protocols via gemtext/markdown
-   view reuse.
+   view reuse. **DONE 2026-07-11** (serval 00d87a51fba): views merged
+   behind nematic's `views` feature, component retired, consumers flipped;
+   wrapper protocols verified already riding the gemtext fallthrough
+   (their bodies ARE gemtext); nex gained its first native view (listing
+   entries as focusable links, errand base_url resolution, kind-marked);
+   finger stays on the gemtext fallthrough deliberately (plain text, no
+   link syntax to lose). The "errand absorbs finger wire-shaping" half
+   DISSOLVED on inspection: nematic's finger engine never parsed wire
+   bytes (a TextEngine wrapper + content-type tag), so the invariant this
+   phase wanted was already true — recorded, not invented. Remaining
+   polish, tracked not blocking: a `.nex` stylesheet block, and a
+   markdown-body wrapper route if a protocol ever declares one.
 
 ## Open questions (review-resolved items recorded 2026-07-10)
 
