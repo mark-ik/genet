@@ -1,12 +1,12 @@
 [package]
 name = "xilem-serval"
-version.workspace = true
+version = "0.1.0"
+repository = "https://github.com/mark-ik/serval"
+publish = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-publish.workspace = true
 rust-version.workspace = true
-repository.workspace = true
 description = "A xilem_core backend that diffs a Xilem view tree into serval's mutable ScriptedDom."
 
 [lib]
@@ -32,10 +32,10 @@ highlight = ["dep:illume", "dep:tinct"]
 [dependencies]
 # Arrangement placements (Placement / VirtualWindow) for the `placed` /
 # `arrangement` views — the view half of chisel's tier-3 arrangement leaf.
-chisel = { path = "../chisel" }
-xilem_core = { path = "../xilem-core" }
-serval-scripted-dom = { path = "../serval-scripted-dom" }
-layout_dom_api = { package = "layout-dom-api", path = "../shared/layout-dom" }
+chisel = { package = "serval-chisel", version = "0.1.0", path = "../chisel" }
+xilem_core = { package = "serval-xilem-core", version = "0.4.0", path = "../xilem-core" }
+serval-scripted-dom = { version = "0.1.0", path = "../serval-scripted-dom" }
+layout_dom_api = { package = "layout-dom-api", version = "0.1.0", path = "../shared/layout-dom" }
 # UAX#29 word boundaries for Ctrl+←/→ word motion + Ctrl+Backspace/Delete kill-word
 # in `TextInput` (the buffer owns word segmentation; the host just sends the key).
 unicode-segmentation = { workspace = true }

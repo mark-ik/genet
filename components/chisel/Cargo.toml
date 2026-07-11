@@ -1,6 +1,8 @@
 [package]
-name = "chisel"
-version.workspace = true
+name = "serval-chisel"
+version = "0.1.0"
+repository = "https://github.com/mark-ik/serval"
+publish = true
 authors.workspace = true
 # License: workspace default (MPL-2.0) while chisel lives inside the serval
 # workspace. chisel is new, engine-neutral code (not Servo-derived); relicense
@@ -8,9 +10,7 @@ authors.workspace = true
 # docs/2026-07-07_chisel_widget_leaf_design.md.
 license.workspace = true
 edition.workspace = true
-publish.workspace = true
 rust-version.workspace = true
-repository.workspace = true
 description = "Custom-paint widget leaves for the serval host: a small contract that plugs a leaf into serval's layout / paint / input / a11y passes."
 
 [lib]
