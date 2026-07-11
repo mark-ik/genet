@@ -486,9 +486,15 @@ where
         inline_sources: FxHashMap::default(),
     };
 
-    // The layout root. Two shapes of `LayoutDom::document()`:
-    //   - A `Document` wrapper node (the normal case): its first element
-    //     child (`<html>`, skipping comments/doctype) is the real root.
+    // The layout root. Three shapes of `LayoutDom::document()`:
+    //   - A `Document` wrapper node with ONE element child (the normal case):
+    //     that child (`<html>`, skipping comments/doctype) is the real root.
+    //   - A `Document` wrapper with SEVERAL element children (a host-built
+    //     synthetic DOM — merecat's chrome layer, widget pools — which has no
+    //     UA `<html>` wrapper): every child must lay out, so they hang off a
+    //     synthetic block root sized by the viewport. Parsed HTML never hits
+    //     this (one `<html>`); taking only the first child silently dropped
+    //     the rest of the document.
     //   - An element (a re-rooted `SubtreeView`, whose `document()` is the
     //     subtree root, e.g. `<body>`): that element *is* the root, and
     //     all of its children must be laid out.
@@ -496,12 +502,28 @@ where
     let root = if matches!(dom.kind(doc.id()), NodeKind::Element) {
         build_node(dom, styles, images, doc, &mut tree)
     } else {
-        match doc
+        let mut elems = doc
             .dom_children()
-            .find(|c| matches!(dom.kind(c.id()), NodeKind::Element))
-        {
-            Some(elem) => build_node(dom, styles, images, elem, &mut tree),
-            None => tree.push(BoxNode::new(initial_style(), BoxSource::Element(doc.id()))),
+            .filter(|c| matches!(dom.kind(c.id()), NodeKind::Element));
+        match (elems.next(), elems.next()) {
+            (Some(only), None) => build_node(dom, styles, images, only, &mut tree),
+            (Some(first), Some(second)) => {
+                let mut children = vec![
+                    build_node(dom, styles, images, first, &mut tree),
+                    build_node(dom, styles, images, second, &mut tree),
+                ];
+                for elem in elems {
+                    children.push(build_node(dom, styles, images, elem, &mut tree));
+                }
+                // The synthetic root: initial values (`display: inline` maps
+                // to taffy Block for a box with children), no decorations of
+                // its own, keyed by the document node like the empty-document
+                // fallback below.
+                let mut root = BoxNode::new(initial_style(), BoxSource::Element(doc.id()));
+                root.children = children;
+                tree.push(root)
+            }
+            (None, _) => tree.push(BoxNode::new(initial_style(), BoxSource::Element(doc.id()))),
         }
     };
     tree.root = root;

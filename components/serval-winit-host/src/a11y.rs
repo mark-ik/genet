@@ -14,6 +14,14 @@
 //! host-agnostic: it knows about a winit [`Window`], a `TreeUpdate`, and a wake
 //! callback, nothing about any particular host's panes or verbs.
 //!
+//! # Window lifecycle
+//!
+//! On Windows, [`AccessKitBridge::install`] creates a native subclassing
+//! adapter and must run before the window is shown for the first time. Build an
+//! initial tree while the window is hidden, install it, and then reveal the
+//! window. Calling only [`AccessKitBridge::new`] is not sufficient, and hidden
+//! winit windows may not receive the redraw that a deferred install expects.
+//!
 //! [`serval_layout::build_subtree`]: https://docs.rs/serval-layout
 
 use std::collections::VecDeque;

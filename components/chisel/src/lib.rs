@@ -254,6 +254,14 @@ impl<K: Eq + Hash> LeafRegistry<K> {
         self.leaves.remove(key)
     }
 
+    /// Retain only leaves whose keys satisfy `keep`.
+    ///
+    /// Hosts call this after reconciling model-owned leaf families so removed
+    /// tracks, rows, or nodes do not leave retained widget state behind.
+    pub fn retain(&mut self, mut keep: impl FnMut(&K) -> bool) {
+        self.leaves.retain(|key, _| keep(key));
+    }
+
     pub fn contains(&self, key: &K) -> bool {
         self.leaves.contains_key(key)
     }
@@ -531,6 +539,11 @@ mod tests {
         // retain_keys drops stale buffers.
         out.retain_keys(|k| k != 3);
         assert!(out.get(3).is_none());
+
+        reg.insert(4, Box::new(FlagLeaf { dirty: dirty.clone() }));
+        reg.retain(|key| *key == 4);
+        assert!(!reg.contains(&3));
+        assert!(reg.contains(&4));
     }
 
     #[test]

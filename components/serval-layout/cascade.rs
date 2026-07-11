@@ -995,12 +995,22 @@ fn cascade_traverse<D>(
     //    so the parallel-cascade win is bounded by *this* phase, not the cascade
     //    as a whole. We pass `None` for the pool (serial) — measurement only.
     let t_recalc = timing.then(std::time::Instant::now);
-    if let Some(root_id) = first_element_descendant(dom, dom.document()) {
-        let root_element: StyleNodeRef<'_, D> = StyleNodeRef::new(root_id);
-        let token = RecalcStyle::pre_traverse(root_element, &context);
-        if token.should_traverse() {
-            let traverser = RecalcStyle::new(context);
-            driver::traverse_dom(&traverser, token, None);
+    // Traverse from EVERY document-level element, not just the first: a
+    // host-built synthetic DOM (merecat's chrome layer, widget pools) has no
+    // `<html>` wrapper and hangs several roots off the document; styling only
+    // the first left its siblings at initial values (unstyled, unpositioned).
+    // Parsed HTML has exactly one root element, so this loop runs once there.
+    {
+        let traverser = RecalcStyle::new(context);
+        for root_id in dom.dom_children(dom.document()) {
+            if !matches!(dom.kind(root_id), layout_dom_api::NodeKind::Element) {
+                continue;
+            }
+            let root_element: StyleNodeRef<'_, D> = StyleNodeRef::new(root_id);
+            let token = RecalcStyle::pre_traverse(root_element, &traverser.context);
+            if token.should_traverse() {
+                driver::traverse_dom(&traverser, token, None);
+            }
         }
     }
     if let Some(t) = t_recalc {
@@ -1511,17 +1521,6 @@ fn parse_stylesheet(
         AllowImportRules::Yes,
     );
     DocumentStyleSheet(ServoArc::new(sheet))
-}
-
-/// Walk `dom`'s children of `from` and return the first element descendant.
-/// Used to find the document's root element (`<html>`).
-fn first_element_descendant<D: LayoutDom>(dom: &D, from: D::NodeId) -> Option<D::NodeId> {
-    for child in dom.dom_children(from) {
-        if matches!(dom.kind(child), layout_dom_api::NodeKind::Element) {
-            return Some(child);
-        }
-    }
-    None
 }
 
 fn count_element_subtree<D: LayoutDom>(dom: &D, root: D::NodeId) -> usize {

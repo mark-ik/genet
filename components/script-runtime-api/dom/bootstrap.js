@@ -485,7 +485,12 @@
       // `passive`: preventDefault() must be a no-op for the duration of this
       // listener (DOM). The flag is read by Event.preventDefault (lib.rs).
       event.__inPassive = rec.passive;
-      rec.cb.call(node, event);
+      // A listener's exception is *reported*, not propagated: dispatch continues
+      // to the remaining listeners and dispatchEvent returns normally (DOM
+      // §dispatch step "if this throws an exception, report the exception").
+      // Without this, one throwing onload/handler errors out the whole test.
+      try { rec.cb.call(node, event); }
+      catch (ex) { globalThis.__reportListenerException(ex); }
       event.__inPassive = false;
     }
   }
@@ -510,8 +515,11 @@
     event.target = this;
     event.srcElement = this; // legacy alias for target
     event.__path = path;     // composedPath() (no shadow DOM: target → root + window)
-    event.__stop = false;
-    event.__stopImmediate = false;
+    // The stop-propagation flags are NOT cleared here. The DOM clears them
+    // *after* dispatch (§dispatch), so an event whose `cancelBubble` /
+    // `stopPropagation()` was set *before* dispatch arrives already stopped and
+    // fires nothing — every phase below is guarded on `__stop`. Clearing them
+    // here instead silently un-stopped such an event.
     // eventPhase constants: NONE 0, CAPTURING 1, AT_TARGET 2, BUBBLING 3.
     // Capture: root → just above the target.
     event.eventPhase = 1;
@@ -530,11 +538,13 @@
       }
     }
     // Clear the dispatch flag + transient fields (DOM: after dispatch
-    // currentTarget is null, eventPhase is NONE, and the event may be
-    // dispatched again).
+    // currentTarget is null, eventPhase is NONE, the stop flags are unset, and
+    // the event may be dispatched again).
     event.__dispatch = false;
     event.currentTarget = null;
     event.eventPhase = 0;
+    event.__stop = false;
+    event.__stopImmediate = false;
     return !event.__canceled;
   };
   // stopPropagation halts further nodes (the current node's other listeners still
@@ -2032,6 +2042,96 @@
     return node.dispatchEvent(ev);
   };
 
+  // ---- UA-generated input events (touch / wheel) ----
+  //
+  // The passive-listener optimization, and the rule WPT's
+  // `dom/events/non-cancelable-when-passive` pins: a UA-generated touch or wheel
+  // event is cancelable **only if some non-passive listener for its type exists
+  // on the propagation path**. If every listener is passive, nothing can call
+  // preventDefault, so the UA marks the event non-cancelable (and is free to
+  // scroll without consulting script). Only the DOM knows the listener set, so
+  // the decision lives here rather than in the host.
+  //
+  // This applies to the UA input path only. A *script*-dispatched event keeps
+  // whatever `cancelable` its constructor was given, passive listeners or not
+  // (`generic-events-stay-cancelable`).
+  function hasNonPassiveListener(node, type) {
+    var path = [];
+    var n = node;
+    while (n) { path.push(n); n = n.parentNode; }
+    if (path.length && path[path.length - 1].nodeType === 9 && globalThis.window) {
+      path.push(globalThis.window);
+    }
+    var keys = ['c:' + type, 'b:' + type];
+    for (var i = 0; i < path.length; i++) {
+      var listeners = path[i].__listeners;
+      if (!listeners) continue;
+      for (var k = 0; k < keys.length; k++) {
+        var l = listeners[keys[k]];
+        if (!l) continue;
+        for (var j = 0; j < l.length; j++) {
+          if (!l[j].passive) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Host bridge: dispatch a touch event carrying one touch point. Per Touch
+  // Events, `touches`/`targetTouches` list the points currently on the surface
+  // (empty once the finger lifts), while `changedTouches` always carries the
+  // point this event is about.
+  globalThis.__dispatchTouch = function(rawId, type, x, y, identifier) {
+    var node = wrapNode(__reflectNode(String(rawId)));
+    if (!node) { return false; }
+    type = String(type);
+    var touch = new Touch({
+      identifier: Number(identifier), target: node,
+      clientX: Number(x), clientY: Number(y),
+      pageX: Number(x), pageY: Number(y),
+      screenX: Number(x), screenY: Number(y),
+      force: (type === 'touchend' || type === 'touchcancel') ? 0 : 1,
+    });
+    var lifted = (type === 'touchend' || type === 'touchcancel');
+    var active = lifted ? [] : [touch];
+    var ev = new TouchEvent(type, {
+      bubbles: true,
+      cancelable: hasNonPassiveListener(node, type),
+      touches: active,
+      targetTouches: active,
+      changedTouches: [touch],
+    });
+    return node.dispatchEvent(ev);
+  };
+
+  // Host bridge: dispatch a wheel input as both the standard `wheel` event and
+  // the legacy `mousewheel` (WPT covers both). Each gets its own cancelable
+  // decision, since the rule is per event type.
+  globalThis.__dispatchWheel = function(rawId, x, y, deltaX, deltaY, deltaMode) {
+    var node = wrapNode(__reflectNode(String(rawId)));
+    if (!node) { return false; }
+    var proceed = true;
+    for (var i = 0; i < 2; i++) {
+      var type = (i === 0) ? 'wheel' : 'mousewheel';
+      var ev = new WheelEvent(type, {
+        bubbles: true,
+        cancelable: hasNonPassiveListener(node, type),
+        clientX: Number(x), clientY: Number(y),
+        screenX: Number(x), screenY: Number(y),
+        deltaX: Number(deltaX), deltaY: Number(deltaY), deltaZ: 0,
+        deltaMode: Number(deltaMode),
+      });
+      if (type === 'mousewheel') {
+        // Legacy: wheelDelta is the inverse of deltaY, scaled by 120 per notch.
+        ev.wheelDelta = -Number(deltaY) * 120;
+        ev.wheelDeltaX = -Number(deltaX) * 120;
+        ev.wheelDeltaY = -Number(deltaY) * 120;
+      }
+      if (!node.dispatchEvent(ev)) { proceed = false; }
+    }
+    return proceed;
+  };
+
   // AnimationEvent (css-animations): the `@keyframes` twin of TransitionEvent.
   // Carries `animationName` (the @keyframes rule's name) rather than a property
   // name, plus `elapsedTime` and `pseudoElement`. Bubbles, not cancelable.
@@ -2228,5 +2328,89 @@
     CustomElementRegistry.prototype.upgrade = function(root) { upgradeCustomElementTree(root); };
     globalThis.CustomElementRegistry = CustomElementRegistry;
     globalThis.customElements = new CustomElementRegistry();
+  })();
+
+  // ---- Event-handler IDL attributes (HTML §event-handler-idl-attributes) ----
+  //
+  // `el.onclick = fn`, `window.onload = fn`, `document.body.onload = fn`: a
+  // getter/setter pair per handler name managing a single event listener. The
+  // listener is a stable wrapper registered once (on the first non-null
+  // assignment) that calls the *current* handler value, so reassigning the
+  // handler keeps its listener registration order (per spec, an event handler
+  // interleaves with addEventListener listeners by first-set position) and
+  // setting it to null makes the wrapper a no-op. Only the IDL attribute is
+  // implemented; the content-attribute form (`<body onload="...">` parsed as a
+  // function body) is a separate compile step, deferred.
+  (function() {
+    function defineHandler(proto, type, resolveTarget) {
+      Object.defineProperty(proto, 'on' + type, {
+        configurable: true,
+        get: function() {
+          var t = resolveTarget ? resolveTarget(this) : this;
+          return (t && t.__handlers && t.__handlers[type]) || null;
+        },
+        set: function(v) {
+          var t = resolveTarget ? resolveTarget(this) : this;
+          if (!t) return;
+          if (!t.__handlers) t.__handlers = {};
+          t.__handlers[type] = (typeof v === 'function') ? v : null;
+          if (t.__handlers[type] && !(t.__handlerWrappers && t.__handlerWrappers[type])) {
+            if (!t.__handlerWrappers) t.__handlerWrappers = {};
+            var wrapper = function(event) {
+              var h = t.__handlers[type];
+              if (typeof h === 'function') { return h.call(this, event); }
+            };
+            t.__handlerWrappers[type] = wrapper;
+            t.addEventListener(type, wrapper);
+          }
+        },
+      });
+    }
+    // WindowEventHandlers reflect from <body>/<frameset> onto the Window; on any
+    // other element (or on the Window itself) they are ordinary node handlers.
+    function bodyReflectsToWindow(node) {
+      var nm = node.nodeName;
+      if (nm === 'BODY' || nm === 'FRAMESET') { return globalThis.window || globalThis; }
+      return node;
+    }
+    var WINDOW_REFLECTING = [
+      'load', 'unload', 'resize', 'scroll', 'blur', 'focus', 'error',
+      'hashchange', 'popstate', 'beforeunload', 'pagehide', 'pageshow',
+      'message', 'messageerror', 'offline', 'online', 'storage', 'languagechange',
+    ];
+    var ELEMENT_HANDLERS = [
+      'click', 'dblclick', 'auxclick', 'contextmenu',
+      'mousedown', 'mouseup', 'mousemove', 'mouseover', 'mouseout', 'mouseenter', 'mouseleave',
+      'pointerdown', 'pointerup', 'pointermove', 'pointerover', 'pointerout',
+      'pointerenter', 'pointerleave', 'pointercancel', 'gotpointercapture', 'lostpointercapture',
+      'keydown', 'keyup', 'keypress',
+      // NB: on* touch handlers (ontouchstart, …) are deliberately omitted. Per
+      // Touch Events, those IDL attributes exist only when "expose legacy touch
+      // event APIs" is true (a touch-capable device); serval is not one, and
+      // `'ontouchstart' in document` gates real WPT branches
+      // (Document-createEvent-touchevent). Touch listeners still work via
+      // addEventListener; only the on* reflection is gated. The TouchEvent
+      // *interface* object stays defined (H8b).
+      'wheel',
+      'input', 'change', 'beforeinput', 'submit', 'reset', 'select',
+      'focusin', 'focusout',
+      'drag', 'dragstart', 'dragend', 'dragenter', 'dragover', 'dragleave', 'drop',
+      'copy', 'cut', 'paste',
+      'animationstart', 'animationiteration', 'animationend', 'animationcancel',
+      'transitionstart', 'transitionrun', 'transitionend', 'transitioncancel',
+      'toggle',
+    ];
+    for (var i = 0; i < ELEMENT_HANDLERS.length; i++) {
+      defineHandler(Node.prototype, ELEMENT_HANDLERS[i], null);
+    }
+    for (var j = 0; j < WINDOW_REFLECTING.length; j++) {
+      defineHandler(Node.prototype, WINDOW_REFLECTING[j], bodyReflectsToWindow);
+    }
+    // The Window: every handler registers on the global EventTarget seam
+    // (globalThis.addEventListener delegates to it).
+    var all = ELEMENT_HANDLERS.concat(WINDOW_REFLECTING);
+    for (var k = 0; k < all.length; k++) {
+      defineHandler(globalThis, all[k], null);
+    }
   })();
 })();

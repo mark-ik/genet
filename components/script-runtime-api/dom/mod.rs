@@ -127,6 +127,7 @@ pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(),
     engine.set_function::<CreateComment>("__createComment", 1)?;
     engine.set_function::<CreateFragment>("__createFragment", 0)?;
     engine.set_function::<NodeType>("__nodeType", 1)?;
+    engine.set_function::<NodeRawId>("__nodeRawId", 1)?;
     engine.set_function::<RemoveAttribute>("__removeAttribute", 2)?;
     engine.set_function::<Matches>("__matches", 2)?;
     engine.set_function::<QuerySelector>("__querySelector", 2)?;

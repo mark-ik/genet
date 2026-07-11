@@ -2238,6 +2238,62 @@ mod tests {
         QualName::new(None, ns!(), l.into())
     }
 
+    /// A host-built document with SEVERAL root elements (no `<html>` wrapper —
+    /// merecat's chrome layer, widget pools) lays out and paints every one of
+    /// them. `build_box_tree` used to take only the document's first element
+    /// child, so the second absolute sibling's whole subtree silently emitted
+    /// nothing (merecat's omnibar card blanked whenever its caption chip
+    /// preceded it).
+    #[test]
+    fn multi_root_document_paints_every_root_element() {
+        use paint_list_api::PaintList as _;
+        const SHEET: &[&str] = &[
+            ".a { position: absolute; background-color: rgb(255, 0, 0); } \
+             .b { position: absolute; background-color: rgb(0, 0, 255); }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let a = dom.create_element(html("div"));
+        dom.set_attribute(a, attr("class"), "a");
+        dom.set_attribute(a, attr("style"), "transform: translate(12px, 566px);");
+        let ta = dom.create_text("alpha");
+        dom.append_child(a, ta);
+        dom.append_child(root, a);
+        let b = dom.create_element(html("div"));
+        dom.set_attribute(b, attr("class"), "b");
+        dom.set_attribute(b, attr("style"), "transform: translate(232px, 96px); width: 560px;");
+        let tb = dom.create_text("bravo");
+        dom.append_child(b, tb);
+        dom.append_child(root, b);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let scroll = crate::ScrollOffsets::default();
+        let plist = layout.emit_paint_list(&dom, &scroll, DeviceIntSize::new(800, 600));
+        let has_rect = |r: f32, g: f32, bl: f32| {
+            plist.commands().iter().any(|c| {
+                matches!(c, paint_list_api::PaintCmd::DrawRect(rect)
+                    if (rect.color.r - r).abs() < 0.1
+                        && (rect.color.g - g).abs() < 0.1
+                        && (rect.color.b - bl).abs() < 0.1)
+            })
+        };
+        assert!(has_rect(1.0, 0.0, 0.0), "the first root element paints");
+        assert!(
+            has_rect(0.0, 0.0, 1.0),
+            "the SECOND root element paints too (it used to be dropped): {:#?}",
+            plist.commands()
+        );
+        // Both position through their transforms, not stretched to the viewport.
+        let translated_to = |x: f32, y: f32| {
+            plist.commands().iter().any(|c| {
+                matches!(c, paint_list_api::PaintCmd::PushTransform(t)
+                    if (t.transform.m41 - x).abs() < 0.5 && (t.transform.m42 - y).abs() < 0.5)
+            })
+        };
+        assert!(translated_to(12.0, 566.0), "first sibling's transform applies");
+        assert!(translated_to(232.0, 96.0), "second sibling's transform applies");
+    }
+
     /// The text color a node's persistent plane resolved to.
     fn color(
         layout: &IncrementalLayout<<ScriptedDom as LayoutDom>::NodeId>,

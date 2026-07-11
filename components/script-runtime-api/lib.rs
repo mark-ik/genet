@@ -70,6 +70,12 @@ pub struct HostState {
     /// out-of-range value sees the unclamped value until the host reconciles — the
     /// script/layout split's one fidelity gap.
     pub viewport_scroll: (f32, f32),
+    /// The viewport's CSS-pixel size, the script side of `window.innerWidth` /
+    /// `innerHeight`. The host owns it (it lays out); set it with
+    /// [`Runtime::set_viewport_size`] whenever the surface resizes. Defaults to
+    /// the 800x600 the runtime's media-query evaluator already assumes, so a host
+    /// that never sets it is at least self-consistent.
+    pub viewport_size: (f32, f32),
     /// A pending `Element.scrollIntoView()` target, or `None`. The runtime cannot
     /// compute the element's laid-out position (it does not lay out), so it records
     /// the node; after the run the host resolves it (`IncrementalLayout::scroll_to_element`,
@@ -208,6 +214,10 @@ impl<E: ScriptEngine> Runtime<E> {
     pub fn new() -> Result<Self, E::Error> {
         let mut engine = E::new()?;
         let host: SharedHost = Rc::new(RefCell::new(HostState::default()));
+        // The default viewport: the same 800x600 the media-query evaluator
+        // already assumes, so a host that never calls `set_viewport_size` still
+        // has `innerWidth`/`innerHeight` agree with `matchMedia`.
+        host.borrow_mut().viewport_size = (800.0, 600.0);
         engine.set_host_data(host.clone());
         install_host_surface(&mut engine)?;
         Ok(Self {
@@ -354,6 +364,79 @@ impl<E: ScriptEngine> Runtime<E> {
         self.flush_host_trace_events();
         self.perform_microtask_checkpoint();
         Ok(())
+    }
+
+    /// Set the viewport's CSS-px size, backing `window.innerWidth` /
+    /// `innerHeight`. The host owns the viewport, so it calls this on resize (and
+    /// once at startup); the runtime never computes it.
+    pub fn set_viewport_size(&mut self, width: f32, height: f32) {
+        self.host.borrow_mut().viewport_size = (width, height);
+    }
+
+    /// Dispatch a UA-generated **touch** event (`touchstart` / `touchmove` /
+    /// `touchend` / `touchcancel`) at `raw_node_id`, carrying one touch point at
+    /// page coordinates `(x, y)` with `identifier`.
+    ///
+    /// `cancelable` is **not** a parameter: per the passive-listener optimization
+    /// (and WPT's `dom/events/non-cancelable-when-passive`), a touch event is
+    /// cancelable only if some **non-passive** listener for its type exists on the
+    /// propagation path. Only the DOM knows that, so `__dispatchTouch` computes it.
+    /// Script-constructed events are unaffected — they keep the `cancelable` their
+    /// constructor was given.
+    ///
+    /// Returns `false` if a listener called `preventDefault` (so the host can
+    /// suppress the default gesture). An unknown id is a no-op.
+    pub fn dispatch_touch_event(
+        &mut self,
+        raw_node_id: usize,
+        event_type: &str,
+        x: f64,
+        y: f64,
+        identifier: i32,
+    ) -> Result<bool, E::Error> {
+        // Node id as a *string*: a tagged raw NodeId can exceed 2^53 (the
+        // precision bug the transitions plan hit).
+        let expr = format!(
+            "__dispatchTouch(\"{raw_node_id}\", {event_type:?}, {x}, {y}, {identifier})"
+        );
+        let v = self.engine.eval(&expr)?;
+        self.flush_host_trace_events();
+        let proceed = self
+            .engine
+            .value_to_string(&v)
+            .map(|s| s != "false")
+            .unwrap_or(true);
+        self.perform_microtask_checkpoint();
+        Ok(proceed)
+    }
+
+    /// Dispatch a UA-generated **wheel** event at `raw_node_id`: both the standard
+    /// `wheel` and the legacy `mousewheel` (WPT tests both), at page coordinates
+    /// `(x, y)` with the given deltas. `delta_mode` is 0 pixel / 1 line / 2 page.
+    ///
+    /// `cancelable` is computed per type by the same non-passive-listener rule as
+    /// [`dispatch_touch_event`]. Returns `false` if either event was canceled.
+    pub fn dispatch_wheel_event(
+        &mut self,
+        raw_node_id: usize,
+        x: f64,
+        y: f64,
+        delta_x: f64,
+        delta_y: f64,
+        delta_mode: u32,
+    ) -> Result<bool, E::Error> {
+        let expr = format!(
+            "__dispatchWheel(\"{raw_node_id}\", {x}, {y}, {delta_x}, {delta_y}, {delta_mode})"
+        );
+        let v = self.engine.eval(&expr)?;
+        self.flush_host_trace_events();
+        let proceed = self
+            .engine
+            .value_to_string(&v)
+            .map(|s| s != "false")
+            .unwrap_or(true);
+        self.perform_microtask_checkpoint();
+        Ok(proceed)
     }
 
     /// Dispatch a CSS animation lifecycle event (`animationstart` /
@@ -930,6 +1013,13 @@ fn install_host_surface<E: ScriptEngine>(engine: &mut E) -> Result<(), E::Error>
     engine.set_function::<ScrollIntoView>("__scrollIntoView", 1)?;
     engine.eval(SCROLL_BOOTSTRAP)?;
 
+    // window.innerWidth / innerHeight over the host's viewport size. Tests that
+    // compute a hit point from the viewport (WPT's wheel/scroll cluster does:
+    // `Math.floor(window.innerWidth / 2)`) get NaN without these.
+    engine.set_function::<InnerWidth>("__innerWidth", 0)?;
+    engine.set_function::<InnerHeight>("__innerHeight", 0)?;
+    engine.eval(VIEWPORT_BOOTSTRAP)?;
+
     // Event loop and EventTarget are pure-JS bootstraps over the global. Callbacks
     // live JS-side; the only Rust entry is `run_event_loop` (evals `__runTimers`).
     // ES5-style (function constructors, no arrows/classes) for the widest backend
@@ -1143,7 +1233,10 @@ const EVENT_TARGET_BOOTSTRAP: &str = r#"
       var rec = copy[i];
       if (rec.once) { var j = l.indexOf(rec); if (j !== -1) l.splice(j, 1); }
       event.__inPassive = rec.passive;
-      rec.cb.call(this, event);
+      // Listener exceptions are reported, not propagated (DOM §dispatch); see
+      // the same guard in dom/bootstrap.js's node `fire`.
+      try { rec.cb.call(this, event); }
+      catch (ex) { globalThis.__reportListenerException(ex); }
       event.__inPassive = false;
     }
   };
@@ -1153,17 +1246,19 @@ const EVENT_TARGET_BOOTSTRAP: &str = r#"
     }
     // window is a leaf target (no DOM tree): target phase only — capture- then
     // bubble-registered listeners on this target, with the dispatch flags set.
+    // The stop flags are cleared *after* dispatch, not before (DOM §dispatch):
+    // an event already stopped (`cancelBubble` set pre-dispatch) fires nothing.
     event.__dispatch = true;
     event.target = this;
     event.srcElement = this;
-    event.__stop = false;
-    event.__stopImmediate = false;
     event.eventPhase = 2; // AT_TARGET
-    this.__fire(event, 'c:' + event.type);
+    if (!event.__stop) { this.__fire(event, 'c:' + event.type); }
     if (!event.__stop) { this.__fire(event, 'b:' + event.type); }
     event.__dispatch = false;
     event.currentTarget = null;
     event.eventPhase = 0;
+    event.__stop = false;
+    event.__stopImmediate = false;
     return !event.__canceled;
   };
   globalThis.EventTarget = EventTarget;
@@ -1230,10 +1325,164 @@ const EVENT_TARGET_BOOTSTRAP: &str = r#"
   MouseEvent.prototype.constructor = MouseEvent;
   globalThis.MouseEvent = MouseEvent;
 
-  var target = new EventTarget();
-  globalThis.addEventListener = function(type, cb) { target.addEventListener(type, cb); };
-  globalThis.removeEventListener = function(type, cb) { target.removeEventListener(type, cb); };
-  globalThis.dispatchEvent = function(event) { return target.dispatchEvent(event); };
+  // PointerEvent extends MouseEvent (Pointer Events): pointer identity + geometry.
+  function PointerEvent(type, init) {
+    MouseEvent.call(this, type, init);
+    init = init || {};
+    this.pointerId = Number(init.pointerId || 0);
+    this.width = Number(init.width || 1);
+    this.height = Number(init.height || 1);
+    this.pressure = Number(init.pressure || 0);
+    this.tangentialPressure = Number(init.tangentialPressure || 0);
+    this.tiltX = Number(init.tiltX || 0);
+    this.tiltY = Number(init.tiltY || 0);
+    this.twist = Number(init.twist || 0);
+    this.pointerType = init.pointerType !== undefined ? String(init.pointerType) : '';
+    this.isPrimary = !!init.isPrimary;
+  }
+  PointerEvent.prototype = Object.create(MouseEvent.prototype);
+  PointerEvent.prototype.constructor = PointerEvent;
+  globalThis.PointerEvent = PointerEvent;
+
+  // WheelEvent extends MouseEvent (CSSOM View / UI Events): scroll deltas.
+  var WHEEL_MODE = { PIXEL: 0, LINE: 1, PAGE: 2 };
+  function WheelEvent(type, init) {
+    MouseEvent.call(this, type, init);
+    init = init || {};
+    this.deltaX = Number(init.deltaX || 0);
+    this.deltaY = Number(init.deltaY || 0);
+    this.deltaZ = Number(init.deltaZ || 0);
+    this.deltaMode = Number(init.deltaMode || 0);
+  }
+  WheelEvent.prototype = Object.create(MouseEvent.prototype);
+  WheelEvent.prototype.constructor = WheelEvent;
+  WheelEvent.DOM_DELTA_PIXEL = WHEEL_MODE.PIXEL;
+  WheelEvent.DOM_DELTA_LINE = WHEEL_MODE.LINE;
+  WheelEvent.DOM_DELTA_PAGE = WHEEL_MODE.PAGE;
+  globalThis.WheelEvent = WheelEvent;
+
+  // KeyboardEvent extends UIEvent (UI Events): key identity + modifiers.
+  function KeyboardEvent(type, init) {
+    UIEvent.call(this, type, init);
+    init = init || {};
+    this.key = init.key !== undefined ? String(init.key) : '';
+    this.code = init.code !== undefined ? String(init.code) : '';
+    this.location = Number(init.location || 0);
+    this.ctrlKey = !!init.ctrlKey;
+    this.shiftKey = !!init.shiftKey;
+    this.altKey = !!init.altKey;
+    this.metaKey = !!init.metaKey;
+    this.repeat = !!init.repeat;
+    this.isComposing = !!init.isComposing;
+  }
+  KeyboardEvent.prototype = Object.create(UIEvent.prototype);
+  KeyboardEvent.prototype.constructor = KeyboardEvent;
+  KeyboardEvent.prototype.getModifierState = function(k) {
+    switch (String(k)) {
+      case 'Control': return this.ctrlKey;
+      case 'Shift': return this.shiftKey;
+      case 'Alt': return this.altKey;
+      case 'Meta': return this.metaKey;
+      default: return false;
+    }
+  };
+  globalThis.KeyboardEvent = KeyboardEvent;
+
+  // Touch + TouchList + TouchEvent (Touch Events). A Touch is a plain data
+  // object (not an Event); TouchList is array-like; TouchEvent extends UIEvent
+  // and carries the three touch lists plus the modifier flags.
+  function Touch(init) {
+    init = init || {};
+    this.identifier = Number(init.identifier || 0);
+    this.target = init.target || null;
+    this.screenX = Number(init.screenX || 0);
+    this.screenY = Number(init.screenY || 0);
+    this.clientX = Number(init.clientX || 0);
+    this.clientY = Number(init.clientY || 0);
+    this.pageX = Number(init.pageX || 0);
+    this.pageY = Number(init.pageY || 0);
+    this.radiusX = Number(init.radiusX || 0);
+    this.radiusY = Number(init.radiusY || 0);
+    this.rotationAngle = Number(init.rotationAngle || 0);
+    this.force = Number(init.force || 0);
+  }
+  globalThis.Touch = Touch;
+  function makeTouchList(touches) {
+    var list = { length: touches.length };
+    for (var i = 0; i < touches.length; i++) { list[i] = touches[i]; }
+    list.item = function(i) { return this[i] || null; };
+    return list;
+  }
+  globalThis.TouchList = function() { return makeTouchList([]); };
+  function TouchEvent(type, init) {
+    UIEvent.call(this, type, init);
+    init = init || {};
+    this.touches = makeTouchList(init.touches || []);
+    this.targetTouches = makeTouchList(init.targetTouches || []);
+    this.changedTouches = makeTouchList(init.changedTouches || []);
+    this.ctrlKey = !!init.ctrlKey;
+    this.shiftKey = !!init.shiftKey;
+    this.altKey = !!init.altKey;
+    this.metaKey = !!init.metaKey;
+  }
+  TouchEvent.prototype = Object.create(UIEvent.prototype);
+  TouchEvent.prototype.constructor = TouchEvent;
+  globalThis.TouchEvent = TouchEvent;
+
+  // The Window's listeners live on `globalThis` **itself**, not on a private
+  // EventTarget instance. This is load-bearing: `Node.prototype.dispatchEvent`
+  // (dom/bootstrap.js) walks the tree and, at the top of the path, fires the
+  // window by reading `globalThis.__listeners` directly. If the listeners lived
+  // anywhere else, `window.addEventListener('click', …)` would never fire for a
+  // click on the page — it would only see events dispatched *at* the window.
+  //
+  // The options argument is forwarded, so `{capture, once, passive}` reaches the
+  // window too (dropping it silently made every window listener non-passive).
+  globalThis.addEventListener = function(type, cb, opts) {
+    EventTarget.prototype.addEventListener.call(globalThis, type, cb, opts);
+  };
+  globalThis.removeEventListener = function(type, cb, opts) {
+    EventTarget.prototype.removeEventListener.call(globalThis, type, cb, opts);
+  };
+  globalThis.dispatchEvent = function(event) {
+    return EventTarget.prototype.dispatchEvent.call(globalThis, event);
+  };
+  // `dispatchEvent` fires through `this.__fire`, and globalThis does not inherit
+  // from EventTarget.prototype — it only borrows its methods — so it needs its
+  // own. (Node's tree walk calls the standalone `fire` in dom/bootstrap.js, which
+  // reads `__listeners` off the node directly, so it needs nothing here.)
+  globalThis.__fire = function(event, key) {
+    return EventTarget.prototype.__fire.call(globalThis, event, key);
+  };
+
+  // "Report the exception" (HTML): fire an ErrorEvent-shaped `error` event at
+  // the global, then fall back to the console. This is what a listener's
+  // exception does instead of propagating out of dispatchEvent — and it is how
+  // testharness.js notices: it does `addEventListener("error", …)` and reads
+  // `message` / `error` / `filename` / `lineno` / `colno` to fail the running
+  // test. Guard against recursion: a throwing error-listener must not re-enter.
+  var reporting = false;
+  globalThis.__reportListenerException = function(ex) {
+    var msg = (ex && ex.message !== undefined) ? String(ex.message) : String(ex);
+    if (!reporting) {
+      reporting = true;
+      try {
+        var ev = new Event('error', { cancelable: true });
+        ev.message = msg;
+        ev.error = ex;
+        ev.filename = '';
+        ev.lineno = 0;
+        ev.colno = 0;
+        globalThis.dispatchEvent(ev);
+      } catch (ignored) {
+        // An error handler that itself threw: fall through to the console.
+      }
+      reporting = false;
+    }
+    if (globalThis.console && globalThis.console.error) {
+      globalThis.console.error('Uncaught (in listener): ' + msg);
+    }
+  };
 })();
 "#;
 
@@ -1407,6 +1656,51 @@ impl<E: ScriptEngine> NativeFn<E> for ScrollY {
         cx.make_string(&y.to_string())
     }
 }
+
+/// The viewport's CSS-px size from host state (`read_scroll`'s sibling).
+fn read_viewport_size<E: ScriptEngine>(cx: &mut E::CallCx<'_>) -> (f32, f32) {
+    cx.host_data()
+        .and_then(|d| {
+            d.downcast_ref::<RefCell<HostState>>()
+                .map(|h| h.borrow().viewport_size)
+        })
+        .unwrap_or((0.0, 0.0))
+}
+
+/// `__innerWidth()` → the viewport width in CSS px as a string.
+struct InnerWidth;
+impl<E: ScriptEngine> NativeFn<E> for InnerWidth {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let w = read_viewport_size::<E>(cx).0;
+        cx.make_string(&w.to_string())
+    }
+}
+
+/// `__innerHeight()` → the viewport height in CSS px as a string.
+struct InnerHeight;
+impl<E: ScriptEngine> NativeFn<E> for InnerHeight {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let h = read_viewport_size::<E>(cx).1;
+        cx.make_string(&h.to_string())
+    }
+}
+
+/// `window.innerWidth` / `innerHeight` (plus the `outerWidth` / `outerHeight`
+/// aliases and `devicePixelRatio`) over the `__inner*` natives. Numbers cross the
+/// native boundary as strings, like `__scroll*`, so the getters `Number()` them.
+const VIEWPORT_BOOTSTRAP: &str = r#"
+(function() {
+  function def(name, fn) {
+    Object.defineProperty(globalThis, name, { configurable: true, get: fn });
+  }
+  def('innerWidth', function() { return Number(__innerWidth()); });
+  def('innerHeight', function() { return Number(__innerHeight()); });
+  // No window chrome in an embedded surface: outer == inner.
+  def('outerWidth', function() { return Number(__innerWidth()); });
+  def('outerHeight', function() { return Number(__innerHeight()); });
+  def('devicePixelRatio', function() { return 1; });
+})();
+"#;
 
 /// `window.scrollTo` / `scrollBy` (the `(x, y)` and `{ left, top }` forms) plus the
 /// `scrollX` / `scrollY` / `pageXOffset` / `pageYOffset` getters, over the `__scroll*`
@@ -1980,6 +2274,218 @@ mod tests {
         microtasks_work::<script_engine_boa::BoaEngine>();
     }
 
+    /// Event-handler IDL attributes (`el.onclick = fn`), against any backend.
+    /// Three things the WPT `dom/events` cluster depends on: an element handler
+    /// fires on dispatch; `document.body.onload` reflects to the Window (the
+    /// `load` event is dispatched at the window, and this is how the cluster's
+    /// `body.onload = () => runTest()` ever runs); and reassigning a handler to
+    /// null removes it while a coexisting addEventListener listener survives.
+    fn event_handler_idl_attributes_work<E: ScriptEngine>() {
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.eval(
+            r#"
+            var h = document.createElement('html');
+            var b = document.createElement('body');
+            var d = document.createElement('div');
+            b.appendChild(d); h.appendChild(b); document.appendChild(h);
+            globalThis.__d = d;
+            // Element handler + a coexisting addEventListener listener.
+            d.onclick = function(){ console.log('onclick'); };
+            d.addEventListener('click', function(){ console.log('listener'); });
+            // body.onload must reflect to the window.
+            document.body.onload = function(){ console.log('body.onload'); };
+            // the presence + type checks the WPT tests do.
+            console.log('has:' + ('onclick' in d) + ',' + (typeof window.onload));
+            "#,
+        )
+        .expect("setup");
+
+        // The load event is dispatched at the window; body.onload must catch it.
+        rt.eval("window.dispatchEvent(new Event('load'));")
+            .expect("dispatch load");
+        // Click the div: onclick then the addEventListener listener, in set order.
+        rt.eval("__d.dispatchEvent(new Event('click', { bubbles: true }));")
+            .expect("dispatch click");
+        // Null out onclick: the handler goes, the addEventListener listener stays.
+        rt.eval(
+            "__d.onclick = null;\
+             __d.dispatchEvent(new Event('click', { bubbles: true }));",
+        )
+        .expect("null-out");
+
+        assert_eq!(
+            rt.host().borrow().console,
+            vec![
+                // `'onclick' in d` is true; `typeof window.onload` is 'function'
+                // *because* the `document.body.onload =` above reflected onto the
+                // window — the load handler is the same slot. That reflection is
+                // the whole point.
+                "has:true,function".to_string(),
+                "body.onload".to_string(),
+                "onclick".to_string(),
+                "listener".to_string(),
+                "listener".to_string(), // after onclick=null, only the listener fires
+            ],
+        );
+    }
+
+    #[test]
+    fn event_handler_idl_attributes_on_boa() {
+        event_handler_idl_attributes_work::<script_engine_boa::BoaEngine>();
+    }
+
+    /// The TouchEvent / WheelEvent / PointerEvent / KeyboardEvent interfaces
+    /// construct, carry their fields, honor `cancelable`, and chain `instanceof`
+    /// correctly. The `dom/events` passive/cancelable cluster reads
+    /// `event.cancelable` off a `touchstart`, so the type and its cancelable flag
+    /// must both be real.
+    fn typed_event_interfaces_work<E: ScriptEngine>() {
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.eval(
+            r#"
+            function chain(e, names) {
+              // e.g. names = ['TouchEvent','UIEvent','Event']
+              return names.map(function(n){ return e instanceof globalThis[n]; }).join(',');
+            }
+            var t = new TouchEvent('touchstart', {
+              cancelable: true, bubbles: true,
+              changedTouches: [ new Touch({ identifier: 7, clientX: 30, clientY: 30 }) ],
+            });
+            console.log('touch:' + t.type + ',' + t.cancelable + ',' + t.bubbles
+              + ',' + t.changedTouches.length + ',' + t.changedTouches[0].clientX
+              + ',' + chain(t, ['TouchEvent','UIEvent','Event']));
+            var w = new WheelEvent('wheel', { deltaX: 1, deltaY: -3, deltaMode: 1 });
+            console.log('wheel:' + w.deltaX + ',' + w.deltaY + ',' + w.deltaMode
+              + ',' + WheelEvent.DOM_DELTA_LINE
+              + ',' + chain(w, ['WheelEvent','MouseEvent','UIEvent','Event']));
+            var p = new PointerEvent('pointerdown', { pointerType: 'touch', pointerId: 5, isPrimary: true });
+            console.log('pointer:' + p.pointerType + ',' + p.pointerId + ',' + p.isPrimary
+              + ',' + chain(p, ['PointerEvent','MouseEvent','Event']));
+            var k = new KeyboardEvent('keydown', { key: 'a', code: 'KeyA', ctrlKey: true });
+            console.log('key:' + k.key + ',' + k.code + ',' + k.getModifierState('Control')
+              + ',' + chain(k, ['KeyboardEvent','UIEvent','Event']));
+            "#,
+        )
+        .expect("event interfaces");
+
+        assert_eq!(
+            rt.host().borrow().console,
+            vec![
+                "touch:touchstart,true,true,1,30,true,true,true".to_string(),
+                "wheel:1,-3,1,1,true,true,true,true".to_string(),
+                "pointer:touch,5,true,true,true,true".to_string(),
+                "key:a,KeyA,true,true,true,true".to_string(),
+            ],
+        );
+    }
+
+    #[test]
+    fn typed_event_interfaces_on_boa() {
+        typed_event_interfaces_work::<script_engine_boa::BoaEngine>();
+    }
+
+    /// A listener's exception is **reported, not propagated** (DOM §dispatch):
+    /// dispatch continues to the remaining listeners, `dispatchEvent` returns
+    /// normally, and the exception surfaces as an `error` event at the global —
+    /// which is exactly how `testharness.js` notices (it does
+    /// `addEventListener("error", …)` and fails the running test). Before this,
+    /// one throwing `onload` handler propagated out of the harness's load
+    /// dispatch and errored out the entire test file.
+    fn listener_exceptions_are_reported_not_propagated<E: ScriptEngine>() {
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.eval(
+            r#"
+            var h = document.createElement('html');
+            var b = document.createElement('body');
+            b.appendChild(document.createElement('div'));
+            h.appendChild(b); document.appendChild(h);
+            // testharness-shaped global error handler.
+            addEventListener('error', function(e){ console.log('reported:' + e.message); });
+            var d = b.firstChild;
+            d.addEventListener('click', function(){ throw new Error('boom'); });
+            d.addEventListener('click', function(){ console.log('second listener still ran'); });
+            "#,
+        )
+        .expect("setup");
+
+        // The throwing listener must not make dispatchEvent throw.
+        rt.eval(
+            "document.body.firstChild.dispatchEvent(new Event('click', { bubbles: true }));",
+        )
+        .expect("dispatch must not propagate the listener's exception");
+
+        let console = rt.host().borrow().console.clone();
+        assert!(
+            console.iter().any(|l| l == "second listener still ran"),
+            "dispatch continues past a throwing listener: {console:?}"
+        );
+        assert!(
+            console.iter().any(|l| l == "reported:boom"),
+            "the exception is reported as an `error` event at the global: {console:?}"
+        );
+    }
+
+    #[test]
+    fn listener_exceptions_reported_on_boa() {
+        listener_exceptions_are_reported_not_propagated::<script_engine_boa::BoaEngine>();
+    }
+
+    /// A `window` listener fires for an event **bubbling up from a node**, and the
+    /// listener options reach it.
+    ///
+    /// Both halves were broken: `globalThis.addEventListener` delegated to a
+    /// private `EventTarget` instance, so the window's listeners lived somewhere
+    /// `Node.prototype.dispatchEvent` never looked (it fires the top of the
+    /// propagation path by reading `globalThis.__listeners`) — meaning
+    /// `window.addEventListener('click', …)` never saw a click on the page. And
+    /// the wrapper dropped its third argument, so `{passive}` / `{capture}` /
+    /// `{once}` silently never applied to a window listener.
+    fn window_listeners_receive_bubbled_events<E: ScriptEngine>() {
+        let mut rt = Runtime::<E>::new().expect("runtime");
+        rt.eval(
+            r#"
+            var h = document.createElement('html');
+            var b = document.createElement('body');
+            var d = document.createElement('div');
+            b.appendChild(d); h.appendChild(b); document.appendChild(h);
+            window.addEventListener('click', function(e){
+              console.log('window saw click, phase=' + e.eventPhase);
+            });
+            // Capture on the window runs before the target's own listeners.
+            window.addEventListener('click', function(){ console.log('window capture'); }, { capture: true });
+            // `once` must reach the window too.
+            window.addEventListener('ping', function(){ console.log('once'); }, { once: true });
+            d.addEventListener('click', function(){ console.log('div'); });
+            globalThis.__d = d;
+            "#,
+        )
+        .expect("setup");
+
+        rt.eval("__d.dispatchEvent(new Event('click', { bubbles: true }));")
+            .expect("dispatch");
+        // `once` fired from the window: a second dispatch must not re-run it.
+        rt.eval("__d.dispatchEvent(new Event('ping', { bubbles: true }));")
+            .expect("ping 1");
+        rt.eval("__d.dispatchEvent(new Event('ping', { bubbles: true }));")
+            .expect("ping 2");
+
+        assert_eq!(
+            rt.host().borrow().console,
+            vec![
+                "window capture".to_string(),           // capture, root -> target
+                "div".to_string(),                      // target
+                "window saw click, phase=3".to_string(), // bubble (3 = BUBBLING_PHASE)
+                "once".to_string(),                     // fires exactly once
+            ],
+        );
+    }
+
+    #[test]
+    fn window_listeners_receive_bubbled_events_on_boa() {
+        window_listeners_receive_bubbled_events::<script_engine_boa::BoaEngine>();
+    }
+
+
     /// The G3 GC tick, against any backend: a detached node script holds is
     /// pinned on mint and spared by `collect_garbage`; once its reflector is
     /// reported dead it is reaped. The drain→retire path is covered in the engine
@@ -2098,6 +2604,18 @@ mod tests {
     #[test]
     fn testharness_results_on_nova() {
         testharness_results::<script_engine_nova::NovaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn event_handler_idl_attributes_on_nova() {
+        event_handler_idl_attributes_work::<script_engine_nova::NovaEngine>();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn typed_event_interfaces_on_nova() {
+        typed_event_interfaces_work::<script_engine_nova::NovaEngine>();
     }
 
     #[cfg(not(target_arch = "wasm32"))]

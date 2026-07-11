@@ -357,6 +357,223 @@ tick, advance the harness clock by `duration_ms` and dispatch the tick's
 additionally needs `onX` handler attributes and `TouchEvent` (DOM work, links
 2 and 6 — not this plan's).
 
+**Landed 2026-07-10.** The seam is WPT's own: `collect_scripts` splices serval's
+backend (`TESTDRIVER_VENDOR_JS`) in place of the deliberately-blank
+`testdriver-vendor.js`, in document order — after `testdriver.js` defines the
+throwing defaults, before any test script can call them. The vendor sets
+`in_automation = true` (unimplemented commands now throw spec-honestly instead
+of waiting forever for a human), normalizes element origins to the wire
+element-reference format, and queues transactions the drive loop drains
+(`process_testdriver_actions`): parse with the pinned `webdriver` protocol
+types, run through the shared `embedder_traits::webdriver_actions::interpret_actions`,
+resolve element origins through the session's `absolute_rect`, dispatch each
+tick's mouse events at `hit_test`-ed nodes (pointerdown/mousedown,
+pointerup/mouseup/click, pointermove/mousemove — the interpreter's own
+mouse-only first cut), advance the virtual clock by the tick's reported
+duration, render a turn, settle the Promise.
+
+- **One runtime addition was needed:** `__nodeRawId(ref)`
+  (`script-runtime-api/dom/tree.rs`), the reverse of `__reflectNode` — the
+  wrapper's `__ref` is a JS-opaque reflector, so handing a node *back* to Rust
+  needs the native id extraction (found the hard way:
+  `String(el.__ref)` serialized as `"[object Object]"` and the interpreter
+  correctly refused the origin rather than guessing).
+- **Guard, and the first cross-consumer test of the automation core:**
+  `test_driver_action_sequence_synthesizes_a_click` — real `testdriver.js`, the
+  vendor seam, Actions-format JSON, the interpreter, session geometry, and a
+  synthesized click completing an `async_test`, with zero coordinate literals
+  and zero sleeps.
+- Not yet: keyboard/wheel/touch dispatch (interpreter emits key events; the
+  bridge skips them), event coordinates on the synthetic events
+  (`dispatch_event` carries type only), and the remaining testdriver commands
+  (`click()`, `send_keys()` keep their throwing defaults — spec-correct
+  `unsupported` rather than fakes).
+
+## H8: DOM event surface — `onX` handler attributes + typed event interfaces (2026-07-10)
+
+The DOM-side prerequisites (H6's chain links 2 and 6), which the harness plan
+does not own but which the harness lane is the reason to prioritize. Both are in
+`script-runtime-api` (the runtime), not `serval-wpt`.
+
+### H8a — event-handler IDL attributes (`el.onclick = fn`, link 2)
+
+The 40-test `dom/events/non-cancelable-when-passive` cluster registers via
+`document.body.onload = () => runTest(...)`; with no `onX` mechanism that set an
+inert expando and `runTest` never ran (the cluster's true first blocker, ahead of
+`test_driver`). Landed in `dom/bootstrap.js`: a getter/setter per handler name
+managing one stable listener (registered once on first non-null assignment,
+calls the current value, so reassignment keeps registration order and `= null`
+is a no-op). The **WindowEventHandlers set** (`load`, `resize`, `scroll`,
+`error`, `blur`, `focus`, …) **reflects from `<body>`/`<frameset>` onto the
+Window** — which is how `body.onload` catches the `load` event the harness
+dispatches *at the window*. Guard:
+`event_handler_idl_attributes_work` (boa + nova) — element handler + coexisting
+`addEventListener` listener fire in set order, `body.onload` reflects to window,
+`= null` removes the handler while the listener survives.
+- Deferred: the **content-attribute** form (`<body onload="run()">` compiled
+  from the attribute string). Common in older WPT tests; a separate compile step.
+  The IDL form is what the passive/cancelable cluster and most modern tests use.
+
+### H8b — typed event interfaces (`TouchEvent` / `WheelEvent` / …, link 6)
+
+`TouchEvent`, `WheelEvent`, `PointerEvent`, `KeyboardEvent`, plus `Touch` /
+`TouchList`, added to the event bootstrap (`lib.rs`) prototype-chained like the
+existing `MouseEvent`: correct fields, `cancelable` honored, `instanceof` holds
+through the chain (`TouchEvent → UIEvent → Event`, `WheelEvent → MouseEvent →
+UIEvent → Event`). The passive/cancelable cluster reads `event.cancelable` off a
+`touchstart`, so the type and its flag must both be real. Guard:
+`typed_event_interfaces_work` (boa + nova).
+- **Honest scope limit — the cluster still won't fully pass from H8 alone.** The
+  types now exist, but a touch-pointer `test_driver.Actions()` must actually
+  *produce* `TouchEvent`s at the target, which needs (i) the shared interpreter to
+  emit touch (not mouse) events for `pointerType: 'touch'` — it is mouse-only
+  first-cut, the automation lane's call — and (ii) H7b's bridge to construct a
+  typed `TouchEvent` with the right `cancelable` rather than a bare `Event` by
+  type. Both are follow-ons. H8 removes the two DOM blockers; the input path is
+  the remaining one.
+- **`ontouchstart` and friends are deliberately NOT exposed.** Per Touch Events,
+  the `on*` touch IDL attributes exist only when "expose legacy touch event APIs"
+  is true (a touch-capable device). Exposing them regressed
+  `Document-createEvent-touchevent` (which branches on
+  `'ontouchstart' in document`) from pass to fail. Touch listeners still work via
+  `addEventListener`; only the `on*` reflection is gated. The `TouchEvent`
+  *interface object* stays defined.
+
+### H8c — listener exceptions are reported, not propagated (found by H8a)
+
+A DOM conformance bug the `onX` work exposed, and a load-bearing one: a
+listener's exception was **propagating out of `dispatchEvent`**. Per DOM
+§dispatch it must be *reported* — dispatch continues to the remaining listeners
+and `dispatchEvent` returns normally. Because H8a made `onload` handlers actually
+run, this would have spuriously errored out whole test files across the corpus
+(it already had: it turned `Element-getElementsByTagName-change-document-HTMLNess`
+from `fail` into `error`).
+
+Fixed in both dispatch paths (`fire` in `dom/bootstrap.js`, `EventTarget.__fire`
+in `lib.rs`): the callback is invoked under try/catch, and the exception goes to
+`__reportListenerException`, which fires an **ErrorEvent-shaped `error` event at
+the global** and falls back to the console. That shape is deliberate:
+`testharness.js` does `addEventListener("error", …)` and reads
+`message` / `error` / `filename` / `lineno` / `colno` to fail the *running test*,
+so a throwing handler now fails its test instead of killing the file. Recursion
+guarded (a throwing error-listener cannot re-enter). Guard:
+`listener_exceptions_are_reported_not_propagated` — dispatch continues past a
+throwing listener and the exception surfaces as an `error` event.
+
+### H8 measured result (2026-07-10)
+
+**The 40-test `dom/events/non-cancelable-when-passive` cluster is alive.** All 40
+moved from `no-results` (dead — never registered a subtest, because
+`document.body.onload` set an inert expando) to running. `dom` overall:
+
+| | before H8 | after H8 |
+| --- | --- | --- |
+| all-pass | 92 | **96** |
+| no-results (dead) | 84 | **42** |
+| subtests | 2233 | **2244** |
+
+- **44 tests revived** (`no-results` -> `fail`): 40 in the passive/cancelable
+  cluster, 3 in `dom/events/scrolling`, 1 beforeunload. They now register and run;
+  they fail on the touch-input gap above, which is the honest next blocker.
+- **4 newly passing**: `EventTarget-dispatchEvent`, `KeyEvent-initKeyEvent` (the
+  `KeyboardEvent` interface now exists), `window-composed-path`, and
+  `non-cancelable-when-passive/synthetic-events-cancelable` — the one member of
+  the cluster that dispatches *synthetic* events rather than needing real touch
+  input, so it passes end to end today.
+- `css/css-animations`: 3 more tests revived (`no-results` -> `fail`), subtests
+  157/1208.
+- **One lateral move, named:** two `dom/ranges/Range-in-shadow-*` variants went
+  `error` -> `no-results`. They are shadow-DOM-blocked either way (they call
+  `attachShadow` inside a `load` handler) and score zero subtests in both states;
+  the change is a direct consequence of H8c correctly *not* propagating the
+  listener's exception. Residual fidelity gap noted: serval's results bridge does
+  not surface testharness's *harness-level* error status, so a test whose only
+  failure is a thrown handler with no registered subtests reads as `no-results`
+  rather than a reasoned error. Separate item.
+- All six checked baselines re-verified `unexpected=0` after the deliberate
+  rebase of `dom` and `css/css-animations`.
+
+## H9: the input path, end to end (2026-07-10)
+
+The last link. The cluster H8 revived now **passes**: `dom/events/non-cancelable-when-passive`
+is **38 of 42 all-pass** (was 0), and `dom` all-pass went **96 -> 144** (+48
+`fail` -> `pass`, zero regressions). The four stragglers are a layout gap, not an
+input gap (below).
+
+### What it took
+
+1. **Interpreter: touch pointers emit touch events** (`webdriver_actions.rs`,
+   the shared crate — coordinated with the automation lane, whose first cut was
+   mouse-only). `pointerType: "touch"` now emits `InputEvent::Touch`; mouse and
+   pen still emit mouse events. Two rules fall out and are load-bearing:
+   - **A touch that is not down emits nothing on a move.** There is no hovering
+     finger, and the spec's own `injectInput` idiom moves the pointer to its
+     origin *before* pressing — that move must not fabricate a `touchmove`.
+     Position is still tracked, so the press lands right.
+   - A touch that never went down cannot lift.
+2. **Bridge: typed events, and the touchstart target** (`serval-wpt/harness.rs`).
+   `InputEvent::Touch` / `Wheel` now go through typed dispatch. Per Touch Events,
+   **every event for one touch point goes to the element the touch started on**,
+   not a fresh hit-test, so the bridge remembers that target per touch id for the
+   transaction. Wheel dispatches both the standard `wheel` and the legacy
+   `mousewheel` (WPT covers both), un-negating the interpreter's sign so the DOM
+   event carries the spec's.
+3. **The `cancelable` rule, which is the whole point of the cluster.** A
+   UA-generated touch/wheel event is cancelable **only if a non-passive listener
+   for its type exists on the propagation path** — the passive-listener
+   optimization. Only the DOM knows the listener set, so `__dispatchTouch` /
+   `__dispatchWheel` (bootstrap) walk the path and decide. Deliberately scoped to
+   the UA input path: a *script*-dispatched event keeps whatever `cancelable` its
+   constructor was given (`generic-events-stay-cancelable` pins this, and passes).
+4. **`window.innerWidth` / `innerHeight`** (`HostState::viewport_size` +
+   `Runtime::set_viewport_size` + natives, the `scrollX` seam pattern). The wheel
+   half computes its hit point as `Math.floor(window.innerWidth / 2)`; without
+   these it scrolled at `NaN`. One `VIEWPORT_W/H` constant now feeds the layout
+   session, `matchMedia`, and `innerWidth` so they cannot drift.
+
+### Two pre-existing DOM bugs this surfaced, both load-bearing
+
+- **Window listeners never fired for bubbled events.**
+  `globalThis.addEventListener` delegated to a *private* `EventTarget` instance,
+  so the window's listeners lived on an object `Node.prototype.dispatchEvent`
+  never looked at (it fires the top of the path by reading
+  `globalThis.__listeners`). So `window.addEventListener('click', …)` never saw a
+  click on the page — only events dispatched *at* the window. The same wrapper
+  silently dropped its third argument, so `{passive}`/`{capture}`/`{once}` never
+  applied to a window listener. Fixed by making `globalThis` itself the window
+  EventTarget. This alone was 8 of the cluster's tests. Guard:
+  `window_listeners_receive_bubbled_events`.
+- **`cancelBubble` set before dispatch was silently un-set.** `dispatchEvent`
+  cleared the stop-propagation flags at the *start*; the DOM clears them *after*
+  (§dispatch), so an event stopped before dispatch must fire nothing. The
+  existing `cancel_bubble_before_dispatch` test had been passing **vacuously** —
+  it asserted "window did not fire", which was trivially true while window
+  listeners were unreachable. Fixing the window bug exposed it. Both dispatch
+  paths corrected.
+
+### The 4 stragglers: a `position: fixed` layout gap, precisely diagnosed
+
+`wheel` / `mousewheel` on-`div` fail because their `#div` is
+`position: fixed; top:0; right:0; bottom:0; left:0` with no width/height, and
+serval resolves a **fixed** box's insets against its **parent** instead of the
+**viewport** (the ICB). Probed directly: the div computes to `(0, 0, 800, 0)` —
+width 800 resolves fine from `left:0`+`right:0`, but height is 0 because the
+parent `body` has `height: auto`, which is 0 (its only child is out of flow). Give
+`body` an explicit height and the same div resolves to `(0, 0, 800, 600)` and
+hit-tests correctly. So inset-derived sizing *works*; the containing block is
+wrong.
+
+Confirmed further: serval-layout has **no fixed-vs-absolute handling at all** — it
+hands stylo's style to `stylo_taffy::TaffyStyloStyle` and inherits Taffy's
+absolute positioning, which is parent-relative by construction. `fixed` and
+`absolute` are indistinguishable today. Closing it means *introducing* the
+containing-block concept (ICB for `fixed`, nearest positioned ancestor for
+`absolute`), with paint-order and scroll consequences. **Owned by the layout lane,
+not this plan** — filed in `2026-06-16_serval_layout_roadmap.md`'s near-horizon
+threads with the full diagnosis. It is the only thing between this cluster and
+42/42, and it mis-sizes any fixed overlay (sticky header, modal backdrop) whose
+parent has an auto height, so it is not a WPT-only curiosity.
+
 **H4a's `reason` vocabulary cannot express this triage.** The plan assumed the
 155 could be "bucketed by pinned `reason`". Verified against a live
 `--write-expectations` run: every one of the 155 carries exactly one of two

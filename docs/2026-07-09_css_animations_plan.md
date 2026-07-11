@@ -137,9 +137,9 @@ guard `animationevent_types_survives_the_rendering_session`.)*
   not a fork of it): `AnimationEventRecord` / `AnimationEventKind` and
   `harvest_animation_events`, drained by `IncrementalLayout::take_animation_events`
   in the same per-frame step as transition events. `Runtime::dispatch_animation_event`
-  + an `AnimationEvent` / `__dispatchAnimation` bootstrap pair carry them to script,
-  passing the node id as a **string** (the f64-above-2^53 precision bug the
-  transitions plan hit).
+  plus an `AnimationEvent` / `__dispatchAnimation` bootstrap pair carry them to
+  script, passing the node id as a **string** (the f64-above-2^53 precision bug
+  the transitions plan hit).
   - **Iteration boundaries are counted from `started_at`, not Stylo's counter.**
     `Animation::iterate` increments `KeyframesIterationState::Finite`'s counter but
     leaves `Infinite(current)` pinned at 0 forever, so the counter is unusable for
@@ -189,6 +189,15 @@ guard `animationevent_types_survives_the_rendering_session`.)*
     plan's T3 WPT slice (never wired, for this reason) and 85 of the 155 dead `dom`
     tests (see the harness-exactness plan's H6). One harness capability — a driven
     rendering loop in `serval-wpt` — unblocks all three.
+    **Update 2026-07-10: that loop landed** (harness plan H7a), and two of the
+    three engine levers it exposed landed with it: the `AnimationEvent` /
+    `TransitionEvent` bootstrap constructors are prototype-chained (so
+    `instanceof` holds; pinned end-to-end in the serval-scripted dispatch
+    guards on both engines), and `computed_query` serializes the box insets
+    (`left`/`right`/`top`/`bottom`) plus `transform` (an animated inset is now
+    readable via `getComputedStyle`; pinned in
+    `negative_delay_and_the_f32_boundary_tick_survive`). The remaining lever is
+    the Web Animations API surface, still out of scope here.
 
 **Done when:** ~~the chosen `css/css-animations` slice runs `unexpected=0` on boa
 with a checked-in baseline~~ **met**, ~~and the event-order + fill/direction tests

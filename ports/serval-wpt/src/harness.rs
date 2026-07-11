@@ -43,7 +43,7 @@ thread_local! {
     /// media environment), shared across tests so `matchMedia` works without a
     /// per-test stylist build.
     static MEDIA_QUERY_EVAL: std::rc::Rc<serval_layout::MediaQueryEvaluator> =
-        std::rc::Rc::new(serval_layout::MediaQueryEvaluator::new(800.0, 600.0));
+        std::rc::Rc::new(serval_layout::MediaQueryEvaluator::new(VIEWPORT_W, VIEWPORT_H));
 }
 
 /// `matchMedia` seam for the WPT runner: evaluates against a default device.
@@ -82,6 +82,13 @@ pub trait CompletionSource {
 const DRIVE_DEADLINE: Duration = Duration::from_secs(15);
 /// Timers fired per drive turn before re-checking the completion channel.
 const TIMER_BUDGET: u32 = 64;
+/// The WPT viewport, in CSS px. One constant so the three consumers cannot
+/// drift: the layout session, the media-query evaluator (`matchMedia`), and
+/// `window.innerWidth`/`innerHeight` (which the wheel cluster computes its hit
+/// point from).
+const VIEWPORT_W: f32 = 800.0;
+const VIEWPORT_H: f32 = 600.0;
+
 /// The drive loop's rendering cadence (one 60Hz frame, ms). In disk mode this is
 /// a *virtual* step — rAF callbacks and the animation clock advance by it with no
 /// sleeping, so a 2s animation costs evaluation time, not wall time. In server
@@ -363,11 +370,15 @@ impl RenderSession {
             let mut discard = Vec::new();
             host.dom.drain_mutations(&mut discard);
             let refs: Vec<&str> = sheets.iter().map(String::as_str).collect();
-            *layout.borrow_mut() = Some(IncrementalLayout::new(&host.dom, &refs, 800.0, 600.0));
+            *layout.borrow_mut() = Some(IncrementalLayout::new(&host.dom, &refs, VIEWPORT_W, VIEWPORT_H));
         }
         rt.set_computed_style_handler(Box::new(WptComputedStyle {
             layout: layout.clone(),
         }));
+        // `window.innerWidth`/`innerHeight` must agree with the session's
+        // viewport: the wheel/scroll cluster computes its hit point from them
+        // (`Math.floor(window.innerWidth / 2)`).
+        rt.set_viewport_size(VIEWPORT_W, VIEWPORT_H);
         Self { layout, sheets }
     }
 
@@ -431,6 +442,177 @@ impl RenderSession {
     }
 }
 
+/// H7b: drain and run one queued `test_driver.action_sequence` transaction, if
+/// any. Returns how much work happened (0 = nothing queued).
+///
+/// The vendor JS queues `{actions, resolve, reject}`; this parses the spec
+/// Actions JSON with the pinned protocol types, runs it through the shared tick
+/// interpreter (element origins resolved through the rendering session's
+/// geometry — the interpreter's caller-owns-the-tree rule), dispatches each
+/// tick's events at hit-tested nodes, advances the virtual clock by the tick's
+/// reported duration (a wall-clock drive collapses ticks instead: reported,
+/// never slept), and settles the Promise.
+fn process_testdriver_actions<E: ScriptEngine>(
+    rt: &mut Runtime<E>,
+    render: &RenderSession,
+    now_ms: &mut f64,
+    virtual_clock: bool,
+) -> usize {
+    let json = match rt.eval("String(typeof __tdTake === 'function' ? __tdTake() : '')") {
+        Ok(v) => rt.value_to_string(&v).unwrap_or_default(),
+        Err(_) => return 0,
+    };
+    if json.is_empty() {
+        return 0;
+    }
+    let settle = |rt: &mut Runtime<E>, err: Option<String>| {
+        let call = match err {
+            Some(m) => format!("__tdSettle({:?})", m),
+            None => "__tdSettle()".to_string(),
+        };
+        let _ = rt.eval(&call);
+        let _ = rt.run_microtasks();
+    };
+    let sequences: Vec<webdriver::actions::ActionSequence> = match serde_json::from_str(&json) {
+        Ok(s) => s,
+        Err(e) => {
+            settle(rt, Some(format!("malformed actions payload: {e}")));
+            return 1;
+        },
+    };
+    // The resolver holds only Rc clones, so `rt` stays free for dispatch below.
+    let host_rc = rt.host().clone();
+    let layout_rc = render.layout.clone();
+    let resolver = move |reference: &str| -> Option<(f64, f64)> {
+        let raw: usize = reference.parse().ok()?;
+        let node = DomNodeId::from_raw(raw);
+        let host = host_rc.borrow();
+        let layout = layout_rc.borrow();
+        let (x, y, w, h) = layout.as_ref()?.absolute_rect(&host.dom, node)?;
+        Some((f64::from(x + w / 2.0), f64::from(y + h / 2.0)))
+    };
+    let ticks =
+        match embedder_traits::webdriver_actions::interpret_actions(&sequences, &resolver) {
+            Ok(t) => t,
+            Err(e) => {
+                settle(rt, Some(format!("{e:?}")));
+                return 1;
+            },
+        };
+    // Per Touch Events, every event for one touch point goes to the element the
+    // touch *started* on, not to whatever is under the finger now. Remember that
+    // target per touch id for the life of the transaction.
+    let mut touch_targets: std::collections::HashMap<i32, DomNodeId> =
+        std::collections::HashMap::new();
+    for tick in ticks {
+        for event in tick.events {
+            dispatch_input_event(rt, render, &event, &mut touch_targets);
+        }
+        if virtual_clock {
+            *now_ms += tick.duration_ms as f64;
+        }
+        let _ = render.turn(rt, *now_ms);
+    }
+    settle(rt, None);
+    1
+}
+
+/// Map one interpreter [`InputEvent`] onto DOM events at the hit-tested node.
+///
+/// Touch and wheel go through the **typed** bridges
+/// ([`Runtime::dispatch_touch_event`] / [`dispatch_wheel_event`]), which build a
+/// real `TouchEvent` / `WheelEvent` and — critically — decide `cancelable` from
+/// the DOM's own listener set (a UA input event is cancelable only if a
+/// non-passive listener for its type is on the path). Mouse/pointer still
+/// dispatch by type only; giving them coordinates and a typed `MouseEvent` is a
+/// follow-on, not needed by the cluster this serves.
+///
+/// Keyboard events are not dispatched yet (the interpreter emits them).
+fn dispatch_input_event<E: ScriptEngine>(
+    rt: &mut Runtime<E>,
+    render: &RenderSession,
+    event: &embedder_traits::input_events::InputEvent,
+    touch_targets: &mut std::collections::HashMap<i32, DomNodeId>,
+) {
+    use embedder_traits::WebViewPoint;
+    use embedder_traits::input_events::{InputEvent, MouseButtonAction, TouchEventType};
+    let xy = |p: &WebViewPoint| match p {
+        WebViewPoint::Page(pt) => (pt.x, pt.y),
+        WebViewPoint::Device(pt) => (pt.x, pt.y),
+    };
+    let hit = |rt: &Runtime<E>, (x, y): (f32, f32)| -> Option<DomNodeId> {
+        let host = rt.host().borrow();
+        let layout = render.layout.borrow();
+        layout
+            .as_ref()
+            .and_then(|l| l.hit_test(&host.dom, x, y, &Default::default()))
+    };
+
+    match event {
+        InputEvent::Touch(t) => {
+            let (x, y) = xy(&t.point);
+            let id = t.touch_id.0;
+            let (kind, target) = match t.event_type {
+                TouchEventType::Down => {
+                    let Some(target) = hit(rt, (x, y)) else { return };
+                    // Every later event for this touch point goes here.
+                    touch_targets.insert(id, target);
+                    ("touchstart", target)
+                },
+                // Move/Up/Cancel go to the touchstart target, not a fresh
+                // hit-test: the finger owns the element it landed on.
+                TouchEventType::Move => match touch_targets.get(&id) {
+                    Some(&target) => ("touchmove", target),
+                    None => return,
+                },
+                TouchEventType::Up => match touch_targets.remove(&id) {
+                    Some(target) => ("touchend", target),
+                    None => return,
+                },
+                TouchEventType::Cancel => match touch_targets.remove(&id) {
+                    Some(target) => ("touchcancel", target),
+                    None => return,
+                },
+            };
+            let _ = rt.dispatch_touch_event(target.raw(), kind, f64::from(x), f64::from(y), id);
+        },
+        InputEvent::Wheel(w) => {
+            let (x, y) = xy(&w.point);
+            let Some(target) = hit(rt, (x, y)) else { return };
+            // The interpreter negates the spec's deltas (its positive WheelDelta
+            // scrolls the view up); the DOM event carries the spec sign, so
+            // negate back.
+            let _ = rt.dispatch_wheel_event(
+                target.raw(),
+                f64::from(x),
+                f64::from(y),
+                -w.delta.x,
+                -w.delta.y,
+                0, // DOM_DELTA_PIXEL
+            );
+        },
+        InputEvent::MouseMove(m) => {
+            let p = xy(&m.point);
+            let Some(target) = hit(rt, p) else { return };
+            for kind in ["pointermove", "mousemove"] {
+                let _ = rt.dispatch_event(target.raw(), kind);
+            }
+        },
+        InputEvent::MouseButton(b) => {
+            let p = xy(&b.point);
+            let Some(target) = hit(rt, p) else { return };
+            let kinds: &[&str] = match b.action {
+                MouseButtonAction::Down => &["pointerdown", "mousedown"],
+                MouseButtonAction::Up => &["pointerup", "mouseup", "click"],
+            };
+            for kind in kinds {
+                let _ = rt.dispatch_event(target.raw(), kind);
+            }
+        },
+        _ => {},
+    }
+}
+
 fn run_loaded_with<E: ScriptEngine>(
     rt: &mut Runtime<E>,
     test_src: &str,
@@ -468,10 +650,12 @@ fn drive_virtual<E: ScriptEngine>(rt: &mut Runtime<E>, render: &RenderSession) -
         rt.run_microtasks();
         let fired = rt.run_timers(TIMER_BUDGET, now_ms);
         let rendered = render.turn(rt, now_ms);
+        let acted = process_testdriver_actions(rt, render, &mut now_ms, true);
         let has_raf = rt.has_animation_frame_callbacks();
         let animating = render.animating();
         let next_timer = rt.next_timer_delay();
-        if fired == 0 && rendered == 0 && !has_raf && !animating && next_timer.is_none() {
+        if fired == 0 && rendered == 0 && acted == 0 && !has_raf && !animating && next_timer.is_none()
+        {
             break; // quiescent: no timer, no frame consumer, nothing happened
         }
         // Advance the virtual clock: to the sooner of the next frame and the next
@@ -520,6 +704,10 @@ fn drive_wall<E: ScriptEngine>(
         });
         let fired = rt.run_timers(TIMER_BUDGET, elapsed_ms(start));
         let rendered = render.turn(rt, elapsed_ms(start));
+        // Wall-clock drive: tick durations are collapsed, not slept (the
+        // interpreter reports them; a headed consumer would pace real frames).
+        let mut wall_now = elapsed_ms(start);
+        let acted = process_testdriver_actions(rt, render, &mut wall_now, false);
         let has_raf = rt.has_animation_frame_callbacks();
         let animating = render.animating();
         let pending = rt.pending_fetches();
@@ -529,12 +717,13 @@ fn drive_wall<E: ScriptEngine>(
             && fired == 0
             && applied == 0
             && rendered == 0
+            && acted == 0
             && !has_raf
             && !animating
         {
             break; // quiescent: no fetch, no timer, no frame consumer
         }
-        if fired == 0 && applied == 0 && rendered == 0 {
+        if fired == 0 && applied == 0 && rendered == 0 && acted == 0 {
             // Nothing ran this turn. Sleep until the next event: a fetch
             // completion, the next timer's due time, or — while frames are
             // wanted — at most one frame.
@@ -581,6 +770,11 @@ fn collect_scripts<D: LayoutDom>(
         .is_some_and(|q| q.local.as_ref() == "script")
     {
         match dom.attribute(node, &Namespace::default(), &LocalName::from("src")) {
+            // WPT's deliberately-blank vendor hook: splice serval's automation
+            // backend in its place (H7b), in document order.
+            Some(src) if is_testdriver_vendor_src(src) => {
+                out.push(TESTDRIVER_VENDOR_JS.to_string());
+            },
             Some(src) if !is_harness_src(src) => {
                 if let Some(text) = loader.load_script(src) {
                     out.push(text);
@@ -613,6 +807,68 @@ fn is_harness_src(src: &str) -> bool {
         || s.ends_with("testharnessreport.js")
         || s.ends_with("testharnesscss.css")
 }
+
+/// Whether a `<script src>` is WPT's `testdriver-vendor.js` — the file WPT ships
+/// deliberately blank so the vendor supplies its automation backend. serval's
+/// backend ([`TESTDRIVER_VENDOR_JS`]) is spliced in its place, in document order,
+/// exactly where the real vendor file would run (after `testdriver.js` defines
+/// the throwing defaults, before any test script calls them).
+fn is_testdriver_vendor_src(src: &str) -> bool {
+    let s = src.split(['#', '?']).next().unwrap_or(src);
+    s.ends_with("testdriver-vendor.js")
+}
+
+/// serval's `testdriver-vendor.js` (H7b): the in-process WebDriver-Actions
+/// backend. `action_sequence` normalizes element origins to the wire
+/// element-reference format carrying the node's raw ref (only the host can
+/// resolve geometry), queues the transaction, and returns a Promise the drive
+/// loop settles after running the ticks through the shared interpreter
+/// (`embedder_traits::webdriver_actions::interpret_actions`). Commands beyond
+/// `action_sequence` keep their spec-honest throwing defaults;
+/// `in_automation = true` makes them throw instead of waiting forever for a
+/// human.
+const TESTDRIVER_VENDOR_JS: &str = r#"
+(function() {
+  if (typeof window === 'undefined' || !window.test_driver_internal) { return; }
+  globalThis.__tdQueue = [];
+  globalThis.__tdActive = null;
+  globalThis.__tdTake = function() {
+    if (globalThis.__tdActive || globalThis.__tdQueue.length === 0) { return ''; }
+    globalThis.__tdActive = globalThis.__tdQueue.shift();
+    return JSON.stringify(globalThis.__tdActive.actions);
+  };
+  globalThis.__tdSettle = function(err) {
+    var e = globalThis.__tdActive;
+    globalThis.__tdActive = null;
+    if (!e) { return; }
+    if (err) { e.reject(new Error(String(err))); } else { e.resolve(); }
+  };
+  window.test_driver_internal.in_automation = true;
+  window.test_driver_internal.action_sequence = function(actions) {
+    var fixed = (actions || []).map(function(src) {
+      var copy = {};
+      for (var k in src) { copy[k] = src[k]; }
+      if (src.actions) {
+        copy.actions = src.actions.map(function(a) {
+          var b = {};
+          for (var j in a) { b[j] = a[j]; }
+          if (b.origin && typeof b.origin === 'object' && b.origin.__ref !== undefined) {
+            // The wrapper's __ref is the JS-opaque reflector; __nodeRawId is
+            // the native reverse of __reflectNode, yielding the raw node id
+            // the host resolves through its layout session.
+            b.origin = { 'element-6066-11e4-a52e-4f735466cecf': String(__nodeRawId(b.origin.__ref)) };
+          }
+          return b;
+        });
+      }
+      return copy;
+    });
+    return new Promise(function(resolve, reject) {
+      globalThis.__tdQueue.push({ actions: fixed, resolve: resolve, reject: reject });
+    });
+  };
+})();
+"#;
 
 /// Resolve a local `<script src>` to a path (`/`-absolute against the tests root,
 /// else relative to the test dir). Remote / `data:` srcs return `None`.
@@ -712,6 +968,133 @@ window.addEventListener("load", function() {
                 assert!(!results.is_empty(), "the animation events should reach testharness");
             },
             HarnessOutcome::Threw(m) => panic!("threw instead of reporting: {m}"),
+        }
+    }
+
+    /// H7b end to end, and the first cross-consumer test of the shared Actions
+    /// tick interpreter: a WPT-shaped test loads the real `testdriver.js`, the
+    /// vendor seam splices serval's backend, `test_driver.Actions()`-format JSON
+    /// queues through `action_sequence`, the interpreter resolves the element
+    /// origin through the rendering session's geometry, and the synthesized
+    /// pointerdown/up/click land on the hit-tested node — completing the
+    /// async_test with zero coordinate literals and zero sleeps.
+    #[test]
+    fn test_driver_action_sequence_synthesizes_a_click() {
+        let wpt = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/wpt");
+        let testharness_js =
+            fs::read_to_string(wpt.join("tests/resources/testharness.js")).expect("harness");
+        let tests_root = wpt.join("tests");
+        let base_dir = tests_root.join("dom");
+        let loader = DiskLoader {
+            base_dir: base_dir.as_path(),
+            tests_root: tests_root.as_path(),
+        };
+        let html = r#"<!DOCTYPE html>
+<script src="/resources/testdriver.js"></script>
+<script src="/resources/testdriver-vendor.js"></script>
+<div id="target" style="position:absolute;left:0;top:0;width:100px;height:100px"></div>
+<script>
+async_test(function(t) {
+  var el = document.getElementById('target');
+  el.addEventListener('click', t.step_func_done(function() {}));
+  var actions = [{
+    type: 'pointer', id: 'p1', parameters: { pointerType: 'mouse' },
+    actions: [
+      { type: 'pointerMove', duration: 0, origin: el, x: 0, y: 0 },
+      { type: 'pointerDown', button: 0 },
+      { type: 'pointerUp', button: 0 },
+    ],
+  }];
+  window.test_driver_internal.action_sequence(actions).then(
+    function() {},
+    function(e) {
+      t.step_func(function() {
+        assert_unreached('action_sequence rejected: ' + (e && e.message));
+      })();
+    });
+}, 'a synthesized click reaches the element listener');
+</script>"#;
+        let results = unwrap_ran(run_test(
+            &testharness_js,
+            html,
+            &loader,
+            None,
+            None,
+            None,
+            Engine::Boa,
+        ));
+        assert_eq!(results.len(), 1, "one subtest: {results:?}");
+        assert!(
+            results[0].passed(),
+            "the synthesized click should complete the async_test: {results:?}"
+        );
+    }
+
+    /// The input path end to end (H9), and the rule the whole
+    /// `non-cancelable-when-passive` cluster exists to pin: a **touch** pointer
+    /// action produces a real `TouchEvent` at the element, and its `cancelable`
+    /// is decided by whether a **non-passive** listener for that type is on the
+    /// propagation path. Passive-only => not cancelable; any non-passive =>
+    /// cancelable.
+    ///
+    /// Runs both halves in one file so a regression in either direction (always
+    /// cancelable / never cancelable) fails.
+    #[test]
+    fn a_touch_action_produces_a_touchevent_whose_cancelable_respects_passive() {
+        let wpt = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/wpt");
+        let testharness_js =
+            fs::read_to_string(wpt.join("tests/resources/testharness.js")).expect("harness");
+        let tests_root = wpt.join("tests");
+        let base_dir = tests_root.join("dom");
+        let loader = DiskLoader {
+            base_dir: base_dir.as_path(),
+            tests_root: tests_root.as_path(),
+        };
+        let page = |passive: bool| {
+            format!(
+                r#"<!DOCTYPE html>
+<script src="/resources/testdriver.js"></script>
+<script src="/resources/testdriver-actions.js"></script>
+<script src="/resources/testdriver-vendor.js"></script>
+<div id="t" style="position:absolute;left:0;top:0;width:200px;height:200px"></div>
+<script>
+async_test(function(t) {{
+  var el = document.getElementById('t');
+  el.addEventListener('touchstart', t.step_func_done(function(e) {{
+    assert_true(e instanceof TouchEvent, 'a real TouchEvent');
+    assert_equals(e.cancelable, {expected}, 'cancelable follows the non-passive rule');
+    assert_equals(e.changedTouches.length, 1, 'carries the touch point');
+  }}), {{ passive: {passive} }});
+  new test_driver.Actions()
+    .addPointer('finger', 'touch')
+    .pointerMove(0, 0, {{ origin: el }})
+    .pointerDown()
+    .pointerUp()
+    .send();
+}}, 'touchstart cancelable with passive={passive}');
+</script>"#,
+                passive = passive,
+                // A passive-only listener cannot preventDefault, so the UA marks
+                // the event non-cancelable.
+                expected = !passive,
+            )
+        };
+        for passive in [false, true] {
+            let results = unwrap_ran(run_test(
+                &testharness_js,
+                &page(passive),
+                &loader,
+                None,
+                None,
+                None,
+                Engine::Boa,
+            ));
+            assert_eq!(results.len(), 1, "passive={passive}: one subtest: {results:?}");
+            assert!(
+                results[0].passed(),
+                "passive={passive}: {:?}",
+                results[0]
+            );
         }
     }
 

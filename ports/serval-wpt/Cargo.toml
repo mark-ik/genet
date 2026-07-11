@@ -21,6 +21,10 @@ serval-layout = { path = "../../components/serval-layout" }
 # runtime's live (mutable) DOM, whose node ids are serval-scripted-dom's.
 serval-scripted-dom = { path = "../../components/serval-scripted-dom" }
 layout_dom_api = { workspace = true }
+# H7b: `test_driver_internal.action_sequence` hands WebDriver Actions JSON to
+# the drive loop, which parses it with the pinned protocol types and runs it
+# through the shared tick interpreter (embedder_traits::webdriver_actions).
+webdriver = { workspace = true }
 # MANIFEST.json reader (harness-exactness H1): the upstream WPT manifest is JSON.
 serde_json = { workspace = true }
 

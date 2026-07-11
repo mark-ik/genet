@@ -28,19 +28,31 @@
 //! Deliberate first-cut deviations from the spec, each stated where it bites:
 //! pointer moves emit a single event at the final position rather than
 //! interpolated intermediates; key events do not maintain a modifier state
-//! (shift does not uppercase subsequent characters); only the mouse pointer
-//! type is interpreted. Touch/pen parameters are accepted and ignored.
+//! (shift does not uppercase subsequent characters). Pen pointers are
+//! interpreted as mouse.
+//!
+//! **Pointer types.** `pointerType: "mouse"` (and `"pen"`) emit mouse events;
+//! `"touch"` emits touch events, because a touch pointer is a finger, not a
+//! cursor. Two consequences fall out of that and are load-bearing (WPT's
+//! `dom/events/non-cancelable-when-passive` depends on both):
+//! - A touch pointer that is **not down emits nothing on a move**. There is no
+//!   "hovering finger"; the spec's own `injectInput` idiom moves a touch pointer
+//!   to its origin *before* pressing, and that move must not fabricate a
+//!   `touchmove`. Position is still tracked, so the subsequent press lands right.
+//! - Touch events carry no button; a touch source's down/up are `Down`/`Up`
+//!   touch events keyed by the source's touch id (its input-source index, which
+//!   is stable for the transaction).
 
 use euclid::Point2D;
 use keyboard_types::{Key, KeyState, NamedKey};
 use webdriver::actions::{
     ActionSequence, ActionsType, GeneralAction, KeyAction, KeyActionItem, PointerAction,
-    PointerActionItem, PointerOrigin, WheelAction, WheelActionItem,
+    PointerActionItem, PointerOrigin, PointerType, WheelAction, WheelActionItem,
 };
 
 use crate::input_events::{
-    InputEvent, KeyboardEvent, MouseButtonAction, MouseButtonEvent, MouseMoveEvent, WheelDelta,
-    WheelEvent, WheelMode,
+    InputEvent, KeyboardEvent, MouseButtonAction, MouseButtonEvent, MouseMoveEvent, TouchEvent,
+    TouchEventType, TouchId, WheelDelta, WheelEvent, WheelMode,
 };
 use crate::WebViewPoint;
 
@@ -87,6 +99,10 @@ pub fn interpret_actions(
     // Per-pointer-source position state, keyed by sequence index: `pointer`
     // origins are relative to where that source last moved.
     let mut positions: Vec<(f64, f64)> = vec![(0.0, 0.0); sequences.len()];
+    // Per-pointer-source pressed state, keyed the same way. Only touch reads it
+    // (a finger that is not down emits nothing on a move, and cannot lift); a
+    // mouse hovers and moves freely, so it ignores this.
+    let mut down_sources: Vec<bool> = vec![false; sequences.len()];
 
     let mut ticks = Vec::with_capacity(tick_count);
     for tick_index in 0..tick_count {
@@ -122,46 +138,89 @@ pub fn interpret_actions(
                     },
                     None => {},
                 },
-                ActionsType::Pointer { actions, .. } => match actions.get(tick_index) {
-                    Some(PointerActionItem::General(GeneralAction::Pause(pause))) => {
-                        duration_ms = duration_ms.max(pause.duration.unwrap_or(0));
-                    },
-                    Some(PointerActionItem::Pointer(action)) => match action {
-                        PointerAction::Down(down) => {
-                            events.push(InputEvent::MouseButton(MouseButtonEvent::new(
-                                MouseButtonAction::Down,
-                                down.button.into(),
-                                page_point(positions[source_index]),
-                            )));
+                ActionsType::Pointer {
+                    actions,
+                    parameters,
+                } => {
+                    let is_touch = parameters.pointer_type == PointerType::Touch;
+                    let touch_id = TouchId(source_index as i32);
+                    match actions.get(tick_index) {
+                        Some(PointerActionItem::General(GeneralAction::Pause(pause))) => {
+                            duration_ms = duration_ms.max(pause.duration.unwrap_or(0));
                         },
-                        PointerAction::Up(up) => {
-                            events.push(InputEvent::MouseButton(MouseButtonEvent::new(
-                                MouseButtonAction::Up,
-                                up.button.into(),
-                                page_point(positions[source_index]),
-                            )));
+                        Some(PointerActionItem::Pointer(action)) => match action {
+                            PointerAction::Down(down) => {
+                                down_sources[source_index] = true;
+                                events.push(if is_touch {
+                                    InputEvent::Touch(TouchEvent::new(
+                                        TouchEventType::Down,
+                                        touch_id,
+                                        page_point(positions[source_index]),
+                                    ))
+                                } else {
+                                    InputEvent::MouseButton(MouseButtonEvent::new(
+                                        MouseButtonAction::Down,
+                                        down.button.into(),
+                                        page_point(positions[source_index]),
+                                    ))
+                                });
+                            },
+                            PointerAction::Up(up) => {
+                                let was_down = down_sources[source_index];
+                                down_sources[source_index] = false;
+                                events.push(if is_touch {
+                                    // A finger that never touched down cannot lift.
+                                    if !was_down {
+                                        continue;
+                                    }
+                                    InputEvent::Touch(TouchEvent::new(
+                                        TouchEventType::Up,
+                                        touch_id,
+                                        page_point(positions[source_index]),
+                                    ))
+                                } else {
+                                    InputEvent::MouseButton(MouseButtonEvent::new(
+                                        MouseButtonAction::Up,
+                                        up.button.into(),
+                                        page_point(positions[source_index]),
+                                    ))
+                                });
+                            },
+                            PointerAction::Move(move_action) => {
+                                duration_ms = duration_ms.max(move_action.duration.unwrap_or(0));
+                                let target = resolve_origin(
+                                    &move_action.origin,
+                                    (move_action.x, move_action.y),
+                                    positions[source_index],
+                                    resolve_element,
+                                )?;
+                                positions[source_index] = target;
+                                // Spec allows interpolated intermediate events over
+                                // the duration; this emits the final position once.
+                                if is_touch {
+                                    // No hovering finger: a touch pointer that is not
+                                    // down emits nothing. The position is still
+                                    // tracked above, so the next press lands here.
+                                    if down_sources[source_index] {
+                                        events.push(InputEvent::Touch(TouchEvent::new(
+                                            TouchEventType::Move,
+                                            touch_id,
+                                            page_point(target),
+                                        )));
+                                    }
+                                } else {
+                                    events.push(InputEvent::MouseMove(MouseMoveEvent::new(
+                                        page_point(target),
+                                    )));
+                                }
+                            },
+                            // Cancel rewinds a source's effects mid-transaction; no
+                            // consumer needs it yet, and a silent partial rewind
+                            // would be worse than none.
+                            PointerAction::Cancel => {},
                         },
-                        PointerAction::Move(move_action) => {
-                            duration_ms = duration_ms.max(move_action.duration.unwrap_or(0));
-                            let target = resolve_origin(
-                                &move_action.origin,
-                                (move_action.x, move_action.y),
-                                positions[source_index],
-                                resolve_element,
-                            )?;
-                            positions[source_index] = target;
-                            // Spec allows interpolated intermediate events over
-                            // the duration; this emits the final position once.
-                            events.push(InputEvent::MouseMove(MouseMoveEvent::new(page_point(
-                                target,
-                            ))));
-                        },
-                        // Cancel rewinds a source's effects mid-transaction; no
-                        // consumer needs it yet, and a silent partial rewind
-                        // would be worse than none.
-                        PointerAction::Cancel => {},
-                    },
-                    None => {},
+                        None => {},
+                    }
                 },
                 ActionsType::Wheel { actions } => match actions.get(tick_index) {
                     Some(WheelActionItem::General(GeneralAction::Pause(pause))) => {

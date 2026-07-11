@@ -37,19 +37,10 @@
       "reason": "non-testharness",
       "status": "skip"
     },
-    "css/css-animations/animate-with-background-color-oklch-002.html": {
-      "reason": "no-subtests",
-      "status": "no-results"
-    },
+    "css/css-animations/animate-with-background-color-oklch-002.html": "fail",
     "css/css-animations/animate-with-color-mix-2.html": "fail",
-    "css/css-animations/animate-with-color-mix.html": {
-      "reason": "no-subtests",
-      "status": "no-results"
-    },
-    "css/css-animations/animate-with-relative-color.html": {
-      "reason": "no-subtests",
-      "status": "no-results"
-    },
+    "css/css-animations/animate-with-color-mix.html": "fail",
+    "css/css-animations/animate-with-relative-color.html": "fail",
     "css/css-animations/animation-base-response-001.html": {
       "reason": "evaluation-threw",
       "status": "error"

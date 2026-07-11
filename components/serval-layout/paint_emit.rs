@@ -2303,10 +2303,18 @@ where
 {
     use html5ever::local_name;
 
-    // Root element = the first element child of the document node.
-    let root = dom
+    // Root element = the document's SOLE element child. §root-background
+    // propagation is defined for a real document root (`<html>`); a host-built
+    // synthetic DOM with several document-level elements has no root in that
+    // sense, and promoting the first sibling's background to the whole canvas
+    // painted it over everything (while suppressing it on its own box).
+    let mut elements = dom
         .dom_children(dom.document())
-        .find(|&c| dom.kind(c) == NodeKind::Element)?;
+        .filter(|&c| dom.kind(c) == NodeKind::Element);
+    let root = elements.next()?;
+    if elements.next().is_some() {
+        return None;
+    }
 
     // The root must generate a principal box at all: `display: none` on the root
     // hides the whole document, so there is no canvas background to propagate

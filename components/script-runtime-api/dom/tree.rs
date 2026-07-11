@@ -411,6 +411,21 @@ impl<E: ScriptEngine> NativeFn<E> for CreateFragment {
     }
 }
 
+/// `__nodeRawId(node)` → the reflector's raw `NodeId` as a decimal string, or
+/// `""` for a non-reflector. The reverse of `__reflectNode`: a host bridge that
+/// hands a node *back* to Rust (the testdriver Actions element origin, for one)
+/// carries this id, since the reflector itself is JS-opaque.
+pub(crate) struct NodeRawId;
+impl<E: ScriptEngine> NativeFn<E> for NodeRawId {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let node = cx.arg(0);
+        match cx.reflector_data(&node) {
+            Some(id) => cx.make_string(&id.to_string()),
+            None => cx.make_string(""),
+        }
+    }
+}
+
 /// `__nodeType(node)` → the DOM `nodeType` integer (as a string): 1 element,
 /// 3 text, 8 comment, 9 document, 10 doctype, 7 processing-instruction. Drives the
 /// JS `Element` / `Text` prototype split in `wrapNode`.

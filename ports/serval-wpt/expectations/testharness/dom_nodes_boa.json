@@ -453,8 +453,8 @@
       "reason": "non-testharness",
       "status": "skip"
     },
-    "dom/nodes/moveBefore/continue-css-animation-left.html": "fail",
-    "dom/nodes/moveBefore/continue-css-animation-transform.html": "fail",
+    "dom/nodes/moveBefore/continue-css-animation-left.html": "pass",
+    "dom/nodes/moveBefore/continue-css-animation-transform.html": "pass",
     "dom/nodes/moveBefore/continue-css-transition-left-pseudo.html": "fail",
     "dom/nodes/moveBefore/continue-css-transition-left.html": "fail",
     "dom/nodes/moveBefore/continue-css-transition-transform-pseudo.html": "fail",

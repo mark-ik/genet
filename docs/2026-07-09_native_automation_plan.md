@@ -374,11 +374,26 @@ trait, so it blocks nothing.
   loudly, never guessing a position; tick durations are reported, never slept,
   so a headed consumer paces frames and a headless one collapses time. Stated
   first-cut deviations: single event per pointer move (no interpolation), no
-  modifier tracking, mouse pointer type only, `Cancel` ignored. And the
-  premise-check paid out again: no new surface trait was needed for delivery,
-  because `WebDriverCommandMsg::InputEvent(WebViewId, InputEvent, ..)` already
-  survived the knockout — hosts and the wpt harness consume ticks through their
-  own dispatch, and a trait waits for a real second shape.
+  modifier tracking, ~~mouse pointer type only~~ (lifted, below), `Cancel`
+  ignored. And the premise-check paid out again: no new surface trait was needed
+  for delivery, because `WebDriverCommandMsg::InputEvent(WebViewId, InputEvent, ..)`
+  already survived the knockout — hosts and the wpt harness consume ticks through
+  their own dispatch, and a trait waits for a real second shape.
+  - **Touch pointers landed 2026-07-10 (WPT lane, cross-lane edit to this crate,
+    coordinated).** `pointerType: "touch"` now emits `InputEvent::Touch`; mouse
+    and pen still emit mouse events. The first cross-consumer use of the
+    interpreter demanded it (WPT's `dom/events/non-cancelable-when-passive`
+    injects a touch pointer), and it forced two rules worth keeping in the
+    interpreter rather than each consumer: **a touch that is not down emits
+    nothing on a move** (there is no hovering finger, and the spec's own
+    `injectInput` idiom moves the pointer to its origin *before* pressing — that
+    move must not fabricate a `touchmove`; the position is still tracked so the
+    press lands right), and a touch that never went down cannot lift. Per-source
+    pressed state (`down_sources`) sits beside the existing `positions`. Result:
+    that cluster went 0 -> 38 of 42 all-pass. See the harness plan's H9.
+  - Still open in the interpreter, and now the *only* things standing between
+    the cluster and 42/42 are outside it: keyboard dispatch (the interpreter
+    emits key events; no consumer dispatches them yet) and `Cancel`.
 - Action routing: reuse the a11y `ActionRequest` drain for semantic actions
   (focus, activate, set value), so automation actions and screen-reader
   actions share one code path.

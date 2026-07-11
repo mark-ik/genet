@@ -127,6 +127,37 @@ scripted-DOM breadth, not a serval-layout engine primitive.
 
 These are real but bounded; recorded here so they are not lost.
 
+- **`position: fixed` resolves its insets against the *parent*, not the viewport**
+  (found 2026-07-10 by the WPT input-path work; diagnosed precisely, blocking 4
+  WPT tests today). A fixed box's containing block must be the **viewport** (the
+  ICB); serval uses the Taffy parent. Probe: for
+  `#d { position: fixed; top:0; right:0; bottom:0; left:0 }` inside a normal
+  `<body>`, `#d` computes to **`(0, 0, 800, 0)`** — the width resolves correctly
+  from `left:0`+`right:0`, but the height is **0**, because the parent `body` has
+  `height: auto` = 0 (its only child is out of flow). Give `body` an explicit
+  `height: 600px` and the very same box resolves to `(0, 0, 800, 600)` and
+  hit-tests correctly. So inset-derived sizing *works*; only the containing block
+  is wrong.
+
+  **The scope is larger than "fix a mapping", and this is the part to know before
+  starting.** serval-layout has *no* fixed-vs-absolute handling at all: it hands
+  stylo's computed style to `stylo_taffy::TaffyStyloStyle` (`box_tree.rs`) and
+  inherits Taffy's absolute positioning wholesale, which is **parent-relative by
+  construction**. There is no containing-block concept in the crate to correct —
+  grep finds none. So `position: fixed` and `position: absolute` are today
+  *indistinguishable*, and both resolve against the Taffy parent rather than the
+  CSS containing block (nearest positioned ancestor for `absolute`, the ICB for
+  `fixed`). Closing it means **introducing** the containing-block concept —
+  hoisting fixed boxes to the ICB and resolving `absolute` against the nearest
+  positioned ancestor — with the paint-order and scroll consequences that follow.
+  A thread, not a one-liner.
+
+  Blocks `dom/events/non-cancelable-when-passive`'s four
+  `wheel`/`mousewheel`-on-`div` tests (that div is a full-viewport fixed overlay),
+  which are otherwise ready to pass; see the harness plan's H9. Note the wider
+  exposure: any page whose chrome is a fixed overlay (a sticky header, a modal
+  backdrop, a toast layer) mis-sizes the same way whenever its parent's height is
+  auto — this is not a WPT-only curiosity.
 - **Document-lane find.** Find-in-page is wired for the HTML lane; the document
   lane (gemtext/markdown -> retained `DocumentRenderPacket`) returns empty
   matches. Closing it means mapping glyph runs back to char offsets on the
