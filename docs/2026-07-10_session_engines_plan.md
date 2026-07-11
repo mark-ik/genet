@@ -193,6 +193,19 @@ architecture plan's sequencing note. It never learns the ladder existed.
 4. **merecat content lane.** merecat spawns sessions through the same
    facade for its first web render. Done when the merecat vertical slice
    renders an https page through a registry-dispatched session.
+   **DONE 2026-07-11** (merecat d1e6234, serval 41ee1b962b0): the prepped
+   runner arm went live exactly as its handoff contract said — route,
+   spawn through the SessionRegistry (static lane under serval.web),
+   sessions held port-side keyed by node id, focused session composed
+   into the layered present and the scenario self-capture. Receipt:
+   scenarios/rung4_content.scn, RESULT ok, capture shows the rendered
+   page under the caption chip (testing/merecat/images/
+   rung4_content_live.png). The receipt caught two bugs the unit tests
+   could not: URL-round-trip node resolution (fixed via
+   focused_member()) and serval's root-background propagation treating a
+   sole absolute host widget as a document root (fixed serval-side with
+   a regression test) — the prep's "don't mistake green tests for the
+   lane working" caution, vindicated.
 5. **nematic views + errand wire absorption.** smolweb-views merges into
    nematic as `nematic::views`; finger shaping moves to errand; the smolweb
    session in serval-documents consumes nematic views for all formats it has
