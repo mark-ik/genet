@@ -677,6 +677,35 @@ window.addEventListener("load", function() {
 });
 "#;
 
+    #[test]
+    fn zz_probe_animationevent_types() {
+        let wpt = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/wpt");
+        let testharness_js =
+            fs::read_to_string(wpt.join("tests/resources/testharness.js")).expect("harness");
+        let test_path = wpt.join("tests/css/css-animations/animationevent-types.html");
+        let html = fs::read_to_string(&test_path).expect("test html");
+        let base_dir = test_path.parent().unwrap().to_path_buf();
+        let tests_root = wpt.join("tests");
+        let loader = DiskLoader {
+            base_dir: base_dir.as_path(),
+            tests_root: tests_root.as_path(),
+        };
+        let outcome = run_test(
+            &testharness_js,
+            &html,
+            &loader,
+            None,
+            None,
+            None,
+            Engine::Boa,
+        );
+        match outcome {
+            HarnessOutcome::Ran(results) => println!("ran: {} subtests", results.len()),
+            HarnessOutcome::Threw(m) => println!("threw: {m}"),
+        }
+    }
+
     fn unwrap_ran(outcome: HarnessOutcome) -> Vec<TestResult> {
         match outcome {
             HarnessOutcome::Ran(results) => results,

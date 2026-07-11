@@ -241,12 +241,26 @@ changed.
    pushed to GitHub for a clean non-local build (the local patch file
    covers the working-copy loop meanwhile).
 5. App-flavored routing constants live app-side; grep for
-   `graphshell.internal` in serval returns nothing.
+   `graphshell.internal` in serval returns nothing. **DONE 2026-07-10**
+   (serval efeff274ba4, mere baee697): graphshell.internal +
+   linked-data.ingest + is_graph_contribution_route + their default-policy
+   rules moved to the new `mere::routing` module (facade grows an inker
+   dep; `route_policy()` layers the app rules); meerkat's three production
+   policy sites switch to it. Deviation, recorded: `host.external-protocol`
+   STAYS in inker as the neutral hand-to-OS fallback the default policy's
+   fallback rule needs — it is host-generic, not mere-flavored.
 6. Pelt's serval lanes registered as inker document engines behind pelt
    features; meerkat's hand-dispatch of serval lanes retired or reduced to
    registry calls.
 7. crates.io: inker + nematic republished from mark-ik/serval.
-8. errand joins serval (companion step; may land separately).
+8. errand joins serval (companion step; may land separately). **DONE
+   2026-07-10** (serval e4487163ed0, mere 00cf124): components/errand with
+   nex/spartan/guppy-protocol as members under protocols/, each keeping
+   its published identity; serval consumers (nematic, smolweb-views,
+   pelt-desktop) on workspace entries; mere's fetch + meerkat flipped to
+   the serval source. errand's stale MPL SPDX comment (contradicting its
+   MIT/Apache license field) dropped in transit. 93 tests green across
+   the four crates.
 9. verso-tile consolidated (four crates to one, feature-layered as above)
    and building as a serval component; meerkat and system/fetch on the git
    dep; boundary-pass doc amended. **DONE 2026-07-10**: landed exactly as
@@ -260,7 +274,14 @@ changed.
    family never depped inker, so item 9 was independent).
 10. illume + tinct adopted as serval components (companion; may land
     separately); their standalone repos retire; registry descriptions
-    refreshed on republish.
+    refreshed on republish. **DONE 2026-07-10** (serval c398e2b96a7, mere
+    4e263a5): components/illume + components/tinct (repo was named
+    tincture); root git/crates.io deps became path entries; mere's
+    tincture alias flips to the serval source; xilem-serval's highlight
+    feature checks clean; illume 32 + tinct 6 + knot-editor-host 15 tests
+    green. Repo retirement (archiving repos/errand, repos/illume,
+    repos/tincture, the three protocol repos) is Mark's call once serval
+    is pushed.
 
 ## Open questions
 
