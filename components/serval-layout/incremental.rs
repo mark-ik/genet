@@ -2819,6 +2819,112 @@ mod tests {
         );
     }
 
+    /// F1 of the position-containing-block plan: a `position: fixed` box
+    /// resolves its insets against the **viewport** (the ICB), not its parent.
+    /// The WPT shape that found the gap: a fully-inset fixed div under a normal
+    /// auto-height `<body>` used to compute `(0, 0, 800, 0)` — height 0 because
+    /// the (wrong) containing block, `body`, has auto height 0 when its only
+    /// child is out of flow. Hoisted to the root it fills the viewport and
+    /// hit-tests at its center.
+    #[test]
+    fn fixed_inset_box_resolves_against_the_viewport() {
+        const SHEET: &[&str] = &[
+            "html, body { overflow: hidden; margin: 0; }",
+            "#d { position: fixed; top: 0; right: 0; bottom: 0; left: 0; overflow: scroll; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let d = dom.create_element(html("div"));
+        dom.set_attribute(d, attr("id"), "d");
+        dom.append_child(body, d);
+        let inner = dom.create_element(html("div"));
+        dom.set_attribute(inner, attr("style"), "height: 1200px");
+        dom.append_child(d, inner);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        assert_eq!(
+            layout.absolute_rect(&dom, d),
+            Some((0.0, 0.0, W, H)),
+            "fully-inset fixed box fills the viewport under an auto-height body",
+        );
+        assert_eq!(
+            layout.hit_test(&dom, W / 2.0, H / 2.0, &Default::default()),
+            Some(inner),
+            "the viewport center hits the fixed subtree (its tall inner child)",
+        );
+    }
+
+    /// The css-transforms §2 rule, and the orrery's safety rail: an ancestor
+    /// with a transform is the containing block for its fixed descendants, so a
+    /// fixed box under one is **not** hoisted — it keeps resolving against the
+    /// transformed ancestor, exactly as before this slice.
+    #[test]
+    fn a_fixed_box_under_a_transformed_ancestor_is_not_hoisted() {
+        const SHEET: &[&str] = &[
+            "#wrap { transform: translate(10px, 20px); width: 200px; height: 100px; }",
+            "#f { position: fixed; top: 0; right: 0; bottom: 0; left: 0; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let wrap = dom.create_element(html("div"));
+        dom.set_attribute(wrap, attr("id"), "wrap");
+        dom.append_child(body, wrap);
+        let f = dom.create_element(html("div"));
+        dom.set_attribute(f, attr("id"), "f");
+        dom.append_child(wrap, f);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let (_, _, fw, fh) = layout.absolute_rect(&dom, f).expect("fixed box rect");
+        assert_eq!(
+            (fw, fh),
+            (200.0, 100.0),
+            "insets resolve against the transformed ancestor, not the viewport",
+        );
+    }
+
+    /// A `static -> fixed` flip through `apply` re-resolves against the ICB:
+    /// the incremental path must reach a rebuild whose post-pass hoists (a
+    /// splice that would graft a fixed box refuses and falls back).
+    #[test]
+    fn toggling_position_to_fixed_rehosts_to_the_viewport() {
+        const SHEET: &[&str] = &["html, body { margin: 0; }"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let d = dom.create_element(html("div"));
+        dom.set_attribute(d, attr("style"), "height: 50px");
+        dom.append_child(body, d);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let (_, _, _, h0) = layout.absolute_rect(&dom, d).expect("in-flow rect");
+        assert_eq!(h0, 50.0, "starts in flow at its own height");
+
+        let _ = drain(&mut dom);
+        dom.set_attribute(
+            d,
+            attr("style"),
+            "position: fixed; top: 0; right: 0; bottom: 0; left: 0;",
+        );
+        let muts = drain(&mut dom);
+        layout.apply(&dom, SHEET, &muts);
+        assert_eq!(
+            layout.absolute_rect(&dom, d),
+            Some((0.0, 0.0, W, H)),
+            "after the flip the box resolves against the viewport",
+        );
+    }
+
     /// Reduced motion completes a `@keyframes` animation on the first tick and
     /// emits no events, matching the transition behavior. The clock jumps past the
     /// animation's end (`max_animation_end`), so a `forwards` fill lands its final

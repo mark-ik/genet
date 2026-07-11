@@ -423,6 +423,13 @@ impl<Id: Copy + Eq + Hash> BoxTree<Id> {
         if scoped.arena_of(root) != Some(scoped.root) {
             return false;
         }
+        // F1 (position containing blocks): a scoped build hoists fixed boxes to
+        // *its* root, which after grafting would be the subtree root, not the
+        // document ICB. Refuse; the caller falls back to the full rebuild, whose
+        // post-pass hoists against the real root.
+        if scoped.had_fixed_hoists {
+            return false;
+        }
 
         // The old subtree's arena indices: purge their DOM-keyed and
         // text-cache entries so only the grafted boxes resolve.
@@ -546,12 +553,85 @@ where
         }
     };
     tree.root = root;
+
+    // F1 (position containing blocks): re-parent the hoisted `position: fixed`
+    // boxes to the root — the ICB approximation (for parsed HTML the root is
+    // `<html>`, UA-sized to the viewport, so insets resolve against it exactly).
+    // Registration order preserves document order among the hoisted boxes.
+    // Cascade/inheritance are unaffected: stylo already ran over the DOM.
+    if !tree.fixed_hoists.is_empty() {
+        let hoists: Vec<usize> = std::mem::take(&mut tree.fixed_hoists)
+            .into_iter()
+            // A fixed *root* cannot hoist into itself (degenerate, but cheap
+            // to refuse).
+            .filter(|&h| h != root)
+            .collect();
+        if !hoists.is_empty() {
+            let hoisted: FxHashSet<usize> = hoists.iter().copied().collect();
+            for node in &mut tree.nodes {
+                node.children.retain(|c| !hoisted.contains(c));
+            }
+            tree.nodes[root].children.extend(hoists);
+        }
+    }
     tree
 }
 
-/// Recursively build the box for `elem` (an element node) and its
-/// descendants; returns its arena index.
+/// Whether this element's style makes it a containing block for **fixed**
+/// descendants (css-transforms §2 and friends): `transform`, `filter`, or
+/// `perspective`. Conservative first cut — `will-change` and `contain` are not
+/// yet consulted, so a box a real UA would keep local may still hoist; rare,
+/// and the safe direction for conformance is covered by the common three.
+pub(crate) fn establishes_fixed_cb(cv: &ComputedValues) -> bool {
+    use style::values::computed::Perspective;
+    let b = cv.get_box();
+    !b.transform.0.is_empty()
+        || !matches!(b.perspective, Perspective::None)
+        || !cv.get_effects().filter.0.is_empty()
+}
+
+/// Recursively build the box for `elem`: the hoist-aware wrapper over
+/// [`build_node_in_flow`]. F1 of the position-containing-block plan: a
+/// `position: fixed` box whose ancestors establish no containing block for it
+/// registers in `fixed_hoists`, and `build_box_tree`'s post-pass re-parents it
+/// to the root (the ICB approximation), so Taffy's parent-relative inset
+/// resolution resolves against the viewport, per CSS Position §2.1. The parent
+/// still receives the index during the walk; the post-pass strips it.
 fn build_node<'a, D>(
+    dom: &'a D,
+    styles: &StylePlane<D::NodeId>,
+    images: &ImagePlane<D::NodeId>,
+    elem: NodeRef<'a, D>,
+    tree: &mut BoxTree<D::NodeId>,
+) -> usize
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    // Snapshot before the guard: a box's *own* transform does not change its
+    // own containing block — only ancestors count (css-transforms §2).
+    let ancestor_guarded = tree.fixed_cb_depth > 0;
+    let guards_descendants = styles
+        .get(elem.id())
+        .and_then(|e| e.borrow_data())
+        .is_some_and(|d| establishes_fixed_cb(d.styles.primary()));
+    if guards_descendants {
+        tree.fixed_cb_depth += 1;
+    }
+    let i = build_node_in_flow(dom, styles, images, elem, tree);
+    if guards_descendants {
+        tree.fixed_cb_depth -= 1;
+    }
+    if !ancestor_guarded && crate::paint_emit::is_fixed(&tree.nodes[i].style) {
+        tree.fixed_hoists.push(i);
+        tree.had_fixed_hoists = true;
+    }
+    i
+}
+
+/// The in-flow half of [`build_node`]: builds the box for `elem` (an element
+/// node) and its descendants; returns its arena index.
+fn build_node_in_flow<'a, D>(
     dom: &'a D,
     styles: &StylePlane<D::NodeId>,
     images: &ImagePlane<D::NodeId>,

@@ -33,6 +33,11 @@ pub mod document;
 /// Engine trait and registry.
 pub mod engine;
 
+/// Session-engine traits and registry — the third engine kind: retained
+/// document sessions producing paint frames (the serval HTML lanes, smolweb
+/// native). Frame-type generic; this crate stays paint-free.
+pub mod session_engine;
+
 /// Surface-engine traits and registry — parallel dispatch path for
 /// long-lived, frame-streaming engines (e.g. `scrying.web`).
 pub mod surface_engine;
@@ -56,6 +61,10 @@ pub use engine::{Engine, EngineError, EngineInput, EngineRegistry};
 pub use routing::{
     EngineRouteDecision, EngineRoutePolicy, EngineRouteRequest, EngineRouteRule, SurfaceContract,
     SurfaceContractMode, SurfaceTargetId, WorkspaceRouteId,
+};
+pub use session_engine::{
+    DocumentSession, EngineKinds, Engines, SessionClick, SessionEngine, SessionError,
+    SessionLink, SessionRegistry, SessionScrollKey, SessionSpawnRequest,
 };
 pub use sniff::sniff_content_type;
 pub use statements::{LinkStatement, link_statements};

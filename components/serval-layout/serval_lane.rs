@@ -220,6 +220,7 @@ where
             self.dom.document(),
             Point::new(0.0, 0.0),
             doc_point,
+            false,
             &mut hit,
             &mut deferred,
         );
@@ -229,6 +230,7 @@ where
                 id,
                 parent_origin,
                 point,
+                ancestor_fixed_cb,
             } = deferred[i];
             walk_for_hit(
                 self.dom,
@@ -239,6 +241,7 @@ where
                 id,
                 parent_origin,
                 point,
+                ancestor_fixed_cb,
                 &mut hit,
                 &mut deferred,
             );
@@ -425,8 +428,13 @@ struct DeferredHitSubtree<Id> {
     id: Id,
     parent_origin: Point,
     point: Point,
+    /// Whether an ancestor of this subtree establishes a containing block for
+    /// fixed descendants (css-transforms §2). Carried so the deferred re-entry
+    /// resumes with the same escape state the in-flow walk had.
+    ancestor_fixed_cb: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk_for_hit<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
@@ -436,23 +444,36 @@ fn walk_for_hit<D>(
     id: D::NodeId,
     parent_origin: Point,
     point: Point,
+    ancestor_fixed_cb: bool,
     out: &mut Option<FragmentHit<SourceNodeId>>,
     deferred: &mut Vec<DeferredHitSubtree<D::NodeId>>,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    let cv = primary_cv(styles, id);
+    // An **escaped** fixed box: `position: fixed` with no ancestor establishing
+    // a containing block for it (css-transforms §2). The box tree hoists such a
+    // box to the root (F1 of the position-containing-block plan), so its
+    // fragment location is *root*-relative — its origin stands alone rather
+    // than accumulating the DOM chain (which would double-count, e.g., the
+    // default `<body>` margin). A *guarded* fixed box (under a transformed
+    // ancestor) stays parent-relative, exactly as before.
+    let escaped_fixed =
+        cv.as_deref().is_some_and(is_fixed) && !ancestor_fixed_cb;
     let layout = fragments.rect_of(id);
     let origin = if let Some(l) = layout {
-        Point::new(
-            parent_origin.x + l.location.x,
-            parent_origin.y + l.location.y,
-        )
+        if escaped_fixed {
+            Point::new(l.location.x, l.location.y)
+        } else {
+            Point::new(
+                parent_origin.x + l.location.x,
+                parent_origin.y + l.location.y,
+            )
+        }
     } else {
         parent_origin
     };
-
-    let cv = primary_cv(styles, id);
     // `position: fixed` attaches to the viewport: paint counters the document
     // scroll around its layer (it paints pinned), so undo the caller's
     // `+viewport_scroll` map here and hit-test the fixed box and its subtree at
@@ -514,6 +535,30 @@ fn walk_for_hit<D>(
                 l.size.height - l.border.top - l.border.bottom,
             );
             if !pad.contains(local) {
+                // A fixed descendant whose containing block is the viewport is
+                // NOT clipped by this box (CSS Overflow: clipping applies only
+                // through the containing-block chain, and this clipper is not in
+                // an escaped fixed box's chain). Defer direct escaped-fixed
+                // children before pruning the in-flow subtree; their re-entry
+                // frame ignores `parent_origin` (escaped origins stand alone).
+                // Known F1 approximation: escaped-fixed boxes nested *deeper*
+                // inside the pruned subtree are still missed.
+                let child_guard = ancestor_fixed_cb
+                    || cv
+                        .as_deref()
+                        .is_some_and(crate::box_tree::establishes_fixed_cb);
+                if !child_guard {
+                    for child in dom.dom_children(id) {
+                        if primary_cv(styles, child).as_deref().is_some_and(is_fixed) {
+                            deferred.push(DeferredHitSubtree {
+                                id: child,
+                                parent_origin: origin,
+                                point: local,
+                                ancestor_fixed_cb: false,
+                            });
+                        }
+                    }
+                }
                 return;
             }
         }
@@ -532,6 +577,10 @@ fn walk_for_hit<D>(
     // document order. Defer each with its accumulated (origin, point)
     // mapping; `hit_test` drains the queue after the in-flow walk, so the
     // positioned plane overwrites in-flow hits.
+    let child_guard = ancestor_fixed_cb
+        || cv
+            .as_deref()
+            .is_some_and(crate::box_tree::establishes_fixed_cb);
     for child in dom.dom_children(id) {
         if primary_cv(styles, child)
             .as_deref()
@@ -541,6 +590,7 @@ fn walk_for_hit<D>(
                 id: child,
                 parent_origin: origin,
                 point: child_point,
+                ancestor_fixed_cb: child_guard,
             });
             continue;
         }
@@ -553,6 +603,7 @@ fn walk_for_hit<D>(
             child,
             origin,
             child_point,
+            child_guard,
             out,
             deferred,
         );
