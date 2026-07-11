@@ -106,8 +106,8 @@ impl Engine for KnotEngine {
 
         // Inline wikilinks `[[name]]` and hashtags `#tag` get rewritten in
         // place: wikilinks become `mere://node/<name>` Link spans so they
-        // route through graphshell.internal; hashtags emit one Badge block
-        // per tag at the end of their containing paragraph.
+        // route through the host's internal-page engine; hashtags emit one
+        // Badge block per tag at the end of their containing paragraph.
         expand::rewrite_inline_extensions(&mut doc.blocks);
 
         apply_frontmatter(

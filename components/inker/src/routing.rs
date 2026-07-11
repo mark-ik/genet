@@ -78,24 +78,13 @@ pub const ENGINE_NEMATIC_SCROLL: &str = "nematic.scroll";
 pub const ENGINE_NEMATIC_TEXT: &str = "nematic.text";
 /// Titan (`titan://`) response bodies — gemtext re-tagged with titan provenance.
 pub const ENGINE_NEMATIC_TITAN: &str = "nematic.titan";
-pub const ENGINE_GRAPHSHELL_INTERNAL: &str = "graphshell.internal";
+/// The one host-handled id inker keeps: the neutral "hand this address to the
+/// OS" target every host has, and the default policy's `fallback` rule needs
+/// one. App-flavored host-handled ids (internal pages, graph-contribution
+/// ingest markers) are the host's own vocabulary, defined app-side and layered
+/// onto the policy at construction (mere: `mere::routing`); registry keys are
+/// plain strings, so a host id costs nothing here.
 pub const ENGINE_EXTERNAL_PROTOCOL: &str = "host.external-protocol";
-
-/// Marker route target for JSON-LD graph ingest (linked-data plan Phase 2).
-/// **Not a render engine.** A host that receives this decision feeds the body to
-/// [`linked-data::from_jsonld`](https://crates.io/crates/linked-data) to produce
-/// a `GraphContribution` it merges into the graph, instead of dispatching to the
-/// engine registry. Routed Headless (no surface), like the other host-handled
-/// target [`ENGINE_EXTERNAL_PROTOCOL`]; recognize it with
-/// [`is_graph_contribution_route`].
-pub const ENGINE_LINKED_DATA_INGEST: &str = "linked-data.ingest";
-
-/// Whether a route decision's `engine_id` is the JSON-LD ingest marker
-/// ([`ENGINE_LINKED_DATA_INGEST`]) rather than a render engine. A host checks
-/// this before dispatching a decision to the engine registry.
-pub fn is_graph_contribution_route(engine_id: &str) -> bool {
-    engine_id == ENGINE_LINKED_DATA_INGEST
-}
 
 /// Whether `engine_id` names a tier-2 **surface** engine — one that produces GPU
 /// frames (a system WebView via [`ENGINE_SCRYING_WEB`]; CEF via weld and Servo via
@@ -402,11 +391,6 @@ impl Default for EngineRoutePolicy {
                     ENGINE_NEMATIC_FILE,
                     SurfaceContractMode::CompositedTexture,
                 ),
-                EngineRouteRule::new(
-                    ["about", "graphshell", "mere"],
-                    ENGINE_GRAPHSHELL_INTERNAL,
-                    SurfaceContractMode::Headless,
-                ),
                 // Content-type rules: when a fetcher learns the MIME type,
                 // these win over scheme rules so an HTTPS response of
                 // `text/markdown` re-routes to the markdown engine instead
@@ -489,13 +473,6 @@ impl Default for EngineRoutePolicy {
                     ["application/feed+json"],
                     ENGINE_NEMATIC_FEED,
                     SurfaceContractMode::CompositedTexture,
-                ),
-                // JSON-LD is a graph contribution, not a render: the host feeds
-                // it to linked-data ingest rather than an engine. Headless.
-                EngineRouteRule::content_type(
-                    ["application/ld+json"],
-                    ENGINE_LINKED_DATA_INGEST,
-                    SurfaceContractMode::Headless,
                 ),
             ],
             fallback: EngineRouteRule::new(

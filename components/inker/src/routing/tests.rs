@@ -58,16 +58,9 @@ fn default_policy_routes_finger_to_finger_engine() {
     assert_eq!(decision.engine_id, ENGINE_NEMATIC_FINGER);
 }
 
-#[test]
-fn default_policy_routes_internal_addresses_headless() {
-    let decision = EngineRoutePolicy::default().route(&request("graphshell://settings"));
-
-    assert_eq!(decision.engine_id, ENGINE_GRAPHSHELL_INTERNAL);
-    assert_eq!(
-        decision.surface_contract.mode,
-        SurfaceContractMode::Headless
-    );
-}
+// (Internal-page routing — mere's `graphshell://` and friends — is the host's
+// own rule, layered onto the policy app-side; its test lives with
+// `mere::routing`.)
 
 #[test]
 fn default_policy_does_not_guess_unknown_protocols() {
@@ -138,22 +131,8 @@ fn unknown_content_type_falls_back_to_scheme() {
     assert_eq!(decision.engine_id, ENGINE_SERVAL_WEB);
 }
 
-#[test]
-fn ld_json_routes_to_graph_contribution_ingest() {
-    let decision = EngineRoutePolicy::default().route(&request_with_content_type(
-        "https://example.test/data",
-        "application/ld+json",
-    ));
-    assert_eq!(decision.engine_id, ENGINE_LINKED_DATA_INGEST);
-    // A graph contribution has no visible surface.
-    assert_eq!(
-        decision.surface_contract.mode,
-        SurfaceContractMode::Headless
-    );
-    // And it is recognized as a non-render route the host handles itself.
-    assert!(is_graph_contribution_route(&decision.engine_id));
-    assert!(!is_graph_contribution_route(ENGINE_SERVAL_WEB));
-}
+// (JSON-LD graph-contribution routing is a host-handled marker, layered onto
+// the policy app-side; its test lives with `mere::routing`.)
 
 #[test]
 fn content_type_match_is_case_insensitive() {

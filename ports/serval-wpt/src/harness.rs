@@ -25,11 +25,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use layout_dom_api::{LayoutDom, LocalName, Namespace};
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace};
 use script_engine_api::ScriptEngine;
 use script_runtime_api::{
-    FetchHandler, FetchOutcome, MediaQueryHandler, Runtime, TestResult, WebGlFactory,
+    ComputedStyleHandler, FetchHandler, FetchOutcome, MediaQueryHandler, Runtime, TestResult,
+    WebGlFactory,
 };
+use serval_layout::{Applied, IncrementalLayout, inline_stylesheets};
+use serval_scripted_dom::NodeId as DomNodeId;
 use serval_static_dom::StaticDocument;
 
 thread_local! {
@@ -76,6 +82,11 @@ pub trait CompletionSource {
 const DRIVE_DEADLINE: Duration = Duration::from_secs(15);
 /// Timers fired per drive turn before re-checking the completion channel.
 const TIMER_BUDGET: u32 = 64;
+/// The drive loop's rendering cadence (one 60Hz frame, ms). In disk mode this is
+/// a *virtual* step — rAF callbacks and the animation clock advance by it with no
+/// sleeping, so a 2s animation costs evaluation time, not wall time. In server
+/// mode it caps the idle wait while frames are pending.
+const FRAME_MS: f64 = 1000.0 / 60.0;
 
 /// Which JS engine the testharness runner drives. Boa is the pure-Rust
 /// conformance oracle; Nova is the native primary. Both implement
@@ -307,31 +318,193 @@ fn prepare_runtime<E: ScriptEngine>(
     }
 }
 
+/// H7a (harness-exactness plan): the testharness lane's rendering session.
+///
+/// An [`IncrementalLayout`] over the runtime's live DOM, doing per drive turn
+/// what a host's frame loop does: apply pending DOM mutations, pump rAF
+/// callbacks, tick CSS animations/transitions on the drive clock, and dispatch
+/// the harvested lifecycle events through the runtime. It also backs
+/// `getComputedStyle` (the serval-scripted `ComputedStyleBridge` pattern), so
+/// style reads return the session's cascade instead of nothing. Cheap when a
+/// test never animates: every hook no-ops on an empty set.
+struct RenderSession {
+    layout: Rc<RefCell<Option<IncrementalLayout<DomNodeId>>>>,
+    sheets: Vec<String>,
+}
+
+/// `getComputedStyle` over the session's retained cascade. One restyle stale by
+/// construction (script runs before the next turn's apply), the standard
+/// tradeoff of the script-before-layout split.
+struct WptComputedStyle {
+    layout: Rc<RefCell<Option<IncrementalLayout<DomNodeId>>>>,
+}
+
+impl ComputedStyleHandler for WptComputedStyle {
+    fn computed_value(&self, node: u64, property: &str) -> Option<String> {
+        self.layout
+            .borrow()
+            .as_ref()?
+            .computed_value(DomNodeId::from_raw(node as usize), property)
+    }
+}
+
+impl RenderSession {
+    /// Build the session over the runtime's already-loaded DOM (before the test
+    /// body runs, so early style reads see the parse-time cascade) and register
+    /// the `getComputedStyle` bridge.
+    fn new<E: ScriptEngine>(rt: &mut Runtime<E>) -> Self {
+        let layout = Rc::new(RefCell::new(None));
+        let sheets;
+        {
+            let mut host = rt.host().borrow_mut();
+            sheets = inline_stylesheets(&host.dom);
+            // Discard the load-time mutation backlog: `new` cascades the DOM's
+            // current state, so replaying it through `apply` would be double work.
+            let mut discard = Vec::new();
+            host.dom.drain_mutations(&mut discard);
+            let refs: Vec<&str> = sheets.iter().map(String::as_str).collect();
+            *layout.borrow_mut() = Some(IncrementalLayout::new(&host.dom, &refs, 800.0, 600.0));
+        }
+        rt.set_computed_style_handler(Box::new(WptComputedStyle {
+            layout: layout.clone(),
+        }));
+        Self { layout, sheets }
+    }
+
+    /// Whether a declared CSS animation/transition is still live on the session
+    /// clock — the drive loop keeps producing frames while true.
+    fn animating(&self) -> bool {
+        self.layout
+            .borrow()
+            .as_ref()
+            .is_some_and(|l| l.has_active_animations())
+    }
+
+    /// One rendering turn at `now_ms`: rAF callbacks, mutation apply, animation
+    /// tick, then transition + animation event dispatch. Returns how much work
+    /// happened (0 = the turn was a no-op), which feeds the quiescence check.
+    fn turn<E: ScriptEngine>(&self, rt: &mut Runtime<E>, now_ms: f64) -> usize {
+        let mut work = rt.run_animation_frame_callbacks(now_ms).unwrap_or(0);
+        let (t_events, a_events, restyled) = {
+            let mut host = rt.host().borrow_mut();
+            let mut layout = self.layout.borrow_mut();
+            let Some(layout) = layout.as_mut() else {
+                return work;
+            };
+            let refs: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
+            let mut muts = Vec::new();
+            host.dom.drain_mutations(&mut muts);
+            let mut restyled = 0usize;
+            if !muts.is_empty() {
+                layout.apply(&host.dom, &refs, &muts);
+                restyled += 1;
+            }
+            if layout.tick_animations(&host.dom, now_ms / 1000.0) != Applied::Unchanged {
+                restyled += 1;
+            }
+            (
+                layout.take_transition_events(&host.dom),
+                layout.take_animation_events(&host.dom),
+                restyled,
+            )
+        };
+        // Dispatch off the borrow: listeners can mutate the DOM; the next turn
+        // picks those mutations up.
+        work += restyled + t_events.len() + a_events.len();
+        for ev in t_events {
+            let _ = rt.dispatch_transition_event(
+                ev.node.raw(),
+                ev.kind.event_type(),
+                &ev.property_name,
+                ev.elapsed_time,
+            );
+        }
+        for ev in a_events {
+            let _ = rt.dispatch_animation_event(
+                ev.node.raw(),
+                ev.kind.event_type(),
+                &ev.animation_name,
+                ev.elapsed_time,
+            );
+        }
+        work
+    }
+}
+
 fn run_loaded_with<E: ScriptEngine>(
     rt: &mut Runtime<E>,
     test_src: &str,
     completion: Option<&dyn CompletionSource>,
 ) -> HarnessOutcome {
-    let Some(cs) = completion else {
-        return match rt.run_loaded_testharness(test_src) {
-            Ok(results) => HarnessOutcome::Ran(results),
-            Err(e) => HarnessOutcome::Threw(truncate(&format!("{e:?}"), 200)),
-        };
-    };
-
-    // Deferred path: drive the event loop ourselves. Timers fire on a real-time
-    // gate (virtual clock = elapsed ms), so a short abort timer fires at its delay
-    // while the far-future testharness timeout stays pending, and fetch completions
-    // arrive out of band on the channel. Each turn: run microtasks, drain ready
-    // completions, fire due timers, then sleep until the next event (a completion or
-    // the next timer's due time) up to the wall-clock deadline.
+    // H7a: every testharness run gets a rendering session. Built before the test
+    // body runs so early `getComputedStyle` reads see the parse-time cascade.
+    let render = RenderSession::new(rt);
     if let Err(e) = rt.begin_loaded_testharness(test_src) {
         return HarnessOutcome::Threw(truncate(&format!("{e:?}"), 200));
     }
+    rt.run_microtasks();
+    match completion {
+        None => drive_virtual(rt, &render),
+        Some(cs) => drive_wall(rt, &render, cs),
+    }
+}
+
+/// Disk-mode drive: all three clocks (timers, rAF, the animation clock) are
+/// **virtual** — each turn advances `now_ms` to the next frame while anything
+/// frame-paced pends, else jumps straight to the next timer's due time, and
+/// never sleeps. Timer firing order matches the old eager path (due-time order),
+/// so pure-timer tests score identically; what's new is that rAF-paced and
+/// animating tests make progress at evaluation speed rather than never. The
+/// wall-clock deadline still backstops runaway loops (a self-rearming 0ms timer,
+/// an rAF loop that never exits).
+fn drive_virtual<E: ScriptEngine>(rt: &mut Runtime<E>, render: &RenderSession) -> HarnessOutcome {
+    let start = Instant::now();
+    let mut now_ms = 0.0f64;
+    loop {
+        if start.elapsed() >= DRIVE_DEADLINE {
+            rt.fail_all_pending("test timed out");
+            break;
+        }
+        rt.run_microtasks();
+        let fired = rt.run_timers(TIMER_BUDGET, now_ms);
+        let rendered = render.turn(rt, now_ms);
+        let has_raf = rt.has_animation_frame_callbacks();
+        let animating = render.animating();
+        let next_timer = rt.next_timer_delay();
+        if fired == 0 && rendered == 0 && !has_raf && !animating && next_timer.is_none() {
+            break; // quiescent: no timer, no frame consumer, nothing happened
+        }
+        // Advance the virtual clock: to the sooner of the next frame and the next
+        // timer while frames are wanted, else straight to the next timer. A turn
+        // that did work but scheduled nothing time-based loops once more at the
+        // same instant and then quiesces.
+        now_ms += if has_raf || animating {
+            match next_timer {
+                Some(d) if d < FRAME_MS => d.max(0.0),
+                _ => FRAME_MS,
+            }
+        } else if let Some(d) = next_timer {
+            d.max(0.0)
+        } else {
+            0.0
+        };
+    }
+    HarnessOutcome::Ran(rt.results())
+}
+
+/// Server-mode drive: timers fire on a real-time gate (virtual clock = elapsed
+/// wall ms), so a short abort timer fires at its delay while the far-future
+/// testharness timeout stays pending, and fetch completions arrive out of band
+/// on the channel. Each turn additionally runs a rendering turn; idle waits are
+/// capped at one frame while rAF callbacks or animations pend.
+fn drive_wall<E: ScriptEngine>(
+    rt: &mut Runtime<E>,
+    render: &RenderSession,
+    cs: &dyn CompletionSource,
+) -> HarnessOutcome {
     let start = Instant::now();
     let elapsed_ms =
         |start: Instant| (Instant::now().saturating_duration_since(start)).as_millis() as f64;
-    rt.run_microtasks();
     loop {
         if elapsed_ms(start) >= DRIVE_DEADLINE.as_millis() as f64 {
             rt.fail_all_pending("test timed out");
@@ -346,18 +519,32 @@ fn run_loaded_with<E: ScriptEngine>(
             FetchCompletion::Fail(id, m) => rt.fail_fetch(id, &m),
         });
         let fired = rt.run_timers(TIMER_BUDGET, elapsed_ms(start));
+        let rendered = render.turn(rt, elapsed_ms(start));
+        let has_raf = rt.has_animation_frame_callbacks();
+        let animating = render.animating();
         let pending = rt.pending_fetches();
         let next_timer = rt.next_timer_delay();
-        if pending == 0 && next_timer.is_none() && fired == 0 && applied == 0 {
-            break; // quiescent: no fetch, no timer, nothing applied
+        if pending == 0
+            && next_timer.is_none()
+            && fired == 0
+            && applied == 0
+            && rendered == 0
+            && !has_raf
+            && !animating
+        {
+            break; // quiescent: no fetch, no timer, no frame consumer
         }
-        if fired == 0 && applied == 0 {
-            // Nothing ran this turn. Sleep until the next event: a fetch completion
-            // (if one is pending) or the next timer's due time, bounded by deadline.
+        if fired == 0 && applied == 0 && rendered == 0 {
+            // Nothing ran this turn. Sleep until the next event: a fetch
+            // completion, the next timer's due time, or — while frames are
+            // wanted — at most one frame.
             let remaining = (DRIVE_DEADLINE.as_millis() as f64 - elapsed_ms(start)).max(0.0);
             let mut wait_ms = remaining;
             if let Some(d) = next_timer {
                 wait_ms = wait_ms.min(d);
+            }
+            if has_raf || animating {
+                wait_ms = wait_ms.min(FRAME_MS);
             }
             if pending > 0 {
                 // Wake on a completion or after the slice (whichever first).
@@ -366,13 +553,13 @@ fn run_loaded_with<E: ScriptEngine>(
                     &mut |c| match c {
                         FetchCompletion::StartStream(id, o) => rt.start_stream(id, o),
                         FetchCompletion::Chunk(id, b) => rt.push_chunk(id, &b),
-                        FetchCompletion::Close(id) => rt.close_stream(id),
                         FetchCompletion::Error(id) => rt.error_stream(id),
+                        FetchCompletion::Close(id) => rt.close_stream(id),
                         FetchCompletion::Fail(id, m) => rt.fail_fetch(id, &m),
                     },
                 );
             } else if wait_ms > 0.0 {
-                // Only timers are outstanding: sleep until the soonest is due.
+                // Only timers/frames are outstanding: sleep until the soonest.
                 std::thread::sleep(Duration::from_millis(wait_ms.ceil() as u64));
             }
         }

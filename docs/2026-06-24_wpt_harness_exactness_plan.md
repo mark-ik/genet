@@ -207,17 +207,28 @@ capability it loads:
    `await` two `requestAnimationFrame` turns, then `test_driver.Actions()…send()`,
    then poll via rAF. Six layers must exist before the last one matters, and
    serval has **none** of the first four:
-   - **No window `EventTarget`.** `lib.rs` does `var window = globalThis`, and
-     `addEventListener` is defined only on `Node.prototype` (`dom/bootstrap.js`),
-     so `window.addEventListener` is not a function.
+   - ~~**No window `EventTarget`.**~~ **Corrected 2026-07-10:** the testharness
+     lane *does* have one. `EVENT_TARGET_BOOTSTRAP` (`script-runtime-api/lib.rs`)
+     gives `globalThis` add/remove/dispatchEvent over a standalone `EventTarget`
+     (plus `UIEvent`/`MouseEvent` constructors). It is detached from the DOM tree
+     (dispatching at a node does not reach it except via the propagation-path
+     special case), but it is enough for `testharness.js`'s own listeners. The
+     general bootstrap outside this lane still lacks it.
    - **No event-handler IDL attributes.** There is no `onX` property mechanism at
      all, so `document.body.onload = fn` sets an inert expando. `runTest` is never
      called, so `promise_test` never registers: hence `no-subtests`, before
-     testdriver is ever reached.
-   - **No `load` event.** Nothing in `script-runtime-api` ever fires one.
-   - **No rAF pump in the harness.** `Runtime::run_animation_frame_callbacks`
-     exists (landed with the event-loop rigor follow-ups) but `serval-wpt` never
-     calls it, so `waitForCompositorCommit` / `waitFor` can never progress.
+     testdriver is ever reached. **This, not testdriver, is the cluster's first
+     blocker** (corrected ranking, 2026-07-10).
+   - ~~**No `load` event.**~~ **Corrected 2026-07-10:** `run_loaded_testharness`
+     dispatches `window.dispatchEvent(new Event('load'))` after test eval
+     (`lib.rs:474`). The original claim came from a grep quoting `"load"` while
+     the code has `'load'` inside an eval string. What remains true: the `load`
+     dispatch reaches only the window shim's listeners, not `body.onload` (no
+     `onX`) and not node-tree `load` listeners.
+   - **No rAF pump in the harness.** True and unchanged:
+     `Runtime::run_animation_frame_callbacks` exists but nothing in the lane
+     calls it (`run_event_loop` is timers + microtasks only), so
+     `waitForCompositorCommit` / `waitFor` can never progress.
    - Only then: no `test_driver_internal` backend (WPT's `testdriver-vendor.js` is
      deliberately blank; the vendor supplies it), and no Touch/Pointer synthesis
      with the passive/`cancelable` semantics these tests actually assert.
@@ -263,6 +274,47 @@ capability it loads:
    rather than winit, because this lane is headless. The sixth link
    (`TouchEvent` / `WheelEvent`, absent from `dom/bootstrap.js`, though `passive`
    listener options already exist) stays DOM work.
+
+## H7: driven rendering loop + the test_driver hookup (claimed 2026-07-10, WPT lane)
+
+**Coordination record, answering the automation lane's question.** Their Actions
+tick interpreter landed (`aec5fee11d1`,
+`shared/embedder::webdriver_actions::interpret_actions`) and was verified against
+this consumer's needs: element origins resolve through a caller-supplied closure
+(here, the harness session's geometry) and tick durations are **reported, never
+slept** (here, mapped onto the harness's clock). Both purity rules are exactly
+what a headless consumer requires. **The hookup (H7b) is this plan's lane**, per
+their suggestion to coordinate rather than land it unilaterally; `ports/serval-wpt`
+is this plan's edit surface. Their remaining phase-1 items (condition-wait etc.)
+touch only their crates and can proceed in parallel with no hazard.
+
+### H7a — the rendering loop
+
+Give the testharness lane the layout session it has never had. Construct an
+`IncrementalLayout` over the runtime's live DOM (the pattern serval-scripted's
+tests already prove: session + `ComputedStyleBridge`); back `getComputedStyle`
+with it. Each drive turn: drain DOM mutations -> `apply`, run rAF callbacks
+(`run_animation_frame_callbacks`), `tick_animations`, then
+`take_transition_events` + `take_animation_events` -> dispatch through the
+runtime. Pacing: never quiesce while rAF callbacks or active animations pend
+(the deadline still backstops); in disk mode drive the clocks **virtually**
+(timers, rAF, and the animation clock all take a caller-supplied `now`), so a
+2s animation costs evaluation time, not wall time.
+
+**Done when** `css/css-animations` moves: the event-order / interpolation tests
+score instead of erroring, `css_animations_boa.json` is deliberately rebased
+upward, and every other checked baseline stays `unexpected=0` or is deliberately
+rebased with the delta named.
+
+### H7b — `test_driver_internal` over the interpreter
+
+Supply `window.test_driver_internal` in the harness surface;
+`action_sequence` -> `interpret_actions` with a session-geometry resolver; per
+tick, advance the harness clock by `duration_ms` and dispatch the tick's
+`InputEvent`s as synthetic DOM events at hit-tested nodes. Sequenced after H7a
+(the resolver and the hit-testing *are* the session). The touch cluster
+additionally needs `onX` handler attributes and `TouchEvent` (DOM work, links
+2 and 6 — not this plan's).
 
 **H4a's `reason` vocabulary cannot express this triage.** The plan assumed the
 155 could be "bucketed by pinned `reason`". Verified against a live

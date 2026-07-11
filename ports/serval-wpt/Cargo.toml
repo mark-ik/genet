@@ -17,6 +17,9 @@ path = "src/main.rs"
 # Phase 1 (crash-smoke): parse + layout, no GPU.
 serval-static-dom = { path = "../../components/serval-static-dom" }
 serval-layout = { path = "../../components/serval-layout" }
+# H7a rendering session: the testharness lane's IncrementalLayout runs over the
+# runtime's live (mutable) DOM, whose node ids are serval-scripted-dom's.
+serval-scripted-dom = { path = "../../components/serval-scripted-dom" }
 layout_dom_api = { workspace = true }
 # MANIFEST.json reader (harness-exactness H1): the upstream WPT manifest is JSON.
 serde_json = { workspace = true }

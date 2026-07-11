@@ -187,15 +187,22 @@ The survey that motivated this plan found the skeleton largely standing:
       `dom/events/non-cancelable-when-passive` (40 tests, all `no-results`) and
       found the ordered prerequisites to be: window `EventTarget` -> `onX`
       event-handler attributes -> the `load` event -> a harness rAF pump ->
-      `test_driver_internal` -> Touch/Pointer event types. serval has none of the
-      first four (`var window = globalThis` with `addEventListener` only on
-      `Node.prototype`; no `onX` mechanism, so `document.body.onload = fn` is an
-      inert expando; no `load` event fired anywhere; `serval-wpt` never calls
-      `Runtime::run_animation_frame_callbacks`). On link 6: `passive` listener
-      options **are** implemented (`preventDefault` ignored), but `TouchEvent` and
-      `WheelEvent` do not exist in `dom/bootstrap.js` at all, and those tests
-      assert `event.cancelable` on `touchstart` / `touchmove` / `mousewheel`. The
-      core supplies the injection; the DOM must still supply the event types.
+      `test_driver_internal` -> Touch/Pointer event types. *(Corrected
+      2026-07-10, verified against `lib.rs`: links 1 and 3 partially exist in
+      the testharness lane. `EVENT_TARGET_BOOTSTRAP` gives `globalThis`
+      add/remove/dispatchEvent over a standalone `EventTarget`, and
+      `run_loaded_testharness` dispatches `load` on it after test eval; the
+      original "no load is ever fired" came from a grep quoting `"load"` where
+      the code has `'load'`. Still genuinely missing: `onX` handler attributes,
+      the cluster's actual first blocker since it registers via
+      `document.body.onload`, and the rAF pump — `serval-wpt` never calls
+      `Runtime::run_animation_frame_callbacks`. See the harness plan's H7 for
+      the corrected sequencing and the claimed hookup.)* On link 6: `passive`
+      listener options **are** implemented (`preventDefault` ignored), but
+      `TouchEvent` and `WheelEvent` do not exist in `dom/bootstrap.js` at all,
+      and those tests assert `event.cancelable` on `touchstart` / `touchmove` /
+      `mousewheel`. The core supplies the injection; the DOM must still supply
+      the event types.
     - **Hosted-surface assumption.** Phase 1 actuate synthesizes "into the same
       input path winit events take" and resolves handles "to in-view center via
       serval-layout geometry, scroll-into-view if needed." That presumes a window,
