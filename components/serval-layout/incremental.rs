@@ -3296,6 +3296,94 @@ mod tests {
         );
     }
 
+    /// Static-position machinery: an all-auto-inset absolute box now hoists
+    /// (with a flow placeholder), so its **percentage width resolves against
+    /// the containing block** (CSS 2.2 §10.2) while its position stays the
+    /// static position in the original parent's flow — previously an either/or.
+    #[test]
+    fn an_auto_inset_absolute_box_sizes_against_its_containing_block() {
+        const SHEET: &[&str] = &[
+            "html, body { margin: 0; }",
+            "#rel { position: relative; width: 400px; height: 200px; }",
+            "#wrap { width: 100px; height: 60px; }",
+            "#filler { height: 30px; }",
+            "#abs { position: absolute; width: 50%; height: 20px; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let rel = dom.create_element(html("div"));
+        dom.set_attribute(rel, attr("id"), "rel");
+        dom.append_child(body, rel);
+        let wrap = dom.create_element(html("div"));
+        dom.set_attribute(wrap, attr("id"), "wrap");
+        dom.append_child(rel, wrap);
+        let filler = dom.create_element(html("div"));
+        dom.set_attribute(filler, attr("id"), "filler");
+        dom.append_child(wrap, filler);
+        let abs = dom.create_element(html("div"));
+        dom.set_attribute(abs, attr("id"), "abs");
+        dom.append_child(wrap, abs);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        assert_eq!(
+            layout.absolute_rect(&dom, abs),
+            Some((0.0, 30.0, 200.0, 20.0)),
+            "50% resolves against the 400px containing block; the position \
+             stays the static position after the filler in the wrapper",
+        );
+    }
+
+    /// Static-position machinery, the partial-auto case: `left` set with
+    /// `top`/`bottom` auto resolves x against the containing block and takes
+    /// y from the static position in the original parent's flow — not from
+    /// the containing block's flow (the pre-machinery approximation).
+    #[test]
+    fn a_partial_auto_inset_box_takes_its_static_position_on_the_auto_axis() {
+        const SHEET: &[&str] = &[
+            "html, body { margin: 0; }",
+            "#rel { position: relative; width: 400px; height: 200px; }",
+            "#pad { height: 50px; }",
+            "#wrap { width: 100px; height: 60px; }",
+            "#filler { height: 30px; }",
+            "#abs { position: absolute; left: 10px; width: 40px; height: 20px; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let rel = dom.create_element(html("div"));
+        dom.set_attribute(rel, attr("id"), "rel");
+        dom.append_child(body, rel);
+        // In-flow content above the wrapper, so the static y (80) differs
+        // from anything the containing block's own flow would produce.
+        let pad = dom.create_element(html("div"));
+        dom.set_attribute(pad, attr("id"), "pad");
+        dom.append_child(rel, pad);
+        let wrap = dom.create_element(html("div"));
+        dom.set_attribute(wrap, attr("id"), "wrap");
+        dom.append_child(rel, wrap);
+        let filler = dom.create_element(html("div"));
+        dom.set_attribute(filler, attr("id"), "filler");
+        dom.append_child(wrap, filler);
+        let abs = dom.create_element(html("div"));
+        dom.set_attribute(abs, attr("id"), "abs");
+        dom.append_child(wrap, abs);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        assert_eq!(
+            layout.absolute_rect(&dom, abs),
+            Some((10.0, 80.0, 40.0, 20.0)),
+            "x from `left: 10px` against the containing block; y from the \
+             static position (50px pad + 30px filler)",
+        );
+    }
+
     /// An out-of-flow element nested **inside a gathered inline subtree** (an
     /// `<i>` run inside a paragraph) is not swallowed into the line: the
     /// gather skips it (out-of-flow content takes no line space, CSS 2.2

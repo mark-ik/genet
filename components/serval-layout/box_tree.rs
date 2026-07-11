@@ -621,54 +621,75 @@ where
     // replaced, inline-formatting, external-texture, chisel) refuses the hoist
     // and the box stays parent-relative, the pre-F2 approximation.
     if !tree.abs_hoists.is_empty() {
-        let hoists: Vec<(usize, usize)> = std::mem::take(&mut tree.abs_hoists)
+        let hoists: Vec<(AbsHoist<D::NodeId>, usize)> = std::mem::take(&mut tree.abs_hoists)
             .into_iter()
-            .filter_map(|(h, cb, forced)| {
-                let resolved = cb.and_then(|id| tree.node_map.get(&id)).map(|&n| idx(n));
-                let target = match (cb, resolved, forced) {
+            .filter_map(|h| {
+                let resolved = h.cb.and_then(|id| tree.node_map.get(&id)).map(|&n| idx(n));
+                let target = match (h.cb, resolved, h.forced) {
                     (None, _, _) => Some(root),
                     (Some(_), Some(t), _) => Some(t),
                     // A forced (island) hoist must land somewhere: an
                     // unresolvable CB (an inline element has no box) falls
                     // back to the root. A block-path hoist refuses instead
-                    // (the box keeps its in-flow parent attachment).
+                    // (the box keeps its in-flow attachment... which a
+                    // placeholder may be holding — restored below).
                     (Some(_), None, true) => Some(root),
                     (Some(_), None, false) => None,
-                }?;
-                let t = &tree.nodes[target];
-                let container_safe = t.inline_content.is_none()
-                    && t.replaced_size.is_none()
-                    && t.external_texture_key.is_none()
-                    && t.chisel_leaf_key.is_none();
-                // A container-unsafe target (a leaf box) refuses block-path
-                // hoists; an island retargets the root for the same
-                // must-land-somewhere reason.
-                let target = if container_safe {
-                    target
-                } else if forced {
-                    root
-                } else {
+                };
+                let target = target.and_then(|t| {
+                    let n = &tree.nodes[t];
+                    let container_safe = n.inline_content.is_none()
+                        && n.replaced_size.is_none()
+                        && n.external_texture_key.is_none()
+                        && n.chisel_leaf_key.is_none();
+                    // A container-unsafe target (a leaf box) refuses
+                    // block-path hoists; an island retargets the root for
+                    // the same must-land-somewhere reason.
+                    if container_safe {
+                        Some(t)
+                    } else if h.forced {
+                        Some(root)
+                    } else {
+                        None
+                    }
+                });
+                let Some(target) = target.filter(|&t| h.idx != root && h.idx != t) else {
+                    // Refused: the box stays in flow — swap the real box back
+                    // over its placeholder so it is not lost.
+                    if let Some(ph) = h.placeholder {
+                        for node in &mut tree.nodes {
+                            for c in &mut node.children {
+                                if *c == ph {
+                                    *c = h.idx;
+                                }
+                            }
+                        }
+                    }
                     return None;
                 };
-                (h != root && h != target).then_some((h, target))
+                Some((h, target))
             })
             .collect();
         if !hoists.is_empty() {
-            let hoisted: FxHashSet<usize> = hoists.iter().map(|&(h, _)| h).collect();
+            let hoisted: FxHashSet<usize> = hoists.iter().map(|(h, _)| h.idx).collect();
             for node in &mut tree.nodes {
                 node.children.retain(|c| !hoisted.contains(c));
             }
             // Document order among boxes hoisted to the same target is
             // preserved by registration order (the build walk is a DFS).
-            for &(h, target) in &hoists {
-                tree.nodes[target].children.push(h);
+            for (h, target) in &hoists {
+                tree.nodes[*target].children.push(h.idx);
             }
-            // Retained as (index, applied target's DOM id) — the Option is
-            // always `Some` from here on (an ICB hoist resolved to the root).
-            // Fragment readback fills the plane's target map from it.
+            // Retained with `cb` = the applied target's DOM id (always `Some`
+            // from here on; an ICB hoist resolved to the root). Fragment
+            // readback fills the plane's target map from it; the post-layout
+            // static-position fixup reads `placeholder`.
             tree.abs_hoists = hoists
                 .into_iter()
-                .map(|(h, t)| (h, Some(tree.nodes[t].source.dom_id()), false))
+                .map(|(h, t)| AbsHoist {
+                    cb: Some(tree.nodes[t].source.dom_id()),
+                    ..h
+                })
                 .collect();
         }
     }
@@ -791,6 +812,77 @@ where
     i
 }
 
+/// Post-layout **static-position fixup** (CSS 2.2 §10.3.7): for every hoisted
+/// absolute box that left a placeholder in its original parent's flow, copy
+/// the placeholder's laid-out absolute position onto the box's auto axes.
+/// Taffy resolved the box's non-auto insets against the hoist target (the
+/// containing block) — correct — but placed its auto axes at a static
+/// position within the *target's* flow; the spec wants the ORIGINAL parent's
+/// flow, which is exactly where the placeholder sits.
+///
+/// Locations are parent-relative, so the fixup adjusts by the delta of
+/// absolute positions. Hoists can nest (a placeholder can sit inside another
+/// hoisted subtree), so the pass iterates to a fixed point — bounded, since
+/// dependencies follow the finite hoist-nesting depth.
+fn apply_static_position_fixups<Id: Copy + Eq + Hash>(tree: &mut BoxTree<Id>, root: usize) {
+    let needs: Vec<(usize, usize, bool, bool)> = tree
+        .abs_hoists
+        .iter()
+        .filter_map(|h| {
+            let ph = h.placeholder?;
+            let cv = &tree.nodes[h.idx].style;
+            let (ax, ay) = (has_auto_x(cv), has_auto_y(cv));
+            (ax || ay).then_some((h.idx, ph, ax, ay))
+        })
+        .collect();
+    if needs.is_empty() {
+        return;
+    }
+    for _round in 0..4 {
+        // Absolute origins of every reachable box under the current
+        // (possibly part-fixed) locations.
+        let mut origins: Vec<Option<(f32, f32)>> = vec![None; tree.nodes.len()];
+        let mut stack = vec![(root, {
+            let l = &tree.nodes[root].final_layout;
+            (l.location.x, l.location.y)
+        })];
+        while let Some((i, o)) = stack.pop() {
+            origins[i] = Some(o);
+            for &c in &tree.nodes[i].children {
+                let l = &tree.nodes[c].final_layout;
+                stack.push((c, (o.0 + l.location.x, o.1 + l.location.y)));
+            }
+        }
+        let mut changed = false;
+        for &(b, ph, ax, ay) in &needs {
+            let (Some(cur), Some(want)) = (origins[b], origins[ph]) else {
+                continue;
+            };
+            // The placeholder (zero margins) sits at the flow position; the
+            // real box's border box lands margin-inset from there.
+            let m = tree.nodes[b].final_layout.margin;
+            let l = &mut tree.nodes[b].final_layout.location;
+            if ax {
+                let dx = (want.0 + m.left) - cur.0;
+                if dx.abs() > 0.01 {
+                    l.x += dx;
+                    changed = true;
+                }
+            }
+            if ay {
+                let dy = (want.1 + m.top) - cur.1;
+                if dy.abs() > 0.01 {
+                    l.y += dy;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
 /// Whether both x-axis insets (`left` / `right`) compute `auto`.
 fn has_auto_x(cv: &ComputedValues) -> bool {
     let p = cv.get_position();
@@ -856,20 +948,33 @@ fn build_out_of_flow_islands<'a, D>(
         let before_fixed = tree.fixed_hoists.len();
         let before_abs = tree.abs_hoists.len();
         let b = build_node(dom, styles, images, node, tree);
+        // `b` may be a static-position placeholder rather than the real box
+        // (the wrapper returns the placeholder for the parent to attach);
+        // the element's real arena index is authoritative via `node_map`.
+        let real = tree.node_map.get(&node.id()).map(|&n| idx(n));
         if tree.fixed_hoists.len() > before_fixed {
             // The fixed lane always lands on the root; nothing to force.
-        } else if tree.abs_hoists.len() > before_abs {
+        } else if tree.abs_hoists.len() > before_abs
+            && tree.abs_hoists.last().map(|h| h.idx) == real
+        {
             // Self-registered on the abs lane: mark it forced — the island
-            // has no parent attachment to fall back to.
+            // has no parent attachment to fall back to — and drop any
+            // static-position placeholder: the gather skipped the element,
+            // so no in-flow slot exists and the placeholder box would never
+            // be laid out (the orphan arena node stays inert).
             if let Some(last) = tree.abs_hoists.last_mut() {
-                if last.0 == b {
-                    last.2 = true;
-                }
+                last.forced = true;
+                last.placeholder = None;
             }
         } else {
-            // The wrapper skipped registration (auto insets, CB == DOM
-            // parent, or a transform-guarded fixed box): register forced.
-            tree.abs_hoists.push((b, tree.abs_cb, true));
+            // The wrapper skipped registration (CB == DOM parent, or a
+            // transform-guarded fixed box): register forced.
+            tree.abs_hoists.push(AbsHoist {
+                idx: real.unwrap_or(b),
+                cb: tree.abs_cb,
+                forced: true,
+                placeholder: None,
+            });
             tree.had_hoists = true;
         }
         // The island's own build handled its descendants; don't descend.
@@ -885,15 +990,6 @@ fn build_out_of_flow_islands<'a, D>(
 fn is_absolute(cv: &ComputedValues) -> bool {
     use style::values::computed::PositionProperty;
     matches!(cv.get_box().position, PositionProperty::Absolute)
-}
-
-/// Whether any of the four box insets is non-`auto`. An absolute box with all
-/// insets auto sits at its **static position** (CSS 2.2 §10.3.7); hoisting it
-/// would destroy that for no gain, since there is no inset to resolve against
-/// the containing block anyway.
-fn has_non_auto_inset(cv: &ComputedValues) -> bool {
-    let p = cv.get_position();
-    !(p.left.is_auto() && p.right.is_auto() && p.top.is_auto() && p.bottom.is_auto())
 }
 
 /// The in-flow half of [`build_node`]: builds the box for `elem` (an element
@@ -1834,6 +1930,7 @@ where
         taffy::compute_root_layout(&mut view, root, viewport);
         taffy::round_layout(&mut view, root);
     }
+    apply_static_position_fixups(&mut tree, idx(root));
     if let Some(t) = t {
         eprintln!(
             "[layout-timing] taffy_compute     {:>9.3} ms",
@@ -1881,7 +1978,7 @@ where
             .fixed_hoists
             .iter()
             .copied()
-            .chain(tree.abs_hoists.iter().map(|&(h, ..)| h))
+            .chain(tree.abs_hoists.iter().map(|h| h.idx))
             .collect();
         let mut stack: Vec<(usize, (f32, f32))> = vec![(tree.root, {
             let l = &tree.nodes[tree.root].final_layout;
@@ -1908,7 +2005,8 @@ where
                 .or_default()
                 .push(tree.nodes[h].source.dom_id());
         }
-        for &(h, target, _) in &tree.abs_hoists {
+        for h in &tree.abs_hoists {
+            let (h, target) = (h.idx, h.cb);
             if let Some(t) = target {
                 fragments
                     .hoisted_by_target
