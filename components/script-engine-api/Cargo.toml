@@ -4,10 +4,12 @@
 # names only capabilities; engine-native types stay inside the backend crates.
 [package]
 name = "script-engine-api"
-version = "0.0.0"
+version = "0.1.0"
+repository = "https://github.com/mark-ik/serval"
+publish = true
+description = "Engine-neutral scripting contract for the serval engine family: the ScriptEngine trait, native-callback surface, and host-data plumbing a JS engine implements (Boa, Nova) and a scripted document drives."
 edition = "2021"
 license = "MPL-2.0"
-publish = false
 
 [lib]
 name = "script_engine_api"

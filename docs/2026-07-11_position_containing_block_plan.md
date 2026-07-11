@@ -1,12 +1,12 @@
 # Position containing blocks: fixed to the ICB, absolute to its positioned ancestor
 
 **Date:** 2026-07-11
-**Status:** **F1, F2, and the residual round all landed 2026-07-11** (fixed ->
-ICB; absolute -> nearest positioned ancestor; hit-walk target-frame deferral +
-completed CB predicate). Every named F1/F2 residual is closed or re-scoped;
-remaining work is the F3 list only. Spun out of the layout roadmap's
-near-horizon entry (found 2026-07-10 by the WPT input-path work, H9 in the
-harness-exactness plan).
+**Status:** **F1, F2, the residual round, and the F3 inline round all landed
+2026-07-11** (fixed -> ICB; absolute -> nearest positioned ancestor; hit-walk
+target-frame deferral + completed CB predicate; out-of-flow islands in inline
+content). Remaining work is the trimmed F3 list at the bottom. Spun out of
+the layout roadmap's near-horizon entry (found 2026-07-10 by the WPT
+input-path work, H9 in the harness-exactness plan).
 **Scope:** the *layout* half of out-of-flow positioning in `serval-layout`. The
 paint half (deferred stacking layers, fixed layers countering document scroll)
 already exists (`is_out_of_flow` / `is_fixed` feeding `paint_stacking`, per the
@@ -253,15 +253,69 @@ nonconformance (§10.2, percentages resolve against the CB) but hoisting
 without static-position preservation would break the far more common
 dropdown-at-static-position pattern — the wrong trade. Named under F3.
 
-### F3 — out of scope
+### F3 round — inline-level out-of-flow, landed 2026-07-11
 
-`sticky` (scroll-linked, different machinery), inline-level fixed/absolute
-blockification (an out-of-flow inline should blockify; today a fixed `<span>`
-rides inline content and never reaches `build_node`'s hoist), synthetic
-multi-root ICB sizing, and **static-position machinery** (the two-pass hoist
+The "blockification" item's premise was **wrong**: stylo's style adjuster
+already blockifies absolutely-positioned elements at computed-value time
+(`style_adjuster.rs`, `blockify_if_necessary`), so a `position: absolute`
+`<span>` as a **direct child** of a block container reads `display: block`,
+fails `flows_inline` / `establishes_inline_context`, takes the block path,
+and hoists — it worked all along. Pinned by
+`an_absolute_span_in_inline_content_blockifies_and_hoists`.
+
+The *real* gap was one level deeper: an out-of-flow element **nested inside a
+gathered inline subtree** (inside an `<i>` run, an anonymous inline group, or
+an inline-block's content) was flowed transparently by `gather_runs` — text
+rode the line at a bogus position, no box, no hoist, invisible to
+hit-testing. Landed as the **out-of-flow islands** lane:
+
+- `gather_runs` skips an out-of-flow element (CSS 2.2 §9.7: it takes no line
+  space), and the leaf build (`build_out_of_flow_islands`, called from both
+  the inline-context branch and `flush_anon_group`) DFSes the gathered
+  subtree building each one as a real box registered on the hoist lanes.
+  Islands have **no in-flow parent attachment**, so their registrations are
+  **forced** (`abs_hoists` gained the flag): an unresolvable or
+  container-unsafe target falls back to the root rather than refusing — a
+  refused island would dangle unreachable.
+- **`island_worthy` — the scope cut that survived contact with WPT.** The
+  first cut islanded everything and regressed six `position-relative-table-*`
+  reftests: their absolute `.indicator`'s containing block is a
+  `position: relative` **inline-block**, which has no arena box, so the
+  forced hoist landed at the root and painted the previously-invisible red
+  indicator at the viewport corner (also exactly the real-world
+  badge-on-inline-wrapper pattern — root-hoisting is *worse* than the legacy
+  flow). Now both the gather skip and the island build share one predicate:
+  island iff the true CB (walked per position type — transform-CB chain for
+  `fixed`, positioned-or-transform for `absolute`) is a plain block container
+  that will own a landable box. Inline / inline-block / out-of-flow /
+  replaced / inline-context-leaf / table-internal CBs keep the legacy
+  transparent flow — near-anchor line content beats a root-hoisted box. The
+  two decisions MUST agree (skip-without-build vanishes content;
+  build-without-skip duplicates it); the shared predicate is the guarantee.
+
+Guards (falsified against the pre-island code — both returned `None`, no box
+at all): `an_absolute_box_nested_in_an_inline_run_hoists_as_an_island`
+(rect + hit), `a_fixed_box_nested_in_an_inline_run_hoists_to_the_viewport`.
+Results: serval-layout 312, paint html→pixels 30, xilem-serval 101,
+serval-scripted 45, meerkat 247, all green; all nine WPT baselines hold at
+`unexpected=0` (the six table reftests recovered by the `island_worthy` cut).
+
+Named residuals of the islands lane: an inline/inline-block CB keeps the
+legacy flow (spec wants the inline's content edges — needs boxes for
+positioned inlines); an island's static-position guess is CB-flow, not
+line-position (needs the F3 static-position machinery below); a guarded
+`fixed` island approximates its CB as the nearest boxed positioned ancestor
+rather than the nearest transform ancestor specifically.
+
+### F3 — remaining, out of scope
+
+`sticky` (scroll-linked, different machinery), synthetic multi-root ICB
+sizing, **positioned-inline containing blocks** (a `position: relative`
+inline/inline-block as CB — no arena box today; unlocks the islands lane's
+legacy-flow set), and **static-position machinery** (the two-pass hoist
 carrying the original parent's flow position; unlocks the partial-auto inset
-guess and percentage sizing for all-auto-inset boxes — see the residual
-round's assessment). Each is noted so it is not lost, none blocks F1/F2.
+guess, percentage sizing for all-auto-inset boxes, and line-accurate island
+static positions). Each is noted so it is not lost, none blocks F1/F2.
 
 ## Hazards, named
 

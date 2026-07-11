@@ -1,12 +1,12 @@
 [package]
 name = "serval-static-html"
-version.workspace = true
+version = "0.1.0"
+repository = "https://github.com/mark-ik/serval"
+publish = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-publish.workspace = true
 rust-version.workspace = true
-repository.workspace = true
 description = "Static HTML profile witness for the Serval profile ladder."
 
 [lib]
@@ -16,5 +16,5 @@ path = "lib.rs"
 layout_api = { workspace = true }
 paint_api = { workspace = true }
 paint_types = { workspace = true }
-serval-static-dom = { path = "../serval-static-dom" }
+serval-static-dom = { version = "0.1.0", path = "../serval-static-dom" }
 servo-url = { workspace = true }

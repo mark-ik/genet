@@ -1,13 +1,13 @@
 [package]
-name = "servo-paint-types"
-version.workspace = true
+name = "serval-paint-types"
+version = "0.1.0"
+repository = "https://github.com/mark-ik/serval"
+publish = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-publish.workspace = true
 rust-version.workspace = true
-repository.workspace = true
-description.workspace = true
+description = "Shared paint-tier types for the serval engine family: the vocabulary the paint and observables layers exchange (rects, colors, image keys) without a renderer dependency."
 
 [lib]
 name = "paint_types"

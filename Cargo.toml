@@ -224,7 +224,7 @@ knot-editor-host = { version = "=0.1.0", path = "components/inker/knot-editor-ho
 scrying-engine = { version = "=0.2.0", path = "components/inker/engines/scrying-engine" }
 graft-engine = { version = "=0.2.0", path = "components/inker/engines/graft-engine" }
 weld-engine = { version = "=0.2.0", path = "components/inker/engines/weld-engine" }
-pelt-core = { version = "=0.2.0", path = "ports/pelt-core" }
+pelt-core = { version = "=0.1.0", path = "ports/pelt-core" }
 pelt-desktop = { version = "=0.2.0", path = "ports/pelt-desktop" }
 netrender = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
 netrender_device = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
@@ -347,12 +347,12 @@ zeroize = "1.8"
 deny_public_fields = { package = "servo-deny-public-fields", version = "=0.2.0", path = "components/deny_public_fields" }
 devtools_traits = { package = "servo-devtools-traits", version = "=0.2.0", path = "components/shared/devtools" }
 embedder_traits = { package = "servo-embedder-traits", version = "=0.2.0", path = "components/shared/embedder" }
-engine_observables_api = { package = "engine-observables-api", version = "=0.2.0", path = "components/shared/engine-observables-api" }
+engine_observables_api = { package = "engine-observables-api", version = "=0.1.0", path = "components/shared/engine-observables-api" }
 fonts = { package = "servo-fonts", version = "=0.2.0", path = "components/fonts" }
 fonts_traits = { package = "servo-fonts-traits", version = "=0.2.0", path = "components/shared/fonts" }
 hyper_serde = { package = "servo-hyper-serde", version = "=0.2.0", path = "components/hyper_serde" }
 layout_api = { package = "servo-layout-api", version = "=0.2.0", path = "components/shared/layout" }
-layout_dom_api = { package = "layout-dom-api", version = "=0.2.0", path = "components/shared/layout-dom" }
+layout_dom_api = { package = "layout-dom-api", version = "=0.1.0", path = "components/shared/layout-dom" }
 malloc_size_of = { package = "servo-malloc-size-of", version = "=0.2.0", path = "components/malloc_size_of" }
 media = { package = "servo-media-thread", version = "=0.2.0", path = "components/media/media-thread" }
 net_traits = { package = "servo-net-traits", version = "=0.2.0", path = "components/shared/net" }
@@ -364,7 +364,7 @@ paint_list_api = { git = "https://github.com/mark-ik/netrender.git", branch = "m
 # The PaintCmd -> netrender::Scene translator; also lives in the netrender
 # workspace so any engine (serval, nematic, inker) can reuse the lowering.
 paint_list_render = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
-paint_types = { package = "servo-paint-types", version = "=0.2.0", path = "components/shared/paint-types" }
+paint_types = { package = "serval-paint-types", version = "=0.1.0", path = "components/shared/paint-types" }
 pixels = { package = "servo-pixels", version = "=0.2.0", path = "components/pixels" }
 profile = { package = "servo-profile", version = "=0.2.0", path = "components/profile" }
 profile_traits = { package = "servo-profile-traits", version = "=0.2.0", path = "components/shared/profile" }

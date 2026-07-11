@@ -1,12 +1,12 @@
 [package]
 name = "serval-extract"
-version.workspace = true
+version = "0.1.0"
+repository = "https://github.com/mark-ik/serval"
+publish = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-publish.workspace = true
 rust-version.workspace = true
-repository.workspace = true
 description = "Render-free content extraction over the profile-neutral LayoutDom (the extraction lane: analyze, don't paint)."
 
 [lib]
@@ -20,4 +20,4 @@ layout_dom_api = { workspace = true }
 
 [dev-dependencies]
 # A concrete LayoutDom to extract from in tests; the no-JS parse tree.
-serval-static-dom = { path = "../serval-static-dom" }
+serval-static-dom = { version = "0.1.0", path = "../serval-static-dom" }

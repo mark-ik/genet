@@ -1,12 +1,12 @@
 [package]
 name = "serval-scripted-dom"
-version.workspace = true
+version = "0.1.0"
+repository = "https://github.com/mark-ik/serval"
+publish = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-publish.workspace = true
 rust-version.workspace = true
-repository.workspace = true
 description = "Mutable scripted-DOM provider: LayoutDom + LayoutDomMut over a NodeId arena, recording DomMutations for serval-layout invalidation."
 
 [lib]
@@ -15,7 +15,7 @@ path = "lib.rs"
 
 [dependencies]
 engine_observables_api = { workspace = true }
-layout-dom-api = { path = "../shared/layout-dom", features = ["capture"] }
+layout-dom-api = { version = "0.1.0", path = "../shared/layout-dom", features = ["capture"] }
 markup5ever = { workspace = true }
 # The HTML serializer (the `serialize` fn + `SerializeOpts` + void-element/escaping
 # logic) lives in html5ever; markup5ever only carries the `Serialize`/`Serializer`
@@ -23,7 +23,7 @@ markup5ever = { workspace = true }
 html5ever = { workspace = true }
 # Reused for `set_inner_html` fragment parsing: parse via StaticDocument (a LayoutDom),
 # then walk it into the mutable arena. Avoids a second TreeSink impl.
-serval-static-dom = { path = "../serval-static-dom" }
+serval-static-dom = { version = "0.1.0", path = "../serval-static-dom" }
 
 [dev-dependencies]
 postcard = { workspace = true }

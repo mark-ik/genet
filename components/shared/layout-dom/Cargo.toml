@@ -1,12 +1,12 @@
 [package]
 name = "layout-dom-api"
-version.workspace = true
+version = "0.1.0"
+repository = "https://github.com/mark-ik/serval"
+publish = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
-publish.workspace = true
 rust-version.workspace = true
-repository.workspace = true
 description = "Profile-neutral DOM trait consumed by serval-layout and other read-only DOM walkers (reader-mode, serialization, selectors)."
 
 [lib]
