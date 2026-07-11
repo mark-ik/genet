@@ -1,5 +1,10 @@
 # guppy-protocol
 
+> **Home:** [`mark-ik/serval`](https://github.com/mark-ik/serval), at
+> `components/errand/protocols/guppy-protocol` (adopted 2026-07). The former standalone repository is archived
+> and links here.
+
+
 A Rust implementation of the
 [Guppy protocol](https://github.com/dimkr/guppy-protocol) v0.4.4
 (`guppy://`): an async UDP client and server with chunking, per-packet

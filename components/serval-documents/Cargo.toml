@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository = "https://github.com/mark-ik/serval"
 description = "Serval's retained document sessions — the static, scripted, and smolweb content lanes as inker session engines (2026-07-10 session-engines plan). Formerly pelt's convenience lanes; pelt is now one consumer among hosts."
+readme = "README.md"
 
 [lib]
 path = "src/lib.rs"

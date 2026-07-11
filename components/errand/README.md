@@ -3,6 +3,15 @@
 
 Async smolweb transport in one scheme-routed call.
 
+> **Home:** [`mark-ik/serval`](https://github.com/mark-ik/serval), at
+> `components/errand` (adopted 2026-07). The former standalone repository is archived
+> and links here.
+
+The spec-faithful protocol crates ([`nex-protocol`](https://crates.io/crates/nex-protocol),
+[`spartan-protocol`](https://crates.io/crates/spartan-protocol),
+[`guppy-protocol`](https://crates.io/crates/guppy-protocol)) live in this
+subtree as workspace members, each keeping its own published identity.
+
 `errand` fetches a URL over a small-web protocol and hands back the raw bytes, a
 normalized status, and a MIME hint. One call, routed by scheme:
 

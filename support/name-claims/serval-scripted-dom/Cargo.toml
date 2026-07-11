@@ -1,0 +1,9 @@
+[package]
+name = "serval-scripted-dom"
+version = "0.0.1"
+edition = "2021"
+license = "MPL-2.0"
+repository = "https://github.com/mark-ik/serval"
+description = "Serval's mutable scripted DOM (the live document a page's script mutates). NAME CLAIM: the real component lives unpublished in mark-ik/serval (components/serval-scripted-dom); consume it as a git dependency."
+
+[workspace]

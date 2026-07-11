@@ -1,11 +1,20 @@
 # inker
 
-`inker` is the engine/renderer controller for the
-[mere](https://crates.io/crates/mere) browser. It owns the question "*which
-engine should handle this content,*" taking into account the URI scheme,
-the content type, which engines are actually available on the host, and any
-user preference. The output is a host-neutral surface contract that
-[`verso-core`](https://crates.io/crates/verso-core) renders against.
+`inker` is the engine/renderer controller for the serval engine family and
+its hosts (merecat's mere, pelt, strophe, isometry). It owns the question
+"*which engine should handle this content,*" taking into account the URI
+scheme, the content type, which engines are actually available on the host,
+and any user preference — and it defines the three engine kinds the answer
+dispatches to: **document engines** (request/response, serializable blocks),
+**session engines** (retained documents producing paint frames — the serval
+HTML lanes, smolweb native), and **surface engines** (external GPU-texture
+producers: scrying / graft / weld). One registry pattern, one routing
+vocabulary, one a11y-capability declaration across all three.
+
+> **Home:** [`mark-ik/serval`](https://github.com/mark-ik/serval), at
+> `components/inker` (adopted 2026-07). The former standalone repository is archived
+> and links here.
+
 
 Inker is the right home for arbitrating among engines when several are valid
 for the same input. For full-web pages, both the Servo/wgpu fork (Serval) and

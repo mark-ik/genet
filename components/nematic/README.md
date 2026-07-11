@@ -1,10 +1,18 @@
 # nematic
 
-`nematic` is the smolweb engine for the
-[mere](https://crates.io/crates/mere) browser. It renders content from
-protocols where layout cost is minimal and the document is mostly text:
-Gemini, Gopher, Spartan, Finger, plain text, Markdown, static-HTML files,
-RSS/Atom feeds, and local files.
+`nematic` is the smolweb engine family for serval and its hosts. It has two
+products: `nematic::blocks`-style **document engines** (the default) that
+lower Gemini, Gopher, Spartan, Finger, plain text, Markdown, RSS/Atom, and
+the knot note format into inker's portable block model — the stored/authored
+lane (cards, clips, worker-shippable packets) — and, behind the `views`
+feature, **`nematic::views`**: native per-format xilem-serval views over
+errand's ASTs, the idiom-preserving live-render lane (real focusable links,
+per-format classes, per-site theming; no lowest-common-denominator lowering).
+
+> **Home:** [`mark-ik/serval`](https://github.com/mark-ik/serval), at
+> `components/nematic` (adopted 2026-07). The former standalone repository is archived
+> and links here.
+
 
 For fullweb rendering (CSS, JS, embedded media), mere routes through Serval
 (the Servo/wgpu fork) or a system webview. **Nematic does not own an HTML

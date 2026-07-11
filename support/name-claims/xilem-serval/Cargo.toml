@@ -1,0 +1,9 @@
+[package]
+name = "xilem-serval"
+version = "0.0.1"
+edition = "2021"
+license = "MPL-2.0"
+repository = "https://github.com/mark-ik/serval"
+description = "Reactive view layer for the serval engine: element views over a live ScriptedDom, rendered by serval's cascade/layout/paint. NAME CLAIM: the real component lives unpublished in mark-ik/serval (components/xilem-serval); consume it as a git dependency until the view stack publishes."
+
+[workspace]

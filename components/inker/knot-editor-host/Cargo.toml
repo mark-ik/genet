@@ -6,6 +6,7 @@ license.workspace = true
 # Not workspace: serval's workspace repository still points at upstream servo.
 repository = "https://github.com/mark-ik/serval"
 description = "Host-side reuse-lexers for the knot editor: precise inner-language injection over parsers the workspace already ships, layered as overrides on the portable illume pack. Markdown via pulldown-cmark today; CSS/HTML/JS/Turtle to follow."
+readme = "README.md"
 documentation = "https://docs.rs/knot-editor-host"
 keywords = ["djot", "editor", "syntax-highlighting", "injection"]
 categories = ["text-processing"]

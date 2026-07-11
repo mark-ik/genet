@@ -1,5 +1,10 @@
 # spartan-protocol
 
+> **Home:** [`mark-ik/serval`](https://github.com/mark-ik/serval), at
+> `components/errand/protocols/spartan-protocol` (adopted 2026-07). The former standalone repository is archived
+> and links here.
+
+
 A spec-faithful Rust implementation of the
 [Spartan protocol](https://github.com/michael-lazar/spartan) (`spartan://`):
 an async client, a server with a pluggable handler, static file serving, and

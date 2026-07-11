@@ -1,0 +1,9 @@
+[package]
+name = "layout-dom-api"
+version = "0.0.1"
+edition = "2021"
+license = "MPL-2.0"
+repository = "https://github.com/mark-ik/serval"
+description = "The LayoutDom trait family: the DOM-shape contract serval's cascade and layout walk. NAME CLAIM: the real component lives unpublished in mark-ik/serval (components/shared/layout-dom); consume it as a git dependency."
+
+[workspace]

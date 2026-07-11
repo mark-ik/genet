@@ -1,0 +1,1 @@
+C:\Users\mark_\Code\repos\serval\support\name-claims\serval-scripted-dom\target\debug\libserval_scripted_dom.rlib: C:\Users\mark_\Code\repos\serval\support\name-claims\serval-scripted-dom\target\package\serval-scripted-dom-0.0.1\src\lib.rs

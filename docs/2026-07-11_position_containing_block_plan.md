@@ -1,11 +1,12 @@
 # Position containing blocks: fixed to the ICB, absolute to its positioned ancestor
 
 **Date:** 2026-07-11
-**Status:** **F1 and F2 both landed 2026-07-11** (fixed -> ICB; absolute ->
-nearest positioned ancestor; results and residuals below). Remaining work is
-the F3 out-of-scope list plus the named residuals. Spun out of the layout
-roadmap's near-horizon entry (found 2026-07-10 by the WPT input-path work, H9
-in the harness-exactness plan).
+**Status:** **F1, F2, and the residual round all landed 2026-07-11** (fixed ->
+ICB; absolute -> nearest positioned ancestor; hit-walk target-frame deferral +
+completed CB predicate). Every named F1/F2 residual is closed or re-scoped;
+remaining work is the F3 list only. Spun out of the layout roadmap's
+near-horizon entry (found 2026-07-10 by the WPT input-path work, H9 in the
+harness-exactness plan).
 **Scope:** the *layout* half of out-of-flow positioning in `serval-layout`. The
 paint half (deferred stacking layers, fixed layers countering document scroll)
 already exists (`is_out_of_flow` / `is_fixed` feeding `paint_stacking`, per the
@@ -125,21 +126,17 @@ green. Guards: `fixed_inset_box_resolves_against_the_viewport`,
      `establishes_fixed_cb` predicate the box tree uses, so the two stay in
      agreement by construction.
 
-**F1 residuals, named:**
+**F1 residuals, named** *(all four closed — the first by the F2 side table,
+the rest by the residual round below):*
 
-- `absolute_origin` / `walk_origins` (backing `absolute_rect`, host overlays,
-  a11y bounds) still accumulate the DOM chain, so a hoisted fixed box's
-  reported rect is off by its ancestors' offsets on pages with body
-  margin/padding. Same fix shape as the hit walk; it is style-blind today
-  (needs a `StylePlane` parameter), hence deferred rather than folded in.
-- Escaped-fixed boxes nested *deeper* inside a clip-pruned subtree are still
-  missed by hit-testing (the prune defers direct children only).
-- An escaped fixed box under an element-scrolled (but untransformed) ancestor
-  inherits that ancestor's scroll mapping in the hit point; per spec it should
-  not. Edge; noted in the walk comment.
-- `establishes_fixed_cb` consults `transform` / `perspective` / `filter`;
-  `will-change` and `contain` are not yet read (a box a real UA would keep
-  local may hoist).
+- ~~`absolute_origin` / `walk_origins` DOM-chain double-count~~ — closed by
+  the F2 slice's fragment-plane hoist side table.
+- ~~Escaped boxes nested *deeper* inside a clip-pruned subtree missed by
+  hit-testing~~ — closed by the residual round's target-frame deferral.
+- ~~Element-scrolled ancestor's scroll wrongly applied to an escaped box's
+  hit point~~ — closed by the same redesign.
+- ~~`will-change` / `contain` not consulted by `establishes_fixed_cb`~~ —
+  closed by the residual round.
 
 ### F2 — `absolute` → nearest positioned ancestor
 
@@ -199,20 +196,72 @@ geometry); both lanes now have seeded baselines
   e.g. only `left` set hoists; Taffy then derives the auto `top` from its
   static position *within the CB's flow*, not within the original DOM
   parent's flow (spec wants the latter). Same §10.3.7 latitude as the
-  all-auto case, but the guess is coarser once hoisted.
+  all-auto case, but the guess is coarser once hoisted. *(Assessed in the
+  residual round: needs static-position machinery, re-scoped to F3.)*
 - All-auto-inset boxes stay fully parent-relative (deliberate; see above) —
   their *sizing* CB (for percentage widths) is therefore still the DOM parent,
-  not the positioned ancestor.
-- The F1 hit-walk residuals (deeper-nested hoisted boxes under a clip-pruned
-  subtree; element-scrolled ancestor point mapping) apply to hoisted absolute
-  boxes equally.
+  not the positioned ancestor. *(Same machinery; re-scoped to F3.)*
+- ~~The F1 hit-walk residuals apply to hoisted absolute boxes equally~~ —
+  closed by the residual round's target-frame deferral, for both hoist lanes.
+
+### Residual round — landed 2026-07-11
+
+**Hit-walk redesign: hoisted boxes defer from their hoist *target's* frame.**
+The F1 walk deferred a hoisted box from its DOM parent's frame, which carries
+the wrong accumulated mapping — intermediate static scrollers added their
+offsets and intermediate clippers pruned it away, at any depth beyond direct
+children. The fragment plane now also carries the reverse view
+(`hoisted_by_target`: hoist target → adopted boxes, filled at readback from
+the same retained hoist lists), and `walk_for_hit` defers a hoisted box when
+it visits the **containing block**, whose frame's mapping — scrolls above and
+at the CB, clips on the CB chain — is precisely the one the spec applies to
+it. The DOM parent's loop skips hoisted children entirely, and the prune path
+needs no special case at all: a CB *outside* a pruned subtree defers its
+adopted boxes regardless of their DOM depth, and a CB *inside* one is pruned
+with it, so its adopted boxes are correctly clipped too (the clipper is on
+their CB chain). Both prior approximations became theorems of the structure.
+
+**`establishes_fixed_cb` completed.** Now also consults `will-change` (stylo's
+pre-digested change bits: `TRANSFORM`, `PERSPECTIVE`, `FIXPOS_CB_NON_SVG` for
+filter — css-will-change §3) and `contain: layout / paint` incl. the
+`strict`/`content` shorthands (css-contain §3). No residual left on the
+predicate.
+
+Guards, each verified to fail against the pre-round code (vacuity check —
+the scrolled-ancestor test initially passed vacuously through the old prune
+path and was re-aimed inside the scroller's window):
+`a_fixed_box_nested_deep_inside_a_clip_pruned_subtree_is_still_hit`,
+`a_hoisted_absolute_box_ignores_an_intermediate_scrolled_ancestor`,
+`will_change_transform_guards_fixed_descendants`,
+`contain_paint_guards_fixed_descendants`.
+
+Results: serval-layout 309, paint html→pixels 30, xilem-serval 101,
+serval-scripted 45, meerkat 247, all green; all nine WPT baselines
+(testharness ×7 + reftest ×2, css_position pair included) hold at
+`unexpected=0` (`fetch_api_basic` still excluded as the known environmental
+flake).
+
+**Static-position pair, assessed and re-scoped to F3.** Both remaining F2
+residuals reduce to the same missing machinery: the true static position is a
+*flow* result of the original DOM parent, known only after in-flow layout, so
+honoring it for a hoisted box means a two-pass shape (Servo's
+`HoistedAbsolutelyPositionedBox` carries exactly this) — compute the would-be
+in-flow position, then convert the auto sides to explicit insets against the
+CB. Until then: the partial-auto guess is within §10.3.7 latitude (quality,
+not conformance); the all-auto percentage-sizing case is genuine
+nonconformance (§10.2, percentages resolve against the CB) but hoisting
+without static-position preservation would break the far more common
+dropdown-at-static-position pattern — the wrong trade. Named under F3.
 
 ### F3 — out of scope
 
 `sticky` (scroll-linked, different machinery), inline-level fixed/absolute
 blockification (an out-of-flow inline should blockify; today a fixed `<span>`
-rides inline content and never reaches `build_node`'s hoist), and synthetic
-multi-root ICB sizing. Each is noted so it is not lost, none blocks F1/F2.
+rides inline content and never reaches `build_node`'s hoist), synthetic
+multi-root ICB sizing, and **static-position machinery** (the two-pass hoist
+carrying the original parent's flow position; unlocks the partial-auto inset
+guess and percentage sizing for all-auto-inset boxes — see the residual
+round's assessment). Each is noted so it is not lost, none blocks F1/F2.
 
 ## Hazards, named
 

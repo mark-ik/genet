@@ -1,7 +1,12 @@
 # tinct
 
 Perceptual seed-to-palette derivation for the Merely family (Woodshed,
-Strophe, Mere).
+Strophe, merecat's mere).
+
+> **Home:** [`mark-ik/serval`](https://github.com/mark-ik/serval), at
+> `components/tinct` (adopted 2026-07). The former standalone repository is archived
+> and links here.
+
 
 A theme is authored as a handful of **seed** colours — a primary / secondary /
 tertiary brand triad, a neutral surface hue, and a light/dark mode. The full

@@ -2,6 +2,11 @@
 
 A portable, pure-Rust, wasm-safe text lexer and syntax highlighter.
 
+> **Home:** [`mark-ik/serval`](https://github.com/mark-ik/serval), at
+> `components/illume` (adopted 2026-07). The former standalone repository is archived
+> and links here.
+
+
 illume takes source text and returns `(range, kind)` spans. It carries three passes:
 
 - **djot structure** — headings, emphasis, strong, links, code, blockquotes, and the

@@ -1,5 +1,10 @@
 # nex-protocol
 
+> **Home:** [`mark-ik/serval`](https://github.com/mark-ik/serval), at
+> `components/errand/protocols/nex-protocol` (adopted 2026-07). The former standalone repository is archived
+> and links here.
+
+
 A Rust implementation of the Nex protocol (`nex://`): an async client, a
 directory-serving server, a listing parser, and a small CLI.
 

@@ -39,7 +39,11 @@ jotdown = "0.10"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
-xilem-serval = { path = "../xilem-serval", optional = true }
+# Version req so the crate can publish: locally the path satisfies it; on
+# the registry the xilem-serval name-claim stub does (a consumer enabling
+# `views` from crates.io needs the real component, i.e. the serval git dep,
+# until serval's view stack publishes for real).
+xilem-serval = { version = ">=0.0.1", path = "../xilem-serval", optional = true }
 
 [dev-dependencies]
 # The views tests build into a real ScriptedDom and inspect the result
