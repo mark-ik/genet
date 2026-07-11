@@ -248,6 +248,108 @@ fn is_inline_element<NodeId: Copy + Eq + Hash>(
     Some(matches!(display.outside(), DisplayOutside::Inline))
 }
 
+/// Whether the element is out of flow by position (`absolute` / `fixed`).
+/// Out-of-flow content never contributes to an inline formatting context
+/// (it takes no line space): when [`island_worthy`], the gather skips it and
+/// the box tree builds it as a hoist-registered island instead
+/// (position-containing-block plan).
+pub(crate) fn is_out_of_flow<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> bool {
+    use style::values::computed::PositionProperty;
+    styles
+        .get(id)
+        .and_then(|e| e.borrow_data())
+        .is_some_and(|d| {
+            matches!(
+                d.styles.primary().get_box().position,
+                PositionProperty::Absolute | PositionProperty::Fixed
+            )
+        })
+}
+
+/// Whether an out-of-flow element inside a gathered inline subtree should be
+/// built as a hoisted **island**: true iff its CSS containing block will have
+/// a real, container-safe box for the hoist to land on. When it will not — a
+/// `position: relative` inline or inline-block ancestor (no arena box), an
+/// out-of-flow ancestor within the gathered region, an inline-context leaf
+/// (a measured leaf lays out no children), a replaced/table-internal CB —
+/// the gather keeps the legacy transparent flow instead: the content rides
+/// the line near its anchor, a far better approximation than hoisting to the
+/// root (the WPT `position-relative-table-*` shapes, and the badge-on-inline-
+/// wrapper pattern, are exactly this).
+///
+/// The gather's skip decision and the box tree's island build MUST agree, or
+/// content vanishes (skipped but never built) or duplicates (flowed and
+/// built) — this predicate is the single shared answer.
+pub(crate) fn island_worthy<'a, D>(
+    dom: &'a D,
+    styles: &StylePlane<D::NodeId>,
+    elem: &NodeRef<'a, D>,
+) -> bool
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    use style::values::specified::box_::{DisplayInside, DisplayOutside};
+    let fixed = styles
+        .get(elem.id())
+        .and_then(|e| e.borrow_data())
+        .is_some_and(|d| {
+            use style::values::computed::PositionProperty;
+            matches!(
+                d.styles.primary().get_box().position,
+                PositionProperty::Fixed
+            )
+        });
+    let mut a = elem.parent();
+    while let Some(anc) = a {
+        if !matches!(dom.kind(anc.id()), NodeKind::Element) {
+            break;
+        }
+        // An out-of-flow ancestor inside the gathered region has no box of its
+        // own (it was flowed, or its island build owns this subtree instead) —
+        // conservative false keeps both walks in the legacy lane together.
+        if is_out_of_flow(styles, anc.id()) {
+            return false;
+        }
+        let Some(entry) = styles.get(anc.id()) else {
+            a = anc.parent();
+            continue;
+        };
+        let Some(data) = entry.borrow_data() else {
+            a = anc.parent();
+            continue;
+        };
+        let cv = data.styles.primary();
+        let is_cb = if fixed {
+            crate::box_tree::establishes_fixed_cb(cv)
+        } else {
+            crate::box_tree::establishes_fixed_cb(cv) || crate::paint_stacking::is_positioned(cv)
+        };
+        if is_cb {
+            // The nearest containing block: representable iff it is a plain
+            // block container (it gets an arena box that lays out children) —
+            // not inline-level, not replaced, not a measured inline-context
+            // leaf, not a boxless table-internal part (`<tr>`, `<tbody>`).
+            let display = cv.get_box().display;
+            let block_flow = matches!(display.outside(), DisplayOutside::Block)
+                && matches!(
+                    display.inside(),
+                    DisplayInside::Flow | DisplayInside::FlowRoot
+                );
+            drop(data);
+            return block_flow
+                && !is_replaced(dom, anc.id())
+                && !establishes_inline_context(dom, styles, anc.clone());
+        }
+        a = anc.parent();
+    }
+    // No containing block at all: the ICB (the root box) — always landable.
+    true
+}
+
 fn is_floating<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId) -> bool {
     styles
         .get(id)

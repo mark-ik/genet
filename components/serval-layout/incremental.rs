@@ -3253,6 +3253,134 @@ mod tests {
         );
     }
 
+    /// An out-of-flow **inline** element blockifies (CSS Display §2.7 — stylo's
+    /// style adjuster computes `display: block` for absolutely-positioned
+    /// elements), so an absolute `<span>` mixed into a paragraph's text takes
+    /// the block path, gets its own box, and hoists to its containing block —
+    /// it does not ride the inline runs.
+    #[test]
+    fn an_absolute_span_in_inline_content_blockifies_and_hoists() {
+        const SHEET: &[&str] = &[
+            // p margin zeroed: the UA 1em would collapse through #rel and
+            // offset it (and thus the hoisted box) by 16px — margin-collapse
+            // noise, not what this test is about.
+            "html, body, p { margin: 0; }",
+            "#rel { position: relative; width: 300px; height: 200px; }",
+            "#s { position: absolute; top: 0; right: 0; bottom: 0; left: 0; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let rel = dom.create_element(html("div"));
+        dom.set_attribute(rel, attr("id"), "rel");
+        dom.append_child(body, rel);
+        let p = dom.create_element(html("p"));
+        dom.append_child(rel, p);
+        let t1 = dom.create_text("before ");
+        dom.append_child(p, t1);
+        let s = dom.create_element(html("span"));
+        dom.set_attribute(s, attr("id"), "s");
+        dom.append_child(p, s);
+        let t2 = dom.create_text(" after");
+        dom.append_child(p, t2);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        assert_eq!(
+            layout.absolute_rect(&dom, s),
+            Some((0.0, 0.0, 300.0, 200.0)),
+            "the absolute span fills its positioned ancestor, escaping both \
+             the inline runs and the static paragraph",
+        );
+    }
+
+    /// An out-of-flow element nested **inside a gathered inline subtree** (an
+    /// `<i>` run inside a paragraph) is not swallowed into the line: the
+    /// gather skips it (out-of-flow content takes no line space, CSS 2.2
+    /// §9.7) and the box tree builds it as a hoisted island resolving against
+    /// its containing block. The direct-child case is covered by stylo's
+    /// blockification; this is the case blockification alone cannot reach.
+    #[test]
+    fn an_absolute_box_nested_in_an_inline_run_hoists_as_an_island() {
+        const SHEET: &[&str] = &[
+            "html, body, p { margin: 0; }",
+            "#rel { position: relative; width: 300px; height: 200px; }",
+            "#s { position: absolute; top: 0; right: 0; bottom: 0; left: 0; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let rel = dom.create_element(html("div"));
+        dom.set_attribute(rel, attr("id"), "rel");
+        dom.append_child(body, rel);
+        let p = dom.create_element(html("p"));
+        dom.append_child(rel, p);
+        let t1 = dom.create_text("before ");
+        dom.append_child(p, t1);
+        let i = dom.create_element(html("i"));
+        dom.append_child(p, i);
+        let t2 = dom.create_text("italic ");
+        dom.append_child(i, t2);
+        let s = dom.create_element(html("span"));
+        dom.set_attribute(s, attr("id"), "s");
+        dom.append_child(i, s);
+        let st = dom.create_text("island");
+        dom.append_child(s, st);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        assert_eq!(
+            layout.absolute_rect(&dom, s),
+            Some((0.0, 0.0, 300.0, 200.0)),
+            "the nested absolute span escapes the inline run and fills its \
+             positioned ancestor",
+        );
+        assert_eq!(
+            layout.hit_test(&dom, 250.0, 150.0, &Default::default()),
+            Some(s),
+            "a point far from the paragraph's line but inside the ancestor \
+             hits the island",
+        );
+    }
+
+    /// The fixed twin of the island test: a `position: fixed` element nested
+    /// in an inline run hoists to the viewport.
+    #[test]
+    fn a_fixed_box_nested_in_an_inline_run_hoists_to_the_viewport() {
+        const SHEET: &[&str] = &[
+            "html, body, p { margin: 0; }",
+            "#s { position: fixed; top: 0; right: 0; bottom: 0; left: 0; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+        let t1 = dom.create_text("before ");
+        dom.append_child(p, t1);
+        let i = dom.create_element(html("i"));
+        dom.append_child(p, i);
+        let t2 = dom.create_text("italic ");
+        dom.append_child(i, t2);
+        let s = dom.create_element(html("span"));
+        dom.set_attribute(s, attr("id"), "s");
+        dom.append_child(i, s);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        assert_eq!(
+            layout.absolute_rect(&dom, s),
+            Some((0.0, 0.0, W, H)),
+            "the nested fixed span escapes the inline run and fills the viewport",
+        );
+    }
+
     /// `will-change: transform` on an ancestor is a containing block for fixed
     /// descendants (css-will-change §3), same as a real transform — the box is
     /// not hoisted.

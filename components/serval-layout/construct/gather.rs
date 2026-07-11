@@ -312,6 +312,20 @@ pub(crate) fn gather_child<'a, D>(
             }
         },
         NodeKind::Element => {
+            // Out-of-flow content contributes nothing to the line (CSS 2.2
+            // §9.7: absolutely-positioned boxes take no inline space). When
+            // its containing block is representable the box tree builds it as
+            // its own hoisted box (`build_out_of_flow_islands`) and the gather
+            // skips it — flowing its text would both duplicate it and give it
+            // a bogus in-line position. When the CB is NOT representable (an
+            // inline / inline-block CB has no box), the legacy transparent
+            // flow stands: near-anchor text beats a root-hoisted box. The two
+            // decisions share `island_worthy` — they must agree.
+            if super::is_out_of_flow(styles, child.id())
+                && super::island_worthy(dom, styles, &child)
+            {
+                return;
+            }
             if dom
                 .element_name(child.id())
                 .is_some_and(|q| q.local == html5ever::local_name!("br"))

@@ -221,9 +221,15 @@ pub struct BoxTree<Id: Copy + Eq + Hash> {
     /// containing block is not their DOM parent — `(arena index, containing
     /// block's DOM id)`, `None` meaning the ICB (no positioned ancestor at
     /// all). Registered during construction; the post-pass resolves the DOM id
-    /// through `node_map` and re-parents. Retains the applied hoists after,
+    /// through `node_map` and re-parents. The `bool` is the **forced** flag:
+    /// a box built as an out-of-flow *island* from inside a gathered inline
+    /// subtree has no in-flow attachment at all, so if its containing block
+    /// fails to resolve (an inline CB has no box) the post-pass falls back to
+    /// the root rather than refusing — a refused island would dangle
+    /// unreachable. Block-path registrations (`false`) keep the refusal
+    /// fallback (stay parent-relative). Retains the applied hoists after,
     /// same as `fixed_hoists`.
-    abs_hoists: Vec<(usize, Option<Id>)>,
+    abs_hoists: Vec<(usize, Option<Id>, bool)>,
     /// Transform-CB depth during the construction walk: >0 while inside an
     /// ancestor that establishes a containing block for fixed descendants
     /// (css-transforms §2: `transform`, `filter`, `perspective`, …). A fixed
@@ -601,17 +607,34 @@ where
     if !tree.abs_hoists.is_empty() {
         let hoists: Vec<(usize, usize)> = std::mem::take(&mut tree.abs_hoists)
             .into_iter()
-            .filter_map(|(h, cb)| {
-                let target = match cb {
-                    None => root,
-                    Some(id) => idx(*tree.node_map.get(&id)?),
-                };
+            .filter_map(|(h, cb, forced)| {
+                let resolved = cb.and_then(|id| tree.node_map.get(&id)).map(|&n| idx(n));
+                let target = match (cb, resolved, forced) {
+                    (None, _, _) => Some(root),
+                    (Some(_), Some(t), _) => Some(t),
+                    // A forced (island) hoist must land somewhere: an
+                    // unresolvable CB (an inline element has no box) falls
+                    // back to the root. A block-path hoist refuses instead
+                    // (the box keeps its in-flow parent attachment).
+                    (Some(_), None, true) => Some(root),
+                    (Some(_), None, false) => None,
+                }?;
                 let t = &tree.nodes[target];
                 let container_safe = t.inline_content.is_none()
                     && t.replaced_size.is_none()
                     && t.external_texture_key.is_none()
                     && t.chisel_leaf_key.is_none();
-                (h != root && h != target && container_safe).then_some((h, target))
+                // A container-unsafe target (a leaf box) refuses block-path
+                // hoists; an island retargets the root for the same
+                // must-land-somewhere reason.
+                let target = if container_safe {
+                    target
+                } else if forced {
+                    root
+                } else {
+                    return None;
+                };
+                (h != root && h != target).then_some((h, target))
             })
             .collect();
         if !hoists.is_empty() {
@@ -629,7 +652,7 @@ where
             // Fragment readback fills the plane's target map from it.
             tree.abs_hoists = hoists
                 .into_iter()
-                .map(|(h, t)| (h, Some(tree.nodes[t].source.dom_id())))
+                .map(|(h, t)| (h, Some(tree.nodes[t].source.dom_id()), false))
                 .collect();
         }
     }
@@ -721,11 +744,75 @@ where
         // that only churned child order. (Root element: both sides `None`.)
         let dom_parent = elem.parent().map(|p| p.id());
         if ancestor_abs_cb != dom_parent {
-            tree.abs_hoists.push((i, ancestor_abs_cb));
+            tree.abs_hoists.push((i, ancestor_abs_cb, false));
             tree.had_hoists = true;
         }
     }
     i
+}
+
+/// Build **out-of-flow islands** under a gathered inline subtree: the gather
+/// skipped every `position: absolute / fixed` element (out-of-flow content
+/// takes no line space, CSS 2.2 §9.7), so each one gets a real box here,
+/// registered for hoisting to its containing block. The box is attached to
+/// **no** in-flow parent — only the hoist post-pass parents it — so every
+/// island registration is *forced* (a refusal would leave it dangling and
+/// unreachable by layout).
+///
+/// Named approximations, all within or near §10.3.7's static-position
+/// latitude: an **inline** containing block (a `position: relative` span has
+/// no box) resolves to the nearest *boxed* CB or the root, not the inline's
+/// content edges; a guarded `fixed` island uses the same nearest-boxed-CB
+/// approximation; an all-auto-inset island lands at its CB-flow guess, since
+/// a line-level static position would need IFC integration.
+fn build_out_of_flow_islands<'a, D>(
+    dom: &'a D,
+    styles: &StylePlane<D::NodeId>,
+    images: &ImagePlane<D::NodeId>,
+    node: NodeRef<'a, D>,
+    tree: &mut BoxTree<D::NodeId>,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    if !matches!(dom.kind(node.id()), NodeKind::Element) {
+        return;
+    }
+    if crate::construct::is_out_of_flow(styles, node.id()) {
+        // Not island-worthy (an inline / inline-block / already-out-of-flow
+        // containing block has no landable box): the gather flowed this whole
+        // subtree transparently -- the legacy behavior -- so build nothing and
+        // do not descend (deeper out-of-flow content belongs to the same
+        // flowed region). The predicate is shared with the gather's skip;
+        // the two MUST agree or content vanishes / duplicates.
+        if !crate::construct::island_worthy(dom, styles, &node) {
+            return;
+        }
+        let before_fixed = tree.fixed_hoists.len();
+        let before_abs = tree.abs_hoists.len();
+        let b = build_node(dom, styles, images, node, tree);
+        if tree.fixed_hoists.len() > before_fixed {
+            // The fixed lane always lands on the root; nothing to force.
+        } else if tree.abs_hoists.len() > before_abs {
+            // Self-registered on the abs lane: mark it forced — the island
+            // has no parent attachment to fall back to.
+            if let Some(last) = tree.abs_hoists.last_mut() {
+                if last.0 == b {
+                    last.2 = true;
+                }
+            }
+        } else {
+            // The wrapper skipped registration (auto insets, CB == DOM
+            // parent, or a transform-guarded fixed box): register forced.
+            tree.abs_hoists.push((b, tree.abs_cb, true));
+            tree.had_hoists = true;
+        }
+        // The island's own build handled its descendants; don't descend.
+        return;
+    }
+    for child in node.dom_children() {
+        build_out_of_flow_islands(dom, styles, images, child, tree);
+    }
 }
 
 /// Whether the box computes `position: absolute` (exactly — `fixed` has its
@@ -808,6 +895,11 @@ where
         tree.node_map.insert(elem.id(), nid(i));
         if !sources.is_empty() {
             tree.inline_sources.insert(elem.id(), sources);
+        }
+        // Out-of-flow elements nested anywhere in the gathered subtree got no
+        // runs (the gather skips them); build each as a hoisted island.
+        for child in elem.dom_children() {
+            build_out_of_flow_islands(dom, styles, images, child, tree);
         }
         return i;
     }
@@ -1018,6 +1110,11 @@ fn flush_anon_group<'a, D>(
         tree.inline_sources.insert(key, sources);
     }
     children.push(i);
+    // Out-of-flow elements nested inside the group's inline subtrees got no
+    // runs (the gather skips them); build each as a hoisted island.
+    for member in group.iter() {
+        build_out_of_flow_islands(dom, styles, images, *member, tree);
+    }
     group.clear();
 }
 
@@ -1719,7 +1816,7 @@ where
             .fixed_hoists
             .iter()
             .copied()
-            .chain(tree.abs_hoists.iter().map(|&(h, _)| h))
+            .chain(tree.abs_hoists.iter().map(|&(h, ..)| h))
             .collect();
         let mut stack: Vec<(usize, (f32, f32))> = vec![(tree.root, {
             let l = &tree.nodes[tree.root].final_layout;
@@ -1746,7 +1843,7 @@ where
                 .or_default()
                 .push(tree.nodes[h].source.dom_id());
         }
-        for &(h, target) in &tree.abs_hoists {
+        for &(h, target, _) in &tree.abs_hoists {
             if let Some(t) = target {
                 fragments
                     .hoisted_by_target
