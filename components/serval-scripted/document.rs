@@ -2145,7 +2145,7 @@ mod tests {
              var b = document.createElement('body'); \
              var d = document.createElement('div'); d.setAttribute('id','d'); \
              b.appendChild(d); h.appendChild(b); document.appendChild(h); \
-             d.addEventListener('animationstart', function(e){ console.log('start:'+e.animationName+':'+e.elapsedTime); }); \
+             d.addEventListener('animationstart', function(e){ console.log('start:'+e.animationName+':'+e.elapsedTime+':'+(e instanceof AnimationEvent)+':'+(e instanceof Event)); }); \
              d.addEventListener('animationiteration', function(e){ console.log('iter:'+e.animationName+':'+e.elapsedTime); }); \
              d.addEventListener('animationend', function(e){ console.log('end:'+e.animationName+':'+e.elapsedTime); });",
         )
@@ -2211,7 +2211,10 @@ mod tests {
         assert_eq!(
             console,
             vec![
-                "start:fade:0".to_string(),
+                // The instanceof pair pins the prototype-chained constructor
+                // (lever: `evt instanceof AnimationEvent`, the first assert of
+                // WPT's animation event tests).
+                "start:fade:0:true:true".to_string(),
                 "iter:fade:2".to_string(),
                 "end:fade:4".to_string(),
             ],

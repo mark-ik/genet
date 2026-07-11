@@ -500,7 +500,7 @@
     "dom/nodes/moveBefore/object-crash-regression.html": "fail",
     "dom/nodes/moveBefore/pointer-events.html": "fail",
     "dom/nodes/moveBefore/popover-preserve.html": "fail",
-    "dom/nodes/moveBefore/preserve-render-blocking-script.html": "fail",
+    "dom/nodes/moveBefore/preserve-render-blocking-script.html": "pass",
     "dom/nodes/moveBefore/preserve-render-blocking-style.html": {
       "reason": "evaluation-threw",
       "status": "error"

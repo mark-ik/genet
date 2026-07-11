@@ -2000,8 +2000,9 @@
 
   // TransitionEvent (css-transitions): an Event carrying `propertyName`,
   // `elapsedTime`, and `pseudoElement`. Bubbles, not cancelable. Minimal:
-  // backed by the shell Event with the extra fields attached, enough for
-  // listeners and the four transition* event types.
+  // backed by the shell Event with the extra fields attached and the instance
+  // reparented onto TransitionEvent.prototype, so `instanceof TransitionEvent`
+  // (what the WPT event tests assert first) and `instanceof Event` both hold.
   globalThis.TransitionEvent = function(type, init) {
     init = init || {};
     var ev = new Event(String(type), {
@@ -2011,8 +2012,12 @@
     ev.propertyName = init.propertyName !== undefined ? String(init.propertyName) : '';
     ev.elapsedTime = init.elapsedTime !== undefined ? Number(init.elapsedTime) : 0;
     ev.pseudoElement = init.pseudoElement !== undefined ? String(init.pseudoElement) : '';
+    Object.setPrototypeOf(ev, TransitionEvent.prototype);
     return ev;
   };
+  globalThis.TransitionEvent.prototype = Object.create(Event.prototype, {
+    constructor: { value: globalThis.TransitionEvent, writable: true, configurable: true },
+  });
 
   // Host bridge: dispatch a transition* event at a node (from the layout tick's
   // harvested lifecycle events). `type` is one of transitionrun /
@@ -2030,6 +2035,7 @@
   // AnimationEvent (css-animations): the `@keyframes` twin of TransitionEvent.
   // Carries `animationName` (the @keyframes rule's name) rather than a property
   // name, plus `elapsedTime` and `pseudoElement`. Bubbles, not cancelable.
+  // Prototype-chained exactly like TransitionEvent, for `instanceof`.
   globalThis.AnimationEvent = function(type, init) {
     init = init || {};
     var ev = new Event(String(type), {
@@ -2039,8 +2045,12 @@
     ev.animationName = init.animationName !== undefined ? String(init.animationName) : '';
     ev.elapsedTime = init.elapsedTime !== undefined ? Number(init.elapsedTime) : 0;
     ev.pseudoElement = init.pseudoElement !== undefined ? String(init.pseudoElement) : '';
+    Object.setPrototypeOf(ev, AnimationEvent.prototype);
     return ev;
   };
+  globalThis.AnimationEvent.prototype = Object.create(Event.prototype, {
+    constructor: { value: globalThis.AnimationEvent, writable: true, configurable: true },
+  });
 
   // Host bridge: dispatch an animation* event at a node (from the layout tick's
   // harvested lifecycle events). `type` is one of animationstart /

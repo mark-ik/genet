@@ -306,6 +306,47 @@ score instead of erroring, `css_animations_boa.json` is deliberately rebased
 upward, and every other checked baseline stays `unexpected=0` or is deliberately
 rebased with the delta named.
 
+**Landed 2026-07-10.** The session + virtual-clock drive is in
+(`RenderSession` + `drive_virtual` / `drive_wall` in `harness.rs`); every
+testharness run now gets it. Results, honestly stated:
+
+- **The event machinery works end to end**: `animationevent-types.html` (three
+  async listeners: start / iteration / end, negative delay, animates `left`)
+  reports 0/3 *scored* subtests where it previously died unscored — all three
+  listeners fire; the asserts fail on genuine platform gaps (`evt instanceof
+  AnimationEvent` — the bootstrap constructors are factory-shaped, not
+  prototype-chained — and Web Animations' `.animation` attribute). Guard:
+  `animationevent_types_survives_the_rendering_session` (harness) +
+  `negative_delay_and_the_f32_boundary_tick_survive` (serval-layout).
+- **Deliberate rebases, deltas named**: `dom` and `dom/nodes` each +1 all-pass
+  (`dom/nodes/moveBefore/preserve-render-blocking-script.html` fail -> pass,
+  subtests 2230 -> 2233); `html/webappapis/timers` 4 all-pass / 8 errored ->
+  **6 all-pass / 4 with-failures / 2 errored**, subtests 7/7 -> 9/14 — the
+  far-future-`setTimeout` family (`type-long-settimeout` etc.) became runnable
+  because the virtual clock jumps to a huge delay instead of never reaching it.
+  `dom/abort` and `css/mediaqueries` unchanged at `unexpected=0`.
+- **`css/css-animations` aggregates did not move** (156/1198, statuses
+  unchanged): the tests the loop unlocked were already coarse-`fail`, and their
+  remaining asserts need engine surface, not harness. The next levers for that
+  corpus, in observed order: (a) prototype-chain the `AnimationEvent` /
+  `TransitionEvent` bootstrap constructors so `instanceof` holds; (b)
+  `computed_query` longhand coverage — `computed_value(_, "left")` returns
+  `None` today, and interpolation tests assert positional longhands via
+  `getComputedStyle`; (c) Web Animations API surface (out of scope).
+- **The stylo fork gained a load-bearing fix** (`mark-ik/stylo` `56e70cacdb`,
+  serval lock repinned): Stylo's keyframe search casts f64 progress to f32
+  against f32 start percentages, so a progress in `(1 - 2^-24, 1.0)` — which an
+  accumulated 16.667ms frame clock produces routinely — fell into a
+  `debug_unreachable` and panicked the process. Six css-animations tests panicked
+  this way on the loop's first run. **Any consumer that ticks Stylo animations on
+  an accumulated clock wants this fix; mere pins its own stylo rev and should
+  repin.**
+- Cost: full `dom` (660 files) runs in ~2m07 release with per-test sessions;
+  `css/css-animations` ~5m30 (it genuinely drives animations now).
+- Noted in passing: `webgl_conformance::gl_clear_conformance_runs_through_the_harness`
+  fails on HEAD *before* this work ("not a callable function" in the Khronos
+  shim) — pre-existing, owner unknown, not chased in this lane.
+
 ### H7b — `test_driver_internal` over the interpreter
 
 Supply `window.test_driver_internal` in the harness surface;

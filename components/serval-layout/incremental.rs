@@ -2708,8 +2708,16 @@ mod tests {
         assert_close(opacity(&layout), 0.0, "the forwards fill survives an unrelated restyle");
     }
 
+    /// A negative `animation-delay` starts the animation mid-flight, a
+    /// geometry-affecting property (`left`) rides the re-layout tick path, and
+    /// — the regression this pins — a tick whose progress lands in the f32
+    /// rounding hole `(1 - 2^-24, 1.0)` survives. Stylo's keyframe search casts
+    /// f64 progress to f32 against f32 start percentages; before the fork fix
+    /// (`mark-ik/stylo` 56e70cacdb) such a tick fell into a `debug_unreachable`
+    /// and took the whole test process down. An accumulated 16.667ms frame
+    /// clock produces such values routinely, so this is a load-bearing tick.
     #[test]
-    fn zz_probe_negative_delay_layout_animation() {
+    fn negative_delay_and_the_f32_boundary_tick_survive() {
         const SHEET: &[&str] = &[
             "@keyframes sample { from { left: 150px } to { left: 0px } }",
             "p{position:relative;width:100px;height:100px;animation:sample 2s linear -1s 2 normal forwards}",
@@ -2724,12 +2732,35 @@ mod tests {
         dom.append_child(body, p);
 
         let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
-        for t in [0.0, 0.5, 1.5, 3.5, 5.0] {
-            let a = layout.tick_animations(&dom, t);
-            let left = layout.computed_value(p, "left");
-            let evs = layout.take_animation_events(&dom).len();
-            println!("t={t} applied={a:?} left={left:?} events={evs}");
+        // progress = (t + 1) / 2; this t puts progress inside the f32 hole:
+        // f64-distinct from 1.0 but casting to exactly 1.0f32.
+        let hole = 2.0 * (1.0 - 1e-9) - 1.0;
+        let mut events: Vec<(String, f64)> = Vec::new();
+        for t in [0.0, 0.5, hole, 1.5, 3.5, 5.0] {
+            layout.tick_animations(&dom, t);
+            for e in layout.take_animation_events(&dom) {
+                events.push((e.kind.event_type().to_string(), e.elapsed_time));
+            }
         }
+        let kinds: Vec<&str> = events.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            kinds,
+            ["animationstart", "animationiteration", "animationend"],
+            "negative delay: start immediately, one boundary, then end",
+        );
+        assert!(
+            (events[0].1 - 1.0).abs() < 0.01,
+            "a -1s delay means 1s of active time has already elapsed at start, got {}",
+            events[0].1
+        );
+        assert!(!layout.has_active_animations(), "forwards fill is idle after the end");
+        // The `left` inset serializes through getComputedStyle (computed_query
+        // lever): past the end with fill-mode:forwards it holds the `to` value.
+        assert_eq!(
+            layout.computed_value(p, "left").as_deref(),
+            Some("0px"),
+            "an animated inset must be readable via computed_value",
+        );
     }
 
     /// Reduced motion completes a `@keyframes` animation on the first tick and

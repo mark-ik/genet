@@ -677,10 +677,15 @@ window.addEventListener("load", function() {
 });
 "#;
 
+    /// End to end through the H7a rendering session: the real WPT
+    /// `animationevent-types.html` (negative delay, iteration-count 2, animates
+    /// `left`) runs to completion without panicking. This test found the stylo
+    /// f32 boundary hole (fork fix `56e70cacdb`) — the harness's silent panic
+    /// hook had reduced it to an opaque `ERROR panic` in the corpus run, so it
+    /// stays here where a panic gets a backtrace.
     #[test]
-    fn zz_probe_animationevent_types() {
-        let wpt = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/wpt");
+    fn animationevent_types_survives_the_rendering_session() {
+        let wpt = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/wpt");
         let testharness_js =
             fs::read_to_string(wpt.join("tests/resources/testharness.js")).expect("harness");
         let test_path = wpt.join("tests/css/css-animations/animationevent-types.html");
@@ -701,8 +706,12 @@ window.addEventListener("load", function() {
             Engine::Boa,
         );
         match outcome {
-            HarnessOutcome::Ran(results) => println!("ran: {} subtests", results.len()),
-            HarnessOutcome::Threw(m) => println!("threw: {m}"),
+            // Subtest passes/failures are the corpus baseline's business; this
+            // guard only pins "the session does not take the process down".
+            HarnessOutcome::Ran(results) => {
+                assert!(!results.is_empty(), "the animation events should reach testharness");
+            },
+            HarnessOutcome::Threw(m) => panic!("threw instead of reporting: {m}"),
         }
     }
 

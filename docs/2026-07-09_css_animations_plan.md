@@ -122,9 +122,13 @@ into the second iteration, where `normal` gives 0.75 and `alternate` 0.25 — a
 midpoint sample cannot tell them apart), and
 `css_animation_honors_fill_mode_delay_and_play_state`.
 
-Not yet covered: negative `animation-delay`, fractional iteration counts,
-`alternate-reverse`, and `backwards`/`both` fill. Stylo implements all four; they
-want tests, not code.
+Not yet covered: fractional iteration counts, `alternate-reverse`, and
+`backwards`/`both` fill. Stylo implements them; they want tests, not code.
+*(Negative `animation-delay` was covered 2026-07-10 — the WPT rendering loop's
+first corpus run panicked on it, exposing a stylo f32 boundary hole fixed in the
+fork (`56e70cacdb`); guard
+`negative_delay_and_the_f32_boundary_tick_survive`, plus the end-to-end harness
+guard `animationevent_types_survives_the_rendering_session`.)*
 
 ### A3: animation events + WPT measurement
 

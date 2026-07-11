@@ -3,11 +3,20 @@
   "engine": "boa",
   "tests": {
     "dom/abort/AbortSignal.any.html": "pass",
-    "dom/abort/abort-signal-any-crash.html": "skip",
+    "dom/abort/abort-signal-any-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/abort/abort-signal-any.any.html": "fail",
     "dom/abort/abort-signal-timeout.html": "fail",
-    "dom/abort/crashtests/any-on-abort.html": "skip",
-    "dom/abort/crashtests/timeout-close.html": "skip",
+    "dom/abort/crashtests/any-on-abort.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "dom/abort/crashtests/timeout-close.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/abort/event.any.html": "fail",
     "dom/abort/reason-constructor.html": "fail",
     "dom/abort/timeout.any.html": "pass",
@@ -25,8 +34,14 @@
     "dom/eventPathRemoved.html": "pass",
     "dom/events/AddEventListenerOptions-once.any.html": "pass",
     "dom/events/AddEventListenerOptions-passive.any.html": "fail",
-    "dom/events/AddEventListenerOptions-signal.any.html": "error",
-    "dom/events/Body-FrameSet-Event-Handlers.html": "error",
+    "dom/events/AddEventListenerOptions-signal.any.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/Body-FrameSet-Event-Handlers.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/events/CustomEvent.html": "fail",
     "dom/events/Event-cancelBubble.html": "fail",
     "dom/events/Event-constants.html": "pass",
@@ -52,7 +67,10 @@
     "dom/events/Event-dispatch-propagation-stopped.html": "fail",
     "dom/events/Event-dispatch-redispatch.html": "fail",
     "dom/events/Event-dispatch-reenter.html": "fail",
-    "dom/events/Event-dispatch-single-activation-behavior.html": "error",
+    "dom/events/Event-dispatch-single-activation-behavior.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/events/Event-dispatch-target-moved.html": "fail",
     "dom/events/Event-dispatch-target-removed.html": "fail",
     "dom/events/Event-dispatch-throwing-multiple-globals.html": "fail",
@@ -78,7 +96,10 @@
     "dom/events/EventListener-incumbent-global-2.sub.html": "fail",
     "dom/events/EventListener-invoke-legacy.html": "fail",
     "dom/events/EventListenerOptions-capture.html": "fail",
-    "dom/events/EventTarget-add-listener-platform-object.html": "error",
+    "dom/events/EventTarget-add-listener-platform-object.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/events/EventTarget-add-remove-listener.any.html": "pass",
     "dom/events/EventTarget-addEventListener.any.html": "pass",
     "dom/events/EventTarget-constructible.any.html": "fail",
@@ -90,7 +111,10 @@
     "dom/events/click-on-absolute-pseudo.html": "fail",
     "dom/events/event-disabled-dynamic.html": "fail",
     "dom/events/event-global-extra.window.html": "fail",
-    "dom/events/event-global-is-still-set-when-coercing-beforeunload-result.html": "no-results",
+    "dom/events/event-global-is-still-set-when-coercing-beforeunload-result.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
     "dom/events/event-global-is-still-set-when-reporting-exception-onerror.html": "fail",
     "dom/events/event-global-set-before-handleEvent-lookup.window.html": "fail",
     "dom/events/event-global.html": "fail",
@@ -100,127 +124,415 @@
     "dom/events/handler-count.html?document": "fail",
     "dom/events/handler-count.html?element": "fail",
     "dom/events/handler-count.html?window": "fail",
-    "dom/events/keypress-dispatch-crash.html": "skip",
+    "dom/events/keypress-dispatch-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/events/label-default-action.html": "fail",
     "dom/events/legacy-pre-activation-behavior.window.html": "pass",
     "dom/events/mouse-event-retarget.html": "fail",
     "dom/events/no-focus-events-at-clicking-editable-content-in-link.html": "fail",
     "dom/events/non-cancelable-when-passive/generic-events-stay-cancelable.html": "pass",
-    "dom/events/non-cancelable-when-passive/non-passive-mousewheel-event-listener-on-body.html": "no-results",
-    "dom/events/non-cancelable-when-passive/non-passive-mousewheel-event-listener-on-div.html": "no-results",
-    "dom/events/non-cancelable-when-passive/non-passive-mousewheel-event-listener-on-document.html": "no-results",
-    "dom/events/non-cancelable-when-passive/non-passive-mousewheel-event-listener-on-root.html": "no-results",
-    "dom/events/non-cancelable-when-passive/non-passive-mousewheel-event-listener-on-window.html": "no-results",
-    "dom/events/non-cancelable-when-passive/non-passive-touchmove-event-listener-on-body.html": "no-results",
-    "dom/events/non-cancelable-when-passive/non-passive-touchmove-event-listener-on-div.html": "no-results",
-    "dom/events/non-cancelable-when-passive/non-passive-touchmove-event-listener-on-document.html": "no-results",
-    "dom/events/non-cancelable-when-passive/non-passive-touchmove-event-listener-on-root.html": "no-results",
-    "dom/events/non-cancelable-when-passive/non-passive-touchmove-event-listener-on-window.html": "no-results",
-    "dom/events/non-cancelable-when-passive/non-passive-touchstart-event-listener-on-body.html": "no-results",
-    "dom/events/non-cancelable-when-passive/non-passive-touchstart-event-listener-on-div.html": "no-results",
-    "dom/events/non-cancelable-when-passive/non-passive-touchstart-event-listener-on-document.html": "no-results",
-    "dom/events/non-cancelable-when-passive/non-passive-touchstart-event-listener-on-root.html": "no-results",
-    "dom/events/non-cancelable-when-passive/non-passive-touchstart-event-listener-on-window.html": "no-results",
-    "dom/events/non-cancelable-when-passive/non-passive-wheel-event-listener-on-body.html": "no-results",
-    "dom/events/non-cancelable-when-passive/non-passive-wheel-event-listener-on-div.html": "no-results",
-    "dom/events/non-cancelable-when-passive/non-passive-wheel-event-listener-on-document.html": "no-results",
-    "dom/events/non-cancelable-when-passive/non-passive-wheel-event-listener-on-root.html": "no-results",
-    "dom/events/non-cancelable-when-passive/non-passive-wheel-event-listener-on-window.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-mousewheel-event-listener-on-body.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-mousewheel-event-listener-on-div.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-mousewheel-event-listener-on-document.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-mousewheel-event-listener-on-root.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-mousewheel-event-listener-on-window.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-touchmove-event-listener-on-body.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-touchmove-event-listener-on-div.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-touchmove-event-listener-on-document.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-touchmove-event-listener-on-root.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-touchmove-event-listener-on-window.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-touchstart-event-listener-on-body.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-touchstart-event-listener-on-div.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-touchstart-event-listener-on-document.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-touchstart-event-listener-on-root.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-touchstart-event-listener-on-window.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-wheel-event-listener-on-body.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-wheel-event-listener-on-div.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-wheel-event-listener-on-document.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-wheel-event-listener-on-root.html": "no-results",
-    "dom/events/non-cancelable-when-passive/passive-wheel-event-listener-on-window.html": "no-results",
+    "dom/events/non-cancelable-when-passive/non-passive-mousewheel-event-listener-on-body.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/non-passive-mousewheel-event-listener-on-div.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/non-passive-mousewheel-event-listener-on-document.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/non-passive-mousewheel-event-listener-on-root.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/non-passive-mousewheel-event-listener-on-window.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/non-passive-touchmove-event-listener-on-body.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/non-passive-touchmove-event-listener-on-div.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/non-passive-touchmove-event-listener-on-document.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/non-passive-touchmove-event-listener-on-root.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/non-passive-touchmove-event-listener-on-window.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/non-passive-touchstart-event-listener-on-body.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/non-passive-touchstart-event-listener-on-div.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/non-passive-touchstart-event-listener-on-document.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/non-passive-touchstart-event-listener-on-root.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/non-passive-touchstart-event-listener-on-window.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/non-passive-wheel-event-listener-on-body.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/non-passive-wheel-event-listener-on-div.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/non-passive-wheel-event-listener-on-document.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/non-passive-wheel-event-listener-on-root.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/non-passive-wheel-event-listener-on-window.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-mousewheel-event-listener-on-body.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-mousewheel-event-listener-on-div.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-mousewheel-event-listener-on-document.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-mousewheel-event-listener-on-root.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-mousewheel-event-listener-on-window.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-touchmove-event-listener-on-body.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-touchmove-event-listener-on-div.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-touchmove-event-listener-on-document.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-touchmove-event-listener-on-root.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-touchmove-event-listener-on-window.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-touchstart-event-listener-on-body.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-touchstart-event-listener-on-div.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-touchstart-event-listener-on-document.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-touchstart-event-listener-on-root.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-touchstart-event-listener-on-window.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-wheel-event-listener-on-body.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-wheel-event-listener-on-div.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-wheel-event-listener-on-document.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-wheel-event-listener-on-root.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/non-cancelable-when-passive/passive-wheel-event-listener-on-window.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
     "dom/events/non-cancelable-when-passive/synthetic-events-cancelable.html": "fail",
     "dom/events/passive-by-default.html": "fail",
-    "dom/events/pointer-event-document-move.html": "error",
+    "dom/events/pointer-event-document-move.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/events/preventDefault-during-activation-behavior.html": "fail",
-    "dom/events/relatedTarget.window.html": "error",
+    "dom/events/relatedTarget.window.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/events/remove-all-listeners.html": "fail",
-    "dom/events/replace-event-listener-null-browsing-context-crash.html": "skip",
+    "dom/events/replace-event-listener-null-browsing-context-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/events/scrolling/iframe-chains.html": "fail",
-    "dom/events/scrolling/input-text-scroll-event-when-using-arrow-keys.html": "no-results",
-    "dom/events/scrolling/save-iframe-scroll-offset-when-display-none.html": "no-results",
+    "dom/events/scrolling/input-text-scroll-event-when-using-arrow-keys.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/scrolling/save-iframe-scroll-offset-when-display-none.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
     "dom/events/scrolling/scroll-cross-origin-iframes.html": "fail",
     "dom/events/scrolling/scroll-event-fired-to-element.html": "fail",
     "dom/events/scrolling/scroll-event-fired-to-iframe.html": "fail",
-    "dom/events/scrolling/scrollIntoView-in-onscroll-to-sticky.html": "error",
+    "dom/events/scrolling/scrollIntoView-in-onscroll-to-sticky.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/events/scrolling/scrollend-event-fired-after-instant-scroll-in-microtask.html": "fail",
-    "dom/events/scrolling/scrollend-event-fired-after-sequence-of-scrolls.tentative.html": "no-results",
-    "dom/events/scrolling/scrollend-event-fired-after-snap.html": "no-results",
-    "dom/events/scrolling/scrollend-event-fired-for-mandatory-snap-point-after-load.html": "no-results",
-    "dom/events/scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=root-scrollBy-auto": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=root-scrollBy-smooth": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=root-scrollTo-auto": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=root-scrollTo-smooth": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=subframe-scrollBy-auto": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=subframe-scrollBy-smooth": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=subframe-scrollTo-auto": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=subframe-scrollTo-smooth": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=root-scrollLeft-auto": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=root-scrollLeft-smooth": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=root-scrollTop-auto": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=root-scrollTop-smooth": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=subframe-scrollLeft-auto": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=subframe-scrollLeft-smooth": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=subframe-scrollTop-auto": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=subframe-scrollTop-smooth": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-scrollIntoView.html?include=nested-scrollIntoView": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-scrollIntoView.html?include=root-inline-end-block-end-behavior-auto": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-scrollIntoView.html?include=root-inline-start-block-start-behavior-smooth": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-scrollIntoView.html?include=subframe-inline-end-block-end-behavior-auto": "error",
-    "dom/events/scrolling/scrollend-event-fired-for-scrollIntoView.html?include=subframe-inline-start-block-start-behavior-smooth": "error",
-    "dom/events/scrolling/scrollend-event-fired-to-document.html": "no-results",
-    "dom/events/scrolling/scrollend-event-fired-to-element-with-overscroll-behavior.html": "error",
-    "dom/events/scrolling/scrollend-event-fired-to-window.html": "no-results",
-    "dom/events/scrolling/scrollend-event-fires-for-repeat-key-ending-after-scroll-container-end-is-reached.html": "no-results",
-    "dom/events/scrolling/scrollend-event-fires-on-visual-viewport.html": "no-results",
-    "dom/events/scrolling/scrollend-event-fires-to-iframe-window.html": "no-results",
-    "dom/events/scrolling/scrollend-event-for-user-scroll.html": "no-results",
-    "dom/events/scrolling/scrollend-event-handler-content-attributes.html": "no-results",
-    "dom/events/scrolling/scrollend-event-not-fired-after-removing-scroller.tentative.html": "no-results",
-    "dom/events/scrolling/scrollend-event-not-fired-on-no-scroll.html": "no-results",
+    "dom/events/scrolling/scrollend-event-fired-after-sequence-of-scrolls.tentative.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/scrolling/scrollend-event-fired-after-snap.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-mandatory-snap-point-after-load.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=root-scrollBy-auto": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=root-scrollBy-smooth": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=root-scrollTo-auto": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=root-scrollTo-smooth": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=subframe-scrollBy-auto": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=subframe-scrollBy-smooth": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=subframe-scrollTo-auto": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=subframe-scrollTo-smooth": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=root-scrollLeft-auto": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=root-scrollLeft-smooth": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=root-scrollTop-auto": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=root-scrollTop-smooth": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=subframe-scrollLeft-auto": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=subframe-scrollLeft-smooth": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=subframe-scrollTop-auto": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=subframe-scrollTop-smooth": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-scrollIntoView.html?include=nested-scrollIntoView": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-scrollIntoView.html?include=root-inline-end-block-end-behavior-auto": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-scrollIntoView.html?include=root-inline-start-block-start-behavior-smooth": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-scrollIntoView.html?include=subframe-inline-end-block-end-behavior-auto": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-for-scrollIntoView.html?include=subframe-inline-start-block-start-behavior-smooth": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-to-document.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/scrolling/scrollend-event-fired-to-element-with-overscroll-behavior.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/scrollend-event-fired-to-window.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/scrolling/scrollend-event-fires-for-repeat-key-ending-after-scroll-container-end-is-reached.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/scrolling/scrollend-event-fires-on-visual-viewport.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/scrolling/scrollend-event-fires-to-iframe-window.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/scrolling/scrollend-event-for-user-scroll.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/scrolling/scrollend-event-handler-content-attributes.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/scrolling/scrollend-event-not-fired-after-removing-scroller.tentative.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/scrolling/scrollend-event-not-fired-on-no-scroll.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
     "dom/events/scrolling/scrollend-fires-to-text-input.html": "fail",
-    "dom/events/scrolling/scrollend-with-snap-on-fractional-offset.html": "error",
+    "dom/events/scrolling/scrollend-with-snap-on-fractional-offset.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/events/scrolling/wheel-event-composed.html": "fail",
-    "dom/events/scrolling/wheel-event-no-scroll-after-prevent-default.html": "no-results",
-    "dom/events/scrolling/wheel-event-transactions-basic.html?include=scroll-over-scrollable-child": "error",
-    "dom/events/scrolling/wheel-event-transactions-basic.html?include=target-basic": "error",
-    "dom/events/scrolling/wheel-event-transactions-basic.html?include=transaction-not-bound-to-scroll-frame": "error",
+    "dom/events/scrolling/wheel-event-no-scroll-after-prevent-default.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/scrolling/wheel-event-transactions-basic.html?include=scroll-over-scrollable-child": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/wheel-event-transactions-basic.html?include=target-basic": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/scrolling/wheel-event-transactions-basic.html?include=transaction-not-bound-to-scroll-frame": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/events/scrolling/wheel-event-transactions-multiple-action-chains.html": "fail",
-    "dom/events/scrolling/wheel-event-transactions-target-display-change.html?include=contents": "no-results",
-    "dom/events/scrolling/wheel-event-transactions-target-display-change.html?include=none": "no-results",
+    "dom/events/scrolling/wheel-event-transactions-target-display-change.html?include=contents": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/scrolling/wheel-event-transactions-target-display-change.html?include=none": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
     "dom/events/scrolling/wheel-event-transactions-target-elements.html": "fail",
     "dom/events/scrolling/wheel-event-transactions-target-move.html": "fail",
     "dom/events/scrolling/wheel-event-transactions-target-removal.html": "fail",
-    "dom/events/scrolling/wheel-event-transactions-target-resize.html?include=passive-false": "no-results",
-    "dom/events/scrolling/wheel-event-transactions-target-resize.html?include=passive-true": "no-results",
-    "dom/events/shadow-relatedTarget.html": "error",
-    "dom/events/webkit-animation-end-event.html": "error",
-    "dom/events/webkit-animation-iteration-event.html": "error",
-    "dom/events/webkit-animation-start-event.html": "error",
-    "dom/events/webkit-transition-end-event.html": "error",
+    "dom/events/scrolling/wheel-event-transactions-target-resize.html?include=passive-false": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/scrolling/wheel-event-transactions-target-resize.html?include=passive-true": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/events/shadow-relatedTarget.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/webkit-animation-end-event.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/webkit-animation-iteration-event.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/webkit-animation-start-event.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/events/webkit-transition-end-event.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/events/window-composed-path.html": "fail",
     "dom/historical-mutation-events.html": "fail",
     "dom/historical.html": "fail",
     "dom/idlharness.window.html?exclude=Node": "fail",
     "dom/idlharness.window.html?include=Node": "fail",
-    "dom/interface-objects.html": "error",
+    "dom/interface-objects.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/lists/DOMTokenList-Iterable.html": "fail",
     "dom/lists/DOMTokenList-coverage-for-attributes.html": "fail",
     "dom/lists/DOMTokenList-iteration.html": "fail",
@@ -231,7 +543,10 @@
     "dom/nodes/CharacterData-data.html": "pass",
     "dom/nodes/CharacterData-deleteData.html": "pass",
     "dom/nodes/CharacterData-insertData.html": "pass",
-    "dom/nodes/CharacterData-remove.html": "no-results",
+    "dom/nodes/CharacterData-remove.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
     "dom/nodes/CharacterData-replaceData.html": "pass",
     "dom/nodes/CharacterData-substringData.html": "fail",
     "dom/nodes/CharacterData-surrogates.html": "fail",
@@ -239,11 +554,20 @@
     "dom/nodes/ChildNode-before.html": "fail",
     "dom/nodes/ChildNode-replaceWith.html": "fail",
     "dom/nodes/Comment-constructor.html": "fail",
-    "dom/nodes/Comment-in-doctype.xhtml": "skip",
-    "dom/nodes/DOMImplementation-createDocument-with-null-browsing-context-crash.html": "skip",
+    "dom/nodes/Comment-in-doctype.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
+    "dom/nodes/DOMImplementation-createDocument-with-null-browsing-context-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/DOMImplementation-createDocument.html": "fail",
     "dom/nodes/DOMImplementation-createDocumentType.html": "fail",
-    "dom/nodes/DOMImplementation-createHTMLDocument-with-null-browsing-context-crash.html": "skip",
+    "dom/nodes/DOMImplementation-createHTMLDocument-with-null-browsing-context-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/DOMImplementation-createHTMLDocument-with-saved-implementation.html": "fail",
     "dom/nodes/DOMImplementation-createHTMLDocument.html": "fail",
     "dom/nodes/DOMImplementation-hasFeature.html": "pass",
@@ -251,8 +575,14 @@
     "dom/nodes/Document-adoptNode.html": "fail",
     "dom/nodes/Document-characterSet-normalization-1.html": "fail",
     "dom/nodes/Document-characterSet-normalization-2.html": "fail",
-    "dom/nodes/Document-constructor-svg.svg": "no-results",
-    "dom/nodes/Document-constructor-xml.xml": "error",
+    "dom/nodes/Document-constructor-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Document-constructor-xml.xml": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/nodes/Document-constructor.html": "fail",
     "dom/nodes/Document-contentType/contentType/contenttype_bmp.html": "fail",
     "dom/nodes/Document-contentType/contentType/contenttype_css.html": "fail",
@@ -270,22 +600,34 @@
     "dom/nodes/Document-contentType/contentType/createHTMLDocument.html": "fail",
     "dom/nodes/Document-contentType/contentType/xhr_responseType_document.html": "fail",
     "dom/nodes/Document-createAttribute.html": "fail",
-    "dom/nodes/Document-createCDATASection-xhtml.xhtml": "skip",
-    "dom/nodes/Document-createCDATASection.html": "error",
+    "dom/nodes/Document-createCDATASection-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
+    "dom/nodes/Document-createCDATASection.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/nodes/Document-createComment.html": "pass",
     "dom/nodes/Document-createElement-namespace.html": "fail",
     "dom/nodes/Document-createElement.html": "fail",
     "dom/nodes/Document-createElementNS.html": "fail",
     "dom/nodes/Document-createEvent-touchevent.window.html": "pass",
     "dom/nodes/Document-createEvent.https.html": "fail",
-    "dom/nodes/Document-createProcessingInstruction-xhtml.xhtml": "skip",
+    "dom/nodes/Document-createProcessingInstruction-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Document-createProcessingInstruction.html": "fail",
     "dom/nodes/Document-createTextNode.html": "pass",
     "dom/nodes/Document-createTreeWalker.html": "fail",
     "dom/nodes/Document-doctype.html": "fail",
     "dom/nodes/Document-getElementById.html": "fail",
     "dom/nodes/Document-getElementsByClassName.html": "fail",
-    "dom/nodes/Document-getElementsByTagName-xhtml.xhtml": "skip",
+    "dom/nodes/Document-getElementsByTagName-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Document-getElementsByTagName.html": "fail",
     "dom/nodes/Document-getElementsByTagNameNS.html": "fail",
     "dom/nodes/Document-implementation.html": "fail",
@@ -293,34 +635,85 @@
     "dom/nodes/DocumentFragment-constructor.html": "pass",
     "dom/nodes/DocumentFragment-getElementById.html": "fail",
     "dom/nodes/DocumentFragment-querySelectorAll-after-modification.html": "pass",
-    "dom/nodes/DocumentType-literal-xhtml.xhtml": "skip",
+    "dom/nodes/DocumentType-literal-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/DocumentType-literal.html": "fail",
     "dom/nodes/DocumentType-remove.html": "pass",
-    "dom/nodes/Element-childElement-null-svg.svg": "no-results",
-    "dom/nodes/Element-childElement-null-xhtml.xhtml": "skip",
+    "dom/nodes/Element-childElement-null-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-childElement-null-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-childElement-null.html": "pass",
-    "dom/nodes/Element-childElementCount-dynamic-add-svg.svg": "no-results",
-    "dom/nodes/Element-childElementCount-dynamic-add-xhtml.xhtml": "skip",
+    "dom/nodes/Element-childElementCount-dynamic-add-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-childElementCount-dynamic-add-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-childElementCount-dynamic-add.html": "pass",
-    "dom/nodes/Element-childElementCount-dynamic-remove-svg.svg": "no-results",
-    "dom/nodes/Element-childElementCount-dynamic-remove-xhtml.xhtml": "skip",
+    "dom/nodes/Element-childElementCount-dynamic-remove-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-childElementCount-dynamic-remove-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-childElementCount-dynamic-remove.html": "pass",
-    "dom/nodes/Element-childElementCount-nochild-svg.svg": "no-results",
-    "dom/nodes/Element-childElementCount-nochild-xhtml.xhtml": "skip",
+    "dom/nodes/Element-childElementCount-nochild-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-childElementCount-nochild-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-childElementCount-nochild.html": "pass",
-    "dom/nodes/Element-childElementCount-svg.svg": "no-results",
-    "dom/nodes/Element-childElementCount-xhtml.xhtml": "skip",
+    "dom/nodes/Element-childElementCount-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-childElementCount-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-childElementCount.html": "pass",
     "dom/nodes/Element-children.html": "fail",
     "dom/nodes/Element-classlist.html": "fail",
     "dom/nodes/Element-closest.html": "fail",
-    "dom/nodes/Element-firstElementChild-entity-xhtml.xhtml": "skip",
-    "dom/nodes/Element-firstElementChild-entity.svg": "no-results",
-    "dom/nodes/Element-firstElementChild-namespace-svg.svg": "no-results",
-    "dom/nodes/Element-firstElementChild-namespace-xhtml.xhtml": "skip",
+    "dom/nodes/Element-firstElementChild-entity-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
+    "dom/nodes/Element-firstElementChild-entity.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-firstElementChild-namespace-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-firstElementChild-namespace-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-firstElementChild-namespace.html": "pass",
-    "dom/nodes/Element-firstElementChild-svg.svg": "no-results",
-    "dom/nodes/Element-firstElementChild-xhtml.xhtml": "skip",
+    "dom/nodes/Element-firstElementChild-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-firstElementChild-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-firstElementChild.html": "pass",
     "dom/nodes/Element-getElementsByClassName.html": "fail",
     "dom/nodes/Element-getElementsByTagName-change-document-HTMLNess.html": "fail",
@@ -330,24 +723,48 @@
     "dom/nodes/Element-hasAttributes.html": "fail",
     "dom/nodes/Element-insertAdjacentElement.html": "fail",
     "dom/nodes/Element-insertAdjacentText.html": "fail",
-    "dom/nodes/Element-lastElementChild-svg.svg": "no-results",
-    "dom/nodes/Element-lastElementChild-xhtml.xhtml": "skip",
+    "dom/nodes/Element-lastElementChild-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-lastElementChild-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-lastElementChild.html": "pass",
     "dom/nodes/Element-matches-namespaced-elements.html": "fail",
     "dom/nodes/Element-matches.html": "fail",
-    "dom/nodes/Element-nextElementSibling-svg.svg": "no-results",
-    "dom/nodes/Element-nextElementSibling-xhtml.xhtml": "skip",
+    "dom/nodes/Element-nextElementSibling-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-nextElementSibling-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-nextElementSibling.html": "pass",
-    "dom/nodes/Element-previousElementSibling-svg.svg": "no-results",
-    "dom/nodes/Element-previousElementSibling-xhtml.xhtml": "skip",
+    "dom/nodes/Element-previousElementSibling-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-previousElementSibling-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-previousElementSibling.html": "pass",
     "dom/nodes/Element-remove.html": "pass",
     "dom/nodes/Element-removeAttribute.html": "fail",
     "dom/nodes/Element-removeAttributeNS.html": "fail",
     "dom/nodes/Element-setAttribute-crbug-1138487.html": "fail",
     "dom/nodes/Element-setAttribute.html": "fail",
-    "dom/nodes/Element-siblingElement-null-svg.svg": "no-results",
-    "dom/nodes/Element-siblingElement-null-xhtml.xhtml": "skip",
+    "dom/nodes/Element-siblingElement-null-svg.svg": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/nodes/Element-siblingElement-null-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Element-siblingElement-null.html": "pass",
     "dom/nodes/Element-tagName.html": "fail",
     "dom/nodes/Element-webkitMatchesSelector.html": "fail",
@@ -355,11 +772,17 @@
     "dom/nodes/MutationObserver-callback-arguments.html": "fail",
     "dom/nodes/MutationObserver-characterData.html": "fail",
     "dom/nodes/MutationObserver-childList.html": "fail",
-    "dom/nodes/MutationObserver-cross-realm-callback-report-exception.html": "error",
+    "dom/nodes/MutationObserver-cross-realm-callback-report-exception.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/nodes/MutationObserver-disconnect.html": "fail",
     "dom/nodes/MutationObserver-document.html": "fail",
     "dom/nodes/MutationObserver-inner-outer.html": "fail",
-    "dom/nodes/MutationObserver-nested-crash.html": "skip",
+    "dom/nodes/MutationObserver-nested-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/MutationObserver-sanity.html": "fail",
     "dom/nodes/MutationObserver-takeRecords.html": "fail",
     "dom/nodes/MutationObserver-textContent.html": "fail",
@@ -373,29 +796,56 @@
     "dom/nodes/Node-cloneNode-document-allow-declarative-shadow-roots.window.html": "fail",
     "dom/nodes/Node-cloneNode-document-with-doctype.html": "fail",
     "dom/nodes/Node-cloneNode-external-stylesheet-no-bc.sub.html": "pass",
-    "dom/nodes/Node-cloneNode-on-inactive-document-crash.html": "skip",
+    "dom/nodes/Node-cloneNode-on-inactive-document-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/Node-cloneNode-svg.html": "fail",
     "dom/nodes/Node-cloneNode.html": "fail",
-    "dom/nodes/Node-compareDocumentPosition.html": "error",
+    "dom/nodes/Node-compareDocumentPosition.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/nodes/Node-constants.html": "fail",
-    "dom/nodes/Node-contains-xml.xml": "error",
-    "dom/nodes/Node-contains.html": "error",
+    "dom/nodes/Node-contains-xml.xml": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/nodes/Node-contains.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/nodes/Node-insertBefore.html": "fail",
     "dom/nodes/Node-isConnected-shadow-dom.html": "fail",
     "dom/nodes/Node-isConnected.html": "fail",
-    "dom/nodes/Node-isEqualNode-xhtml.xhtml": "skip",
+    "dom/nodes/Node-isEqualNode-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Node-isEqualNode.html": "fail",
     "dom/nodes/Node-isSameNode.html": "fail",
-    "dom/nodes/Node-lookupNamespaceURI.html": "error",
-    "dom/nodes/Node-lookupPrefix.xhtml": "skip",
+    "dom/nodes/Node-lookupNamespaceURI.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/nodes/Node-lookupPrefix.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Node-mutation-adoptNode.html": "fail",
-    "dom/nodes/Node-nodeName-xhtml.xhtml": "skip",
+    "dom/nodes/Node-nodeName-xhtml.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Node-nodeName.html": "fail",
     "dom/nodes/Node-nodeValue.html": "fail",
     "dom/nodes/Node-normalize.html": "fail",
     "dom/nodes/Node-parentElement.html": "fail",
     "dom/nodes/Node-parentNode.html": "fail",
-    "dom/nodes/Node-properties.html": "error",
+    "dom/nodes/Node-properties.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/nodes/Node-removeChild.html": "fail",
     "dom/nodes/Node-replaceChild.html": "fail",
     "dom/nodes/Node-textContent.html": "fail",
@@ -410,20 +860,41 @@
     "dom/nodes/ParentNode-append.html": "fail",
     "dom/nodes/ParentNode-children.html": "fail",
     "dom/nodes/ParentNode-prepend.html": "fail",
-    "dom/nodes/ParentNode-querySelector-All-xht.xht": "skip",
+    "dom/nodes/ParentNode-querySelector-All-xht.xht": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/ParentNode-querySelector-All.html": "fail",
     "dom/nodes/ParentNode-querySelector-case-insensitive.html": "fail",
     "dom/nodes/ParentNode-querySelector-escapes.html": "fail",
     "dom/nodes/ParentNode-querySelector-scope.html": "fail",
-    "dom/nodes/ParentNode-querySelectorAll-removed-elements.html": "error",
+    "dom/nodes/ParentNode-querySelectorAll-removed-elements.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/nodes/ParentNode-querySelectors-exclusive.html": "pass",
-    "dom/nodes/ParentNode-querySelectors-namespaces.html": "error",
+    "dom/nodes/ParentNode-querySelectors-namespaces.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/nodes/ParentNode-querySelectors-space-and-dash-attribute-value.html": "pass",
     "dom/nodes/ParentNode-replaceChildren.html": "fail",
-    "dom/nodes/ProcessingInstruction-escapes-1.xhtml": "skip",
-    "dom/nodes/ProcessingInstruction-in-doctype.xhtml": "skip",
-    "dom/nodes/ProcessingInstruction-literal-1.xhtml": "skip",
-    "dom/nodes/ProcessingInstruction-literal-2.xhtml": "skip",
+    "dom/nodes/ProcessingInstruction-escapes-1.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
+    "dom/nodes/ProcessingInstruction-in-doctype.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
+    "dom/nodes/ProcessingInstruction-literal-1.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
+    "dom/nodes/ProcessingInstruction-literal-2.xhtml": {
+      "reason": "xhtml",
+      "status": "skip"
+    },
     "dom/nodes/Text-constructor.html": "fail",
     "dom/nodes/Text-splitText.html": "pass",
     "dom/nodes/Text-wholeText.html": "pass",
@@ -433,11 +904,26 @@
     "dom/nodes/attributes-namednodemap.html": "fail",
     "dom/nodes/attributes.html": "fail",
     "dom/nodes/case.html": "fail",
-    "dom/nodes/crashtests/attribute-index-when-no-attributes.html": "skip",
-    "dom/nodes/crashtests/childNodes-last_visited-unwrap-crash.html": "skip",
-    "dom/nodes/crashtests/document-replaceChild-input-documentElement.html": "skip",
-    "dom/nodes/crashtests/documentElement-remove-descendant-query.html": "skip",
-    "dom/nodes/crashtests/multiple-append-mutated-in-unload.https.html": "skip",
+    "dom/nodes/crashtests/attribute-index-when-no-attributes.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "dom/nodes/crashtests/childNodes-last_visited-unwrap-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "dom/nodes/crashtests/document-replaceChild-input-documentElement.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "dom/nodes/crashtests/documentElement-remove-descendant-query.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "dom/nodes/crashtests/multiple-append-mutated-in-unload.https.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/getElementsByClassName-01.htm": "pass",
     "dom/nodes/getElementsByClassName-02.htm": "pass",
     "dom/nodes/getElementsByClassName-03.htm": "pass",
@@ -495,8 +981,14 @@
     "dom/nodes/insertion-removing-steps/script-does-not-run-on-child-removal.window.html": "fail",
     "dom/nodes/moveBefore/Node-moveBefore.html": "fail",
     "dom/nodes/moveBefore/child-style-preserve.html": "fail",
-    "dom/nodes/moveBefore/chrome-338071841-crash.html": "skip",
-    "dom/nodes/moveBefore/chrome-433696404-crash.html": "skip",
+    "dom/nodes/moveBefore/chrome-338071841-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "dom/nodes/moveBefore/chrome-433696404-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/moveBefore/continue-css-animation-left.html": "fail",
     "dom/nodes/moveBefore/continue-css-animation-transform.html": "fail",
     "dom/nodes/moveBefore/continue-css-transition-left-pseudo.html": "fail",
@@ -511,17 +1003,26 @@
     "dom/nodes/moveBefore/custom-element-move-reactions.html": "fail",
     "dom/nodes/moveBefore/fieldset-child-blur-event.html": "fail",
     "dom/nodes/moveBefore/fire-focusin-focusout.html": "fail",
-    "dom/nodes/moveBefore/focus-preserve-render.html": "skip",
+    "dom/nodes/moveBefore/focus-preserve-render.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/moveBefore/focus-preserve.html": "fail",
     "dom/nodes/moveBefore/focus-within.html": "fail",
     "dom/nodes/moveBefore/fullscreen-preserve.html": "fail",
     "dom/nodes/moveBefore/hover-style-update.html": "fail",
     "dom/nodes/moveBefore/iframe-document-preserve.window.html": "fail",
-    "dom/nodes/moveBefore/input-moveBefore-crash.html": "skip",
+    "dom/nodes/moveBefore/input-moveBefore-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/moveBefore/listed-form-element-reset.html": "fail",
     "dom/nodes/moveBefore/live-range-updates.html": "fail",
     "dom/nodes/moveBefore/modal-dialog.html": "fail",
-    "dom/nodes/moveBefore/moveBefore-as-flex-item.html": "skip",
+    "dom/nodes/moveBefore/moveBefore-as-flex-item.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/moveBefore/moveBefore-from-light-to-shadow.html": "fail",
     "dom/nodes/moveBefore/moveBefore-id-map.html": "fail",
     "dom/nodes/moveBefore/moveBefore-name-map.html": "fail",
@@ -535,8 +1036,11 @@
     "dom/nodes/moveBefore/object-crash-regression.html": "fail",
     "dom/nodes/moveBefore/pointer-events.html": "fail",
     "dom/nodes/moveBefore/popover-preserve.html": "fail",
-    "dom/nodes/moveBefore/preserve-render-blocking-script.html": "fail",
-    "dom/nodes/moveBefore/preserve-render-blocking-style.html": "error",
+    "dom/nodes/moveBefore/preserve-render-blocking-script.html": "pass",
+    "dom/nodes/moveBefore/preserve-render-blocking-style.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/nodes/moveBefore/relevant-mutations.html": "fail",
     "dom/nodes/moveBefore/script-move-before.html": "pass",
     "dom/nodes/moveBefore/select-option-optgroup.html": "fail",
@@ -545,15 +1049,24 @@
     "dom/nodes/moveBefore/style-applies.html": "fail",
     "dom/nodes/moveBefore/throws-exception.html": "fail",
     "dom/nodes/name-validation.html": "fail",
-    "dom/nodes/node-appendchild-crash.html": "skip",
+    "dom/nodes/node-appendchild-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/prepend-on-Document.html": "fail",
     "dom/nodes/query-target-in-load-event.html": "fail",
     "dom/nodes/querySelector-mixed-case.html": "fail",
     "dom/nodes/remove-and-adopt-thcrash.html": "fail",
-    "dom/nodes/remove-from-shadow-host-and-adopt-into-iframe.html": "skip",
+    "dom/nodes/remove-from-shadow-host-and-adopt-into-iframe.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/remove-next-sibling-during-replace-with.html": "fail",
     "dom/nodes/remove-unscopable.html": "fail",
-    "dom/nodes/replaceWith-document-element-crash.html": "skip",
+    "dom/nodes/replaceWith-document-element-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/nodes/rootNode.html": "fail",
     "dom/nodes/svg-template-querySelector.html": "fail",
     "dom/observable/tentative/crashtests/observable-gc.any.html": "fail",
@@ -587,44 +1100,131 @@
     "dom/observable/tentative/observable-toArray.any.html": "fail",
     "dom/ranges/Range-adopt-test.html": "fail",
     "dom/ranges/Range-attributes.html": "fail",
-    "dom/ranges/Range-cloneContents.html": "error",
-    "dom/ranges/Range-cloneRange.html": "error",
-    "dom/ranges/Range-collapse.html": "error",
+    "dom/ranges/Range-cloneContents.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/ranges/Range-cloneRange.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/ranges/Range-collapse.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/ranges/Range-commonAncestorContainer-2.html": "fail",
-    "dom/ranges/Range-commonAncestorContainer.html": "error",
-    "dom/ranges/Range-compareBoundaryPoints-crash.html": "skip",
-    "dom/ranges/Range-compareBoundaryPoints.html": "error",
+    "dom/ranges/Range-commonAncestorContainer.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/ranges/Range-compareBoundaryPoints-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "dom/ranges/Range-compareBoundaryPoints.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/ranges/Range-comparePoint-2.html": "fail",
-    "dom/ranges/Range-comparePoint.html": "error",
+    "dom/ranges/Range-comparePoint.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/ranges/Range-constructor.html": "fail",
-    "dom/ranges/Range-deleteContents.html": "error",
+    "dom/ranges/Range-deleteContents.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/ranges/Range-detach.html": "fail",
     "dom/ranges/Range-extractContents-dynamic-end.html": "fail",
-    "dom/ranges/Range-extractContents.html": "error",
-    "dom/ranges/Range-in-shadow-after-the-shadow-removed.html?mode=closed": "error",
-    "dom/ranges/Range-in-shadow-after-the-shadow-removed.html?mode=open": "error",
-    "dom/ranges/Range-insertNode.html": "error",
+    "dom/ranges/Range-extractContents.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/ranges/Range-in-shadow-after-the-shadow-removed.html?mode=closed": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/ranges/Range-in-shadow-after-the-shadow-removed.html?mode=open": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/ranges/Range-insertNode.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/ranges/Range-intersectsNode-2.html": "fail",
     "dom/ranges/Range-intersectsNode-binding.html": "fail",
     "dom/ranges/Range-intersectsNode-shadow.html": "fail",
-    "dom/ranges/Range-intersectsNode.html": "error",
-    "dom/ranges/Range-isPointInRange.html": "error",
-    "dom/ranges/Range-mutations-appendChild.html": "no-results",
-    "dom/ranges/Range-mutations-appendData.html": "no-results",
-    "dom/ranges/Range-mutations-dataChange.html": "no-results",
-    "dom/ranges/Range-mutations-deleteData.html": "no-results",
-    "dom/ranges/Range-mutations-insertBefore.html": "no-results",
-    "dom/ranges/Range-mutations-insertData.html": "no-results",
-    "dom/ranges/Range-mutations-removeChild.html": "no-results",
-    "dom/ranges/Range-mutations-replaceChild.html": "no-results",
-    "dom/ranges/Range-mutations-replaceData.html": "no-results",
-    "dom/ranges/Range-mutations-splitText.html": "no-results",
-    "dom/ranges/Range-selectNode.html": "error",
-    "dom/ranges/Range-set.html": "error",
+    "dom/ranges/Range-intersectsNode.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/ranges/Range-isPointInRange.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/ranges/Range-mutations-appendChild.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/ranges/Range-mutations-appendData.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/ranges/Range-mutations-dataChange.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/ranges/Range-mutations-deleteData.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/ranges/Range-mutations-insertBefore.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/ranges/Range-mutations-insertData.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/ranges/Range-mutations-removeChild.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/ranges/Range-mutations-replaceChild.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/ranges/Range-mutations-replaceData.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/ranges/Range-mutations-splitText.html": {
+      "reason": "no-subtests",
+      "status": "no-results"
+    },
+    "dom/ranges/Range-selectNode.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/ranges/Range-set.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/ranges/Range-stringifier.html": "fail",
-    "dom/ranges/Range-surroundContents.html": "error",
-    "dom/ranges/StaticRange-constructor.html": "error",
-    "dom/ranges/crashtests/Range-setEnd-to-node-removed-by-extractContents.html": "skip",
+    "dom/ranges/Range-surroundContents.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/ranges/StaticRange-constructor.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/ranges/crashtests/Range-setEnd-to-node-removed-by-extractContents.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/ranges/tentative/OpaqueRange-auto-disconnect.html": "fail",
     "dom/ranges/tentative/OpaqueRange-basic.html": "fail",
     "dom/ranges/tentative/OpaqueRange-disconnect.html": "fail",
@@ -642,12 +1242,27 @@
     "dom/ranges/tentative/OpaqueRange-unsupported-elements.html": "fail",
     "dom/ranges/tentative/OpaqueRange-update-event-order.html": "fail",
     "dom/ranges/tentative/OpaqueRange-validation.html": "fail",
-    "dom/slot-recalc.html": "skip",
-    "dom/svg-insert-crash.html": "skip",
+    "dom/slot-recalc.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
+    "dom/svg-insert-crash.html": {
+      "reason": "non-testharness",
+      "status": "skip"
+    },
     "dom/traversal/NodeFilter-constants.html": "fail",
-    "dom/traversal/NodeIterator-removal.html": "error",
-    "dom/traversal/NodeIterator.html": "error",
-    "dom/traversal/TreeWalker-acceptNode-filter-cross-realm-null-browsing-context.html": "error",
+    "dom/traversal/NodeIterator-removal.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/traversal/NodeIterator.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
+    "dom/traversal/TreeWalker-acceptNode-filter-cross-realm-null-browsing-context.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/traversal/TreeWalker-acceptNode-filter-cross-realm.html": "fail",
     "dom/traversal/TreeWalker-acceptNode-filter.html": "pass",
     "dom/traversal/TreeWalker-basic.html": "fail",
@@ -659,7 +1274,10 @@
     "dom/traversal/TreeWalker-traversal-skip-most.html": "pass",
     "dom/traversal/TreeWalker-traversal-skip.html": "pass",
     "dom/traversal/TreeWalker-walking-outside-a-tree.html": "pass",
-    "dom/traversal/TreeWalker.html": "error",
+    "dom/traversal/TreeWalker.html": {
+      "reason": "evaluation-threw",
+      "status": "error"
+    },
     "dom/window-extends-event-target.html": "fail",
     "dom/xpath-result-single-node-value-nullable.html": "pass"
   },

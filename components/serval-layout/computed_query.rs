@@ -35,6 +35,13 @@ pub fn computed_value_string<NodeId: Copy + Eq + Hash>(
         "visibility" => cv.clone_visibility().to_css_string(),
         "opacity" => cv.clone_opacity().to_css_string(),
         "position" => cv.clone_position().to_css_string(),
+        // Box insets: what CSS-animation interpolation tests assert most (an
+        // animated `left` read back mid-flight via getComputedStyle).
+        "left" => cv.clone_left().to_css_string(),
+        "right" => cv.clone_right().to_css_string(),
+        "top" => cv.clone_top().to_css_string(),
+        "bottom" => cv.clone_bottom().to_css_string(),
+        "transform" => cv.clone_transform().to_css_string(),
         "overflow-x" => cv.clone_overflow_x().to_css_string(),
         "overflow-y" => cv.clone_overflow_y().to_css_string(),
         "font-size" => cv.clone_font_size().to_css_string(),
