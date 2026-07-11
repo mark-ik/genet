@@ -151,7 +151,7 @@ serval-extract = { path = "../../components/serval-extract", optional = true }
 serval-winit-host = { path = "../../components/serval-winit-host", optional = true }
 # Chisel widget leaves (png-reftest feature): the first-pixels smoke renders
 # Knob/Meter/GraphGlyph leaves through the session leaf path to an offscreen PNG.
-chisel = { path = "../../components/chisel", optional = true }
+chisel = { package = "serval-chisel", version = "0.1.0", path = "../../components/chisel", optional = true }
 # The tile surface projects its laid-out frame DOM (chisel leaf interiors
 # included) into an AccessKit tree; the windowed viewer pushes it to the OS
 # through `serval_winit_host::AccessKitBridge`.

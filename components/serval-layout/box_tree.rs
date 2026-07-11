@@ -196,6 +196,29 @@ impl<Id> BoxNode<Id> {
     }
 }
 
+/// One registered `position: absolute` hoist (see `BoxTree::abs_hoists`).
+struct AbsHoist<Id> {
+    /// Arena index of the hoisted box.
+    idx: usize,
+    /// Before the post-pass: the containing block's DOM id (`None` = the ICB,
+    /// no positioned ancestor at all). After: the *applied* target's DOM id
+    /// (always `Some`), read by fragment readback for the plane's target map.
+    cb: Option<Id>,
+    /// The **forced** flag: a box built as an out-of-flow *island* from
+    /// inside a gathered inline subtree has no in-flow attachment at all, so
+    /// if its containing block fails to resolve (an inline CB has no box) the
+    /// post-pass falls back to the root rather than refusing — a refused
+    /// island would dangle unreachable. Block-path registrations keep the
+    /// refusal fallback (stay parent-relative).
+    forced: bool,
+    /// Arena index of the zero-size anonymous **static-position placeholder**
+    /// left in the original parent's flow, present when the box has an auto
+    /// *axis* (both insets `auto` on x or y — CSS 2.2 §10.3.7): its laid-out
+    /// position IS the static position, and the post-layout fixup rewrites
+    /// the hoisted box's location on those axes to match.
+    placeholder: Option<usize>,
+}
+
 /// serval's layout arena. Built from a `LayoutDom` + `StylePlane`;
 /// laid out via Taffy's trait-impl algorithms.
 pub struct BoxTree<Id: Copy + Eq + Hash> {
@@ -218,18 +241,11 @@ pub struct BoxTree<Id: Copy + Eq + Hash> {
     /// hoists, read by fragment readback to fill the plane's hoist side table.
     fixed_hoists: Vec<usize>,
     /// Position containing blocks, F2: `position: absolute` boxes whose CSS
-    /// containing block is not their DOM parent — `(arena index, containing
-    /// block's DOM id)`, `None` meaning the ICB (no positioned ancestor at
-    /// all). Registered during construction; the post-pass resolves the DOM id
-    /// through `node_map` and re-parents. The `bool` is the **forced** flag:
-    /// a box built as an out-of-flow *island* from inside a gathered inline
-    /// subtree has no in-flow attachment at all, so if its containing block
-    /// fails to resolve (an inline CB has no box) the post-pass falls back to
-    /// the root rather than refusing — a refused island would dangle
-    /// unreachable. Block-path registrations (`false`) keep the refusal
-    /// fallback (stay parent-relative). Retains the applied hoists after,
-    /// same as `fixed_hoists`.
-    abs_hoists: Vec<(usize, Option<Id>, bool)>,
+    /// containing block is not their DOM parent. Registered during
+    /// construction; the post-pass resolves the CB DOM id through `node_map`
+    /// and re-parents. Retains the applied hoists after, same as
+    /// `fixed_hoists`.
+    abs_hoists: Vec<AbsHoist<Id>>,
     /// Transform-CB depth during the construction walk: >0 while inside an
     /// ancestor that establishes a containing block for fixed descendants
     /// (css-transforms §2: `transform`, `filter`, `perspective`, …). A fixed
@@ -733,22 +749,71 @@ where
     if !ancestor_guarded && crate::paint_emit::is_fixed(&style) {
         tree.fixed_hoists.push(i);
         tree.had_hoists = true;
-    } else if is_absolute(&style) && has_non_auto_inset(&style) {
+    } else if is_absolute(&style) {
         // F2: an absolute box whose CSS containing block is not its DOM parent
         // re-parents to it (`None` = the ICB — no positioned ancestor at all).
-        // Fully-auto insets keep the box parent-relative: its position is then
-        // its *static position*, which the DOM parent approximates far better
-        // than the distant CB would (CSS 2.2 §10.3.7 permits approximating).
         // No hoist when the CB already *is* the DOM parent — Taffy resolves
         // parent-relative by construction, so re-parenting would be a no-op
         // that only churned child order. (Root element: both sides `None`.)
         let dom_parent = elem.parent().map(|p| p.id());
         if ancestor_abs_cb != dom_parent {
-            tree.abs_hoists.push((i, ancestor_abs_cb, false));
+            // Static position (CSS 2.2 §10.3.7): an axis with both insets
+            // `auto` sits where in-flow layout would have put the box — in the
+            // ORIGINAL parent's flow, which the hoist just left. A zero-size
+            // anonymous placeholder keeps that slot: the parent attaches it in
+            // the box's place, its laid-out position is the static position,
+            // and the post-layout fixup copies it onto the hoisted box's auto
+            // axes. Skipped inside flex/grid parents, where an extra item
+            // would take a slot (and a gap): Taffy's own abspos static
+            // position within those containers is already sound.
+            let placeholder = ((has_auto_x(&style) || has_auto_y(&style))
+                && !parent_is_item_container(styles, dom_parent))
+            .then(|| {
+                tree.push(BoxNode::new(
+                    initial_style(),
+                    BoxSource::Anonymous(elem.id()),
+                ))
+            });
+            tree.abs_hoists.push(AbsHoist {
+                idx: i,
+                cb: ancestor_abs_cb,
+                forced: false,
+                placeholder,
+            });
             tree.had_hoists = true;
+            if let Some(ph) = placeholder {
+                // The parent's children list gets the placeholder; the real
+                // box is attached by the hoist post-pass alone.
+                return ph;
+            }
         }
     }
     i
+}
+
+/// Whether both x-axis insets (`left` / `right`) compute `auto`.
+fn has_auto_x(cv: &ComputedValues) -> bool {
+    let p = cv.get_position();
+    p.left.is_auto() && p.right.is_auto()
+}
+
+/// Whether both y-axis insets (`top` / `bottom`) compute `auto`.
+fn has_auto_y(cv: &ComputedValues) -> bool {
+    let p = cv.get_position();
+    p.top.is_auto() && p.bottom.is_auto()
+}
+
+/// Whether `parent` lays out its children as flex/grid items.
+fn parent_is_item_container<Id: Copy + Eq + Hash>(
+    styles: &StylePlane<Id>,
+    parent: Option<Id>,
+) -> bool {
+    use style::values::specified::box_::DisplayInside;
+    let Some(p) = parent else { return false };
+    matches!(
+        display_inside_of(styles, p),
+        Some(DisplayInside::Flex | DisplayInside::Grid)
+    )
 }
 
 /// Build **out-of-flow islands** under a gathered inline subtree: the gather
