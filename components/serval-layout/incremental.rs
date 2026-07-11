@@ -534,6 +534,21 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     {
         let range = document_scroll_range(dom, &self.styles, &self.fragments, self.viewport.size);
         self.viewport.scroll = self.viewport.clamp_scroll(scroll, range);
+        self.refresh_sticky();
+    }
+
+    /// Re-derive `position: sticky` locations from the current document
+    /// scroll (see `box_tree::refresh_sticky_positions`). Called on every
+    /// scroll write and after every relayout; a no-op for sticky-free pages.
+    fn refresh_sticky(&mut self) {
+        let root = self.built.root_arena();
+        crate::box_tree::refresh_sticky_positions(
+            &mut self.built,
+            &mut self.fragments,
+            root,
+            self.viewport.scroll,
+            (self.width, self.height),
+        );
     }
 
     /// Scroll the document by `(dx, dy)` from its current offset (clamped as in
@@ -889,6 +904,9 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         let range = document_scroll_range(dom, &self.styles, &self.fragments, size);
         vp.scroll = vp.clamp_scroll(prev_scroll, range);
         self.viewport = vp;
+        // A relayout recaptured the sticky flow bases; re-derive the stuck
+        // locations at the preserved scroll.
+        self.refresh_sticky();
     }
 
     /// The aggregate `RestyleDamage` from the most recent attribute-only

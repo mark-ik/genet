@@ -262,6 +262,13 @@ pub struct BoxTree<Id: Copy + Eq + Hash> {
     /// root/ancestry, which after grafting would be wrong, so such a graft
     /// refuses and the caller takes the full-rebuild path.
     had_hoists: bool,
+    /// `position: sticky` boxes — `(arena index, parent arena index, flow
+    /// location)` — captured after layout (post static-position fixups).
+    /// Sticky is scroll-linked: [`refresh_sticky_positions`] re-derives each
+    /// box's location as `base + clamped shift` from the CURRENT document
+    /// scroll, so paint, hit-testing, and rect queries all read one truth
+    /// from the retained layout instead of each re-deriving the shift.
+    sticky_bases: Vec<(usize, usize, taffy::Point<f32>)>,
 }
 
 impl<Id: Copy + Eq + Hash> BoxTree<Id> {
@@ -546,6 +553,7 @@ where
         fixed_cb_depth: 0,
         abs_cb: None,
         had_hoists: false,
+        sticky_bases: Vec::new(),
     };
 
     // The layout root. Three shapes of `LayoutDom::document()`:
@@ -821,6 +829,118 @@ where
     i
 }
 
+/// Record every `position: sticky` box's flow location (see
+/// `BoxTree::sticky_bases`), so scroll changes can re-derive the stuck
+/// location without a relayout. Runs after every layout, once locations are
+/// final (post static-position fixups).
+fn capture_sticky_bases<Id: Copy + Eq + Hash>(tree: &mut BoxTree<Id>, root: usize) {
+    tree.sticky_bases.clear();
+    let mut stack = vec![root];
+    while let Some(i) = stack.pop() {
+        for ci in 0..tree.nodes[i].children.len() {
+            let c = tree.nodes[i].children[ci];
+            if is_sticky(&tree.nodes[c].style) {
+                tree.sticky_bases.push((c, i, tree.nodes[c].final_layout.location));
+            }
+            stack.push(c);
+        }
+    }
+}
+
+/// Re-derive every sticky box's location from the CURRENT document scroll
+/// (css-position §6.3, V1: the **document** scrollport only): the box shifts
+/// the minimum needed to satisfy its non-auto insets against the scrollport,
+/// clamped to its parent's content box (a sticky header stops at its
+/// section's edge). Mutates the retained tree's `final_layout` AND the
+/// fragment plane's copies, so paint, hit-testing, and rect queries agree by
+/// construction. Idempotent: locations derive from the captured flow bases.
+///
+/// V1 residuals, named in the plan: the nearest *element* scroller is not
+/// consulted (a sticky box inside `overflow: scroll` tracks the document,
+/// not its scroller); percentage insets resolve against the viewport.
+pub(crate) fn refresh_sticky_positions<Id: Copy + Eq + Hash>(
+    tree: &mut BoxTree<Id>,
+    fragments: &mut FragmentPlane<Id>,
+    root: usize,
+    viewport_scroll: (f32, f32),
+    viewport_size: (f32, f32),
+) {
+    if tree.sticky_bases.is_empty() {
+        return;
+    }
+    // Reset to flow bases so the shift derivation below is idempotent.
+    let bases = std::mem::take(&mut tree.sticky_bases);
+    for &(b, _, base) in &bases {
+        tree.nodes[b].final_layout.location = base;
+    }
+    // Absolute origins under flow locations (one DFS; nested sticky boxes
+    // compose against their ancestor's UNSHIFTED position — an accepted
+    // approximation, nested sticky is rare).
+    let mut origins: Vec<Option<(f32, f32)>> = vec![None; tree.nodes.len()];
+    let mut stack = vec![(root, {
+        let l = &tree.nodes[root].final_layout;
+        (l.location.x, l.location.y)
+    })];
+    while let Some((i, o)) = stack.pop() {
+        origins[i] = Some(o);
+        for &c in &tree.nodes[i].children {
+            let l = &tree.nodes[c].final_layout;
+            stack.push((c, (o.0 + l.location.x, o.1 + l.location.y)));
+        }
+    }
+    let (sx, sy) = viewport_scroll;
+    let (vw, vh) = viewport_size;
+    for &(b, parent, _) in &bases {
+        let (Some(abs), Some(pabs)) = (origins[b], origins[parent]) else {
+            continue;
+        };
+        let l = tree.nodes[b].final_layout;
+        let pl = tree.nodes[parent].final_layout;
+        // The parent's content box, absolute.
+        let pc_x0 = pabs.0 + pl.border.left + pl.padding.left;
+        let pc_y0 = pabs.1 + pl.border.top + pl.padding.top;
+        let pc_x1 = pabs.0 + pl.size.width - pl.border.right - pl.padding.right;
+        let pc_y1 = pabs.1 + pl.size.height - pl.border.bottom - pl.padding.bottom;
+        let cv = &tree.nodes[b].style;
+        let pos = cv.get_position();
+        let calc = |_: *const (), _: f32| 0.0;
+        let top = stylo_taffy::convert::inset(&pos.top).resolve_to_option(vh, calc);
+        let bottom = stylo_taffy::convert::inset(&pos.bottom).resolve_to_option(vh, calc);
+        let left = stylo_taffy::convert::inset(&pos.left).resolve_to_option(vw, calc);
+        let right = stylo_taffy::convert::inset(&pos.right).resolve_to_option(vw, calc);
+        let mut dy = 0.0f32;
+        if let Some(t) = top {
+            dy = ((sy + t) - abs.1).max(0.0);
+        } else if let Some(bm) = bottom {
+            dy = ((sy + vh - bm) - (abs.1 + l.size.height)).min(0.0);
+        }
+        // Clamp to the parent's content box: sticking never escapes the CB.
+        dy = dy.clamp(
+            (pc_y0 - abs.1).min(0.0),
+            (pc_y1 - (abs.1 + l.size.height)).max(0.0),
+        );
+        let mut dx = 0.0f32;
+        if let Some(lf) = left {
+            dx = ((sx + lf) - abs.0).max(0.0);
+        } else if let Some(r) = right {
+            dx = ((sx + vw - r) - (abs.0 + l.size.width)).min(0.0);
+        }
+        dx = dx.clamp(
+            (pc_x0 - abs.0).min(0.0),
+            (pc_x1 - (abs.0 + l.size.width)).max(0.0),
+        );
+        if dx != 0.0 || dy != 0.0 {
+            let loc = &mut tree.nodes[b].final_layout.location;
+            loc.x += dx;
+            loc.y += dy;
+        }
+        // The fragment plane holds a COPY of the layout; keep it in step so
+        // DOM-driven consumers (hit, absolute_rect, a11y) read the same truth.
+        fragments.insert(tree.nodes[b].source.dom_id(), tree.nodes[b].final_layout);
+    }
+    tree.sticky_bases = bases;
+}
+
 /// Post-layout **static-position fixup** (CSS 2.2 §10.3.7): for every hoisted
 /// absolute box that left a placeholder in its original parent's flow, copy
 /// the placeholder's laid-out absolute position onto the box's auto axes.
@@ -992,6 +1112,12 @@ fn build_out_of_flow_islands<'a, D>(
     for child in node.dom_children() {
         build_out_of_flow_islands(dom, styles, images, child, tree);
     }
+}
+
+/// Whether the box computes `position: sticky` (css-position §6.3).
+pub(crate) fn is_sticky(cv: &ComputedValues) -> bool {
+    use style::values::computed::PositionProperty;
+    matches!(cv.get_box().position, PositionProperty::Sticky)
 }
 
 /// Whether the box computes `position: absolute` (exactly — `fixed` has its
@@ -1391,6 +1517,14 @@ impl taffy::CoreStyle for CssStyle {
     }
     #[inline]
     fn inset(&self) -> taffy::Rect<taffy::LengthPercentageAuto> {
+        // `position: sticky` maps to Taffy `Relative` (stylo_taffy), which
+        // would apply the insets as a STATIC offset — but sticky insets are
+        // scroll-linked constraints, not offsets: unscrolled, the box sits at
+        // its flow position. Neutralize them here; the dynamic shift is baked
+        // in by `refresh_sticky_positions` per the current scroll.
+        if is_sticky(&self.inner.0) {
+            return taffy::Rect::auto();
+        }
         self.inner.inset()
     }
     #[inline]
@@ -1940,6 +2074,7 @@ where
         taffy::round_layout(&mut view, root);
     }
     apply_static_position_fixups(&mut tree, idx(root));
+    capture_sticky_bases(&mut tree, idx(root));
     if let Some(t) = t {
         eprintln!(
             "[layout-timing] taffy_compute     {:>9.3} ms",

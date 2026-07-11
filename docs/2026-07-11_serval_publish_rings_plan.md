@@ -96,6 +96,41 @@ patches, branch tracking) is built for it.
   serval-* only when their ring goes; in-tree consumers keep the rename
   invisible via workspace `package =` aliases.
 
+## Progress
+
+- **2026-07-11, rings 0-2 PUBLISHED** (17 crates this pass; serval commits
+  d17bc307060 + follow-ups, netrender 6fd8cd4c5 pushed, netfetcher pushed):
+  - Ring 1: paint_list_api, netrender_device, netrender, netrender_text,
+    paint_list_render, netfetcher — all 0.1.0.
+  - Ring 0: layout-dom-api 0.1.0 and serval-scripted-dom 0.1.0 (stubs
+    superseded), serval-paint-types 0.1.0 (renamed from servo-paint-types),
+    engine-observables-api, serval-static-dom, serval-extract,
+    script-engine-api, pelt-core — 0.1.0.
+  - Ring 2: serval-xilem-core 0.4.0 (the vendored mirror published under
+    the serval prefix after the registry-0.4.0 swap failed — the vendor
+    tracks upstream main past the release), serval-chisel 0.1.0 (chisel is
+    taken on crates.io; lib names unchanged for both renames), and
+    xilem-serval 0.1.0 (stub superseded). All three name-claim stubs from
+    the adoption republish are now retired by real crates, so nematic's
+    `views` and verso-tile's `serval-donor` resolve real from the registry
+    with no dependent republish (the >=0.0.1 reqs pick the new versions).
+  - **serval-static-html reclassified to ring 3** mid-pass: its
+    servo-layout-api dep is the semantic fork (a registry build silently
+    resolves Servo's published crate and loses LayoutHostServices) — the
+    exact hazard this plan's fork line names, caught live by the publish
+    verify. Audit lesson recorded: manifest greps miss workspace-alias
+    deps; `cargo tree -i <fork-crate>` is the audit tool.
+  - **Known heaviness, follow-on**: the published contracts reach upstream
+    stylo through servo-malloc-size-of (a fork-invariant trait surface —
+    compiles correctly, but drags the upstream stylo build into registry
+    consumers). A 0.1.1 pass feature-gating malloc_size_of across
+    engine-observables-api / serval-paint-types / serval-scripted-dom would
+    slim it; 92 references, so it is a deliberate refactor, not a tweak.
+  - The netrender-family git deps at serval's root now carry version reqs
+    (git + version: local builds keep git resolution, publishes record the
+    registry req) — this required pushing netrender/netfetcher, and note
+    that cargo's `paths` override does NOT apply to git deps.
+
 ## Done conditions
 
 1. Ring 0 published; verso-tile 0.1.1 republished with real (not stub)
