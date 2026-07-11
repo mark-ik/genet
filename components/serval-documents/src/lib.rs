@@ -43,9 +43,9 @@ pub mod engines;
 pub use document::{ClickOutcome, LoadedDocument, LocalFetcher};
 pub use engines::{StaticSessionEngine, session_click_from_outcome};
 #[cfg(feature = "scripted")]
-pub use engines::ScriptedSessionEngine;
+pub use engines::{ScriptedDocumentSession, ScriptedSessionEngine};
 #[cfg(feature = "smolweb")]
-pub use engines::SmolwebSessionEngine;
+pub use engines::{SmolwebDocumentSession, SmolwebSessionEngine};
 pub use href::resolve_href;
 pub use pelt_core::ResourceFetcher;
 

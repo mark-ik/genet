@@ -165,9 +165,19 @@ where
     }
 }
 
+/// The scripted document as a session. Public so a host with richer
+/// construction seams (per-spawn fetchers, cookie jars) builds the document
+/// itself and wraps it; the engine above is the simple-seam path.
 #[cfg(feature = "scripted")]
-struct ScriptedDocumentSession<E: script_engine_api::ScriptEngine> {
+pub struct ScriptedDocumentSession<E: script_engine_api::ScriptEngine> {
     doc: serval_scripted::ScriptedDocument<E>,
+}
+
+#[cfg(feature = "scripted")]
+impl<E: script_engine_api::ScriptEngine + 'static> ScriptedDocumentSession<E> {
+    pub fn new(doc: serval_scripted::ScriptedDocument<E>) -> Self {
+        Self { doc }
+    }
 }
 
 #[cfg(feature = "scripted")]
@@ -276,12 +286,28 @@ impl<Fetch: ResourceFetcher + Send + Sync> SessionEngine<Scene> for SmolwebSessi
     }
 }
 
+/// The smolweb document as a session. Public so a host that themes per
+/// content (meerkat's palette-derived themes) parses the document itself and
+/// wraps it; the engine above is the fixed-theme path.
 #[cfg(feature = "smolweb")]
-struct SmolwebDocumentSession {
+pub struct SmolwebDocumentSession {
     doc: crate::SmolwebDocument,
     /// Last framed size: the lane's click/content-height APIs take the
     /// viewport, which the trait carries implicitly through `frame`.
     viewport: (u32, u32),
+}
+
+#[cfg(feature = "smolweb")]
+impl SmolwebDocumentSession {
+    pub fn new(doc: crate::SmolwebDocument, viewport: (u32, u32)) -> Self {
+        Self { doc, viewport }
+    }
+
+    /// The concrete document, for observation downcasts (link tables with
+    /// host-side banding math, DOM handles).
+    pub fn document_mut(&mut self) -> &mut crate::SmolwebDocument {
+        &mut self.doc
+    }
 }
 
 #[cfg(feature = "smolweb")]

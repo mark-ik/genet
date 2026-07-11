@@ -155,10 +155,18 @@ architecture plan's sequencing note. It never learns the ladder existed.
 1. **inker session contracts.** Traits + `SessionRegistry<F>` + kind facade
    land with unit tests; no consumer yet. Done when inker tests cover
    spawn/dispatch/kind-resolution and the crate still has no paint deps.
+   **DONE 2026-07-10** (serval 2dca9ed8e3c): 88 inker tests, no new deps;
+   review deltas in (scroll_to on the contract, EngineKindIndex
+   non-generic, flags-not-kind resolution).
 2. **serval-documents component.** The three pelt types move, implement the
    traits, pelt consumes the component. Done when pelt's viewers and
    reftests are green against the component and pelt-desktop no longer
-   defines the document types.
+   defines the document types. **DONE 2026-07-10** (serval 8851ec90102):
+   component 28 tests all-features; pelt 24 default + 29 full-feature;
+   pelt's windowed smolweb glue stays pelt-side (local traits for the
+   foreign type); ScriptedSessionEngine<E, Fetch> mirrors
+   ScriptedDocument<E>'s per-engine monomorphization; the session wrappers
+   are public for hosts with richer construction seams.
 3. **meerkat rides the registry** — RESCOPED per review 2026-07-10 to the
    **render + input path only**. The ladder in `content/handlers.rs` and
    the scripted/smolweb spawn special-casing reduce to registry dispatch;
@@ -173,7 +181,15 @@ architecture plan's sequencing note. It never learns the ladder existed.
    downcasts convert to that contract and this phase's residue retires.
    Done when meerkat's suite is green and no `ENGINE_SERVAL_*` match arms
    remain in the render/input dispatch (observation downcasts are counted
-   and listed, not hidden).
+   and listed, not hidden). **DONE 2026-07-10** (mere 92f7a0a): one
+   session field, actor-held SessionRegistry, meerkat-local rung engines
+   beside their seam types; downcast residue = extract-on-show, dom/layout
+   stats, freeze/resume lifecycle (the listed observation set);
+   ENGINE_SERVAL_* survives only as engine_id() registration constants +
+   the test-only construction seam. Receipts: default 82+247; scripted 253
+   (RUST_MIN_STACK=16M — Boa on 2MB test threads overflows; the feature
+   build did not even compile at baseline, so this fixes a red, not
+   preserves a green); smolweb green.
 4. **merecat content lane.** merecat spawns sessions through the same
    facade for its first web render. Done when the merecat vertical slice
    renders an https page through a registry-dispatched session.
