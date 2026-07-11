@@ -777,19 +777,28 @@ where
         // parent-relative by construction, so re-parenting would be a no-op
         // that only churned child order. (Root element: both sides `None`.)
         let dom_parent = elem.parent().map(|p| p.id());
-        if ancestor_abs_cb != dom_parent {
+        let (auto_x, auto_y) = (has_auto_x(&style), has_auto_y(&style));
+        let flex_grid_parent = parent_is_item_container(styles, dom_parent);
+        // A FULLY-auto box under a FLEX/GRID parent is not hoisted at all:
+        // its static position is alignment-aware (`align-items` /
+        // `justify-content` center an abspos child — the WPT
+        // position-absolute-center shapes), which Taffy computes only while
+        // the box stays the container's child; a flow placeholder can't
+        // stand in (an extra item takes a slot and a gap). The cost is the
+        // old approximation for this narrow shape only: its percentages
+        // resolve against the flex parent, not the CB. A box with at least
+        // one resolved axis still hoists (the inset needs the CB) — its auto
+        // axis takes Taffy's static guess within the CB, without a
+        // placeholder, for the same no-extra-item reason.
+        if ancestor_abs_cb != dom_parent && !(auto_x && auto_y && flex_grid_parent) {
             // Static position (CSS 2.2 §10.3.7): an axis with both insets
             // `auto` sits where in-flow layout would have put the box — in the
             // ORIGINAL parent's flow, which the hoist just left. A zero-size
             // anonymous placeholder keeps that slot: the parent attaches it in
             // the box's place, its laid-out position is the static position,
             // and the post-layout fixup copies it onto the hoisted box's auto
-            // axes. Skipped inside flex/grid parents, where an extra item
-            // would take a slot (and a gap): Taffy's own abspos static
-            // position within those containers is already sound.
-            let placeholder = ((has_auto_x(&style) || has_auto_y(&style))
-                && !parent_is_item_container(styles, dom_parent))
-            .then(|| {
+            // axes.
+            let placeholder = ((auto_x || auto_y) && !flex_grid_parent).then(|| {
                 tree.push(BoxNode::new(
                     initial_style(),
                     BoxSource::Anonymous(elem.id()),

@@ -226,8 +226,8 @@ graft-engine = { version = "=0.2.0", path = "components/inker/engines/graft-engi
 weld-engine = { version = "=0.2.0", path = "components/inker/engines/weld-engine" }
 pelt-core = { version = "=0.1.0", path = "ports/pelt-core" }
 pelt-desktop = { version = "=0.2.0", path = "ports/pelt-desktop" }
-netrender = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
-netrender_device = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
+netrender = { git = "https://github.com/mark-ik/netrender.git", branch = "main", version = "0.1.0" }
+netrender_device = { git = "https://github.com/mark-ik/netrender.git", branch = "main", version = "0.1.0" }
 # (No xilem git deps remain. The Masonry-era `xilem` / `masonry` /
 # `masonry_winit` git deps left with pelt-viewer's retirement, 2026-06-12. The
 # last survivor, `xilem_core`, was vendored into `components/xilem-core` (a
@@ -360,10 +360,10 @@ paint = { package = "servo-paint", version = "=0.2.0", path = "components/paint"
 paint_api = { package = "servo-paint-api", version = "=0.2.0", path = "components/shared/paint" }
 # Moved to the netrender workspace as a neutral, engine-agnostic crate
 # (extraction plan 2026-05-20). serval is now a consumer, not the owner.
-paint_list_api = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
+paint_list_api = { git = "https://github.com/mark-ik/netrender.git", branch = "main", version = "0.1.0" }
 # The PaintCmd -> netrender::Scene translator; also lives in the netrender
 # workspace so any engine (serval, nematic, inker) can reuse the lowering.
-paint_list_render = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
+paint_list_render = { git = "https://github.com/mark-ik/netrender.git", branch = "main", version = "0.1.0" }
 paint_types = { package = "serval-paint-types", version = "=0.1.0", path = "components/shared/paint-types" }
 pixels = { package = "servo-pixels", version = "=0.2.0", path = "components/pixels" }
 profile = { package = "servo-profile", version = "=0.2.0", path = "components/profile" }
