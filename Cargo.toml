@@ -36,6 +36,10 @@ members = [
     "components/errand/protocols/nex-protocol",
     "components/errand/protocols/spartan-protocol",
     "components/errand/protocols/guppy-protocol",
+    # The text/editing column's portable pair, adopted 2026-07-10 (same plan):
+    # illume (lexer/highlighter spans) + tinct (OKLCH palette derivation).
+    "components/illume",
+    "components/tinct",
     "components/smolweb-views",
     "components/serval-winit-host",
     "components/serval-render",
@@ -290,8 +294,12 @@ unicode_categories = "0.1.1"
 # (perceptual seed-to-palette, with the syntax-role palette). Both are standalone
 # sibling libs; xilem-serval is the assembly point that maps illume's kinds onto
 # tinct's roles, so every serval host gets highlighted editing for free.
-illume = { git = "https://github.com/mark-ik/illume.git", branch = "main" }
-tinct = "0.1.1"
+# Adopted as components 2026-07-10 (inker-adoption plan, companion rehomes):
+# the text/editing column consolidates here — illume spans, tinct palettes,
+# knot-editor-host editor model, xilem-serval text surfaces. Both keep
+# MIT/Apache per-crate and their published identities.
+illume = { version = "=0.0.2", path = "components/illume" }
+tinct = { version = "=0.1.1", path = "components/tinct" }
 unicode-properties = { version = "0.1.4", features = ["emoji"] }
 unicode-script = "0.5"
 unicode-segmentation = "1.13.2"

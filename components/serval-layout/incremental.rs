@@ -2708,6 +2708,30 @@ mod tests {
         assert_close(opacity(&layout), 0.0, "the forwards fill survives an unrelated restyle");
     }
 
+    #[test]
+    fn zz_probe_negative_delay_layout_animation() {
+        const SHEET: &[&str] = &[
+            "@keyframes sample { from { left: 150px } to { left: 0px } }",
+            "p{position:relative;width:100px;height:100px;animation:sample 2s linear -1s 2 normal forwards}",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        for t in [0.0, 0.5, 1.5, 3.5, 5.0] {
+            let a = layout.tick_animations(&dom, t);
+            let left = layout.computed_value(p, "left");
+            let evs = layout.take_animation_events(&dom).len();
+            println!("t={t} applied={a:?} left={left:?} events={evs}");
+        }
+    }
+
     /// Reduced motion completes a `@keyframes` animation on the first tick and
     /// emits no events, matching the transition behavior. The clock jumps past the
     /// animation's end (`max_animation_end`), so a `forwards` fill lands its final

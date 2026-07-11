@@ -1,0 +1,22 @@
+[package]
+name = "illume"
+version = "0.0.2"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mark-ik/serval"
+description = "Portable, pure-Rust, wasm-safe text lexer and syntax highlighter: djot structure plus a pluggable inner-language injection registry over a logos pack, and a prose-entity pass (URLs, mentions, tags). Host- and toolkit-agnostic; emits (range, kind) spans, no UI dependency."
+documentation = "https://docs.rs/illume"
+keywords = ["djot", "lexer", "syntax-highlighting", "logos"]
+categories = ["text-processing"]
+readme = "README.md"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# The djot pull-parser. Highlighting is driven from jotdown's byte-offset event
+# stream (separate from any block/meaning model a host layers on top).
+jotdown = "0.10"
+# DFA lexer generator for the curated injection pack — the fastest pure-Rust token
+# lexer, wasm-clean, no C. Each pack language is a small token enum.
+logos = "0.16"
