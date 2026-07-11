@@ -109,8 +109,11 @@ id, answer document / session / surface / host-handled. Routing is
 untouched; decisions already carry ids.
 
 **serval** gets the formalization Mark asked for: the three lane types
-promote OUT of pelt into a new component (working name
-`components/serval-sessions`) that implements `SessionEngine` for
+promote OUT of pelt into a new component, **`components/serval-documents`**
+(review decision 2026-07-10: "session" is load-bearing family-wide for
+app/persistence sessions — mere's session-runtime, merecat's session.rs,
+"window = graph-shaped session" — and the trait is already
+`DocumentSession`), that implements `SessionEngine` for
 `serval.web`, `serval.scripted`, `serval.scripted.nova`, and the smolweb
 lane, behind the same feature ladder pelt uses today (tile-surface /
 scripted / scripted-nova / smolweb). Pelt returns to being a thin reference
@@ -122,7 +125,7 @@ components.
 smolweb-views and becomes the whole smolweb engine family with two products,
 `nematic::blocks` (the existing `Engine` impls, for stored/clip/summary
 content) and `nematic::views` (the native per-format views that
-serval-sessions' smolweb session renders through). Per-format features so
+serval-documents' smolweb session renders through). Per-format features so
 apps pick gemini in, spartan out. Block lowering stops being the render
 path anywhere.
 
@@ -152,36 +155,55 @@ architecture plan's sequencing note. It never learns the ladder existed.
 1. **inker session contracts.** Traits + `SessionRegistry<F>` + kind facade
    land with unit tests; no consumer yet. Done when inker tests cover
    spawn/dispatch/kind-resolution and the crate still has no paint deps.
-2. **serval-sessions component.** The three pelt types move, implement the
+2. **serval-documents component.** The three pelt types move, implement the
    traits, pelt consumes the component. Done when pelt's viewers and
    reftests are green against the component and pelt-desktop no longer
    defines the document types.
-3. **meerkat rides the registry.** The ladder in `content/handlers.rs` and
-   the scripted/smolweb special cases in the actor reduce to registry
-   dispatch; `engine_present` stops special-casing `serval.*`. Done when
-   meerkat's suite is green and grep finds no `ENGINE_SERVAL_*` match arms
-   in meerkat's content path.
+3. **meerkat rides the registry** — RESCOPED per review 2026-07-10 to the
+   **render + input path only**. The ladder in `content/handlers.rs` and
+   the scripted/smolweb spawn special-casing reduce to registry dispatch;
+   `engine_present` stops special-casing `serval.*`. The **observation
+   half** (ScriptedDocument::extract, selection/find primitives, the
+   engine-subtree a11y walk, dispatch_event/dom_snapshot) deliberately
+   keeps concrete-type access through `as_any` downcasts until the
+   observation contract lands — that contract is the native automation
+   plan's snapshot/drive side, and extending `DocumentSession` ahead of it
+   would design it twice. Trigger, recorded family-style: when the
+   automation plan's observe/actuate core specifies its read surface, the
+   downcasts convert to that contract and this phase's residue retires.
+   Done when meerkat's suite is green and no `ENGINE_SERVAL_*` match arms
+   remain in the render/input dispatch (observation downcasts are counted
+   and listed, not hidden).
 4. **merecat content lane.** merecat spawns sessions through the same
    facade for its first web render. Done when the merecat vertical slice
    renders an https page through a registry-dispatched session.
 5. **nematic views + errand wire absorption.** smolweb-views merges into
    nematic as `nematic::views`; finger shaping moves to errand; the smolweb
-   session in serval-sessions consumes nematic views for all formats it has
+   session in serval-documents consumes nematic views for all formats it has
    views for. Done when smolweb-views is retired as a separate component
    and native coverage includes the wrapper protocols via gemtext/markdown
    view reuse.
 
-## Open questions
+## Open questions (review-resolved items recorded 2026-07-10)
 
-- Component naming: `serval-sessions` is a working name; alternatives
-  (`serval-documents`, `content-sessions`) on the table.
-- Does `DocumentSession` carry the cookie/fetcher seams (`CookieProvider`,
-  `ScriptResourceFetcher`) in `SessionSpawnRequest`, or stay host-installed
-  post-spawn as today? Leaning spawn-request (one construction path).
-- Where does meerkat's engine activation (present/active) land once the
-  kind facade exists — inker, or stays host-side? Out of scope here; noted
-  so it is not lost.
-- The scripted session's worker story (meerkat-browser-worker ships packets,
-  not scenes): sessions are in-process by design; the worker lane keeps
-  using content-contract packets. Confirm no collision when merecat picks
-  its threading model.
+- ~~Component naming~~ RESOLVED: `serval-documents` (see above).
+- ~~Cookie/fetcher seams~~ RESOLVED in the same spirit as the leaning: one
+  construction path, realized as **engine-held seams at registration** (the
+  concrete `SessionEngine` is constructed with its fetcher/jar/theme; the
+  spawn request stays serializable plain data; nothing is host-installed
+  post-spawn).
+- ~~Engine activation~~ RESOLVED: stays host-side. It is app state
+  (meerkat's node colors ride it), and inker staying policy-neutral is its
+  identity. The kind index is a map, deliberately non-generic.
+- ~~Worker story~~ RESOLVED: no collision; merecat's content lane starts on
+  the shell thread, and the worker lane keeps content-contract packets.
+- Script-initiated navigation (`location.href` and successors): the
+  scripted lane does not surface it yet, but it is the next thing after
+  forms, and `SessionClick` must not ossify as the only navigation channel.
+  A session-emitted navigation event (polled like `pump`, or returned from
+  it) is the likely shape; design when the scripted lane grows it.
+
+Phase 4 verifier, noted 2026-07-10: merecat's scenario lane landed (open
+url, settle, GPU self-capture, assert — no synthetic input), so "renders an
+https page through a registry-dispatched session" has a deterministic
+receipt, not a screenshot-by-hand.

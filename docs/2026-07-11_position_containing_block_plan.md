@@ -1,9 +1,10 @@
 # Position containing blocks: fixed to the ICB, absolute to its positioned ancestor
 
 **Date:** 2026-07-11
-**Status:** plan + F1 slice in progress. Spun out of the layout roadmap's
-near-horizon entry (found 2026-07-10 by the WPT input-path work, H9 in the
-harness-exactness plan).
+**Status:** **F1 landed 2026-07-11** (fixed -> ICB, all done-whens met; results
+and residuals below). F2 (absolute -> nearest positioned ancestor) is the open
+work. Spun out of the layout roadmap's near-horizon entry (found 2026-07-10 by
+the WPT input-path work, H9 in the harness-exactness plan).
 **Scope:** the *layout* half of out-of-flow positioning in `serval-layout`. The
 paint half (deferred stacking layers, fixed layers countering document scroll)
 already exists (`is_out_of_flow` / `is_fixed` feeding `paint_stacking`, per the
@@ -53,10 +54,10 @@ box — block child, table cell, multi-root child, replaced leaf, inline-context
 leaf — is created inside it and attached to its parent by arena index. So:
 
 1. **A transform-CB depth counter on the under-construction tree.**
-   `build_node` computes `establishes_fixed_cb(&style)` at entry
-   (transform / will-change:transform / filter / perspective /
-   contain:paint|layout), increments the counter around its child recursion,
-   and snapshots the depth at entry for its own hoist decision (a box's *own*
+   `build_node` computes `establishes_fixed_cb(&style)` at entry (as landed:
+   `transform` / `perspective` / `filter`; `will-change` and `contain` are a
+   named residual), increments the counter around its child recursion, and
+   snapshots the depth at entry for its own hoist decision (a box's *own*
    transform does not change its own containing block — only ancestors count).
 2. **Hoist registration, not in-place reparenting.** When the finished box is
    `position: fixed` and the entry depth was zero, `build_node` records its
@@ -81,6 +82,7 @@ also means the orrery is untouched twice over (gnodes are `absolute`, and
 their `.stage` is transformed).
 
 **Done when:**
+
 - The probe becomes a guard: the WPT-shaped fixed div computes `(0,0,800,600)`
   under an auto-height body, and hit-tests at the viewport center.
 - A fixed box under a **transformed** ancestor is *not* hoisted (the
@@ -92,6 +94,51 @@ their `.stage` is transformed).
   other checked baseline stays `unexpected=0` or is deliberately rebased with
   the delta named; meerkat/orrery suites stay green (mere consumes local
   serval — meerkat chrome is real exposure).
+
+**Landed 2026-07-11, all conditions met.**
+`dom/events/non-cancelable-when-passive` is **42/42 all-pass (53/53 subtests)**;
+`dom` overall gained +4 (`fail -> pass`, the wheel quartet), rebased to
+148 all-pass with `unexpected=0`; all other baselines unchanged; serval-layout
+298, xilem-serval 101, serval-scripted 79 (both engines), meerkat 247, all
+green. Guards: `fixed_inset_box_resolves_against_the_viewport`,
+`a_fixed_box_under_a_transformed_ancestor_is_not_hoisted`,
+`toggling_position_to_fixed_rehosts_to_the_viewport`.
+
+**What the slice actually took, beyond the box-tree hoist** (the plan's
+"paint/hit parity" hazard was real, in the *hit* lane):
+
+- The hit walk (`serval_lane::walk_for_hit`) is **DOM-driven**, while the hoist
+  is a *box-tree* fact, and this diverged twice:
+  1. **The overflow clip-prune swallowed escaped fixed boxes.** `body` at
+     `overflow: hidden` with auto height 0 pruned its whole DOM subtree from
+     hit-testing — including the fixed child whose containing block (the
+     viewport) the clipper is not in. Per CSS Overflow, clipping applies only
+     through the containing-block chain. The prune now defers direct
+     escaped-fixed children before returning.
+  2. **Origin accumulation double-counted.** A hoisted box's fragment location
+     is root-relative; summing it along the DOM chain adds the ancestors'
+     offsets again (on a default page, exactly the 8px `<body>` margin — hit
+     and paint would disagree by it). The walk now computes an **escaped**
+     fixed box's origin standalone. Escape state threads through the walk and
+     the deferred-subtree queue as `ancestor_fixed_cb`, derived from the same
+     `establishes_fixed_cb` predicate the box tree uses, so the two stay in
+     agreement by construction.
+
+**F1 residuals, named:**
+
+- `absolute_origin` / `walk_origins` (backing `absolute_rect`, host overlays,
+  a11y bounds) still accumulate the DOM chain, so a hoisted fixed box's
+  reported rect is off by its ancestors' offsets on pages with body
+  margin/padding. Same fix shape as the hit walk; it is style-blind today
+  (needs a `StylePlane` parameter), hence deferred rather than folded in.
+- Escaped-fixed boxes nested *deeper* inside a clip-pruned subtree are still
+  missed by hit-testing (the prune defers direct children only).
+- An escaped fixed box under an element-scrolled (but untransformed) ancestor
+  inherits that ancestor's scroll mapping in the hit point; per spec it should
+  not. Edge; noted in the walk comment.
+- `establishes_fixed_cb` consults `transform` / `perspective` / `filter`;
+  `will-change` and `contain` are not yet read (a box a real UA would keep
+  local may hoist).
 
 ### F2 — `absolute` → nearest positioned ancestor
 

@@ -3,14 +3,11 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 //! Pelt adapter for the host-neutral scripted document owner.
+//!
+//! (The `serval_scripted::ResourceFetcher` impl for `LocalFetcher` moved to
+//! `serval-documents` with the lanes — the orphan rule wants it beside the
+//! fetcher it is implemented for.)
 
 pub use serval_scripted::{
     ResourceFetcher as ScriptResourceFetcher, ScriptedDocument, ScriptedEngine,
 };
-
-#[cfg(feature = "tile-surface")]
-impl serval_scripted::ResourceFetcher for crate::document::LocalFetcher {
-    fn fetch(&self, url: &str) -> Option<Vec<u8>> {
-        pelt_core::ResourceFetcher::fetch(self, url)
-    }
-}

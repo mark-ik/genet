@@ -24,8 +24,9 @@ default = ["viewer"]
 # surface as its workbench pane (V6) without dragging in pelt's reference-shell
 # windowing. The windowed viewers (`viewer`, `tiles`) build the present stack on top.
 tile-surface = [
+    "dep:serval-documents",
     "dep:netrender", "dep:serval-render", "dep:serval-static-dom", "dep:serval-layout",
-    "dep:serval-scripted-dom", "dep:layout-dom-api", "dep:xilem-serval", "dep:data-url",
+    "dep:serval-scripted-dom", "dep:layout-dom-api", "dep:xilem-serval",
     "dep:chisel", "dep:accesskit",
 ]
 # The on-screen static-document viewer (V1): the GPU-free `tile-surface` lib plus the
@@ -40,6 +41,7 @@ viewer = ["tile-surface", "dep:serval-winit-host", "dep:wgpu"]
 # targets); Nova is gated behind `scripted-nova` so the default build links a single
 # engine (Boa+Nova+wgpu together exceed the Windows image-size link limit).
 scripted = [
+    "serval-documents/scripted",
     "dep:serval-scripted",
     "dep:netrender", "dep:serval-render", "dep:serval-static-dom", "dep:serval-layout",
     "dep:script-runtime-api", "dep:script-engine-api",
@@ -72,7 +74,7 @@ tiles = ["tile-surface", "chrome", "viewer"]
 # of the async network stack -- `pelt --engine static https://…` needs this. The host
 # owns networking here (pelt is the reference shell), matching meerkat driving
 # netfetcher in the product; serval's engine components stay byte-consuming.
-netfetch = ["tile-surface", "dep:netfetcher", "dep:tokio", "dep:bytes", "dep:url"]
+netfetch = ["tile-surface", "serval-documents/netfetch"]
 # Smolweb document loading (the `smolweb` feature): the `LocalFetcher` gains a
 # gemini/gopher/nex/finger/spartan/guppy branch backed by the errand transport (the
 # sibling smolweb engine), bridged onto the sync `ResourceFetcher` through the same
@@ -81,7 +83,7 @@ netfetch = ["tile-surface", "dep:netfetcher", "dep:tokio", "dep:bytes", "dep:url
 # The host owns networking (pelt is the reference shell), matching meerkat driving
 # errand in the product; serval's engine components stay byte-consuming. errand pulls
 # its own tokio net/time/io-util features, which unify with the `rt` runtime here.
-smolweb = ["tile-surface", "dep:errand", "dep:smolweb-views", "dep:tokio", "dep:url"]
+smolweb = ["tile-surface", "serval-documents/smolweb"]
 netrender = ["dep:netrender", "dep:webgl_wgpu", "dep:wgpu"]
 # The rasterized-PNG reftest lane (V3 follow-up): renders the headless `Scene`
 # through netrender's offscreen wgpu readback to a PNG — the "for human eyes"
@@ -131,6 +133,7 @@ netrender = { workspace = true, optional = true }
 image = { workspace = true, optional = true }
 paint = { workspace = true, optional = true }
 pelt-core = { workspace = true }
+serval-documents = { workspace = true, optional = true }
 pollster = { version = "0.4", optional = true }
 raw-window-handle = { workspace = true, optional = true }
 webgl_wgpu = { workspace = true, optional = true }
@@ -154,23 +157,17 @@ chisel = { path = "../../components/chisel", optional = true }
 # through `serval_winit_host::AccessKitBridge`.
 accesskit = { workspace = true, optional = true }
 # Spec `data:` URL decoding for the LocalFetcher (percent-encoded + base64 bodies).
-data-url = { workspace = true, optional = true }
 
 # Remote document loading (behind the `netfetch` feature): the netfetcher engine
 # (sibling repo) for http(s), bridged onto the sync `ResourceFetcher` through a tokio
 # runtime. The same dep set serval-wpt's `fetch()` uses.
-netfetcher = { git = "https://github.com/mark-ik/netfetcher.git", branch = "main", optional = true }
-tokio = { version = "1", features = ["rt"], optional = true }
-bytes = { version = "1", optional = true }
 url = { workspace = true, optional = true }
 
 # Smolweb document loading (behind the `smolweb` feature): the errand transport
 # (sibling repo) for gemini/gopher/nex/finger/spartan/guppy, bridged onto the sync
 # `ResourceFetcher` through the shared tokio runtime. Brings its own tokio + rustls.
-errand = { workspace = true, optional = true }
 # The native smolweb views (gemtext / gopher / feed) + theming. errand parses, these
 # render to a ScriptedDom; pelt composes the result the same way it does the chrome.
-smolweb-views = { path = "../../components/smolweb-views", optional = true }
 
 # Scripted profile (behind the `scripted` feature): the browser host surface, the
 # live mutable DOM, and the JS engines. `script-engine-api` supplies the

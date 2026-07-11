@@ -174,6 +174,11 @@ pub trait DocumentSession<F>: Any {
 
     fn scroll_for_key(&mut self, key: SessionScrollKey) -> bool;
 
+    /// Jump to an absolute vertical offset (anchor / fragment navigation).
+    /// Defaulted no-op for lanes without absolute addressing; lanes that
+    /// track their offset override.
+    fn scroll_to(&mut self, _y: f32) {}
+
     fn click_at(&mut self, x: f32, y: f32) -> SessionClick;
 
     /// The link hit-table off the retained layout (no live-DOM query per
@@ -269,31 +274,37 @@ impl EngineKinds {
     }
 }
 
-/// The three registries under one roof, so hosts resolve an id's kind(s)
-/// instead of hand-matching id constants. Host-handled ids (internal pages,
-/// ingest markers) are the host's own vocabulary and deliberately absent.
-#[derive(Default)]
-pub struct Engines<F> {
-    pub documents: crate::EngineRegistry,
-    pub sessions: SessionRegistry<F>,
-    pub surfaces: crate::SurfaceEngineRegistry,
+/// Non-generic id-to-kind resolution: which registries hold each id is just
+/// a map, so hosts resolve kinds without threading the frame type through
+/// code that never touches frames. Built after registration from the
+/// registries' id sets; host-handled ids (internal pages, ingest markers)
+/// are the host's own vocabulary and deliberately absent.
+#[derive(Clone, Debug, Default)]
+pub struct EngineKindIndex {
+    kinds: HashMap<String, EngineKinds>,
 }
 
-impl<F> Engines<F> {
-    pub fn new() -> Self {
-        Self {
-            documents: crate::EngineRegistry::new(),
-            sessions: SessionRegistry::new(),
-            surfaces: crate::SurfaceEngineRegistry::new(),
+impl EngineKindIndex {
+    pub fn build<'a>(
+        document_ids: impl IntoIterator<Item = &'a str>,
+        session_ids: impl IntoIterator<Item = &'a str>,
+        surface_ids: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        let mut kinds: HashMap<String, EngineKinds> = HashMap::new();
+        for id in document_ids {
+            kinds.entry(id.to_string()).or_default().document = true;
         }
+        for id in session_ids {
+            kinds.entry(id.to_string()).or_default().session = true;
+        }
+        for id in surface_ids {
+            kinds.entry(id.to_string()).or_default().surface = true;
+        }
+        Self { kinds }
     }
 
     pub fn kinds_of(&self, engine_id: &str) -> EngineKinds {
-        EngineKinds {
-            document: self.documents.contains(engine_id),
-            session: self.sessions.contains(engine_id),
-            surface: self.surfaces.contains(engine_id),
-        }
+        self.kinds.get(engine_id).copied().unwrap_or_default()
     }
 }
 
@@ -411,12 +422,21 @@ mod tests {
     }
 
     #[test]
-    fn kind_facade_reports_flags_not_a_single_kind() {
-        let mut engines: Engines<TextFrame> = Engines::new();
-        engines.sessions.register(Box::new(EchoSessionEngine));
+    fn kind_index_reports_flags_not_a_single_kind() {
+        let mut sessions: SessionRegistry<TextFrame> = SessionRegistry::new();
+        sessions.register(Box::new(EchoSessionEngine));
 
-        let kinds = engines.kinds_of("echo.session");
-        assert!(kinds.session && !kinds.document && !kinds.surface);
-        assert!(!engines.kinds_of("absent").any());
+        // An id may be held by more than one kind (block engine for cards +
+        // session engine for tiles); the index reports flags, host picks.
+        let index = EngineKindIndex::build(
+            ["nematic.gemtext"],
+            sessions.engine_ids().chain(["nematic.gemtext"]),
+            ["scrying.web"],
+        );
+        assert!(index.kinds_of("echo.session").session);
+        let both = index.kinds_of("nematic.gemtext");
+        assert!(both.document && both.session && !both.surface);
+        assert!(index.kinds_of("scrying.web").surface);
+        assert!(!index.kinds_of("absent").any());
     }
 }

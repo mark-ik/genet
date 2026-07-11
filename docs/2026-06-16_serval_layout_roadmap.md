@@ -138,9 +138,13 @@ scripted-DOM breadth, not a serval-layout engine primitive.
 These are real but bounded; recorded here so they are not lost.
 
 - **`position: fixed` resolves its insets against the *parent*, not the viewport**
-  (found 2026-07-10 by the WPT input-path work; diagnosed precisely, blocking 4
-  WPT tests today). A fixed box's containing block must be the **viewport** (the
-  ICB); serval uses the Taffy parent. Probe: for
+  — **promoted to `2026-07-11_position_containing_block_plan.md`; its F1
+  (fixed -> ICB) landed 2026-07-11** (the WPT wheel quartet went green, cluster
+  42/42; residuals and the F2 `absolute` half live in that plan). The entry
+  below stands as the original diagnosis.
+  (Found 2026-07-10 by the WPT input-path work; diagnosed precisely, blocking 4
+  WPT tests at the time.) A fixed box's containing block must be the **viewport**
+  (the ICB); serval used the Taffy parent. Probe: for
   `#d { position: fixed; top:0; right:0; bottom:0; left:0 }` inside a normal
   `<body>`, `#d` computes to **`(0, 0, 800, 0)`** — the width resolves correctly
   from `left:0`+`right:0`, but the height is **0**, because the parent `body` has

@@ -11,30 +11,33 @@
 mod profile;
 mod static_viewer;
 
+// The content lanes moved to `serval-documents` (2026-07-10 session-engines
+// plan): pelt is now one consumer among hosts. These shim modules keep the
+// crate-internal paths (`crate::document::…`, `crate::href::…`) and the
+// public re-export surface stable while the shell code consumes the
+// component.
 #[cfg(feature = "tile-surface")]
-mod document;
+pub(crate) mod document {
+    pub use serval_documents::{ClickOutcome, LoadedDocument, LocalFetcher};
+}
 
-// Dependency-free link resolution, shared by `document`, `scripted`, and the chrome
-// viewer. Lives outside `document` so the headless `scripted` profile can use it
-// without that module's render/`data-url` stack (mirrors `STRUCTURAL_SHEET`'s gate).
 #[cfg(any(feature = "tile-surface", feature = "scripted"))]
-mod href;
-
-#[cfg(any(feature = "netfetch", feature = "smolweb"))]
-mod net_fetch;
+pub(crate) mod href {
+    pub use serval_documents::resolve_href;
+}
 
 #[cfg(feature = "smolweb")]
-mod smolweb;
+mod smolweb_glue;
 #[cfg(feature = "smolweb")]
-pub use smolweb::SmolwebDocument;
+pub use serval_documents::SmolwebDocument;
 // Re-exported so a host that builds a `SmolwebDocument` can name its theme (and, for
 // the App theme, supply a palette) without depending on `smolweb-views` directly.
 #[cfg(all(feature = "smolweb", feature = "viewer", feature = "chrome"))]
 pub use chrome_viewer::run_smolweb_browser;
 #[cfg(all(feature = "smolweb", feature = "viewer"))]
-pub use smolweb::run_smolweb_viewer;
+pub use smolweb_glue::run_smolweb_viewer;
 #[cfg(feature = "smolweb")]
-pub use smolweb_views::{SmolwebPalette, SmolwebTheme};
+pub use serval_documents::{SmolwebPalette, SmolwebTheme};
 
 #[cfg(feature = "viewer")]
 mod headless;
@@ -60,19 +63,8 @@ mod tile_shell;
 #[cfg(feature = "tiles")]
 mod tile_viewer;
 
-/// Structural display defaults the viewer + scripted profiles layer over serval's UA
-/// cascade, so a plain HTML document lays out as a stack of blocks rather than one
-/// inline run, and document metadata stays unpainted. Shared by the static
-/// ([`document`]) and scripted ([`scripted`]) loaders so the two cannot drift. (V1; a
-/// fuller UA sheet is a follow-up.)
-#[cfg(any(feature = "tile-surface", feature = "scripted"))]
-pub(crate) const STRUCTURAL_SHEET: &[&str] = &[
-    "html, body, div, p, h1, h2, h3, h4, h5, h6, ul, ol, li, dl, dt, dd, \
-     section, article, header, footer, nav, main, aside, figure, figcaption, \
-     blockquote, pre, table, thead, tbody, tr, hr, form, fieldset { display: block; }",
-    "head, style, script, title, meta, link, base { display: none; }",
-    "body { padding: 8px; }",
-];
+// (STRUCTURAL_SHEET moved to serval-documents with the lanes; serval-scripted
+// keeps its own copy, as before.)
 
 #[cfg(feature = "png-reftest")]
 mod smoke_chisel;

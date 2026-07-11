@@ -574,6 +574,13 @@ threads with the full diagnosis. It is the only thing between this cluster and
 42/42, and it mis-sizes any fixed overlay (sticky header, modal backdrop) whose
 parent has an auto height, so it is not a WPT-only curiosity.
 
+**Resolved 2026-07-11:** the layout lane's F1 landed
+(`2026-07-11_position_containing_block_plan.md` — fixed boxes hoist to the ICB
+in the box tree, with the hit walk taught the same containing-block escape).
+The wheel quartet passed, making the cluster **42/42 all-pass, 53/53 subtests**,
+and `dom` rebased to 148 all-pass at `unexpected=0`. H9 is closed end to end:
+every test the H6 triage attributed to the input path now runs and passes.
+
 **H4a's `reason` vocabulary cannot express this triage.** The plan assumed the
 155 could be "bucketed by pinned `reason`". Verified against a live
 `--write-expectations` run: every one of the 155 carries exactly one of two

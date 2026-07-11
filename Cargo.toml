@@ -40,6 +40,9 @@ members = [
     # illume (lexer/highlighter spans) + tinct (OKLCH palette derivation).
     "components/illume",
     "components/tinct",
+    # The content lanes as session engines (2026-07-10 session-engines plan):
+    # static/scripted/smolweb retained documents, promoted out of pelt.
+    "components/serval-documents",
     "components/smolweb-views",
     "components/serval-winit-host",
     "components/serval-render",
@@ -215,6 +218,7 @@ nex-protocol = { version = "=0.1.0", path = "components/errand/protocols/nex-pro
 spartan-protocol = { version = "=0.1.0", path = "components/errand/protocols/spartan-protocol" }
 guppy-protocol = { version = "=0.1.0", path = "components/errand/protocols/guppy-protocol" }
 inker = { version = "=0.1.0", path = "components/inker" }
+serval-documents = { version = "=0.1.0", path = "components/serval-documents" }
 nematic = { version = "=0.1.0", path = "components/nematic" }
 document-canvas = { version = "=0.1.0", path = "components/inker/document-canvas" }
 knot-editor-host = { version = "=0.1.0", path = "components/inker/knot-editor-host" }
