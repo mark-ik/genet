@@ -20,7 +20,7 @@ path = "src/lib.rs"
 xilem-serval = { path = "../xilem-serval" }
 # The smolweb parse layer (per-format ASTs). Git dep (sibling-crate convention);
 # the local `.cargo/config.toml` path override speeds cross-repo edits.
-errand = { git = "https://github.com/mark-ik/errand.git" }
+errand = { workspace = true }
 
 [dev-dependencies]
 # Build views into a real ScriptedDom and inspect the result in tests.

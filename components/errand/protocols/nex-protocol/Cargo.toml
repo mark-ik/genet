@@ -1,0 +1,29 @@
+[package]
+name = "nex-protocol"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/mark-ik/serval"
+description = "An implementation of the Nex protocol (nex://): async client, directory-serving server, listing parser, and a CLI. The minimal smolweb protocol — plaintext TCP, no TLS, no status codes."
+keywords = ["nex", "smolweb", "gopher", "gemini", "protocol"]
+categories = ["network-programming"]
+
+[features]
+default = []
+# The `nex` command-line tool (fetch / serve).
+cli = ["tokio/rt", "tokio/macros", "tokio/signal"]
+
+[[bin]]
+name = "nex"
+path = "src/bin/nex.rs"
+required-features = ["cli"]
+
+[dependencies]
+url = "2.5"
+percent-encoding = "2.3"
+tokio = { version = "1", default-features = false, features = ["macros", "net", "io-util", "rt", "time", "fs"] }
+log = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "net", "io-util", "sync", "time"] }
+tempfile = "3"

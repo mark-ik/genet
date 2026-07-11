@@ -1,0 +1,59 @@
+[package]
+name = "errand"
+version = "0.1.2"
+edition = "2024"
+# Own license line, not workspace: errand predates the serval adoption and is
+# published MIT/Apache (founding convention); serval's workspace default is MPL.
+license = "MIT OR Apache-2.0"
+description = "Async small-web (smolweb) transport: gemini, gopher, finger, spartan, nex, guppy, and titan in one scheme-routed fetch, plus titan-upload and misfin-send write companions. Bytes in, bytes out, no HTTP, host-agnostic."
+repository = "https://github.com/mark-ik/serval"
+# Override serval's workspace-wide publish = false: errand is a published crate.
+publish = true
+keywords = ["gemini", "gopher", "smolweb", "nex", "guppy"]
+categories = ["network-programming"]
+readme = "README.md"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+# No features. The `parse` module (gemtext/gopher/nex/feed) compiles
+# unconditionally: the dep-free parsers cost nothing, and the feed parser's
+# quick-xml is light enough to keep as a plain dependency rather than a gate. (A
+# cargo feature added in a sibling repo is invisible to its dependents until the
+# crate is pushed, which made a `parse-feed` gate impractical in this workspace.)
+default = []
+
+[dependencies]
+url = "2.5"
+# The Guppy protocol transaction (spec v0.4.4: acks, retransmission, chunk
+# reassembly) lives in its own spec-faithful crate; errand adapts its response.
+# The three protocol crates are workspace members under protocols/ (adopted
+# 2026-07-10 with errand), each keeping its own published crate identity.
+guppy-protocol = { workspace = true }
+# Spartan and nex transactions live in their spec-faithful sibling crates.
+spartan-protocol = { workspace = true }
+nex-protocol = { workspace = true }
+# Misfin send delegates to the misfin crate's client, on the same ring
+# provider this crate builds rustls with (no C toolchain).
+misfin = { version = "0.0.3", default-features = false, features = ["client", "ring"] }
+tokio = { version = "1", default-features = false, features = ["net", "io-util", "time"] }
+# TLS for gemini: rustls 0.23 on the ring provider, with a trust-on-first-use
+# verifier (capsules are conventionally self-signed). aws-lc-rs is left off so the
+# crate builds without a C toolchain.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+# SHA-256 of leaf certificates for TOFU pinning. Already in the cone (rustls's
+# ring provider); declared directly because `tofu` now uses it.
+ring = "0.17"
+# RSS / Atom feed parsing (`parse::feed`). A light pure-Rust XML reader; kept an
+# unconditional dep (the cross-repo feature wall made a `parse-feed` gate
+# impractical, and quick-xml is small relative to the rustls/tokio cone).
+quick-xml = "0.39"
+# Host-neutral tracing facade: errand only *emits* structured events on the
+# load-bearing fetch op; the consuming app installs the subscriber. No dep on any
+# app or diagnostics registry.
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "net", "io-util"] }

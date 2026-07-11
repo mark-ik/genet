@@ -11,11 +11,11 @@
 # A `paths` entry overrides a crate of the same name + version found anywhere under
 # it; it coexists with a `[patch]` on the same crate (the path override wins). It is
 # a no-op for any build whose graph doesn't reference that crate.
+# (errand + illume left this list 2026-07-10: both are workspace members now,
+# and a paths override would shadow the in-tree copies.)
 paths = [
     "C:/Users/mark_/Code/repos/netrender",
     "C:/Users/mark_/Code/repos/netfetcher",
-    "C:/Users/mark_/Code/repos/errand",
-    "C:/Users/mark_/Code/repos/illume",
     "C:/Users/mark_/Code/crates/nova",
     "C:/Users/mark_/Code/crates/boa",
     "C:/Users/mark_/Code/crates/piccolo",

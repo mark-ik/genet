@@ -167,7 +167,7 @@ url = { workspace = true, optional = true }
 # Smolweb document loading (behind the `smolweb` feature): the errand transport
 # (sibling repo) for gemini/gopher/nex/finger/spartan/guppy, bridged onto the sync
 # `ResourceFetcher` through the shared tokio runtime. Brings its own tokio + rustls.
-errand = { git = "https://github.com/mark-ik/errand.git", branch = "main", optional = true }
+errand = { workspace = true, optional = true }
 # The native smolweb views (gemtext / gopher / feed) + theming. errand parses, these
 # render to a ScriptedDom; pelt composes the result the same way it does the chrome.
 smolweb-views = { path = "../../components/smolweb-views", optional = true }
