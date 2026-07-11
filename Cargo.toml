@@ -6,7 +6,7 @@ license = "MPL-2.0"
 repository = "https://github.com/mark-ik/netfetcher"
 readme = "README.md"
 description = "Portable WHATWG-Fetch network engine for the Mere ecosystem — Servo's net, de-IPC'd, plus an HTTP/3 lane. Mere owns networking; consumers receive bytes."
-publish = false
+publish = true
 
 [lib]
 path = "src/lib.rs"
