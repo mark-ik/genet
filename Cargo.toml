@@ -212,10 +212,10 @@ parley = { version = "0.10.0", default-features = true }
 # plan). inker + nematic publish (0.1.0); the rest inherit publish = false.
 # errand (the smolweb wire layer) + its protocol members adopted the same day,
 # all published crates keeping their identities.
-errand = { version = "=0.1.2", path = "components/errand" }
-nex-protocol = { version = "=0.1.0", path = "components/errand/protocols/nex-protocol" }
-spartan-protocol = { version = "=0.1.0", path = "components/errand/protocols/spartan-protocol" }
-guppy-protocol = { version = "=0.1.0", path = "components/errand/protocols/guppy-protocol" }
+errand = { version = "=0.1.3", path = "components/errand" }
+nex-protocol = { version = "=0.1.1", path = "components/errand/protocols/nex-protocol" }
+spartan-protocol = { version = "=0.1.1", path = "components/errand/protocols/spartan-protocol" }
+guppy-protocol = { version = "=0.1.1", path = "components/errand/protocols/guppy-protocol" }
 inker = { version = "=0.1.0", path = "components/inker" }
 serval-documents = { version = "=0.1.0", path = "components/serval-documents" }
 nematic = { version = "=0.1.0", path = "components/nematic" }
@@ -302,7 +302,7 @@ unicode_categories = "0.1.1"
 # knot-editor-host editor model, xilem-serval text surfaces. Both keep
 # MIT/Apache per-crate and their published identities.
 illume = { version = "=0.0.2", path = "components/illume" }
-tinct = { version = "=0.1.1", path = "components/tinct" }
+tinct = { version = "=0.1.2", path = "components/tinct" }
 unicode-properties = { version = "0.1.4", features = ["emoji"] }
 unicode-script = "0.5"
 unicode-segmentation = "1.13.2"

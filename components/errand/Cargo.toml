@@ -1,6 +1,6 @@
 [package]
 name = "errand"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 # Own license line, not workspace: errand predates the serval adoption and is
 # published MIT/Apache (founding convention); serval's workspace default is MPL.

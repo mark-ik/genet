@@ -3163,6 +3163,159 @@ mod tests {
         );
     }
 
+    /// Residual closed: a hoisted box nested *deep* inside a clip-pruned
+    /// subtree is still hit. The hit walk defers hoisted boxes from their
+    /// hoist **target's** frame (the containing block), not their DOM
+    /// parent's, so an intermediate clipper whose subtree is pruned cannot
+    /// swallow them — at any nesting depth (CSS Overflow: only the
+    /// containing-block chain clips).
+    #[test]
+    fn a_fixed_box_nested_deep_inside_a_clip_pruned_subtree_is_still_hit() {
+        const SHEET: &[&str] = &[
+            "html, body { overflow: hidden; margin: 0; }",
+            "#f { position: fixed; top: 0; right: 0; bottom: 0; left: 0; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        // Two static wrappers between body and the fixed box: the F1
+        // approximation (defer direct children only) missed this shape.
+        let mid = dom.create_element(html("div"));
+        dom.append_child(body, mid);
+        let inner = dom.create_element(html("div"));
+        dom.append_child(mid, inner);
+        let f = dom.create_element(html("div"));
+        dom.set_attribute(f, attr("id"), "f");
+        dom.append_child(inner, f);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        assert_eq!(
+            layout.hit_test(&dom, W / 2.0, H / 2.0, &Default::default()),
+            Some(f),
+            "the viewport center hits the deeply nested fixed box despite the \
+             zero-height clip-pruned body",
+        );
+    }
+
+    /// Residual closed: an intermediate **scrolled** static ancestor does not
+    /// move a hoisted absolute box's hit target. The box's containing block is
+    /// above the scroller, so the scroller is not in its containing-block
+    /// chain — its scroll (and its clip) must not apply. Deferral from the
+    /// containing block's frame gives the point mapping that chain implies.
+    #[test]
+    fn a_hoisted_absolute_box_ignores_an_intermediate_scrolled_ancestor() {
+        const SHEET: &[&str] = &[
+            "html, body { margin: 0; }",
+            "#rel { position: relative; width: 300px; height: 200px; }",
+            "#scroller { overflow: scroll; width: 100px; height: 100px; }",
+            "#tall { height: 500px; }",
+            // Inside the scroller's 100px window, so the hit point reaches it
+            // through the scroller's un-pruned frame — the path that used to
+            // apply the scroll offset to the deferred point.
+            "#abs { position: absolute; top: 50px; left: 0; width: 50px; height: 20px; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let rel = dom.create_element(html("div"));
+        dom.set_attribute(rel, attr("id"), "rel");
+        dom.append_child(body, rel);
+        let scroller = dom.create_element(html("div"));
+        dom.set_attribute(scroller, attr("id"), "scroller");
+        dom.append_child(rel, scroller);
+        let tall = dom.create_element(html("div"));
+        dom.set_attribute(tall, attr("id"), "tall");
+        dom.append_child(scroller, tall);
+        let abs = dom.create_element(html("div"));
+        dom.set_attribute(abs, attr("id"), "abs");
+        dom.append_child(scroller, abs);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        assert_eq!(
+            layout.absolute_rect(&dom, abs),
+            Some((0.0, 50.0, 50.0, 20.0)),
+            "the box resolves against the relative ancestor",
+        );
+        // Scroll the intermediate container 80px. The hoisted box is pinned
+        // to its containing block and must be hit at its unscrolled spot.
+        let mut scroll = ScrollOffsets::default();
+        scroll.insert(scroller, (0.0, 80.0));
+        assert_eq!(
+            layout.hit_test(&dom, 10.0, 55.0, &scroll),
+            Some(abs),
+            "the scrolled intermediate ancestor does not displace the hit",
+        );
+    }
+
+    /// `will-change: transform` on an ancestor is a containing block for fixed
+    /// descendants (css-will-change §3), same as a real transform — the box is
+    /// not hoisted.
+    #[test]
+    fn will_change_transform_guards_fixed_descendants() {
+        const SHEET: &[&str] = &[
+            "html, body { margin: 0; }",
+            "#wrap { will-change: transform; width: 200px; height: 100px; }",
+            "#f { position: fixed; top: 0; right: 0; bottom: 0; left: 0; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let wrap = dom.create_element(html("div"));
+        dom.set_attribute(wrap, attr("id"), "wrap");
+        dom.append_child(body, wrap);
+        let f = dom.create_element(html("div"));
+        dom.set_attribute(f, attr("id"), "f");
+        dom.append_child(wrap, f);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let (_, _, fw, fh) = layout.absolute_rect(&dom, f).expect("fixed box rect");
+        assert_eq!(
+            (fw, fh),
+            (200.0, 100.0),
+            "insets resolve against the will-change ancestor, not the viewport",
+        );
+    }
+
+    /// `contain: paint` on an ancestor is a containing block for fixed
+    /// descendants (css-contain §3) — the box is not hoisted.
+    #[test]
+    fn contain_paint_guards_fixed_descendants() {
+        const SHEET: &[&str] = &[
+            "html, body { margin: 0; }",
+            "#wrap { contain: paint; width: 200px; height: 100px; }",
+            "#f { position: fixed; top: 0; right: 0; bottom: 0; left: 0; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let wrap = dom.create_element(html("div"));
+        dom.set_attribute(wrap, attr("id"), "wrap");
+        dom.append_child(body, wrap);
+        let f = dom.create_element(html("div"));
+        dom.set_attribute(f, attr("id"), "f");
+        dom.append_child(wrap, f);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let (_, _, fw, fh) = layout.absolute_rect(&dom, f).expect("fixed box rect");
+        assert_eq!(
+            (fw, fh),
+            (200.0, 100.0),
+            "insets resolve against the contain: paint ancestor, not the viewport",
+        );
+    }
+
     /// Reduced motion completes a `@keyframes` animation on the first tick and
     /// emits no events, matching the transition behavior. The clock jumps past the
     /// animation's end (`max_animation_end`), so a `forwards` fill lands its final
