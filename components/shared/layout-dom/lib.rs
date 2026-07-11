@@ -36,6 +36,18 @@ pub trait LayoutDom {
     // ---- identity / structure -------------------------------------------
 
     /// The document root.
+    ///
+    /// Two shapes are supported. A `Document` wrapper node whose element
+    /// children are the roots: parsed HTML has exactly one (`<html>`), but a
+    /// host-built synthetic DOM (an app chrome layer, a widget pool) may hang
+    /// SEVERAL elements here with no wrapper — layout styles and paints every
+    /// one of them (serval-layout wraps them in a synthetic block root; see
+    /// its `multi_root_document_paints_every_root_element` test). Or an
+    /// element node (a re-rooted subtree view): that element is itself the
+    /// root. Hosts do not need to invent an `<html>`/container element just
+    /// to satisfy layout. Note the CSS root-background propagation
+    /// (`<html>`/`<body>` background painting the whole canvas) applies only
+    /// to a sole-root document.
     fn document(&self) -> Self::NodeId;
 
     /// Whether `id` still resolves to a live node — the **dangle contract**.

@@ -74,6 +74,16 @@ These are settled. The roadmap does not reopen them; it builds on them.
   element, its box-tree replaced-box participation, the
   `DrawExternalTexture` paint pass, and host compositing. See the element-view
   plan; the serval side is done, the open work is meerkat's render-loop swap.
+- **Multi-root documents** (2026-07-11, `f7b3c53`): a host-built synthetic
+  DOM may hang several element children directly off the document node (no
+  `<html>` wrapper — merecat's chrome layer, widget pools). Box tree wraps
+  them in a synthetic block root, the cascade traverses every root, and
+  root-background propagation gates on a sole root. Before this, everything
+  after the first element child silently emitted nothing — worth remembering
+  as a class: "the document's first element child is the root" is a parsed-
+  HTML assumption, not a `LayoutDom` invariant (the trait's `document()` doc
+  now states the contract). Regression test:
+  `multi_root_document_paints_every_root_element`.
 
 ---
 
@@ -147,10 +157,17 @@ These are real but bounded; recorded here so they are not lost.
   grep finds none. So `position: fixed` and `position: absolute` are today
   *indistinguishable*, and both resolve against the Taffy parent rather than the
   CSS containing block (nearest positioned ancestor for `absolute`, the ICB for
-  `fixed`). Closing it means **introducing** the containing-block concept —
+  `fixed`). Closing it means **introducing** the containing-block concept:
   hoisting fixed boxes to the ICB and resolving `absolute` against the nearest
-  positioned ancestor — with the paint-order and scroll consequences that follow.
-  A thread, not a one-liner.
+  positioned ancestor. A thread, not a one-liner.
+
+  *(Corrected same day, after reading `paint_emit`/`paint_stacking`: the
+  paint-and-scroll half is already built. `is_fixed` / `is_out_of_flow` lift
+  out-of-flow boxes into deferred stacking layers, and a fixed layer already
+  counters the document scroll so it stays pinned, per the zindex scope doc's
+  rule 3. So the earlier "with paint-order and scroll consequences" worry is
+  largely pre-paid; the remaining work is confined to the layout tree, i.e. to
+  which Taffy node an out-of-flow box parents under.)*
 
   Blocks `dom/events/non-cancelable-when-passive`'s four
   `wheel`/`mousewheel`-on-`div` tests (that div is a full-viewport fixed overlay),
