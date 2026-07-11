@@ -220,7 +220,6 @@ where
             self.dom.document(),
             Point::new(0.0, 0.0),
             doc_point,
-            false,
             &mut hit,
             &mut deferred,
         );
@@ -230,7 +229,6 @@ where
                 id,
                 parent_origin,
                 point,
-                ancestor_fixed_cb,
             } = deferred[i];
             walk_for_hit(
                 self.dom,
@@ -241,7 +239,6 @@ where
                 id,
                 parent_origin,
                 point,
-                ancestor_fixed_cb,
                 &mut hit,
                 &mut deferred,
             );
@@ -428,10 +425,6 @@ struct DeferredHitSubtree<Id> {
     id: Id,
     parent_origin: Point,
     point: Point,
-    /// Whether an ancestor of this subtree establishes a containing block for
-    /// fixed descendants (css-transforms §2). Carried so the deferred re-entry
-    /// resumes with the same escape state the in-flow walk had.
-    ancestor_fixed_cb: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -444,7 +437,6 @@ fn walk_for_hit<D>(
     id: D::NodeId,
     parent_origin: Point,
     point: Point,
-    ancestor_fixed_cb: bool,
     out: &mut Option<FragmentHit<SourceNodeId>>,
     deferred: &mut Vec<DeferredHitSubtree<D::NodeId>>,
 ) where
@@ -452,25 +444,21 @@ fn walk_for_hit<D>(
     D::NodeId: Copy + Eq + Hash,
 {
     let cv = primary_cv(styles, id);
-    // An **escaped** fixed box: `position: fixed` with no ancestor establishing
-    // a containing block for it (css-transforms §2). The box tree hoists such a
-    // box to the root (F1 of the position-containing-block plan), so its
-    // fragment location is *root*-relative — its origin stands alone rather
-    // than accumulating the DOM chain (which would double-count, e.g., the
-    // default `<body>` margin). A *guarded* fixed box (under a transformed
-    // ancestor) stays parent-relative, exactly as before.
-    let escaped_fixed =
-        cv.as_deref().is_some_and(is_fixed) && !ancestor_fixed_cb;
+    // A **hoisted** out-of-flow box (the position-containing-block plan): its
+    // fragment location is relative to its *hoist* parent in the box tree, not
+    // its DOM parent, so its origin comes from the fragment plane's side table
+    // (the box tree's own accounting) instead of DOM-chain accumulation — which
+    // would double-count, e.g., the default `<body>` margin. In-flow boxes and
+    // guarded (transform-CB'd) fixed boxes are absent from the table and
+    // accumulate exactly as before.
     let layout = fragments.rect_of(id);
-    let origin = if let Some(l) = layout {
-        if escaped_fixed {
-            Point::new(l.location.x, l.location.y)
-        } else {
-            Point::new(
-                parent_origin.x + l.location.x,
-                parent_origin.y + l.location.y,
-            )
-        }
+    let origin = if let Some((hx, hy)) = fragments.hoisted_origin(id) {
+        Point::new(hx, hy)
+    } else if let Some(l) = layout {
+        Point::new(
+            parent_origin.x + l.location.x,
+            parent_origin.y + l.location.y,
+        )
     } else {
         parent_origin
     };
@@ -535,28 +523,20 @@ fn walk_for_hit<D>(
                 l.size.height - l.border.top - l.border.bottom,
             );
             if !pad.contains(local) {
-                // A fixed descendant whose containing block is the viewport is
-                // NOT clipped by this box (CSS Overflow: clipping applies only
-                // through the containing-block chain, and this clipper is not in
-                // an escaped fixed box's chain). Defer direct escaped-fixed
-                // children before pruning the in-flow subtree; their re-entry
-                // frame ignores `parent_origin` (escaped origins stand alone).
-                // Known F1 approximation: escaped-fixed boxes nested *deeper*
+                // A hoisted descendant's containing block is above this box, so
+                // this clipper is not in its containing-block chain and must not
+                // clip it (CSS Overflow). Defer direct hoisted children before
+                // pruning the in-flow subtree; their re-entry frame reads its
+                // origin from the hoist side table, so `parent_origin` is
+                // ignored. Known approximation: hoisted boxes nested *deeper*
                 // inside the pruned subtree are still missed.
-                let child_guard = ancestor_fixed_cb
-                    || cv
-                        .as_deref()
-                        .is_some_and(crate::box_tree::establishes_fixed_cb);
-                if !child_guard {
-                    for child in dom.dom_children(id) {
-                        if primary_cv(styles, child).as_deref().is_some_and(is_fixed) {
-                            deferred.push(DeferredHitSubtree {
-                                id: child,
-                                parent_origin: origin,
-                                point: local,
-                                ancestor_fixed_cb: false,
-                            });
-                        }
+                for child in dom.dom_children(id) {
+                    if fragments.hoisted_origin(child).is_some() {
+                        deferred.push(DeferredHitSubtree {
+                            id: child,
+                            parent_origin: origin,
+                            point: local,
+                        });
                     }
                 }
                 return;
@@ -577,10 +557,6 @@ fn walk_for_hit<D>(
     // document order. Defer each with its accumulated (origin, point)
     // mapping; `hit_test` drains the queue after the in-flow walk, so the
     // positioned plane overwrites in-flow hits.
-    let child_guard = ancestor_fixed_cb
-        || cv
-            .as_deref()
-            .is_some_and(crate::box_tree::establishes_fixed_cb);
     for child in dom.dom_children(id) {
         if primary_cv(styles, child)
             .as_deref()
@@ -590,7 +566,6 @@ fn walk_for_hit<D>(
                 id: child,
                 parent_origin: origin,
                 point: child_point,
-                ancestor_fixed_cb: child_guard,
             });
             continue;
         }
@@ -603,7 +578,6 @@ fn walk_for_hit<D>(
             child,
             origin,
             child_point,
-            child_guard,
             out,
             deferred,
         );
@@ -701,12 +675,20 @@ where
     D::NodeId: Copy + Eq + Hash,
     F: FnMut(D::NodeId, Point) -> ControlFlow<()>,
 {
-    let origin = match fragments.rect_of(id) {
-        Some(l) => Point::new(
-            parent_origin.x + l.location.x,
-            parent_origin.y + l.location.y,
-        ),
-        None => parent_origin,
+    // A hoisted out-of-flow box's origin comes from the fragment plane's side
+    // table (box-tree truth), not DOM-chain accumulation — see the same branch
+    // in `walk_for_hit`. This also correctly ignores DOM ancestors' scroll
+    // shifts for such a box: its containing block is above them.
+    let origin = if let Some((hx, hy)) = fragments.hoisted_origin(id) {
+        Point::new(hx, hy)
+    } else {
+        match fragments.rect_of(id) {
+            Some(l) => Point::new(
+                parent_origin.x + l.location.x,
+                parent_origin.y + l.location.y,
+            ),
+            None => parent_origin,
+        }
     };
     visit(id, origin)?;
     // A scroll container paints its descendants shifted by `-offset` (the content scrolls

@@ -1,0 +1,1023 @@
+{
+  "command": "reftest",
+  "engine": "boa",
+  "tests": {
+    "css/css-position/absolute-pos-box-inside-fixed-pos-box-with-changing-height.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/animations/bottom-composition.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/animations/bottom-interpolation.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/animations/left-composition.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/animations/left-interpolation.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/animations/position-interpolation.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/animations/right-composition.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/animations/right-interpolation.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/animations/top-composition.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/animations/top-interpolation.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/backdrop-inherit-computed.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/backdrop-inherit-rendered.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/backdrop-tree-abiding-slotted.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/block-axis-constraint-changes-for-out-of-flow-box.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/change-insets-inside-strict-containment-nested.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/containing-block-change-button.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/containing-block-change-scrollframe.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/crashtests/inline-containing-block-crash.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/crashtests/inline-containing-block-dynamic-change.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/crashtests/position-absolute-crash-014.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/crashtests/scroll-tree-parent-construction.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/fixed-z-index-blend.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/hypothetical-box-scroll-parent.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/hypothetical-box-scroll-viewport.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/hypothetical-dynamic-change-001.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/hypothetical-dynamic-change-002.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/hypothetical-dynamic-change-003.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/inheritance.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/invalidate-opacity-negative-z-index.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/multicol/static-position/vlr-ltr-ltr-in-multicol.html": "fail",
+    "css/css-position/multicol/static-position/vlr-ltr-rtl-in-multicol.tentative.html": "fail",
+    "css/css-position/multicol/static-position/vlr-rtl-ltr-in-multicol.tentative.html": "fail",
+    "css/css-position/multicol/static-position/vlr-rtl-rtl-in-multicol.html": "fail",
+    "css/css-position/multicol/static-position/vrl-ltr-ltr-in-multicol.html": "fail",
+    "css/css-position/multicol/static-position/vrl-ltr-rtl-in-multicol.tentative.html": "fail",
+    "css/css-position/multicol/static-position/vrl-rtl-ltr-in-multicol.tentative.html": "fail",
+    "css/css-position/multicol/static-position/vrl-rtl-rtl-in-multicol.html": "fail",
+    "css/css-position/multicol/vlr-ltr-ltr-in-multicols.html": "fail",
+    "css/css-position/multicol/vlr-ltr-rtl-in-multicols.tentative.html": "fail",
+    "css/css-position/multicol/vlr-rtl-ltr-in-multicols.tentative.html": "fail",
+    "css/css-position/multicol/vlr-rtl-rtl-in-multicols.html": "fail",
+    "css/css-position/multicol/vrl-ltr-ltr-in-multicols.html": "fail",
+    "css/css-position/multicol/vrl-ltr-rtl-in-multicols.tentative.html": "fail",
+    "css/css-position/multicol/vrl-rtl-ltr-in-multicols.tentative.html": "fail",
+    "css/css-position/multicol/vrl-rtl-rtl-in-multicols.html": "fail",
+    "css/css-position/nested-positions-crash.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/overlay/animation/overlay-interpolation.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/overlay/author-overlay-top-layer-removal.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/overlay/overlay-button-appearance.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/overlay/overlay-computed.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/overlay/overlay-invalid.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/overlay/overlay-popover-backdrop-crash.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/overlay/overlay-transition-backdrop-entry.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/overlay/overlay-transition-backdrop.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/overlay/overlay-transition-dialog.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/overlay/overlay-transition-finished.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/overlay/overlay-transition-in-rendering.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/overlay/overlay-transition-out-rendering.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/overlay/overlay-transition-property.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/overlay/overlay-transition.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/overlay/overlay-user-agent-rules.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/overlay/overlay-valid.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/bottom-computed.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/bottom-invalid.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/bottom-valid.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/inset-computed.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/inset-invalid.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/inset-valid.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/left-computed.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/left-invalid.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/left-valid.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/position-computed.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/position-invalid.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/position-valid.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/right-computed.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/right-invalid.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/right-valid.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/top-computed.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/top-invalid.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/top-valid.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/z-index-computed.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/z-index-invalid.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/z-index-positioned-computed.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/parsing/z-index-valid.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-abspos-table-dynamic.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-center-001.html": "pass",
+    "css/css-position/position-absolute-center-002.html": "pass",
+    "css/css-position/position-absolute-center-003.html": "pass",
+    "css/css-position/position-absolute-center-004.html": "pass",
+    "css/css-position/position-absolute-center-006.html": "fail",
+    "css/css-position/position-absolute-center-007.html": "fail",
+    "css/css-position/position-absolute-chrome-bug-001.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-chrome-bug-002.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-container-dynamic-002.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-container-dynamic.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-crash-chrome-001.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-crash-chrome-002.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-crash-chrome-003.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-crash-chrome-004.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-crash-chrome-005.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-crash-chrome-006.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-crash-chrome-007.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-crash-chrome-008.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-crash-chrome-009.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-crash-chrome-010.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-crash-chrome-011.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-crash-chrome-012.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-crash-chrome-013.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-auto-overflow.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-containing-block.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-list-marker.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-margin-auto-001.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-overflow-001.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-overflow-002.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-relayout-001.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-relayout-002.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-relayout-003.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-relayout-004.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-static-position-flex.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-static-position-floats-001.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-static-position-floats-002.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-static-position-floats-003.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-static-position-floats-004.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-static-position-inline.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-static-position-margin-001.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-static-position-margin-002.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-static-position-table-cell.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-dynamic-static-position.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-fieldset.html": "pass",
+    "css/css-position/position-absolute-fit-content-auto-margin.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-fit-content.html": "fail",
+    "css/css-position/position-absolute-iframe-print-001.sub.html": "pass",
+    "css/css-position/position-absolute-iframe-print-002.sub.html": "pass",
+    "css/css-position/position-absolute-in-inline-001.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-in-inline-002.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-in-inline-003.html": "fail",
+    "css/css-position/position-absolute-in-inline-004.html": "fail",
+    "css/css-position/position-absolute-in-inline-crash.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-in-inline-margin-top.html": "fail",
+    "css/css-position/position-absolute-large-negative-inset.html": "pass",
+    "css/css-position/position-absolute-margin-auto-001.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-multicol-001.html": "pass",
+    "css/css-position/position-absolute-padding-percentage.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-percentage-height.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-replaced-intrinsic-size.tentative.html": "pass",
+    "css/css-position/position-absolute-replaced-minmax.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-replaced-no-intrinsic-size.tentative.html": "fail",
+    "css/css-position/position-absolute-replaced-with-display-table.html": "pass",
+    "css/css-position/position-absolute-root-element-flex.html": "pass",
+    "css/css-position/position-absolute-root-element-grid.html": "pass",
+    "css/css-position/position-absolute-scrollable-overflow-001.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-scrollable-overflow-zero.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-semi-replaced-stretch-button.html": "pass",
+    "css/css-position/position-absolute-semi-replaced-stretch-input.html": "pass",
+    "css/css-position/position-absolute-semi-replaced-stretch-other.html": "pass",
+    "css/css-position/position-absolute-table-001.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-under-non-containing-stacking-context.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-absolute-with-negative-sized-imcb.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-change.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-fixed-at-bottom-right-on-viewport.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-fixed-dynamic-transformed-sibling.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-fixed-overflow-print.html": "pass",
+    "css/css-position/position-fixed-root-element-flex.html": "pass",
+    "css/css-position/position-fixed-root-element-grid.html": "pass",
+    "css/css-position/position-fixed-scroll-nested-fixed.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-fixed-scroll-overlap.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-fixed-video-controls-print.html": "fail",
+    "css/css-position/position-relative-001.html": "fail",
+    "css/css-position/position-relative-002.html": "fail",
+    "css/css-position/position-relative-003.html": "fail",
+    "css/css-position/position-relative-004.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-relative-005.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-relative-006.html": "pass",
+    "css/css-position/position-relative-007.html": "pass",
+    "css/css-position/position-relative-008.html": "pass",
+    "css/css-position/position-relative-009.html": "pass",
+    "css/css-position/position-relative-010.html": "fail",
+    "css/css-position/position-relative-011.html": "pass",
+    "css/css-position/position-relative-012.html": "pass",
+    "css/css-position/position-relative-013.html": "fail",
+    "css/css-position/position-relative-014.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/position-relative-015.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/position-relative-table-caption.html": "pass",
+    "css/css-position/position-relative-table-tbody-left-absolute-child.html": "pass",
+    "css/css-position/position-relative-table-tbody-left.html": "pass",
+    "css/css-position/position-relative-table-tbody-top-absolute-child.html": "pass",
+    "css/css-position/position-relative-table-tbody-top.html": "pass",
+    "css/css-position/position-relative-table-td-left.html": "pass",
+    "css/css-position/position-relative-table-td-top.html": "pass",
+    "css/css-position/position-relative-table-tfoot-left-absolute-child.html": "pass",
+    "css/css-position/position-relative-table-tfoot-left.html": "pass",
+    "css/css-position/position-relative-table-tfoot-top-absolute-child.html": "pass",
+    "css/css-position/position-relative-table-tfoot-top.html": "pass",
+    "css/css-position/position-relative-table-thead-left-absolute-child.html": "pass",
+    "css/css-position/position-relative-table-thead-left.html": "pass",
+    "css/css-position/position-relative-table-thead-top-absolute-child.html": "pass",
+    "css/css-position/position-relative-table-thead-top.html": "pass",
+    "css/css-position/position-relative-table-tr-left-absolute-child.html": "pass",
+    "css/css-position/position-relative-table-tr-left.html": "pass",
+    "css/css-position/position-relative-table-tr-top-absolute-child.html": "pass",
+    "css/css-position/position-relative-table-tr-top.html": "pass",
+    "css/css-position/position-static-001.html": "fail",
+    "css/css-position/position-sticky-dynamic-ancestor-001.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/replaced-object-backdrop.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/static-position/htb-ltr-ltr.html": "fail",
+    "css/css-position/static-position/htb-ltr-rtl.tentative.html": "fail",
+    "css/css-position/static-position/htb-rtl-ltr.tentative.html": "fail",
+    "css/css-position/static-position/htb-rtl-rtl.html": "fail",
+    "css/css-position/static-position/inline-level-absolute-in-block-level-context-001.html": "fail",
+    "css/css-position/static-position/inline-level-absolute-in-block-level-context-002.html": "fail",
+    "css/css-position/static-position/inline-level-absolute-in-block-level-context-003.html": "fail",
+    "css/css-position/static-position/inline-level-absolute-in-block-level-context-004.html": "pass",
+    "css/css-position/static-position/inline-level-absolute-in-block-level-context-005.html": "pass",
+    "css/css-position/static-position/inline-level-absolute-in-block-level-context-006.html": "pass",
+    "css/css-position/static-position/inline-level-absolute-in-block-level-context-007.html": "fail",
+    "css/css-position/static-position/inline-level-absolute-in-block-level-context-008.html": "fail",
+    "css/css-position/static-position/inline-level-absolute-in-block-level-context-009.html": "fail",
+    "css/css-position/static-position/inline-level-absolute-in-block-level-context-010.html": "pass",
+    "css/css-position/static-position/inline-level-absolute-in-block-level-context-011.html": "pass",
+    "css/css-position/static-position/inline-level-absolute-in-block-level-context-012.html": "pass",
+    "css/css-position/static-position/inline-level-absolute-in-block-level-context-013.html": "pass",
+    "css/css-position/static-position/inline-level-absolute-in-block-level-context-014.html": "pass",
+    "css/css-position/static-position/vlr-ltr-ltr.html": "fail",
+    "css/css-position/static-position/vlr-ltr-rtl.tentative.html": "fail",
+    "css/css-position/static-position/vlr-rtl-ltr.tentative.html": "fail",
+    "css/css-position/static-position/vlr-rtl-rtl.html": "fail",
+    "css/css-position/static-position/vrl-ltr-ltr.html": "fail",
+    "css/css-position/static-position/vrl-ltr-rtl.tentative.html": "fail",
+    "css/css-position/static-position/vrl-rtl-ltr.tentative.html": "fail",
+    "css/css-position/static-position/vrl-rtl-rtl.html": "fail",
+    "css/css-position/sticky-dialog.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-bottom-002.html": "pass",
+    "css/css-position/sticky/position-sticky-bottom-003.html": "pass",
+    "css/css-position/sticky/position-sticky-bottom-004.html": "pass",
+    "css/css-position/sticky/position-sticky-bottom-005.html": "pass",
+    "css/css-position/sticky/position-sticky-bottom-006.html": "pass",
+    "css/css-position/sticky/position-sticky-bottom-007.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-bottom.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-change-top.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-child-multicolumn.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-column-reverse-flex.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-contained-by-display-table.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-details-crash.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-escape-scroller-001.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-escape-scroller-002.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-escape-scroller-003.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-escape-scroller-004.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-fixed-ancestor-002.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-fixed-ancestor-003.html": "fail",
+    "css/css-position/sticky/position-sticky-fixed-ancestor-iframe.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-fixed-ancestor.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-flex-item-001.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-flex-item-002.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-flex-item-003.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-flex-item-004.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-flexbox.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-fractional-offset.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-get-bounding-client-rect.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-grid.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-horizontal-rtl-overconstrained.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-hyperlink.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-ib-split-execcommand-crash.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-in-fixed-container.html": "fail",
+    "css/css-position/sticky/position-sticky-inflow-position.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-inline.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-input-box-gets-focused-after-scroll.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-large-top-2.tentative.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-large-top.tentative.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-left-002.html": "fail",
+    "css/css-position/sticky/position-sticky-left-003.html": "fail",
+    "css/css-position/sticky/position-sticky-left-004.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-left-005.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-left-006.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-left-and-right-overconstrained.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-left.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-margins-002.html": "fail",
+    "css/css-position/sticky/position-sticky-margins-003.html": "fail",
+    "css/css-position/sticky/position-sticky-margins.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-nested-bottom.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-nested-inline.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-nested-left.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-nested-right.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-nested-table.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-nested-thead-th.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-nested-top.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-offset-overflow.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-offset-print.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-offset-top-left.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-on-minimum-scale.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-overflow-clip-container.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-overflow-hidden.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-overflow-padding.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-padding-001.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-padding-002.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-parsing.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-rendering.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-right-002.html": "fail",
+    "css/css-position/sticky/position-sticky-right-003.html": "fail",
+    "css/css-position/sticky/position-sticky-right.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-root-scroller.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-rtl.html": "fail",
+    "css/css-position/sticky/position-sticky-scroll-offset-clamp-crash.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-scroll-reposition.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-scroll-with-clip-and-abspos.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-scrollIntoView.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-scrolled-remove-sibling-002.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-scrolled-remove-sibling.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-single-axis-basic.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-single-axis-dynamic-axis-change-crash.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-single-axis-dynamic.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-single-axis-nested.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-single-axis-used-values.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-stacking-context-002.html": "fail",
+    "css/css-position/sticky/position-sticky-stacking-context.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-table-parts.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-table-pixel-rounding.html": "pass",
+    "css/css-position/sticky/position-sticky-table-td-bottom.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-table-td-left.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-table-td-right.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-table-td-subpixel-zoom.html": "pass",
+    "css/css-position/sticky/position-sticky-table-td-top.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-table-tfoot-bottom.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-table-th-bottom.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-table-th-left.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-table-th-right.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-table-th-top.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-table-thead-top.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-table-tr-bottom.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-table-tr-top.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-top-002.html": "pass",
+    "css/css-position/sticky/position-sticky-top-003.html": "pass",
+    "css/css-position/sticky/position-sticky-top-004.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-top-005.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-top-006.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-top-and-bottom-003.html": "pass",
+    "css/css-position/sticky/position-sticky-top-and-bottom-overconstrained.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-top-and-bottom.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-top.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-transforms-translate.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-transforms.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/position-sticky-writing-modes.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    },
+    "css/css-position/sticky/sticky-after-input.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/sticky/sticky-continuation-crash.html": {
+      "reason": "non-reftest",
+      "status": "skip"
+    },
+    "css/css-position/z-index-blend-will-change-overlapping-layers.html": {
+      "reason": "needs-script",
+      "status": "skip"
+    }
+  },
+  "version": 1
+}

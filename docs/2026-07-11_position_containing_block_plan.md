@@ -1,10 +1,11 @@
 # Position containing blocks: fixed to the ICB, absolute to its positioned ancestor
 
 **Date:** 2026-07-11
-**Status:** **F1 landed 2026-07-11** (fixed -> ICB, all done-whens met; results
-and residuals below). F2 (absolute -> nearest positioned ancestor) is the open
-work. Spun out of the layout roadmap's near-horizon entry (found 2026-07-10 by
-the WPT input-path work, H9 in the harness-exactness plan).
+**Status:** **F1 and F2 both landed 2026-07-11** (fixed -> ICB; absolute ->
+nearest positioned ancestor; results and residuals below). Remaining work is
+the F3 out-of-scope list plus the named residuals. Spun out of the layout
+roadmap's near-horizon entry (found 2026-07-10 by the WPT input-path work, H9
+in the harness-exactness plan).
 **Scope:** the *layout* half of out-of-flow positioning in `serval-layout`. The
 paint half (deferred stacking layers, fixed layers countering document scroll)
 already exists (`is_out_of_flow` / `is_fixed` feeding `paint_stacking`, per the
@@ -150,6 +151,61 @@ Verify at implementation: the CB is the ancestor's **padding box**; check which
 box Taffy resolves abspos children against and shim the offset if needed.
 Static-position fidelity (auto insets) also lands here, approximated per the
 spec's latitude. Blast-radius guard: the CSS corpora plus orrery/meerkat.
+
+**Landed 2026-07-11.** The padding-box question was answered by probe before
+committing to a design: Taffy already resolves an abspos child's insets against
+the parent's **padding box** (border-box origin + border, spec-correct), so no
+offset shim was needed — reparenting alone is the whole fix. Mechanism as
+planned, with these concretions:
+
+- `tree.abs_cb: Option<Id>` (the nearest absolute-CB ancestor's DOM id,
+  save/restore around the child recursion) alongside F1's depth counter. The
+  hoist registers `(arena index, cb)` — `None` meaning the ICB — and only when
+  the CB differs from the DOM parent (a CB that *is* the parent is already
+  what Taffy resolves against; reparenting would be a no-op churning child
+  order).
+- **Auto insets refuse the hoist.** A box with all four insets `auto` sits at
+  its static position (§10.3.7), which its DOM parent approximates far better
+  than the distant CB would, and there are no insets to resolve anyway.
+- The post-pass resolves the CB's DOM id through `node_map`; a CB whose box is
+  a leaf that lays out no children (replaced, inline-formatting,
+  external-texture, chisel) refuses the hoist and the box stays
+  parent-relative, the pre-F2 approximation.
+- The graft guard and the fragment-plane hoist side table generalize over both
+  hoist lanes (`had_hoists`; the readback DFS covers `fixed_hoists` and
+  `abs_hoists`), so hit-testing, `absolute_rect`, and the clip-prune deferral
+  cover hoisted absolute boxes with no walker changes at all.
+
+Guards: `an_absolute_box_skips_static_wrappers_to_its_positioned_ancestor`
+(padding-box discriminator + hit test),
+`an_absolute_box_with_all_auto_insets_stays_at_its_static_position`,
+`an_absolute_box_with_no_positioned_ancestor_resolves_against_the_icb` (the
+behavior change), `percentage_geometry_resolves_against_the_positioned_ancestor`,
+`toggling_position_to_absolute_rehosts_to_the_positioned_ancestor` (the
+incremental-splice hazard, F2 lane).
+
+Results: serval-layout 304, paint html→pixels 30, xilem-serval 101,
+serval-scripted 45, meerkat 247, all green. WPT: all seven baselines hold at
+`unexpected=0` except `fetch_api_basic`, whose 2–4 fluctuating deltas
+reproduce **without** F2 (control rebuild) — environmental, left unrebased.
+`css/css-position` reftests **60 → 62** passed (control-measured), testharness
+lane unchanged (22 all-pass — those tests probe computed values, not
+geometry); both lanes now have seeded baselines
+(`expectations/{testharness,reftest}/css_position_boa.json`) for governance.
+
+**F2 residuals, named:**
+
+- **Partial-auto insets hoist with an approximated static side.** A box with
+  e.g. only `left` set hoists; Taffy then derives the auto `top` from its
+  static position *within the CB's flow*, not within the original DOM
+  parent's flow (spec wants the latter). Same §10.3.7 latitude as the
+  all-auto case, but the guess is coarser once hoisted.
+- All-auto-inset boxes stay fully parent-relative (deliberate; see above) —
+  their *sizing* CB (for percentage widths) is therefore still the DOM parent,
+  not the positioned ancestor.
+- The F1 hit-walk residuals (deeper-nested hoisted boxes under a clip-pruned
+  subtree; element-scrolled ancestor point mapping) apply to hoisted absolute
+  boxes equally.
 
 ### F3 — out of scope
 

@@ -2323,6 +2323,22 @@ where
     if !generates_box(&root_cv) {
         return None;
     }
+
+    // A sole element that is absolutely positioned and not `<html>` is a
+    // host-DOM floating widget (merecat's caption chip with the omnibar
+    // closed), not a document root: its background must stay on its own box,
+    // never the canvas. Caught 2026-07-11 — the chip's background painted
+    // over merecat's whole frame, invisible dark-on-dark until a content
+    // layer composed beneath the chrome. A real parsed document always roots
+    // at `<html>`, which keeps spec propagation even if a stylesheet
+    // positions it; in-flow host roots (smolweb's themed page div) keep
+    // theirs too.
+    let root_is_html = dom
+        .element_name(root)
+        .is_some_and(|q| q.local == local_name!("html"));
+    if !root_is_html && is_out_of_flow(&root_cv) {
+        return None;
+    }
     // Source: the root if it carries a background, else (root transparent) the
     // body — the HTML body→canvas propagation special case. A `display: none` /
     // `display: contents` body generates no principal box and so does not
@@ -5157,6 +5173,39 @@ mod tests {
         assert!(
             viewport_fill(&plist).is_none(),
             "display:none root must not propagate a canvas background"
+        );
+    }
+
+    #[test]
+    fn canvas_background_not_taken_from_a_sole_absolute_host_widget() {
+        // A host-built DOM whose only document-level element is an
+        // absolutely-positioned widget (merecat's caption chip with the
+        // omnibar closed) is not a document root: its background stays on
+        // its own box and never propagates over the canvas.
+        use layout_dom_api::{LayoutDomMut, QualName};
+        let qual = |local: &str| {
+            QualName::new(
+                None,
+                layout_dom_api::Namespace::from(""),
+                layout_dom_api::LocalName::from(local),
+            )
+        };
+        let mut dom = serval_scripted_dom::ScriptedDom::new();
+        let root = dom.document();
+        let chip = dom.create_element(qual("div"));
+        dom.set_attribute(chip, qual("class"), "chip");
+        dom.append_child(root, chip);
+        let layout = crate::IncrementalLayout::new(
+            &dom,
+            &[".chip { position: absolute; background-color: rgb(20, 25, 38); }"],
+            320.0,
+            240.0,
+        );
+        let scroll = crate::ScrollOffsets::<serval_scripted_dom::NodeId>::default();
+        let plist = layout.emit_paint_list(&dom, &scroll, DeviceIntSize::new(320, 240));
+        assert!(
+            viewport_fill(&plist).is_none(),
+            "an absolute host widget's background must not become the canvas background"
         );
     }
 

@@ -23,12 +23,23 @@ use taffy::Layout;
 #[derive(Clone)]
 pub struct FragmentPlane<NodeId: Copy + Eq + Hash> {
     pub(crate) rects: FxHashMap<NodeId, Layout>,
+    /// Absolute (layout-space) origins of boxes the box tree **hoisted** to a
+    /// containing block that is not their DOM parent (position-containing-block
+    /// plan: `fixed` to the ICB today, `absolute` to its positioned ancestor
+    /// under F2). Their `Layout.location` is relative to the *hoist* parent, so
+    /// DOM-driven origin accumulation (hit-testing, `absolute_origin`, a11y
+    /// bounds) would add the DOM ancestors' offsets a second time; walkers that
+    /// find a node here use this origin standalone instead. Filled from the box
+    /// tree at fragment-readback time — the one source of truth, so walkers and
+    /// paint agree by data rather than by re-derived predicates.
+    pub(crate) hoisted_origins: FxHashMap<NodeId, (f32, f32)>,
 }
 
 impl<NodeId: Copy + Eq + Hash> Default for FragmentPlane<NodeId> {
     fn default() -> Self {
         Self {
             rects: FxHashMap::default(),
+            hoisted_origins: FxHashMap::default(),
         }
     }
 }
@@ -40,6 +51,12 @@ impl<NodeId: Copy + Eq + Hash> FragmentPlane<NodeId> {
 
     pub fn insert(&mut self, id: NodeId, layout: Layout) {
         self.rects.insert(id, layout);
+    }
+
+    /// The absolute origin of a hoisted out-of-flow box (see
+    /// [`Self::hoisted_origins`]), or `None` for every in-flow box.
+    pub fn hoisted_origin(&self, id: NodeId) -> Option<(f32, f32)> {
+        self.hoisted_origins.get(&id).copied()
     }
 
     /// Read the laid-out rect for a node, if it was reached by layout.

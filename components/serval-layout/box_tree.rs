@@ -212,22 +212,34 @@ pub struct BoxTree<Id: Copy + Eq + Hash> {
     /// point on a `display:inline` element (which establishes no box of its own).
     /// Absent for leaves with no inline text.
     inline_sources: FxHashMap<Id, Vec<(Range<usize>, Id)>>,
-    /// F1 (position containing blocks): arena indices of `position: fixed`
+    /// Position containing blocks, F1: arena indices of `position: fixed`
     /// boxes registered during construction for re-parenting to the root (the
-    /// ICB approximation). Drained by `build_box_tree`'s post-pass; kept empty
-    /// afterwards.
+    /// ICB approximation). After the post-pass this retains the *applied*
+    /// hoists, read by fragment readback to fill the plane's hoist side table.
     fixed_hoists: Vec<usize>,
+    /// Position containing blocks, F2: `position: absolute` boxes whose CSS
+    /// containing block is not their DOM parent — `(arena index, containing
+    /// block's DOM id)`, `None` meaning the ICB (no positioned ancestor at
+    /// all). Registered during construction; the post-pass resolves the DOM id
+    /// through `node_map` and re-parents. Retains the applied hoists after,
+    /// same as `fixed_hoists`.
+    abs_hoists: Vec<(usize, Option<Id>)>,
     /// Transform-CB depth during the construction walk: >0 while inside an
     /// ancestor that establishes a containing block for fixed descendants
     /// (css-transforms §2: `transform`, `filter`, `perspective`, …). A fixed
     /// box under such an ancestor is *not* hoisted — the spec rule, and what
     /// keeps camera-transformed hosts (the orrery's `.stage`) intact.
     fixed_cb_depth: usize,
-    /// Whether this tree's construction hoisted any fixed box. Read by
-    /// [`Self::graft_subtree`]: a scoped subtree build hoists to *its* root,
-    /// which after grafting would be the subtree root rather than the document
-    /// ICB, so such a graft refuses and the caller takes the full-rebuild path.
-    had_fixed_hoists: bool,
+    /// The DOM id of the nearest ancestor that is a containing block for
+    /// **absolute** descendants (`position ≠ static`, or the transform-CB set),
+    /// maintained save/restore-style by the construction walk. `None` = the
+    /// ICB.
+    abs_cb: Option<Id>,
+    /// Whether this tree's construction hoisted any out-of-flow box. Read by
+    /// [`Self::graft_subtree`]: a scoped subtree build hoists against *its own*
+    /// root/ancestry, which after grafting would be wrong, so such a graft
+    /// refuses and the caller takes the full-rebuild path.
+    had_hoists: bool,
 }
 
 impl<Id: Copy + Eq + Hash> BoxTree<Id> {
@@ -427,7 +439,7 @@ impl<Id: Copy + Eq + Hash> BoxTree<Id> {
         // *its* root, which after grafting would be the subtree root, not the
         // document ICB. Refuse; the caller falls back to the full rebuild, whose
         // post-pass hoists against the real root.
-        if scoped.had_fixed_hoists {
+        if scoped.had_hoists {
             return false;
         }
 
@@ -508,8 +520,10 @@ where
         node_map: FxHashMap::default(),
         inline_sources: FxHashMap::default(),
         fixed_hoists: Vec::new(),
+        abs_hoists: Vec::new(),
         fixed_cb_depth: 0,
-        had_fixed_hoists: false,
+        abs_cb: None,
+        had_hoists: false,
     };
 
     // The layout root. Three shapes of `LayoutDom::document()`:
@@ -571,7 +585,46 @@ where
             for node in &mut tree.nodes {
                 node.children.retain(|c| !hoisted.contains(c));
             }
-            tree.nodes[root].children.extend(hoists);
+            tree.nodes[root].children.extend(hoists.iter().copied());
+            // Retained post-build: fragment readback records these boxes'
+            // absolute origins into the plane's hoist side table, so DOM-driven
+            // origin walkers agree with the box tree.
+            tree.fixed_hoists = hoists;
+        }
+    }
+
+    // F2: re-parent hoisted `position: absolute` boxes to their containing
+    // block's box (`None` = the ICB → root). Resolved through `node_map` — a CB
+    // whose element produced no box (or a leaf box that lays out no children:
+    // replaced, inline-formatting, external-texture, chisel) refuses the hoist
+    // and the box stays parent-relative, the pre-F2 approximation.
+    if !tree.abs_hoists.is_empty() {
+        let hoists: Vec<(usize, usize)> = std::mem::take(&mut tree.abs_hoists)
+            .into_iter()
+            .filter_map(|(h, cb)| {
+                let target = match cb {
+                    None => root,
+                    Some(id) => idx(*tree.node_map.get(&id)?),
+                };
+                let t = &tree.nodes[target];
+                let container_safe = t.inline_content.is_none()
+                    && t.replaced_size.is_none()
+                    && t.external_texture_key.is_none()
+                    && t.chisel_leaf_key.is_none();
+                (h != root && h != target && container_safe).then_some((h, target))
+            })
+            .collect();
+        if !hoists.is_empty() {
+            let hoisted: FxHashSet<usize> = hoists.iter().map(|&(h, _)| h).collect();
+            for node in &mut tree.nodes {
+                node.children.retain(|c| !hoisted.contains(c));
+            }
+            // Document order among boxes hoisted to the same target is
+            // preserved by registration order (the build walk is a DFS).
+            for &(h, target) in &hoists {
+                tree.nodes[target].children.push(h);
+            }
+            tree.abs_hoists = hoists.into_iter().map(|(h, _)| (h, None)).collect();
         }
     }
     tree
@@ -608,25 +661,73 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    // Snapshot before the guard: a box's *own* transform does not change its
-    // own containing block — only ancestors count (css-transforms §2).
+    // Snapshot before the guard: a box's *own* transform / position does not
+    // change its own containing block — only ancestors count (css-transforms
+    // §2, CSS Position §2.1).
     let ancestor_guarded = tree.fixed_cb_depth > 0;
-    let guards_descendants = styles
+    let ancestor_abs_cb = tree.abs_cb;
+    let (guards_descendants, is_abs_cb) = styles
         .get(elem.id())
         .and_then(|e| e.borrow_data())
-        .is_some_and(|d| establishes_fixed_cb(d.styles.primary()));
+        .map(|d| {
+            let cv = d.styles.primary();
+            let fixed_cb = establishes_fixed_cb(cv);
+            // A containing block for absolute descendants: any positioned box
+            // (`position ≠ static`), plus the transform-CB set (which captures
+            // even fixed descendants, so a fortiori absolute ones).
+            (
+                fixed_cb,
+                fixed_cb || crate::paint_stacking::is_positioned(cv),
+            )
+        })
+        .unwrap_or((false, false));
     if guards_descendants {
         tree.fixed_cb_depth += 1;
     }
+    if is_abs_cb {
+        tree.abs_cb = Some(elem.id());
+    }
     let i = build_node_in_flow(dom, styles, images, elem, tree);
+    tree.abs_cb = ancestor_abs_cb;
     if guards_descendants {
         tree.fixed_cb_depth -= 1;
     }
-    if !ancestor_guarded && crate::paint_emit::is_fixed(&tree.nodes[i].style) {
+    let style = tree.nodes[i].style.clone();
+    if !ancestor_guarded && crate::paint_emit::is_fixed(&style) {
         tree.fixed_hoists.push(i);
-        tree.had_fixed_hoists = true;
+        tree.had_hoists = true;
+    } else if is_absolute(&style) && has_non_auto_inset(&style) {
+        // F2: an absolute box whose CSS containing block is not its DOM parent
+        // re-parents to it (`None` = the ICB — no positioned ancestor at all).
+        // Fully-auto insets keep the box parent-relative: its position is then
+        // its *static position*, which the DOM parent approximates far better
+        // than the distant CB would (CSS 2.2 §10.3.7 permits approximating).
+        // No hoist when the CB already *is* the DOM parent — Taffy resolves
+        // parent-relative by construction, so re-parenting would be a no-op
+        // that only churned child order. (Root element: both sides `None`.)
+        let dom_parent = elem.parent().map(|p| p.id());
+        if ancestor_abs_cb != dom_parent {
+            tree.abs_hoists.push((i, ancestor_abs_cb));
+            tree.had_hoists = true;
+        }
     }
     i
+}
+
+/// Whether the box computes `position: absolute` (exactly — `fixed` has its
+/// own hoist lane with a different destination and guard).
+fn is_absolute(cv: &ComputedValues) -> bool {
+    use style::values::computed::PositionProperty;
+    matches!(cv.get_box().position, PositionProperty::Absolute)
+}
+
+/// Whether any of the four box insets is non-`auto`. An absolute box with all
+/// insets auto sits at its **static position** (CSS 2.2 §10.3.7); hoisting it
+/// would destroy that for no gain, since there is no inset to resolve against
+/// the containing block anyway.
+fn has_non_auto_inset(cv: &ComputedValues) -> bool {
+    let p = cv.get_position();
+    !(p.left.is_auto() && p.right.is_auto() && p.top.is_auto() && p.bottom.is_auto())
 }
 
 /// The in-flow half of [`build_node`]: builds the box for `elem` (an element
@@ -1593,6 +1694,34 @@ where
     let mut fragments = FragmentPlane::new();
     for (dom_id, taffy_id) in tree.node_map.iter() {
         fragments.insert(*dom_id, tree.nodes[idx(*taffy_id)].final_layout);
+    }
+    // Hoisted out-of-flow boxes: record their absolute origins so DOM-driven
+    // origin accumulation (hit walk, `absolute_origin`, a11y bounds) reads the
+    // box tree's truth instead of double-counting DOM ancestors' offsets. One
+    // DFS over the box tree, accumulating parent-relative locations; general
+    // over any hoist target (F1's root today, F2's mid-tree containing blocks).
+    if !tree.fixed_hoists.is_empty() || !tree.abs_hoists.is_empty() {
+        let hoisted: FxHashSet<usize> = tree
+            .fixed_hoists
+            .iter()
+            .copied()
+            .chain(tree.abs_hoists.iter().map(|&(h, _)| h))
+            .collect();
+        let mut stack: Vec<(usize, (f32, f32))> = vec![(tree.root, {
+            let l = &tree.nodes[tree.root].final_layout;
+            (l.location.x, l.location.y)
+        })];
+        while let Some((i, origin)) = stack.pop() {
+            if hoisted.contains(&i) {
+                fragments
+                    .hoisted_origins
+                    .insert(tree.nodes[i].source.dom_id(), origin);
+            }
+            for &c in &tree.nodes[i].children {
+                let l = &tree.nodes[c].final_layout;
+                stack.push((c, (origin.0 + l.location.x, origin.1 + l.location.y)));
+            }
+        }
     }
     if let Some(t) = t {
         eprintln!(

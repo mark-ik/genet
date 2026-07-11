@@ -2858,6 +2858,46 @@ mod tests {
         );
     }
 
+    /// The fragment plane's hoist side table keeps DOM-driven origin walkers
+    /// (hit-testing, `absolute_rect`, a11y bounds) in agreement with the box
+    /// tree when ancestors carry real offsets. The **default UA body margin
+    /// (8px)** is the everyman case: a hoisted fixed box's fragment location is
+    /// root-relative, and summing it along the DOM chain would re-add the
+    /// margin — before the side table, `absolute_rect` and hit-testing were
+    /// silently off by exactly (8, 8) on every default-styled page.
+    #[test]
+    fn a_fixed_box_is_not_offset_by_the_default_body_margin() {
+        // No margin reset: the UA sheet's `body { margin: 8px }` applies.
+        const SHEET: &[&str] =
+            &["#d { position: fixed; top: 0; right: 0; bottom: 0; left: 0; }"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        // In-flow content so body has a real offset box of its own.
+        let filler = dom.create_element(html("div"));
+        dom.set_attribute(filler, attr("style"), "height: 40px");
+        dom.append_child(body, filler);
+        let d = dom.create_element(html("div"));
+        dom.set_attribute(d, attr("id"), "d");
+        dom.append_child(body, d);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        assert_eq!(
+            layout.absolute_rect(&dom, d),
+            Some((0.0, 0.0, W, H)),
+            "the fixed box pins to the viewport, not to (8, 8)",
+        );
+        assert_eq!(
+            layout.hit_test(&dom, 2.0, 2.0, &Default::default()),
+            Some(d),
+            "a point inside the viewport edge but outside body's margin box \
+             still hits the fixed overlay",
+        );
+    }
+
     /// The css-transforms §2 rule, and the orrery's safety rail: an ancestor
     /// with a transform is the containing block for its fixed descendants, so a
     /// fixed box under one is **not** hoisted — it keeps resolving against the
@@ -2922,6 +2962,204 @@ mod tests {
             layout.absolute_rect(&dom, d),
             Some((0.0, 0.0, W, H)),
             "after the flip the box resolves against the viewport",
+        );
+    }
+
+    /// F2 (CSS 2.2 §10.1): `position: absolute` resolves against the nearest
+    /// **positioned** ancestor's padding box, skipping static wrappers in
+    /// between. Padding on the positioned ancestor is the discriminator: insets
+    /// of 0 land the box on the padding box (border-box-sized here, no border),
+    /// not the 280x180 content box and not the 200x100 static wrapper.
+    #[test]
+    fn an_absolute_box_skips_static_wrappers_to_its_positioned_ancestor() {
+        const SHEET: &[&str] = &[
+            "html, body { margin: 0; }",
+            "#rel { position: relative; margin: 50px 0 0 100px; width: 300px; \
+             height: 200px; padding: 10px; box-sizing: border-box; }",
+            "#wrap { margin: 20px; width: 200px; height: 100px; }",
+            "#abs { position: absolute; top: 0; right: 0; bottom: 0; left: 0; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let rel = dom.create_element(html("div"));
+        dom.set_attribute(rel, attr("id"), "rel");
+        dom.append_child(body, rel);
+        let wrap = dom.create_element(html("div"));
+        dom.set_attribute(wrap, attr("id"), "wrap");
+        dom.append_child(rel, wrap);
+        let abs = dom.create_element(html("div"));
+        dom.set_attribute(abs, attr("id"), "abs");
+        dom.append_child(wrap, abs);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        assert_eq!(
+            layout.absolute_rect(&dom, abs),
+            Some((100.0, 50.0, 300.0, 200.0)),
+            "insets resolve against the positioned ancestor's padding box, \
+             not the static wrapper",
+        );
+        assert_eq!(
+            layout.hit_test(&dom, 290.0, 240.0, &Default::default()),
+            Some(abs),
+            "a point inside the ancestor but outside the wrapper hits the \
+             absolute box",
+        );
+    }
+
+    /// The static-position rule (CSS 2.2 §10.3.7): an absolute box with **all
+    /// insets auto** sits where in-flow layout would have put it — inside its
+    /// static wrapper — so it is *not* hoisted to the positioned ancestor.
+    #[test]
+    fn an_absolute_box_with_all_auto_insets_stays_at_its_static_position() {
+        const SHEET: &[&str] = &[
+            "html, body { margin: 0; }",
+            "#rel { position: relative; margin: 50px 0 0 100px; width: 300px; height: 200px; }",
+            "#wrap { margin: 20px; width: 200px; height: 100px; }",
+            "#abs { position: absolute; width: 80px; height: 20px; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let rel = dom.create_element(html("div"));
+        dom.set_attribute(rel, attr("id"), "rel");
+        dom.append_child(body, rel);
+        let wrap = dom.create_element(html("div"));
+        dom.set_attribute(wrap, attr("id"), "wrap");
+        dom.append_child(rel, wrap);
+        let filler = dom.create_element(html("div"));
+        dom.set_attribute(filler, attr("style"), "height: 30px");
+        dom.append_child(wrap, filler);
+        let abs = dom.create_element(html("div"));
+        dom.set_attribute(abs, attr("id"), "abs");
+        dom.append_child(wrap, abs);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        // y: wrap's 20px top margin collapses into rel's (rel has no border /
+        // padding), so wrap sits at y=50 and the filler pushes abs to 80.
+        assert_eq!(
+            layout.absolute_rect(&dom, abs),
+            Some((120.0, 80.0, 80.0, 20.0)),
+            "auto insets keep the box at its static position after the filler",
+        );
+    }
+
+    /// No positioned ancestor at all: the containing block is the **ICB** (the
+    /// viewport), per CSS Position §2.1 — the F2 behavior change. Before this
+    /// slice the box resolved against its static wrapper, exactly like the
+    /// fixed case F1 corrected.
+    #[test]
+    fn an_absolute_box_with_no_positioned_ancestor_resolves_against_the_icb() {
+        const SHEET: &[&str] = &[
+            "#wrap { margin: 20px; width: 200px; height: 100px; }",
+            "#abs { position: absolute; top: 0; right: 0; bottom: 0; left: 0; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let wrap = dom.create_element(html("div"));
+        dom.set_attribute(wrap, attr("id"), "wrap");
+        dom.append_child(body, wrap);
+        let abs = dom.create_element(html("div"));
+        dom.set_attribute(abs, attr("id"), "abs");
+        dom.append_child(wrap, abs);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        assert_eq!(
+            layout.absolute_rect(&dom, abs),
+            Some((0.0, 0.0, W, H)),
+            "with no positioned ancestor the insets resolve against the \
+             viewport, unaffected by the default body margin or the wrapper",
+        );
+    }
+
+    /// Percentage widths and insets on a hoisted absolute box resolve against
+    /// the containing block's dimensions, not the static wrapper's and not the
+    /// viewport's.
+    #[test]
+    fn percentage_geometry_resolves_against_the_positioned_ancestor() {
+        const SHEET: &[&str] = &[
+            "html, body { margin: 0; }",
+            "#rel { position: relative; width: 400px; height: 200px; }",
+            "#wrap { width: 100px; height: 50px; }",
+            "#abs { position: absolute; left: 10%; top: 0; width: 50%; height: 20px; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let rel = dom.create_element(html("div"));
+        dom.set_attribute(rel, attr("id"), "rel");
+        dom.append_child(body, rel);
+        let wrap = dom.create_element(html("div"));
+        dom.set_attribute(wrap, attr("id"), "wrap");
+        dom.append_child(rel, wrap);
+        let abs = dom.create_element(html("div"));
+        dom.set_attribute(abs, attr("id"), "abs");
+        dom.append_child(wrap, abs);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        assert_eq!(
+            layout.absolute_rect(&dom, abs),
+            Some((40.0, 0.0, 200.0, 20.0)),
+            "10% left and 50% width resolve against the 400px ancestor",
+        );
+    }
+
+    /// A `static -> absolute` flip through `apply` re-resolves against the
+    /// positioned ancestor — the F2 twin of the fixed toggle above, probing
+    /// the incremental path for the new hoist lane (a splice that would graft
+    /// a hoisted subtree refuses and falls back to rebuild).
+    #[test]
+    fn toggling_position_to_absolute_rehosts_to_the_positioned_ancestor() {
+        const SHEET: &[&str] = &[
+            "html, body { margin: 0; }",
+            "#rel { position: relative; width: 300px; height: 200px; }",
+            "#wrap { width: 100px; height: 50px; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let rel = dom.create_element(html("div"));
+        dom.set_attribute(rel, attr("id"), "rel");
+        dom.append_child(body, rel);
+        let wrap = dom.create_element(html("div"));
+        dom.set_attribute(wrap, attr("id"), "wrap");
+        dom.append_child(rel, wrap);
+        let d = dom.create_element(html("div"));
+        dom.set_attribute(d, attr("style"), "height: 20px");
+        dom.append_child(wrap, d);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let (_, _, w0, _) = layout.absolute_rect(&dom, d).expect("in-flow rect");
+        assert_eq!(w0, 100.0, "starts in flow at the wrapper's width");
+
+        let _ = drain(&mut dom);
+        dom.set_attribute(
+            d,
+            attr("style"),
+            "position: absolute; top: 0; right: 0; bottom: 0; left: 0;",
+        );
+        let muts = drain(&mut dom);
+        layout.apply(&dom, SHEET, &muts);
+        assert_eq!(
+            layout.absolute_rect(&dom, d),
+            Some((0.0, 0.0, 300.0, 200.0)),
+            "after the flip the box fills the positioned ancestor, not the wrapper",
         );
     }
 
