@@ -31,7 +31,7 @@ mod smolweb_glue;
 #[cfg(feature = "smolweb")]
 pub use serval_documents::SmolwebDocument;
 // Re-exported so a host that builds a `SmolwebDocument` can name its theme (and, for
-// the App theme, supply a palette) without depending on `smolweb-views` directly.
+// the App theme, supply a palette) without depending on `nematic::views` directly.
 #[cfg(all(feature = "smolweb", feature = "viewer", feature = "chrome"))]
 pub use chrome_viewer::run_smolweb_browser;
 #[cfg(all(feature = "smolweb", feature = "viewer"))]

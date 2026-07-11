@@ -19,6 +19,7 @@
 use errand::parse::feed::{Feed, FeedEntry};
 use errand::parse::gemtext::GemLine;
 use errand::parse::gopher::{GopherItem, GopherKind};
+use errand::parse::nex::{self, NexEntry};
 use xilem_serval::{
     AnyView, ElementView, PointerClick, ServalCtx, ServalElement, a, clickable, div, el, h1, h2,
     h3, li, p, span, text, ul,
@@ -233,6 +234,45 @@ where
     }
     flush_info(&mut info, &mut children);
     boxed(div(children).attr("class", "gopher"))
+}
+
+/// A Nex directory listing as a native view: each entry is a focusable link
+/// resolved against `address` (nex has no inline link syntax; the listing IS
+/// the links), directories marked with a trailing slash and a `data-kind`
+/// for theming. The plan's "genuinely distinct formats get their own small
+/// AST views" — nex's first (session-engines plan phase 5).
+pub fn nex_view<State, Action, N>(
+    address: &str,
+    entries: &[NexEntry],
+    on_navigate: N,
+) -> SmolwebView<State, Action>
+where
+    State: 'static,
+    Action: xilem_serval::Action + 'static,
+    N: Fn(&str) -> Action + Clone + 'static,
+{
+    let base = nex::base_url(address);
+    let mut children: Vec<SmolwebView<State, Action>> = Vec::new();
+    for entry in entries {
+        let label = if entry.is_dir {
+            format!("{}/", entry.name.trim_end_matches('/'))
+        } else {
+            entry.name.clone()
+        };
+        let url = format!("{base}{}", entry.name.trim_start_matches('/'));
+        let kind = if entry.is_dir { "dir" } else { "file" };
+        let navigate = on_navigate.clone();
+        let anchor = a(text(label))
+            .attr("href", url.clone())
+            .attr("class", "nex-link");
+        let link = clickable(anchor, move |_state: &mut State, _click: PointerClick| {
+            navigate(&url)
+        });
+        children.push(boxed(
+            p(link).attr("class", "nex-entry").attr("data-kind", kind),
+        ));
+    }
+    boxed(div(children).attr("class", "nex"))
 }
 
 /// Flush an accumulated run of `i` info lines into one monospace `pre`, preserving
@@ -534,6 +574,58 @@ mod tests {
         assert_eq!(
             d.attribute(anchor, &no_ns, &LocalName::from("href")),
             Some("gemini://example.test/page"),
+        );
+    }
+
+    /// A nex directory listing builds one focusable link per entry
+    /// (`p.nex-entry > a[href]`), hrefs resolved against the request address,
+    /// directories kind-marked for theming.
+    #[test]
+    fn nex_builds_entry_links() {
+        let entries = vec![
+            errand::parse::nex::NexEntry {
+                name: "docs/".to_string(),
+                is_dir: true,
+            },
+            errand::parse::nex::NexEntry {
+                name: "readme.txt".to_string(),
+                is_dir: false,
+            },
+        ];
+        let dom = Rc::new(RefCell::new(ScriptedDom::new()));
+        let runner = ServalAppRunner::<(), _, _, Nav>::new(
+            dom.clone(),
+            move |_: &()| {
+                nex_view::<(), Nav, _>("nex://example.test/", &entries, |url| {
+                    Nav(url.to_string())
+                })
+            },
+            (),
+        );
+
+        let d = dom.borrow();
+        let no_ns = Namespace::from("");
+        let root = runner.root();
+        let rows: Vec<_> = d.dom_children(root).collect();
+        assert_eq!(rows.len(), 2, "one row per entry");
+
+        let anchor = d
+            .dom_children(rows[0])
+            .find(|&n| d.element_name(n).is_some_and(|q| q.local.as_ref() == "a"))
+            .expect("the entry renders a focusable anchor");
+        assert_eq!(
+            d.attribute(anchor, &no_ns, &LocalName::from("href")),
+            Some("nex://example.test/docs/"),
+            "the directory href resolves against the request address"
+        );
+        assert_eq!(
+            d.attribute(rows[0], &no_ns, &LocalName::from("data-kind")),
+            Some("dir"),
+            "the directory row is kind-marked for theming"
+        );
+        assert_eq!(
+            d.attribute(rows[1], &no_ns, &LocalName::from("data-kind")),
+            Some("file"),
         );
     }
 }

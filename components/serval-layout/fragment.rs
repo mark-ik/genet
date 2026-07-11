@@ -33,6 +33,14 @@ pub struct FragmentPlane<NodeId: Copy + Eq + Hash> {
     /// tree at fragment-readback time — the one source of truth, so walkers and
     /// paint agree by data rather than by re-derived predicates.
     pub(crate) hoisted_origins: FxHashMap<NodeId, (f32, f32)>,
+    /// The reverse view: hoist target -> the boxes hoisted **to** it (the
+    /// root's DOM id for `fixed`, the positioned ancestor's for `absolute`).
+    /// The hit walk defers a hoisted box from its *target's* frame — the frame
+    /// whose accumulated point mapping (scrolls above the containing block,
+    /// clips on the containing-block chain) is the one that legitimately
+    /// applies to it — rather than from its DOM parent's, where intermediate
+    /// static clippers/scrollers would wrongly apply.
+    pub(crate) hoisted_by_target: FxHashMap<NodeId, Vec<NodeId>>,
 }
 
 impl<NodeId: Copy + Eq + Hash> Default for FragmentPlane<NodeId> {
@@ -40,6 +48,7 @@ impl<NodeId: Copy + Eq + Hash> Default for FragmentPlane<NodeId> {
         Self {
             rects: FxHashMap::default(),
             hoisted_origins: FxHashMap::default(),
+            hoisted_by_target: FxHashMap::default(),
         }
     }
 }
@@ -57,6 +66,12 @@ impl<NodeId: Copy + Eq + Hash> FragmentPlane<NodeId> {
     /// [`Self::hoisted_origins`]), or `None` for every in-flow box.
     pub fn hoisted_origin(&self, id: NodeId) -> Option<(f32, f32)> {
         self.hoisted_origins.get(&id).copied()
+    }
+
+    /// The boxes hoisted **to** `id` (see [`Self::hoisted_by_target`]); empty
+    /// for every node that is not a hoist target.
+    pub fn hoisted_children(&self, id: NodeId) -> &[NodeId] {
+        self.hoisted_by_target.get(&id).map_or(&[], Vec::as_slice)
     }
 
     /// Read the laid-out rect for a node, if it was reached by layout.

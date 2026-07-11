@@ -15,6 +15,13 @@ categories = ["web-programming", "rendering"]
 # Override serval's workspace-wide publish = false: nematic is a published crate.
 publish = true
 
+[features]
+default = []
+# The native render lane (nematic::views): per-format xilem-serval views over
+# errand's ASTs, with theming. Off by default so block-engine consumers stay
+# clear of the view/render stack.
+views = ["dep:xilem-serval"]
+
 [lib]
 path = "src/lib.rs"
 
@@ -32,6 +39,13 @@ jotdown = "0.10"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+xilem-serval = { path = "../xilem-serval", optional = true }
+
+[dev-dependencies]
+# The views tests build into a real ScriptedDom and inspect the result
+# (moved with the views from the retired smolweb-views component).
+serval-scripted-dom = { path = "../serval-scripted-dom" }
+layout_dom_api = { package = "layout-dom-api", path = "../shared/layout-dom" }
 
 # `test = true` runs the example's embedded round-trip tests under `cargo test`.
 [[example]]

@@ -523,22 +523,13 @@ fn walk_for_hit<D>(
                 l.size.height - l.border.top - l.border.bottom,
             );
             if !pad.contains(local) {
-                // A hoisted descendant's containing block is above this box, so
-                // this clipper is not in its containing-block chain and must not
-                // clip it (CSS Overflow). Defer direct hoisted children before
-                // pruning the in-flow subtree; their re-entry frame reads its
-                // origin from the hoist side table, so `parent_origin` is
-                // ignored. Known approximation: hoisted boxes nested *deeper*
-                // inside the pruned subtree are still missed.
-                for child in dom.dom_children(id) {
-                    if fragments.hoisted_origin(child).is_some() {
-                        deferred.push(DeferredHitSubtree {
-                            id: child,
-                            parent_origin: origin,
-                            point: local,
-                        });
-                    }
-                }
+                // Hoisted descendants are NOT lost with the subtree: they are
+                // deferred from their hoist *target's* frame (below), which is
+                // outside this pruned subtree whenever this clipper is not in
+                // their containing-block chain (CSS Overflow: only the CB
+                // chain clips). If their containing block sits *inside* the
+                // pruned subtree, its frame is pruned along with it and they
+                // are correctly clipped too.
                 return;
             }
         }
@@ -551,13 +542,32 @@ fn walk_for_hit<D>(
         None => local,
     };
 
+    // Adopted (hoisted) boxes: this node is their containing block, so this
+    // frame's accumulated mapping — scrolls above and at the CB, clips on the
+    // CB chain — is exactly the one that applies to them; intermediate static
+    // scrollers/clippers between here and their DOM parent legitimately do
+    // not. `child_point` includes this node's own scroll: an absolute box
+    // scrolls with its CB (a hoisted `fixed` box's target is the root, and
+    // its re-entry frame counters the document scroll itself).
+    for &h in fragments.hoisted_children(id) {
+        deferred.push(DeferredHitSubtree {
+            id: h,
+            parent_origin: origin,
+            point: child_point,
+        });
+    }
+
     // Positioned children (`position != static`) paint in lifted layers ON
     // TOP of all in-flow content (paint_stacking), across subtree
     // boundaries — so the in-flow walk must not descend into them in
     // document order. Defer each with its accumulated (origin, point)
     // mapping; `hit_test` drains the queue after the in-flow walk, so the
-    // positioned plane overwrites in-flow hits.
+    // positioned plane overwrites in-flow hits. A *hoisted* child is not
+    // this frame's to defer — its hoist target's frame adopts it (above).
     for child in dom.dom_children(id) {
+        if fragments.hoisted_origin(child).is_some() {
+            continue;
+        }
         if primary_cv(styles, child)
             .as_deref()
             .is_some_and(crate::paint_stacking::is_positioned)

@@ -29,9 +29,9 @@ pub mod smolweb;
 pub use smolweb::SmolwebDocument;
 // Re-exported so a host that builds a `SmolwebDocument` can name its theme
 // (and, for the App theme, supply a palette) without depending on
-// `smolweb-views` directly.
+// `nematic::views` directly.
 #[cfg(feature = "smolweb")]
-pub use smolweb_views::{SmolwebPalette, SmolwebTheme};
+pub use nematic::views::{SmolwebPalette, SmolwebTheme};
 
 #[cfg(feature = "scripted")]
 pub use serval_scripted::{

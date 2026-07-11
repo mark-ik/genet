@@ -5,7 +5,7 @@
 //! Smolweb documents as native serval views (the `smolweb` feature).
 //!
 //! The smolweb twin of [`Chrome`](crate::chrome::Chrome): errand parses a fetched
-//! capsule into a per-format AST, a `smolweb-views` view renders it into a
+//! capsule into a per-format AST, a `nematic::views` view renders it into a
 //! `ScriptedDom`, and serval lays it out and paints it to a [`Scene`] through the
 //! same GPU-free path the chrome uses. Native, not gemtext-to-HTML — real focusable
 //! link elements, per-format classes, per-site theming. A link click resolves to a
@@ -18,13 +18,15 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use errand::parse::{feed, gemtext, gopher};
+use errand::parse::{feed, gemtext, gopher, nex};
 use netrender::Scene;
 use pelt_core::ResourceFetcher;
 use serval_layout::{IncrementalLayout, ScrollKey, ScrollOffsets};
 use serval_render::scene_from_session_dom;
 use serval_scripted_dom::{NodeId, ScriptedDom};
-use smolweb_views::{SmolwebTheme, SmolwebView, feed_view, gemtext_view, gopher_view, stylesheet};
+use nematic::views::{
+    SmolwebTheme, SmolwebView, feed_view, gemtext_view, gopher_view, nex_view, stylesheet,
+};
 use xilem_serval::{DomHandle, PointerClick, ServalAppRunner};
 
 /// A link-click navigation target, the action the smolweb views bubble.
@@ -36,6 +38,9 @@ enum Content {
     Gemtext(Vec<gemtext::GemLine>),
     Gopher(Vec<gopher::GopherItem>),
     Feed(feed::Feed),
+    /// A nex directory listing, with the request address the entries resolve
+    /// against. A nex content response (not a listing) renders as gemtext.
+    Nex(String, Vec<nex::NexEntry>),
 }
 
 /// The view's app state: just the parsed content (the view is a pure projection of
@@ -52,6 +57,9 @@ fn view(state: &SmolwebState) -> SmolwebView<SmolwebState, Navigate> {
         Content::Gemtext(lines) => gemtext_view(lines, |url| Navigate(url.to_string())),
         Content::Gopher(items) => gopher_view(items, |url| Navigate(url.to_string())),
         Content::Feed(parsed) => feed_view(parsed, |url| Navigate(url.to_string())),
+        Content::Nex(address, entries) => {
+            nex_view(address, entries, |url| Navigate(url.to_string()))
+        }
     }
 }
 
@@ -237,12 +245,20 @@ fn detect(url: &str, body: &str) -> Content {
     let scheme = url.split_once("://").map(|(s, _)| s).unwrap_or("");
     match scheme {
         "gopher" => Content::Gopher(gopher::parse(body)),
+        // A nex directory listing gets its native view (the listing IS the
+        // links); a nex content response falls through to gemtext.
+        "nex" => match nex::parse(body) {
+            Some(entries) => Content::Nex(url.to_string(), entries),
+            None => Content::Gemtext(gemtext::parse(body)),
+        },
         _ if looks_like_feed(body) => match feed::parse(body) {
             Ok(parsed) => Content::Feed(parsed),
             // A malformed "feed" falls back to gemtext rather than erroring.
             Err(_) => Content::Gemtext(gemtext::parse(body)),
         },
-        // gemini / spartan / guppy / nex / finger and anything else: gemtext.
+        // gemini and the wrapper protocols whose bodies ARE gemtext by
+        // definition (spartan / titan / guppy / scroll / misfin), plus finger
+        // (plain text, no link syntax) and anything else: gemtext.
         _ => Content::Gemtext(gemtext::parse(body)),
     }
 }

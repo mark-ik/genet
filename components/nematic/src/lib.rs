@@ -54,6 +54,14 @@ pub mod gemtext;
 pub mod gopher;
 pub mod guppy;
 pub mod knot;
+
+/// The native render lane (was the `smolweb-views` component, merged
+/// 2026-07-11 per the session-engines plan phase 5): per-format
+/// xilem-serval views over errand's ASTs — the idiom carriers — plus the
+/// theme vocabulary. Feature-gated: the block engines stay light; hosts
+/// that render natively opt in.
+#[cfg(feature = "views")]
+pub mod views;
 pub mod markdown;
 pub mod misfin;
 pub mod nex;

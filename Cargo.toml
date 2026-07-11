@@ -43,7 +43,6 @@ members = [
     # The content lanes as session engines (2026-07-10 session-engines plan):
     # static/scripted/smolweb retained documents, promoted out of pelt.
     "components/serval-documents",
-    "components/smolweb-views",
     "components/serval-winit-host",
     "components/serval-render",
     "components/shared/layout-dom",

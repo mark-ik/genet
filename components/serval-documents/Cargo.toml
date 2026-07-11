@@ -13,9 +13,9 @@ path = "src/lib.rs"
 default = []
 # Remote http(s) loading for LocalFetcher via the netfetcher engine.
 netfetch = ["dep:netfetcher", "dep:tokio", "dep:bytes", "dep:url"]
-# The smolweb native lane: errand transport/parse + smolweb-views rendering.
+# The smolweb native lane: errand transport/parse + nematic::views rendering.
 smolweb = [
-    "dep:errand", "dep:smolweb-views", "dep:tokio", "dep:url",
+    "dep:errand", "dep:nematic", "nematic/views", "dep:tokio", "dep:url",
     "dep:serval-scripted-dom", "dep:xilem-serval",
 ]
 # The scripted lane: a live ScriptedDocument on Boa.
@@ -42,7 +42,7 @@ serval-scripted = { path = "../serval-scripted", features = ["render"], optional
 script-engine-api = { path = "../script-engine-api", optional = true }
 script-engine-boa = { path = "../script-engine-boa", optional = true }
 script-engine-nova = { path = "../script-engine-nova", optional = true }
-smolweb-views = { path = "../smolweb-views", optional = true }
+nematic = { workspace = true, optional = true }
 xilem-serval = { path = "../xilem-serval", optional = true }
 errand = { workspace = true, optional = true }
 # Same git source pelt uses; not a root workspace entry (sibling repo).

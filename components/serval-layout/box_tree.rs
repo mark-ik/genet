@@ -624,23 +624,37 @@ where
             for &(h, target) in &hoists {
                 tree.nodes[target].children.push(h);
             }
-            tree.abs_hoists = hoists.into_iter().map(|(h, _)| (h, None)).collect();
+            // Retained as (index, applied target's DOM id) — the Option is
+            // always `Some` from here on (an ICB hoist resolved to the root).
+            // Fragment readback fills the plane's target map from it.
+            tree.abs_hoists = hoists
+                .into_iter()
+                .map(|(h, t)| (h, Some(tree.nodes[t].source.dom_id())))
+                .collect();
         }
     }
     tree
 }
 
 /// Whether this element's style makes it a containing block for **fixed**
-/// descendants (css-transforms §2 and friends): `transform`, `filter`, or
-/// `perspective`. Conservative first cut — `will-change` and `contain` are not
-/// yet consulted, so a box a real UA would keep local may still hoist; rare,
-/// and the safe direction for conformance is covered by the common three.
+/// descendants: `transform` / `perspective` / `filter` (css-transforms §2,
+/// filter-effects), `will-change` naming any of those (css-will-change §3 —
+/// stylo pre-digests the named features into change bits, `FIXPOS_CB_NON_SVG`
+/// covering filter), or `contain: layout / paint` and the shorthands that
+/// imply them (css-contain §3).
 pub(crate) fn establishes_fixed_cb(cv: &ComputedValues) -> bool {
     use style::values::computed::Perspective;
+    use style::values::specified::box_::{Contain, WillChangeBits};
     let b = cv.get_box();
     !b.transform.0.is_empty()
         || !matches!(b.perspective, Perspective::None)
         || !cv.get_effects().filter.0.is_empty()
+        || b.will_change.bits.intersects(
+            WillChangeBits::TRANSFORM
+                | WillChangeBits::PERSPECTIVE
+                | WillChangeBits::FIXPOS_CB_NON_SVG,
+        )
+        || b.contain.intersects(Contain::LAYOUT | Contain::PAINT)
 }
 
 /// Recursively build the box for `elem`: the hoist-aware wrapper over
@@ -1720,6 +1734,25 @@ where
             for &c in &tree.nodes[i].children {
                 let l = &tree.nodes[c].final_layout;
                 stack.push((c, (origin.0 + l.location.x, origin.1 + l.location.y)));
+            }
+        }
+        // The reverse view (hoist target -> its adopted boxes), for the hit
+        // walk's target-frame deferral.
+        let root_dom = tree.nodes[tree.root].source.dom_id();
+        for &h in &tree.fixed_hoists {
+            fragments
+                .hoisted_by_target
+                .entry(root_dom)
+                .or_default()
+                .push(tree.nodes[h].source.dom_id());
+        }
+        for &(h, target) in &tree.abs_hoists {
+            if let Some(t) = target {
+                fragments
+                    .hoisted_by_target
+                    .entry(t)
+                    .or_default()
+                    .push(tree.nodes[h].source.dom_id());
             }
         }
     }
