@@ -212,6 +212,22 @@ pub struct BoxTree<Id: Copy + Eq + Hash> {
     /// point on a `display:inline` element (which establishes no box of its own).
     /// Absent for leaves with no inline text.
     inline_sources: FxHashMap<Id, Vec<(Range<usize>, Id)>>,
+    /// F1 (position containing blocks): arena indices of `position: fixed`
+    /// boxes registered during construction for re-parenting to the root (the
+    /// ICB approximation). Drained by `build_box_tree`'s post-pass; kept empty
+    /// afterwards.
+    fixed_hoists: Vec<usize>,
+    /// Transform-CB depth during the construction walk: >0 while inside an
+    /// ancestor that establishes a containing block for fixed descendants
+    /// (css-transforms §2: `transform`, `filter`, `perspective`, …). A fixed
+    /// box under such an ancestor is *not* hoisted — the spec rule, and what
+    /// keeps camera-transformed hosts (the orrery's `.stage`) intact.
+    fixed_cb_depth: usize,
+    /// Whether this tree's construction hoisted any fixed box. Read by
+    /// [`Self::graft_subtree`]: a scoped subtree build hoists to *its* root,
+    /// which after grafting would be the subtree root rather than the document
+    /// ICB, so such a graft refuses and the caller takes the full-rebuild path.
+    had_fixed_hoists: bool,
 }
 
 impl<Id: Copy + Eq + Hash> BoxTree<Id> {
@@ -484,6 +500,9 @@ where
         root: 0,
         node_map: FxHashMap::default(),
         inline_sources: FxHashMap::default(),
+        fixed_hoists: Vec::new(),
+        fixed_cb_depth: 0,
+        had_fixed_hoists: false,
     };
 
     // The layout root. Three shapes of `LayoutDom::document()`:

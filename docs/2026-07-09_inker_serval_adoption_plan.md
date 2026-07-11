@@ -251,7 +251,13 @@ changed.
    fallback rule needs — it is host-generic, not mere-flavored.
 6. Pelt's serval lanes registered as inker document engines behind pelt
    features; meerkat's hand-dispatch of serval lanes retired or reduced to
-   registry calls.
+   registry calls. **Superseded 2026-07-10**: widened into its own design
+   pass, [2026-07-10_session_engines_plan.md](./2026-07-10_session_engines_plan.md)
+   (a third engine kind — retained sessions producing paint frames — plus
+   the serval-sessions component, the meerkat ladder collapse, and the
+   errand/nematic reorg folded in). "Document engines" was the wrong shape
+   for the serval lanes: forcing them through EngineDocument is the block
+   mash already rejected.
 7. crates.io: inker + nematic republished from mark-ik/serval.
 8. errand joins serval (companion step; may land separately). **DONE
    2026-07-10** (serval e4487163ed0, mere 00cf124): components/errand with
