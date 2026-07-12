@@ -1,0 +1,33 @@
+[package]
+name = "stylo_taffy"
+version = "0.3.0-beta.1"
+edition = "2024"
+rust-version = "1.89.0"
+license = "MIT OR Apache-2.0 OR MPL-2.0"
+description = "Interop crate for the stylo and taffy crates"
+keywords = ["css", "layout"]
+categories = ["gui"]
+homepage = "https://github.com/dioxuslabs/blitz"
+repository = "https://github.com/dioxuslabs/blitz"
+
+[lib]
+name = "stylo_taffy"
+path = "src/lib.rs"
+
+[dependencies]
+# Redirected by the workspace root's `[patch.crates-io]` to `mark-ik/stylo`
+# (branch `mark-ik/servo-media-features`), which still declares 0.18.0 — see
+# `support/patches/SERVAL_PATCHES.md` and this crate's own README.
+style = { version = "^0.18", package = "stylo" }
+style_atoms = { version = "^0.18", package = "stylo_atoms" }
+# Redirected by the same `[patch.crates-io]` to `support/patches/taffy`
+# (re-vendored 0.12.1, see its own README).
+taffy = { version = "=0.12.1", default-features = false }
+
+[features]
+default = ["std", "block", "flexbox", "grid"]
+std = ["taffy/std"]
+block = ["taffy/block_layout"]
+flexbox = ["taffy/flexbox"]
+grid = ["taffy/grid"]
+floats = ["taffy/float_layout"]
