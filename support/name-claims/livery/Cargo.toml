@@ -1,0 +1,9 @@
+[package]
+name = "livery"
+version = "0.0.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mark-ik/genet"
+description = "Livery: a clean-room, generated CSS cascade engine. NAME CLAIM: the real crate is being developed in mark-ik/genet; consume it as a git dependency."
+
+[workspace]
