@@ -3,7 +3,7 @@ name = "sprigging"
 version = "0.0.1"
 edition = "2021"
 license = "MPL-2.0"
-repository = "https://github.com/mark-ik/serval"
+repository = "https://github.com/mark-ik/genet"
 description = "Sprigging: custom-paint widget leaves applied to the genet engine's render passes (formerly chisel, published as serval-chisel). NAME CLAIM: the real crate lives in mark-ik/serval (components/chisel); consume it as a git dependency."
 
 [workspace]

@@ -3,7 +3,7 @@ name = "genet-taffy"
 version = "0.0.1"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/mark-ik/serval"
+repository = "https://github.com/mark-ik/genet"
 description = "The genet engine's taffy fork (vendored 0.12.x line with genet-side patches). NAME CLAIM: the real crate lives in mark-ik/serval (support/patches/taffy); consume it as a git dependency."
 
 [workspace]
