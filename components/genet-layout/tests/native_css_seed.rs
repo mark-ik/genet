@@ -116,7 +116,10 @@ fn cambium_catalog_declarations_are_covered_by_the_native_seed() {
     let declarations = declaration_names(CAMBIUM_CATALOG);
     let mut missing = BTreeSet::new();
 
-    assert!(!declarations.is_empty(), "catalog CSS produced no declarations");
+    assert!(
+        !declarations.is_empty(),
+        "catalog CSS produced no declarations"
+    );
     for shorthand in ["border", "margin", "padding"] {
         assert!(
             declarations.contains(shorthand),

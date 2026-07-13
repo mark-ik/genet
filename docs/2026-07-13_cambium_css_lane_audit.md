@@ -4,6 +4,10 @@
 **Status:** E0b lane choice, themed catalog fixture, and 40-property clean-room
 database landed. Source hashes are recorded below.
 
+Audited revisions: Cambium `a7c4603c` for the live catalog and Genet
+`c00daa92308` for the database, snapshot, and executable guard. The local
+Cambium extraction does not yet have a Git remote configured.
+
 This is the second receipt for the native CSS engine. The first audit found the
 full current engine path consumes 126 longhands. This audit chooses the first
 bounded lane and records the smaller property contract it actually needs.
