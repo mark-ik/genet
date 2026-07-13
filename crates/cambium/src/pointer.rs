@@ -233,7 +233,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tags::chisel_leaf;
+    use crate::tags::custom_leaf;
     use crate::{AnyView, DomHandle, ServalAppRunner, ServalCtx, ServalElement};
     use layout_dom_api::LayoutDom;
     use serval_scripted_dom::ScriptedDom;
@@ -255,7 +255,7 @@ mod tests {
     /// leaf only paints (`Knob` implements no `Leaf::event`).
     fn knob_view(_s: &KnobState) -> KnobView {
         Box::new(on_pointer(
-            chisel_leaf::<KnobState, ()>(KNOB_KEY, 48, 48),
+            custom_leaf::<KnobState, ()>(KNOB_KEY, 48, 48),
             |s: &mut KnobState, e: PointerEvent| {
                 // Normalize without knowing layout: `local` is element-local and
                 // `size` is the element's box, both supplied by the runner.
@@ -290,7 +290,7 @@ mod tests {
                 .element_name(root)
                 .map(|q| q.local.to_string())
                 .as_deref(),
-            Some("chisel-leaf"),
+            Some("custom-leaf"),
             "on_pointer wraps the leaf element itself; nothing wraps it in a div",
         );
         assert_eq!(runner.state().knob.value(), 0.0, "knob starts at zero");

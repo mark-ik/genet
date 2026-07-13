@@ -1,0 +1,13 @@
+[package]
+name = "cambium-winit"
+version.workspace = true
+description = "winit input translation for Cambium applications"
+edition.workspace = true
+rust-version.workspace = true
+license = "MPL-2.0"
+repository.workspace = true
+publish = true
+
+[dependencies]
+cambium = { version = "0.1.0", path = "../cambium" }
+winit = "0.30.13"

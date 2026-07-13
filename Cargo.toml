@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/cambium", "crates/meristem", "crates/sprigging"]
+members = [
+    "crates/cambium",
+    "crates/cambium-winit",
+    "crates/meristem",
+    "crates/sprigging",
+]
 
 [workspace.package]
 version = "0.1.0"

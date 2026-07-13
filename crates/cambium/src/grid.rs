@@ -6,7 +6,7 @@
 //! header over virtualized, absolutely-placed rows.
 //!
 //! Geometry comes from [`sprigging::GridSpec`]; row *content* comes from the
-//! caller's cell function (any view — text, a `chisel_leaf` sparkline, a
+//! caller's cell function (any view — text, a `custom_leaf` sparkline, a
 //! button), so the grid owns arrangement and nothing else. Only the
 //! [`VirtualWindow`](sprigging::VirtualWindow) rows exist as DOM; scrolling is
 //! caller state (wire [`on_wheel`](crate::on_wheel) around the grid, clamping
@@ -134,7 +134,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tags::chisel_leaf;
+    use crate::tags::custom_leaf;
     use crate::{DomHandle, ServalAppRunner};
     use layout_dom_api::{LayoutDom, LocalName, Namespace};
     use serval_scripted_dom::{NodeId, ScriptedDom};
@@ -175,7 +175,7 @@ mod tests {
                 let i = if descending { rows - 1 - r } else { r };
                 if c == 2 {
                     // Sparkline-in-cell shape: a custom leaf as a cell view.
-                    Box::new(chisel_leaf::<GridState, ()>(1000 + i as u64, 96, 16))
+                    Box::new(custom_leaf::<GridState, ()>(1000 + i as u64, 96, 16))
                 } else {
                     Box::new(el::<_, GridState, ()>("span", format!("r{i}c{c}")))
                 }
