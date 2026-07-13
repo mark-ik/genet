@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/meristem"]
+members = ["crates/cambium", "crates/meristem", "crates/sprigging"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,4 +11,3 @@ repository = "https://github.com/mark-ik/cambium"
 [workspace.dependencies]
 tracing = "0.1.44"
 kurbo = "0.13.1"
-

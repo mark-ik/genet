@@ -11,9 +11,12 @@ Meristem began as Linebender's Apache-2.0 `xilem_core`, vendored into Serval at
 the four Serval commits that touched that subtree, preserving their authors,
 dates, and messages before moving the files to `crates/meristem`.
 
-This is not yet a complete Xilem history graft. C0 remains partial until the
-filtered upstream `xilem_core` history is joined and `git log --follow` reaches
-both upstream Xilem and Serval lineage.
+The upstream side is a path-only replay of the 113 commits that touched
+`xilem_core` through the recorded `mark-ik/xilem` base. The filtered tip is
+`7f61f0537c2d911498cf0e7c940b377cb7673a76`; merge
+`51a8a6a72fc1021ffcaa4c4d7a7ca5dbebddb7bf` joins that lineage to the
+Serval-derived extraction without replacing Cambium's live tree. Patch replay
+rewrites commit hashes but retains original authors, dates, and messages.
 
 ## Semantic patches over the vendored core
 
@@ -31,4 +34,7 @@ default implementations preserve compatibility for other Meristem backends.
 Reconcile against a recorded Xilem release or commit. Compare the retained core
 surface, update this ledger, and run the keyed and portable-move tests before
 accepting an upstream change.
+
+The `upstream-xilem` remote points to `mark-ik/xilem`. Fetching it does not
+merge the wider Xilem workspace; updates are filtered to the core path first.
 

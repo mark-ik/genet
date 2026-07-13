@@ -1,0 +1,21 @@
+[package]
+name = "cambium"
+version.workspace = true
+description = "A Meristem backend and application toolkit for Serval"
+edition.workspace = true
+rust-version.workspace = true
+license = "MPL-2.0"
+repository.workspace = true
+publish = true
+
+[features]
+highlight = ["dep:illume", "dep:tinct"]
+
+[dependencies]
+meristem = { version = "0.1.0", path = "../meristem" }
+sprigging = { version = "0.1.0", path = "../sprigging" }
+serval-scripted-dom = "0.1.0"
+layout_dom_api = { package = "layout-dom-api", version = "0.1.0" }
+unicode-segmentation = "1.13.2"
+illume = { version = "=0.0.2", optional = true }
+tinct = { version = "=0.1.2", optional = true }

@@ -16,11 +16,10 @@ Serval engine crates -X-> Cambium
 
 - Meristem owns reactive diffing, messages, view identity, and view sequences.
 - Cambium owns application views, controls, composition, and Serval adapters.
-- Cambium-Chisel owns retained custom-leaf state and arrangement helpers.
+- Sprigging owns retained custom-leaf state and arrangement helpers.
 - Serval owns DOM, style, layout, paint, input, accessibility, and browser
   behavior.
 - Nematic and other document engines own parsing and protocol-faithful lowering.
 
-Serval remains independently usable without Cambium. Chisel is an extension of
-Serval's neutral custom-leaf seam, not a second layout or input engine.
-
+Serval remains independently usable without Cambium. Sprigging is an extension
+of Serval's neutral custom-leaf seam, not a second layout or input engine.
