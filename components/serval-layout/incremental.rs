@@ -3314,6 +3314,276 @@ mod tests {
         );
     }
 
+    /// A positioned **inline-block** containing block: the badge pattern. The
+    /// wrapper has no arena box (the line places it), so the island hoists to
+    /// the nearest boxed CB and `apply_inline_cb_fixups` re-resolves its
+    /// insets against the inline-block's parley-placed rect.
+    #[test]
+    fn an_absolute_badge_anchors_to_its_positioned_inline_block_wrapper() {
+        const SHEET: &[&str] = &[
+            "html, body, p { margin: 0; }",
+            "#ib { display: inline-block; position: relative; width: 80px; height: 40px; }",
+            "#badge { position: absolute; top: 0; right: 0; width: 10px; height: 10px; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+        let ib = dom.create_element(html("span"));
+        dom.set_attribute(ib, attr("id"), "ib");
+        dom.append_child(p, ib);
+        let badge = dom.create_element(html("div"));
+        dom.set_attribute(badge, attr("id"), "badge");
+        dom.append_child(ib, badge);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        assert_eq!(
+            layout.absolute_rect(&dom, badge),
+            Some((70.0, 0.0, 10.0, 10.0)),
+            "`top: 0; right: 0` resolves against the 80x40 inline-block wrapper",
+        );
+        assert_eq!(
+            layout.hit_test(&dom, 75.0, 5.0, &Default::default()),
+            Some(badge),
+            "the badge is hit at its anchored corner",
+        );
+    }
+
+    /// A `position: relative` **table row** offsets its cells (css-position
+    /// §3.5): the `<tr>` has no box — its cells flatten into the table grid —
+    /// so the row's resolved offset rides `BoxTree::cell_shifts` onto each
+    /// cell's location. The flip through `apply` also proves the shift
+    /// survives recomputes over the retained tree.
+    #[test]
+    fn a_relative_table_row_offsets_its_cells() {
+        const SHEET: &[&str] = &[
+            "html, body { margin: 0; }",
+            "table { border-collapse: collapse; }",
+            "td { padding: 0; }",
+            "td div { width: 50px; height: 50px; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let table = dom.create_element(html("table"));
+        dom.append_child(body, table);
+        let tbody = dom.create_element(html("tbody"));
+        dom.append_child(table, tbody);
+        let mut tds = Vec::new();
+        let mut trs = Vec::new();
+        for _ in 0..2 {
+            let tr = dom.create_element(html("tr"));
+            dom.append_child(tbody, tr);
+            let td = dom.create_element(html("td"));
+            dom.append_child(tr, td);
+            let d = dom.create_element(html("div"));
+            dom.append_child(td, d);
+            trs.push(tr);
+            tds.push(td);
+        }
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let (x0, y0, _, _) = layout.absolute_rect(&dom, tds[0]).expect("cell rect");
+
+        let _ = drain(&mut dom);
+        dom.set_attribute(trs[0], attr("style"), "position: relative; top: 60px");
+        let muts = drain(&mut dom);
+        layout.apply(&dom, SHEET, &muts);
+        assert_eq!(
+            layout.absolute_rect(&dom, tds[0]).map(|r| (r.0, r.1)),
+            Some((x0, y0 + 60.0)),
+            "the relative row's cell shifts down by the row's `top`",
+        );
+        assert_eq!(
+            layout.absolute_rect(&dom, tds[1]).map(|r| r.1),
+            Some(y0 + 50.0),
+            "the second row's cell stays in the grid flow (relative offsets \
+             do not move siblings)",
+        );
+    }
+
+    /// The absolute box sits under a static **inline** wrapper inside the
+    /// positioned inline-block: the island is found by the deep DFS and its
+    /// containing block is still the inline-block (the static wrapper is
+    /// skipped, CSS 2.2 §10.1). Block-level in-flow content inside the
+    /// inline-block would instead keep the whole shape in the legacy flow
+    /// (`inline_block_content_is_pure_inline` — coherence with the flattened
+    /// rendering of that content).
+    #[test]
+    fn a_nested_absolute_box_resolves_against_its_inline_block_containing_block() {
+        const SHEET: &[&str] = &[
+            "html, body { margin: 0; }",
+            // The margin moves the group off (0, 0), so a wrongly root-resolved
+            // position cannot coincide with the right answer.
+            "p { margin: 20px 0 0 30px; }",
+            "#group { display: inline-block; position: relative; width: 150px; height: 200px; }",
+            "#ind { position: absolute; left: 0; top: 100px; width: 50px; height: 50px; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+        let group = dom.create_element(html("span"));
+        dom.set_attribute(group, attr("id"), "group");
+        dom.append_child(p, group);
+        let mid = dom.create_element(html("i"));
+        dom.append_child(group, mid);
+        let t = dom.create_text("anchor text");
+        dom.append_child(mid, t);
+        let ind = dom.create_element(html("div"));
+        dom.set_attribute(ind, attr("id"), "ind");
+        dom.append_child(mid, ind);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        assert_eq!(
+            layout.absolute_rect(&dom, ind),
+            Some((30.0, 120.0, 50.0, 50.0)),
+            "`left: 0; top: 100px` resolves against the inline-block group at \
+             (30, 20), skipping the static div",
+        );
+    }
+
+    /// A host-built **multi-root** document has no `<html>`, so its synthetic
+    /// root box stands in for the ICB — and must size to the viewport (the
+    /// UA sheet's `html { width/height: 100% }` equivalent), or a hoisted
+    /// fixed box resolves `bottom`/`right` against content height instead.
+    #[test]
+    fn a_fixed_box_in_a_multi_root_host_document_fills_the_viewport() {
+        const SHEET: &[&str] = &[
+            "div { margin: 0; }",
+            "#a { height: 40px; }",
+            "#f { position: fixed; top: 0; right: 0; bottom: 0; left: 0; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        // TWO document-level elements: the synthetic-root shape (no <html>).
+        let a = dom.create_element(html("div"));
+        dom.set_attribute(a, attr("id"), "a");
+        dom.append_child(root, a);
+        let b = dom.create_element(html("div"));
+        dom.append_child(root, b);
+        let f = dom.create_element(html("div"));
+        dom.set_attribute(f, attr("id"), "f");
+        dom.append_child(b, f);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        assert_eq!(
+            layout.absolute_rect(&dom, f),
+            Some((0.0, 0.0, W, H)),
+            "the fixed box resolves against the viewport-sized synthetic root",
+        );
+    }
+
+    /// `position: sticky` V1 (css-position §6.3, document scrollport): a
+    /// sticky `top: 0` header rides the document scroll — flow position
+    /// unscrolled, pinned to the viewport top while its section is in view,
+    /// and stopped at the section's content-box bottom edge once the section
+    /// scrolls past. Paint, hit, and rect queries share the refreshed layout.
+    #[test]
+    fn a_sticky_header_sticks_under_document_scroll_and_stops_at_its_section() {
+        const SHEET: &[&str] = &[
+            "html, body { margin: 0; }",
+            "#section { height: 300px; }",
+            "#h { position: sticky; top: 0; height: 30px; }",
+            "#tail { height: 2000px; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let section = dom.create_element(html("div"));
+        dom.set_attribute(section, attr("id"), "section");
+        dom.append_child(body, section);
+        let header = dom.create_element(html("div"));
+        dom.set_attribute(header, attr("id"), "h");
+        dom.append_child(section, header);
+        let tail = dom.create_element(html("div"));
+        dom.set_attribute(tail, attr("id"), "tail");
+        dom.append_child(body, tail);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let (_, y0, _, _) = layout.absolute_rect(&dom, header).expect("flow rect");
+        assert_eq!(y0, 0.0, "unscrolled, the header sits at its flow position");
+
+        layout.set_viewport_scroll(&dom, (0.0, 100.0));
+        assert_eq!(
+            layout.absolute_rect(&dom, header).map(|r| r.1),
+            Some(100.0),
+            "scrolled 100px, the header pins to the viewport top (content y \
+             tracks the scroll)",
+        );
+        assert_eq!(
+            layout.hit_test(&dom, 10.0, 5.0, &Default::default()),
+            Some(header),
+            "the pinned header is hit at the viewport top",
+        );
+
+        layout.set_viewport_scroll(&dom, (0.0, 500.0));
+        assert_eq!(
+            layout.absolute_rect(&dom, header).map(|r| r.1),
+            Some(270.0),
+            "scrolled past the section, the header stops at the section's \
+             bottom edge (300px - 30px)",
+        );
+
+        layout.set_viewport_scroll(&dom, (0.0, 0.0));
+        assert_eq!(
+            layout.absolute_rect(&dom, header).map(|r| r.1),
+            Some(0.0),
+            "scrolled back, the header returns to its flow position",
+        );
+    }
+
+    /// Sticky insets are scroll-linked constraints, not static offsets:
+    /// `top: 20px` on an unscrolled sticky box must NOT shift it (the
+    /// stylo_taffy `Sticky -> Relative` mapping would apply it as a relative
+    /// offset; the `CssStyle` inset neutralization prevents that).
+    #[test]
+    fn sticky_insets_do_not_offset_the_unscrolled_flow_position() {
+        const SHEET: &[&str] = &[
+            "html, body { margin: 0; }",
+            "#pad { height: 40px; }",
+            "#s { position: sticky; top: 20px; height: 30px; }",
+            "#tail { height: 2000px; }",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let pad = dom.create_element(html("div"));
+        dom.set_attribute(pad, attr("id"), "pad");
+        dom.append_child(body, pad);
+        let s = dom.create_element(html("div"));
+        dom.set_attribute(s, attr("id"), "s");
+        dom.append_child(body, s);
+        let tail = dom.create_element(html("div"));
+        dom.set_attribute(tail, attr("id"), "tail");
+        dom.append_child(body, tail);
+
+        let layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        assert_eq!(
+            layout.absolute_rect(&dom, s).map(|r| r.1),
+            Some(40.0),
+            "unscrolled, `top: 20px` does not displace the sticky box from \
+             its flow position after the 40px pad",
+        );
+    }
+
     /// Static-position machinery: an all-auto-inset absolute box now hoists
     /// (with a flow placeholder), so its **percentage width resolves against
     /// the containing block** (CSS 2.2 §10.2) while its position stays the

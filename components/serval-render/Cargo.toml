@@ -34,13 +34,13 @@ engine_observables_api = { workspace = true }
 accesskit = { workspace = true }
 # taffy must match serval-layout's experimental pin (layout() takes a taffy::Size
 # viewport); euclid for the viewport size the image planes carry.
-taffy = { version = "=0.11.0-experimental-cache-fix.3", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "float_layout", "calc", "detailed_layout_info"] }
+taffy = { version = "=0.12.1", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "float_layout", "calc", "content_size", "detailed_layout_info"] }
 euclid = { workspace = true }
 
 [dev-dependencies]
 # The lib tests drive the render pipeline through a `ServalAppRunner` (the serval
 # host spine), so xilem-serval is test-only here -- render.rs / a11y.rs do not
 # touch it.
-xilem-serval = { path = "../xilem-serval" }
+xilem-serval = { package = "serval-xilem", version = "0.1.0", path = "../xilem-serval" }
 # A parsed HTML document for the content-introspection (`inspect`) tests.
 serval-static-dom = { path = "../serval-static-dom" }

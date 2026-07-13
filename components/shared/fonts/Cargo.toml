@@ -28,7 +28,7 @@ read-fonts = { workspace = true }
 serde = { workspace = true }
 servo-base = { workspace = true }
 servo-url = { workspace = true }
-stylo = { workspace = true }
+style = { workspace = true }
 uuid = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]

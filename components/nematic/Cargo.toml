@@ -43,7 +43,7 @@ tracing = { workspace = true }
 # the registry the xilem-serval name-claim stub does (a consumer enabling
 # `views` from crates.io needs the real component, i.e. the serval git dep,
 # until serval's view stack publishes for real).
-xilem-serval = { version = ">=0.0.1", path = "../xilem-serval", optional = true }
+xilem-serval = { package = "serval-xilem", version = "0.1.0", path = "../xilem-serval", optional = true }
 
 [dev-dependencies]
 # The views tests build into a real ScriptedDom and inspect the result

@@ -44,7 +44,7 @@ script-engine-api = { path = "../script-engine-api", optional = true }
 script-engine-boa = { path = "../script-engine-boa", optional = true }
 script-engine-nova = { path = "../script-engine-nova", optional = true }
 nematic = { workspace = true, optional = true }
-xilem-serval = { path = "../xilem-serval", optional = true }
+xilem-serval = { package = "serval-xilem", version = "0.1.0", path = "../xilem-serval", optional = true }
 errand = { workspace = true, optional = true }
 # Same git source pelt uses; not a root workspace entry (sibling repo).
 netfetcher = { git = "https://github.com/mark-ik/netfetcher.git", branch = "main", optional = true }

@@ -1,16 +1,21 @@
 # serval's taffy fork — patch log
 
-This is a vendored copy of `taffy 0.11.0-experimental-cache-fix.3` (the newest
-published taffy, the only line carrying the experimental `float_layout`
-feature). It is wired in via `[patch.crates-io] taffy = { path =
+This is a vendored copy of `taffy 0.12.1` — re-vendored 2026-07-12 from the
+prior `0.11.0-experimental-cache-fix.3` (`float_layout` graduated from
+experimental to stable in 0.12, ending the need to ride the experimental
+line at all; see `docs/2026-07-12_ring3_fork_rename_publish_plan.md`, T0). It
+is wired in via `[patch.crates-io] taffy = { path =
 "support/patches/taffy" }` in the workspace `Cargo.toml`, and redirects only the
-`=0.11.0-experimental-cache-fix.3` requirement (serval-layout + stylo_taffy);
-the workspace's plain `taffy 0.10.1` is unaffected.
+`=0.12.1` requirement (serval-layout + paint + serval-render + serval-wpt +
+the vendored `stylo_taffy`); the workspace's plain `taffy 0.10.1` is
+unaffected.
 
-It exists because taffy's float / BFC / table layout is experimental and
-incomplete, and serval pushes on exactly those paths as CSS conformance climbs.
+It exists because taffy's float / BFC / table layout is still incomplete in
+places, and serval pushes on exactly those paths as CSS conformance climbs.
 This fork is the home for the layout fixes we accumulate, each upstreamed at our
-own pace so the divergence from upstream stays small.
+own pace so the divergence from upstream stays small — see `UPSTREAM_PR.md`
+for the drafted PRs (all three patches below are PR-able; none has landed
+upstream yet).
 
 ## How to keep it in sync
 
@@ -24,8 +29,8 @@ When bumping taffy, re-vendor the new release and re-apply each patch (the
 ### 0001 — `find_content_slot` width-fit (`0001-find_content_slot-width-fit.patch`)
 
 **Files:** `src/compute/float.rs`, `src/compute/block.rs`
-**Upstream status:** present on taffy `main` too; PR drafted (see
-`UPSTREAM_PR.md`).
+**Upstream status:** present on taffy `main` too (unfixed as of 0.12.1); PR
+drafted (see `UPSTREAM_PR.md`, PR 1).
 
 `FloatContext::find_content_slot` chose the first vertical band below `min_y`
 without regard to whether the placed content is wide enough to fit there. A
@@ -49,7 +54,7 @@ full-width float) now matches its reference.
 **Files:** `src/compute/float.rs`, `src/compute/block.rs`, `src/compute/mod.rs`
 **Upstream status:** serval-only so far (the inline IFC seam it feeds is
 serval's parley-measured leaf, which upstream taffy does not model). Additive —
-no existing taffy behaviour changes.
+no existing taffy behaviour changes. PR drafted (`UPSTREAM_PR.md`, PR 2).
 
 Inline text wrapping *around* a float needs each line box to know the width the
 floats leave at its own y. taffy places floats (the `float_layout` feature) but
@@ -82,7 +87,8 @@ the band's `y` (fine for the common no-top-padding case).
 **Files:** `src/style/flex.rs`, `src/compute/flexbox.rs`
 **Upstream status:** serval-only. This taffy version does not model CSS `order`
 at all — `FlexItem.order` is the document index (used only for paint/output
-ordering), and the flex algorithm processes items in document order. PR-able.
+ordering), and the flex algorithm processes items in document order. PR
+drafted (`UPSTREAM_PR.md`, PR 3).
 
 CSS `order` lays flex items out (and paints them) in *order-modified document
 order*: items sort by ascending `order`, ties broken by document order.

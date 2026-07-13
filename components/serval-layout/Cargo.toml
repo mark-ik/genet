@@ -52,7 +52,7 @@ selectors = { workspace = true }
 servo_arc = { workspace = true }
 # servo-base = { workspace = true }  # EXPERIMENT: unused by serval-layout source
 servo-url = { workspace = true }
-stylo = { workspace = true }
+style = { workspace = true }
 stylo_atoms = { workspace = true }
 stylo_dom = { workspace = true }
 stylo_static_prefs = { workspace = true }
@@ -63,8 +63,8 @@ stylo_traits = { workspace = true }
 # `taffy::Style` we consume). Reach is serval-layout + paint's dev-dep;
 # Servo's components/layout stays on 0.10.1. See
 # docs/2026-05-20_stylo_taffy_adoption_plan.md.
-taffy = { version = "=0.11.0-experimental-cache-fix.3", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "float_layout", "calc", "detailed_layout_info"] }
-stylo_taffy = { version = "0.3.0-alpha.5", features = ["floats"] }
+taffy = { version = "=0.12.1", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "float_layout", "calc", "content_size", "detailed_layout_info"] }
+stylo_taffy = { version = "0.3.0-beta.1", features = ["floats"] }
 # Host-neutral diagnostics facade: this crate only EMITS tracing events; the
 # consuming app (e.g. meerkat) installs the subscriber. No dep on any app or
 # diagnostics registry.

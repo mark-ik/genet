@@ -269,25 +269,34 @@ pub(crate) fn is_out_of_flow<NodeId: Copy + Eq + Hash>(
         })
 }
 
-/// Whether an out-of-flow element inside a gathered inline subtree should be
-/// built as a hoisted **island**: true iff its CSS containing block will have
-/// a real, container-safe box for the hoist to land on. When it will not — a
-/// `position: relative` inline or inline-block ancestor (no arena box), an
-/// out-of-flow ancestor within the gathered region, an inline-context leaf
-/// (a measured leaf lays out no children), a replaced/table-internal CB —
-/// the gather keeps the legacy transparent flow instead: the content rides
-/// the line near its anchor, a far better approximation than hoisting to the
-/// root (the WPT `position-relative-table-*` shapes, and the badge-on-inline-
-/// wrapper pattern, are exactly this).
-///
-/// The gather's skip decision and the box tree's island build MUST agree, or
-/// content vanishes (skipped but never built) or duplicates (flowed and
-/// built) — this predicate is the single shared answer.
-pub(crate) fn island_worthy<'a, D>(
+/// How an out-of-flow element inside a gathered inline subtree relates to its
+/// CSS containing block — the single shared answer for the gather's skip
+/// decision and the box tree's island build. The two MUST agree, or content
+/// vanishes (skipped but never built) or duplicates (flowed and built).
+pub(crate) enum IslandCb<Id> {
+    /// The CB will have a real, container-safe arena box (or is the ICB):
+    /// build the island and hoist it there.
+    Landable,
+    /// The CB is a **positioned inline-block** — atomic, but placed by the
+    /// line, so it has no arena box. Build the island, hoist it to the
+    /// nearest *boxed* CB, and position-fix it against the inline-block's
+    /// parley-placed rect post-layout (`apply_inline_cb_fixups`).
+    InlineBlock(Id),
+    /// No landable representation (a positioned plain inline, an out-of-flow
+    /// ancestor within the gathered region, an inline-context-leaf CB, a
+    /// replaced / table-internal CB): keep the legacy transparent flow — the
+    /// content rides the line near its anchor, a far better approximation
+    /// than hoisting to the root.
+    Legacy,
+}
+
+/// Classify an out-of-flow element's containing block for the islands lane
+/// (see [`IslandCb`]).
+pub(crate) fn island_cb<'a, D>(
     dom: &'a D,
     styles: &StylePlane<D::NodeId>,
     elem: &NodeRef<'a, D>,
-) -> bool
+) -> IslandCb<D::NodeId>
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -310,9 +319,9 @@ where
         }
         // An out-of-flow ancestor inside the gathered region has no box of its
         // own (it was flowed, or its island build owns this subtree instead) —
-        // conservative false keeps both walks in the legacy lane together.
+        // conservative Legacy keeps both walks in the same lane together.
         if is_out_of_flow(styles, anc.id()) {
-            return false;
+            return IslandCb::Legacy;
         }
         let Some(entry) = styles.get(anc.id()) else {
             a = anc.parent();
@@ -329,24 +338,83 @@ where
             crate::box_tree::establishes_fixed_cb(cv) || crate::paint_stacking::is_positioned(cv)
         };
         if is_cb {
-            // The nearest containing block: representable iff it is a plain
-            // block container (it gets an arena box that lays out children) —
-            // not inline-level, not replaced, not a measured inline-context
-            // leaf, not a boxless table-internal part (`<tr>`, `<tbody>`).
+            // The nearest containing block. A plain block container gets an
+            // arena box that lays out children -> Landable. A positioned
+            // inline-block is atomic with a parley-placed rect -> the
+            // position-fix lane. Everything else (positioned plain inline,
+            // replaced, a measured inline-context leaf, a boxless
+            // table-internal part like `<tr>`) -> Legacy.
             let display = cv.get_box().display;
             let block_flow = matches!(display.outside(), DisplayOutside::Block)
                 && matches!(
                     display.inside(),
                     DisplayInside::Flow | DisplayInside::FlowRoot
                 );
+            let inline_block = matches!(display.outside(), DisplayOutside::Inline)
+                && matches!(display.inside(), DisplayInside::FlowRoot);
             drop(data);
-            return block_flow
+            if inline_block
                 && !is_replaced(dom, anc.id())
-                && !establishes_inline_context(dom, styles, anc.clone());
+                && inline_block_content_is_pure_inline(dom, styles, &anc)
+            {
+                return IslandCb::InlineBlock(anc.id());
+            }
+            return if block_flow
+                && !is_replaced(dom, anc.id())
+                && !establishes_inline_context(dom, styles, anc.clone())
+            {
+                IslandCb::Landable
+            } else {
+                IslandCb::Legacy
+            };
         }
         a = anc.parent();
     }
     // No containing block at all: the ICB (the root box) — always landable.
+    IslandCb::Landable
+}
+
+/// Whether a gathered inline-block's in-flow content is purely inline-level
+/// (text, inline elements, nested atomics) — the precondition for the islands
+/// lane to spec-position an absolute box against it. Block-level in-flow
+/// content inside a gathered inline-block is currently FLATTENED to runs
+/// (tables lose their grid, divs their boxes), so an island positioned
+/// per-spec against such a CB would sit correctly amid visibly-degraded
+/// surroundings (the WPT `position-relative-table-*` family: a spec-placed
+/// red indicator that the flattened green table can no longer cover).
+/// Coherence wins: those islands stay in the legacy flow with their CB.
+/// Out-of-flow descendants are the islands themselves — skipped; nested
+/// inline-blocks are atomic (placed as boxes) — not descended into.
+fn inline_block_content_is_pure_inline<'a, D>(
+    dom: &'a D,
+    styles: &StylePlane<D::NodeId>,
+    ib: &NodeRef<'a, D>,
+) -> bool
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    use style::values::specified::box_::DisplayOutside;
+    let mut stack: Vec<NodeRef<'a, D>> = ib.dom_children().collect();
+    while let Some(n) = stack.pop() {
+        if !matches!(dom.kind(n.id()), NodeKind::Element) {
+            continue;
+        }
+        if is_out_of_flow(styles, n.id()) {
+            continue;
+        }
+        if is_inline_block(styles, n.id()) || is_replaced(dom, n.id()) {
+            continue;
+        }
+        let outside = styles
+            .get(n.id())
+            .and_then(|e| e.borrow_data())
+            .map(|d| d.styles.primary().get_box().display.outside());
+        if !matches!(outside, Some(DisplayOutside::Inline) | None) {
+            return false;
+        }
+        stack.extend(n.dom_children());
+    }
     true
 }
 

@@ -42,7 +42,7 @@ dpi = { workspace = true }
 euclid = { workspace = true }
 image = { workspace = true }
 # Must match serval-layout's experimental pin (layout() takes a taffy::Size).
-taffy = { version = "=0.11.0-experimental-cache-fix.3", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "float_layout", "calc", "detailed_layout_info"] }
+taffy = { version = "=0.12.1", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "float_layout", "calc", "content_size", "detailed_layout_info"] }
 
 # Phase 3 (testharness): run testharness.js + the test's scripts on the host
 # surface and read results, with the JS engine selectable via `--engine`

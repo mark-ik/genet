@@ -189,7 +189,7 @@ sha2 = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 # Chrome profile (behind the `chrome` feature): the xilem-serval reactive toolkit the
 # omnibar + back/forward views are built with, over a ScriptedDom the runner drives.
-xilem-serval = { path = "../../components/xilem-serval", optional = true }
+xilem-serval = { package = "serval-xilem", version = "0.1.0", path = "../../components/xilem-serval", optional = true }
 # OS clipboard access for the omnibar's Ctrl/Cmd+V paste (chrome feature). Reads only;
 # a failed open (e.g. a headless host) degrades to a no-op paste.
 arboard = { workspace = true, optional = true }

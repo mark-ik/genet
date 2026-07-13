@@ -37,5 +37,5 @@ serde = { workspace = true }
 servo-base = { workspace = true }
 servo-url = { workspace = true }
 servo_arc = { workspace = true }
-stylo = { workspace = true }
+style = { workspace = true }
 stylo_traits = { workspace = true }

@@ -17,7 +17,7 @@ path = "src/lib.rs"
 # them onto the surface (workspace path dep on the sibling netrender checkout).
 netrender = { workspace = true }
 # Key / modifier mapping targets serval's input model (KeyEvent / Modifiers).
-xilem-serval = { path = "../xilem-serval" }
+xilem-serval = { package = "serval-xilem", version = "0.1.0", path = "../xilem-serval" }
 # Windowing + wgpu surface (workspace pins: winit 0.30 / wgpu 29).
 winit = { workspace = true }
 wgpu = { version = "29", default-features = false, features = ["std", "wgsl"] }

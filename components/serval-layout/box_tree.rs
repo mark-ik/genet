@@ -217,6 +217,12 @@ struct AbsHoist<Id> {
     /// position IS the static position, and the post-layout fixup rewrites
     /// the hoisted box's location on those axes to match.
     placeholder: Option<usize>,
+    /// The DOM id of a **positioned inline-block** containing block (islands
+    /// lane): the box was hoisted to the nearest *boxed* CB for layout, but
+    /// its true CB is this atomic inline, so `apply_inline_cb_fixups`
+    /// re-resolves its non-auto insets against the inline-block's
+    /// parley-placed rect after layout. `None` on every block-path hoist.
+    inline_cb: Option<Id>,
 }
 
 /// serval's layout arena. Built from a `LayoutDom` + `StylePlane`;
@@ -262,6 +268,22 @@ pub struct BoxTree<Id: Copy + Eq + Hash> {
     /// root/ancestry, which after grafting would be wrong, so such a graft
     /// refuses and the caller takes the full-rebuild path.
     had_hoists: bool,
+    /// Table cells owed a **row-relative shift**: a `position: relative`
+    /// `<tr>` / row-group has no box (cells flatten into the table grid), so
+    /// its relative offset is resolved at build time (lengths; percentages
+    /// are a residual) and applied to each of its cells' locations after
+    /// layout (`apply_table_cell_shifts`) — the boxless twin of Taffy's own
+    /// `Relative` handling for the cell itself.
+    cell_shifts: Vec<(usize, (f32, f32))>,
+    /// Whether the root is a **synthetic** box (a host-built multi-root
+    /// document, or the empty-document fallback) rather than a real element.
+    /// A synthetic root carries the initial style (`height: auto`,
+    /// content-sized), but it stands in for the ICB, so hoisted `fixed` /
+    /// ICB-absolute boxes would resolve `bottom` / `right` against content
+    /// height instead of the viewport. `get_core_container_style` forces
+    /// `100% x 100%` on it — exactly what the UA sheet's `html { width/
+    /// height: 100% }` does for a real parsed root.
+    synthetic_root: bool,
     /// `position: sticky` boxes — `(arena index, parent arena index, flow
     /// location)` — captured after layout (post static-position fixups).
     /// Sticky is scroll-linked: [`refresh_sticky_positions`] re-derives each
@@ -553,6 +575,8 @@ where
         fixed_cb_depth: 0,
         abs_cb: None,
         had_hoists: false,
+        cell_shifts: Vec::new(),
+        synthetic_root: false,
         sticky_bases: Vec::new(),
     };
 
@@ -591,9 +615,13 @@ where
                 // fallback below.
                 let mut root = BoxNode::new(initial_style(), BoxSource::Element(doc.id()));
                 root.children = children;
+                tree.synthetic_root = true;
                 tree.push(root)
             }
-            (None, _) => tree.push(BoxNode::new(initial_style(), BoxSource::Element(doc.id()))),
+            (None, _) => {
+                tree.synthetic_root = true;
+                tree.push(BoxNode::new(initial_style(), BoxSource::Element(doc.id())))
+            },
         }
     };
     tree.root = root;
@@ -817,6 +845,7 @@ where
                 cb: ancestor_abs_cb,
                 forced: false,
                 placeholder,
+                inline_cb: None,
             });
             tree.had_hoists = true;
             if let Some(ph) = placeholder {
@@ -827,6 +856,105 @@ where
         }
     }
     i
+}
+
+/// Post-layout fixup for islands whose containing block is a **positioned
+/// inline-block** (see `AbsHoist::inline_cb`): the island was hoisted to the
+/// nearest *boxed* CB for layout, so Taffy resolved its insets against the
+/// wrong box. The inline-block's true rect is known post-measure — parley
+/// places it as an `InlineBox` within its leaf's content box — so re-resolve
+/// each non-auto inset against that rect (border box) and move the island.
+/// Auto axes keep their layout position. Named approximations: percentage
+/// and inset-derived *sizing* still resolved against the hoist target; the
+/// padding-box refinement (border widths) is not applied.
+fn apply_inline_cb_fixups<Id: Copy + Eq + Hash>(
+    tree: &mut BoxTree<Id>,
+    text_ctx: &TextMeasureCtx,
+    root: usize,
+) {
+    use parley::PositionedLayoutItem;
+    let jobs: Vec<(usize, Id)> = tree
+        .abs_hoists
+        .iter()
+        .filter_map(|h| Some((h.idx, h.inline_cb?)))
+        .collect();
+    if jobs.is_empty() {
+        return;
+    }
+    let mut origins: Vec<Option<(f32, f32)>> = vec![None; tree.nodes.len()];
+    let mut stack = vec![(root, {
+        let l = &tree.nodes[root].final_layout;
+        (l.location.x, l.location.y)
+    })];
+    while let Some((i, o)) = stack.pop() {
+        origins[i] = Some(o);
+        for &c in &tree.nodes[i].children {
+            let l = &tree.nodes[c].final_layout;
+            stack.push((c, (o.0 + l.location.x, o.1 + l.location.y)));
+        }
+    }
+    for (b, cb_id) in jobs {
+        // The leaf whose inline content carries the inline-block, and the
+        // box index parley knows it by.
+        let mut found = None;
+        for i in 0..tree.nodes.len() {
+            if let Some(content) = &tree.nodes[i].inline_content {
+                if let Some(bi) = content.boxes.iter().position(|item| item.source == cb_id) {
+                    found = Some((i, bi));
+                    break;
+                }
+            }
+        }
+        let Some((leaf, bi)) = found else { continue };
+        let Some(layout) = text_ctx.layouts.get(&nid(leaf)) else {
+            continue;
+        };
+        let mut placed = None;
+        'lines: for line in layout.lines() {
+            for item in line.items() {
+                if let PositionedLayoutItem::InlineBox(pbox) = item {
+                    if pbox.id as usize == bi {
+                        placed = Some((pbox.x, pbox.y, pbox.width, pbox.height));
+                        break 'lines;
+                    }
+                }
+            }
+        }
+        let Some((px, py, pw, ph)) = placed else { continue };
+        let (Some(leaf_abs), Some(cur)) = (origins[leaf], origins[b]) else {
+            continue;
+        };
+        // Inline content lays out within the leaf's content box.
+        let ll = &tree.nodes[leaf].final_layout;
+        let cb_abs = (
+            leaf_abs.0 + ll.border.left + ll.padding.left + px,
+            leaf_abs.1 + ll.border.top + ll.padding.top + py,
+        );
+        let bl = tree.nodes[b].final_layout;
+        let cv = tree.nodes[b].style.clone();
+        let pos = cv.get_position();
+        let calc = |_: *const (), _: f32| 0.0;
+        let left = stylo_taffy::convert::inset(&pos.left).resolve_to_option(pw, calc);
+        let right = stylo_taffy::convert::inset(&pos.right).resolve_to_option(pw, calc);
+        let top = stylo_taffy::convert::inset(&pos.top).resolve_to_option(ph, calc);
+        let bottom = stylo_taffy::convert::inset(&pos.bottom).resolve_to_option(ph, calc);
+        let mut desired = cur;
+        if let Some(lf) = left {
+            desired.0 = cb_abs.0 + lf + bl.margin.left;
+        } else if let Some(r) = right {
+            desired.0 = cb_abs.0 + pw - r - bl.size.width - bl.margin.right;
+        }
+        if let Some(t) = top {
+            desired.1 = cb_abs.1 + t + bl.margin.top;
+        } else if let Some(bm) = bottom {
+            desired.1 = cb_abs.1 + ph - bm - bl.size.height - bl.margin.bottom;
+        }
+        if desired != cur {
+            let loc = &mut tree.nodes[b].final_layout.location;
+            loc.x += desired.0 - cur.0;
+            loc.y += desired.1 - cur.1;
+        }
+    }
 }
 
 /// Record every `position: sticky` box's flow location (see
@@ -1065,15 +1193,17 @@ fn build_out_of_flow_islands<'a, D>(
         return;
     }
     if crate::construct::is_out_of_flow(styles, node.id()) {
-        // Not island-worthy (an inline / inline-block / already-out-of-flow
-        // containing block has no landable box): the gather flowed this whole
-        // subtree transparently -- the legacy behavior -- so build nothing and
-        // do not descend (deeper out-of-flow content belongs to the same
-        // flowed region). The predicate is shared with the gather's skip;
-        // the two MUST agree or content vanishes / duplicates.
-        if !crate::construct::island_worthy(dom, styles, &node) {
-            return;
-        }
+        // Legacy (a positioned plain inline / already-out-of-flow containing
+        // block has no landable representation): the gather flowed this whole
+        // subtree transparently, so build nothing and do not descend (deeper
+        // out-of-flow content belongs to the same flowed region). The
+        // classification is shared with the gather's skip; the two MUST
+        // agree or content vanishes / duplicates.
+        let inline_cb = match crate::construct::island_cb(dom, styles, &node) {
+            crate::construct::IslandCb::Legacy => return,
+            crate::construct::IslandCb::Landable => None,
+            crate::construct::IslandCb::InlineBlock(id) => Some(id),
+        };
         let before_fixed = tree.fixed_hoists.len();
         let before_abs = tree.abs_hoists.len();
         let b = build_node(dom, styles, images, node, tree);
@@ -1094,6 +1224,7 @@ fn build_out_of_flow_islands<'a, D>(
             if let Some(last) = tree.abs_hoists.last_mut() {
                 last.forced = true;
                 last.placeholder = None;
+                last.inline_cb = inline_cb;
             }
         } else {
             // The wrapper skipped registration (CB == DOM parent, or a
@@ -1103,6 +1234,7 @@ fn build_out_of_flow_islands<'a, D>(
                 cb: tree.abs_cb,
                 forced: true,
                 placeholder: None,
+                inline_cb,
             });
             tree.had_hoists = true;
         }
@@ -1302,7 +1434,16 @@ where
 {
     let mut children = Vec::new();
     let mut row = 0u16;
-    collect_table_rows(dom, styles, images, elem, &mut row, &mut children, tree);
+    collect_table_rows(
+        dom,
+        styles,
+        images,
+        elem,
+        &mut row,
+        &mut children,
+        (0.0, 0.0),
+        tree,
+    );
     let mut node = BoxNode::new(style, BoxSource::Element(elem.id()));
     node.children = children;
     let i = tree.push(node);
@@ -1312,7 +1453,10 @@ where
 
 /// Walk `container`'s table structure, building each `table-cell` into a grid
 /// item tagged with its `(*row, col)` and pushing it onto `children`; recurse
-/// through row groups. `*row` advances once per `table-row`.
+/// through row groups. `*row` advances once per `table-row`. `group_shift`
+/// accumulates the relative offsets of boxless positioned table internals
+/// (a `position: relative` row-group, then row) down to the cells, which
+/// carry the summed shift (see `BoxTree::cell_shifts`).
 #[allow(clippy::too_many_arguments)]
 fn collect_table_rows<'a, D>(
     dom: &'a D,
@@ -1321,6 +1465,7 @@ fn collect_table_rows<'a, D>(
     container: NodeRef<'a, D>,
     row: &mut u16,
     children: &mut Vec<usize>,
+    group_shift: (f32, f32),
     tree: &mut BoxTree<D::NodeId>,
 ) where
     D: LayoutDom,
@@ -1330,6 +1475,8 @@ fn collect_table_rows<'a, D>(
     for child in container.dom_children() {
         match display_inside_of(styles, child.id()) {
             Some(DisplayInside::TableRow) => {
+                let rs = relative_shift(styles, child.id());
+                let shift = (group_shift.0 + rs.0, group_shift.1 + rs.1);
                 let mut col = 0u16;
                 for cell in child.dom_children() {
                     if matches!(
@@ -1338,6 +1485,9 @@ fn collect_table_rows<'a, D>(
                     ) {
                         let ci = build_node(dom, styles, images, cell, tree);
                         tree.nodes[ci].grid_placement = Some((*row, col));
+                        if shift != (0.0, 0.0) {
+                            tree.cell_shifts.push((ci, shift));
+                        }
                         children.push(ci);
                         col += 1;
                     }
@@ -1348,12 +1498,45 @@ fn collect_table_rows<'a, D>(
                 DisplayInside::TableRowGroup
                 | DisplayInside::TableHeaderGroup
                 | DisplayInside::TableFooterGroup,
-            ) => collect_table_rows(dom, styles, images, child, row, children, tree),
+            ) => {
+                let rs = relative_shift(styles, child.id());
+                let shift = (group_shift.0 + rs.0, group_shift.1 + rs.1);
+                collect_table_rows(dom, styles, images, child, row, children, shift, tree)
+            },
             // `<caption>`, `<colgroup>`, stray content: not laid out in the
             // first-cut grid (deferred).
             _ => {},
         }
     }
+}
+
+/// The `position: relative` offset of a boxless table internal (`<tr>`,
+/// `<thead>`, ...), resolved at build time: `left` wins over `right` (as
+/// `-right`), `top` over `bottom`, per Taffy's own `Relative` handling.
+/// Lengths only — a percentage inset resolves to 0 (residual; the basis
+/// would be the table size, unknown at build).
+fn relative_shift<Id: Copy + Eq + Hash>(styles: &StylePlane<Id>, id: Id) -> (f32, f32) {
+    use style::values::computed::PositionProperty;
+    let Some(cv) = styles
+        .get(id)
+        .and_then(|e| e.borrow_data())
+        .map(|d| d.styles.primary().clone())
+    else {
+        return (0.0, 0.0);
+    };
+    if !matches!(cv.get_box().position, PositionProperty::Relative) {
+        return (0.0, 0.0);
+    }
+    let p = cv.get_position();
+    let calc = |_: *const (), _: f32| 0.0;
+    let left = stylo_taffy::convert::inset(&p.left).resolve_to_option(0.0, calc);
+    let right = stylo_taffy::convert::inset(&p.right).resolve_to_option(0.0, calc);
+    let top = stylo_taffy::convert::inset(&p.top).resolve_to_option(0.0, calc);
+    let bottom = stylo_taffy::convert::inset(&p.bottom).resolve_to_option(0.0, calc);
+    (
+        left.unwrap_or_else(|| -right.unwrap_or(0.0)),
+        top.unwrap_or_else(|| -bottom.unwrap_or(0.0)),
+    )
 }
 
 /// Build a synthetic block box for the element's block-level `::before` /
@@ -1448,6 +1631,12 @@ type NodeStyle = TaffyStyloStyle<ServoArc<ComputedValues>>;
 struct CssStyle {
     inner: NodeStyle,
     size_override: Option<taffy::Size<taffy::Dimension>>,
+    /// Report `is_block()` regardless of the inner display — the synthetic
+    /// multi-root's initial style computes `display: inline`, which would
+    /// skip `compute_root_layout`'s block branch (where the root size 
+    /// resolves against the viewport). serval dispatches the box as a block
+    /// container either way; this makes the style agree.
+    block_override: bool,
     /// 0-based `(row, col)` for a flattened table cell — its `GridItemStyle`
     /// reports an explicit grid line at `row + 1` / `col + 1` instead of the
     /// element's own (`auto`) placement. `None` for every non-cell box.
@@ -1460,6 +1649,7 @@ impl CssStyle {
         Self {
             inner,
             size_override: None,
+            block_override: false,
             grid_placement: None,
         }
     }
@@ -1469,6 +1659,7 @@ impl CssStyle {
         Self {
             inner,
             size_override: Some(size),
+            block_override: false,
             grid_placement: None,
         }
     }
@@ -1489,7 +1680,7 @@ impl taffy::CoreStyle for CssStyle {
     }
     #[inline]
     fn is_block(&self) -> bool {
-        self.inner.is_block()
+        self.block_override || self.inner.is_block()
     }
     #[inline]
     fn is_compressible_replaced(&self) -> bool {
@@ -1788,14 +1979,32 @@ impl<Id: Copy + Eq + Hash> TraverseTree for BoxTreeView<'_, Id> {}
 
 impl<Id: Copy + Eq + Hash> LayoutPartialTree for BoxTreeView<'_, Id> {
     type CoreContainerStyle<'b>
-        = NodeStyle
+        = CssStyle
     where
         Self: 'b;
     type CustomIdent = style::Atom;
 
     #[inline]
-    fn get_core_container_style(&self, node: NodeId) -> NodeStyle {
-        TaffyStyloStyle(self.node(node).style.clone())
+    fn get_core_container_style(&self, node: NodeId) -> CssStyle {
+        let inner = TaffyStyloStyle(self.node(node).style.clone());
+        // A synthetic root stands in for the ICB: force `100% x 100%` so it
+        // resolves to the viewport (`compute_root_layout` resolves the root
+        // size against the available space), the same sizing the UA sheet
+        // gives a real `<html>` root. Hoisted fixed / ICB-absolute boxes then
+        // resolve `bottom` / `right` insets against the viewport, per CSS
+        // Position 2.1.
+        if self.tree.synthetic_root && idx(node) == self.tree.root_arena() {
+            let mut cs = CssStyle::with_size(
+                inner,
+                taffy::Size {
+                    width: taffy::Dimension::percent(1.0),
+                    height: taffy::Dimension::percent(1.0),
+                },
+            );
+            cs.block_override = true;
+            return cs;
+        }
+        CssStyle::new(inner)
     }
 
     #[inline]
@@ -1862,7 +2071,7 @@ impl<Id: Copy + Eq + Hash> LayoutBlockContainer for BoxTreeView<'_, Id> {
 
     #[inline]
     fn get_block_container_style(&self, node: NodeId) -> NodeStyle {
-        self.get_core_container_style(node)
+        TaffyStyloStyle(self.node(node).style.clone())
     }
 
     #[inline]
@@ -1896,7 +2105,7 @@ impl<Id: Copy + Eq + Hash> LayoutFlexboxContainer for BoxTreeView<'_, Id> {
 
     #[inline]
     fn get_flexbox_container_style(&self, node: NodeId) -> NodeStyle {
-        self.get_core_container_style(node)
+        TaffyStyloStyle(self.node(node).style.clone())
     }
 
     #[inline]
@@ -1920,7 +2129,7 @@ impl<Id: Copy + Eq + Hash> LayoutGridContainer for BoxTreeView<'_, Id> {
 
     #[inline]
     fn get_grid_container_style(&self, node: NodeId) -> NodeStyle {
-        self.get_core_container_style(node)
+        TaffyStyloStyle(self.node(node).style.clone())
     }
 
     #[inline]
@@ -2074,6 +2283,16 @@ where
         taffy::round_layout(&mut view, root);
     }
     apply_static_position_fixups(&mut tree, idx(root));
+    apply_inline_cb_fixups(&mut tree, text_ctx, idx(root));
+    // Row-relative shifts (see `BoxTree::cell_shifts`): Taffy recomputes
+    // locations fresh on every pass over the retained tree, so the shift is
+    // re-applied after each — the list persists for the tree's lifetime.
+    for i in 0..tree.cell_shifts.len() {
+        let (ci, (dx, dy)) = tree.cell_shifts[i];
+        let loc = &mut tree.nodes[ci].final_layout.location;
+        loc.x += dx;
+        loc.y += dy;
+    }
     capture_sticky_bases(&mut tree, idx(root));
     if let Some(t) = t {
         eprintln!(

@@ -46,29 +46,6 @@ pub struct ContentSlot {
     pub height: f32,
 }
 
-/// A horizontal exclusion band for wrapping inline content around floats.
-///
-/// Over the y-range `[y_start, y_end)` (in the consuming block's
-/// content-box-local coordinate space), floats narrow the available inline
-/// width by `left` on the inline-start side and `right` on the inline-end side
-/// — both measured inward from the content-box edges. Consumed by inline line
-/// breaking to give each line box its own (narrowed) width, so text wraps to
-/// the side of a float and reclaims the full column below it.
-///
-/// serval patch (float wrap-around): produced by
-/// [`FloatContext::exclusion_bands`] + `BlockContext::inline_exclusion_bands`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct InlineFloatBand {
-    /// Top of the band (content-box-local y).
-    pub y_start: f32,
-    /// Bottom of the band (content-box-local y).
-    pub y_end: f32,
-    /// Inline-start inset imposed by floats over this band.
-    pub left: f32,
-    /// Inline-end inset imposed by floats over this band.
-    pub right: f32,
-}
-
 /// A floated box
 #[derive(Debug, Clone, Default)]
 pub struct PlacedFloatedBox {
@@ -492,6 +469,7 @@ impl FloatContext {
         self.cleared_segment(clear).and_then(|idx| self.segments.get(idx.max(1) - 1)).map(|seg| seg.y.end)
     }
 
+    /// Search for a space suitable for laying out non-floated content into
     /// Search for a space suitable for laying out non-floated content into.
     ///
     /// `min_width` is the minimum width the content needs (its outer/margin-box
@@ -592,6 +570,29 @@ impl FloatContext {
             .map(|seg| (seg.y.clone(), seg.insets))
             .collect()
     }
+}
+
+/// A horizontal exclusion band for wrapping inline content around floats.
+///
+/// Over the y-range `[y_start, y_end)` (in the consuming block's
+/// content-box-local coordinate space), floats narrow the available inline
+/// width by `left` on the inline-start side and `right` on the inline-end side
+/// — both measured inward from the content-box edges. Consumed by inline line
+/// breaking to give each line box its own (narrowed) width, so text wraps to
+/// the side of a float and reclaims the full column below it.
+///
+/// serval patch (float wrap-around): produced by
+/// [`FloatContext::exclusion_bands`] + `BlockContext::inline_exclusion_bands`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InlineFloatBand {
+    /// Top of the band (content-box-local y).
+    pub y_start: f32,
+    /// Bottom of the band (content-box-local y).
+    pub y_end: f32,
+    /// Inline-start inset imposed by floats over this band.
+    pub left: f32,
+    /// Inline-end inset imposed by floats over this band.
+    pub right: f32,
 }
 
 /// Context for computing the intrinsic width contribution of a set of floats

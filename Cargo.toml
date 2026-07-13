@@ -253,12 +253,12 @@ rustls-pki-types = "1.14"
 rustls-platform-verifier = "0.7.0"
 sea-query = { version = "=1.0.0-rc.31", default-features = false, features = ["backend-sqlite", "derive"] }
 sea-query-rusqlite = { version = "=0.8.0-rc.15" }
-selectors = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/servo-media-features" }
+selectors = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/serval-publish-names" }
 serde = "1.0.228"
 serde_bytes = "0.11"
 serde_core = "1.0.226"
 serde_json = "1.0"
-servo_arc = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/servo-media-features" }
+servo_arc = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/serval-publish-names" }
 sha2 = "0.10"
 speexdsp-resampler = "0.1.0"
 # Font enumeration + family resolution, the same stack parley uses (so the
@@ -268,12 +268,22 @@ skrifa = "0.42.1"
 smallvec = { version = "1.15", features = ["serde", "union"] }
 string_cache = "0.9"
 strum = { version = "0.28", features = ["derive"] }
-stylo = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/servo-media-features" }
-stylo_atoms = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/servo-media-features" }
-stylo_dom = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/servo-media-features" }
-stylo_malloc_size_of = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/servo-media-features" }
-stylo_static_prefs = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/servo-media-features" }
-stylo_traits = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/servo-media-features" }
+# Workspace-dependency KEY is `style` (not `stylo`) because the package's own
+# `[lib] name = "style"` (servo's convention; unchanged by the T1 rename —
+# see docs/2026-07-12_ring3_fork_rename_publish_plan.md). Cargo's extern-name
+# binding rule: with no `package =` override, a dependency is visible under
+# its target's OWN `[lib] name`; ADDING `package =` (needed here, since the
+# real crate is renamed to `serval-stylo`) switches that to the TOML key
+# instead — so the key must equal the desired import name (`style::...`,
+# used workspace-wide) or every consumer's source breaks. `stylo_atoms` /
+# `stylo_dom` / `stylo_static_prefs` have no such mismatch (their `[lib]
+# name` already equals their old package name), so their keys are untouched.
+style = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/serval-publish-names", package = "serval-stylo" }
+stylo_atoms = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/serval-publish-names", package = "serval-stylo-atoms" }
+stylo_dom = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/serval-publish-names", package = "serval-stylo-dom" }
+stylo_malloc_size_of = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/serval-publish-names" }
+stylo_static_prefs = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/serval-publish-names", package = "serval-stylo-static-prefs" }
+stylo_traits = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/serval-publish-names" }
 syn = { version = "2", default-features = false, features = ["clone-impls", "derive", "parsing"] }
 synstructure = "0.13"
 taffy = { version = "0.10.1", default-features = false, features = ["calc", "detailed_layout_info", "grid", "std"] }
@@ -482,16 +492,31 @@ gpu-allocator = { path = "support/patches/gpu-allocator" }
 # runtime-rng on wasm (native keeps it), so the wasm graph carries no getrandom 0.3
 # and needs no getrandom patch. Retire when ahash ships a release on getrandom 0.4.
 sonic-rs = { path = "support/patches/sonic-rs-0.5.8" }
-# taffy fork carrying one fix to experimental float layout: `find_content_slot`
-# ignored the placed content's width, so a full-width float yielded a zero-width
-# slot at its right edge and a fixed-width BFC child was placed there (overflowing)
-# instead of dropping below the float. The bug is present on taffy's `main` too
-# (no released fix exists; serval is already on the newest experimental publish),
-# so we carry a minimal width-fit patch here and upstream it. Only the
-# 0.11.0-experimental-cache-fix.3 requirement (serval-layout + stylo_taffy) is
-# redirected; the workspace's taffy 0.10.1 is unaffected. See
-# docs/2026-05-31_css_rendering_conformance_plan.md (floats × BFC).
+# taffy fork, re-vendored 2026-07-12 onto the newest STABLE release (0.12.1 —
+# `float_layout` graduated from experimental, ending the need to ride the
+# experimental-cache-fix line). Carries three patches, each upstreamed at our
+# own pace (see support/patches/taffy/SERVAL_PATCHES.md + UPSTREAM_PR.md):
+# `find_content_slot` width-fit (a full-width float yielded a zero-width slot
+# at its right edge, placing a fixed-width BFC child there instead of below
+# the float — present on taffy `main` too), a float exclusion-band accessor
+# (feeds serval's parley-measured inline float wrap), and flex `order` (taffy
+# does not model CSS `order`). Only the `=0.12.1` requirement (serval-layout +
+# stylo_taffy) is redirected; the workspace's plain taffy 0.10.1 is
+# unaffected. See docs/2026-07-12_ring3_fork_rename_publish_plan.md (T0) and
+# docs/2026-05-31_css_rendering_conformance_plan.md (floats × BFC, the
+# original patch's context).
 taffy = { path = "support/patches/taffy" }
+# stylo_taffy fork, vendored 2026-07-12 at 0.3.0-beta.1 (the first stylo_taffy
+# release targeting taffy 0.12.x; alpha.5/6 still pinned the experimental
+# line). Two edits from the published source, both to match serval's actual
+# stylo fork surface rather than the registry `stylo` lineage stylo_taffy's
+# authors track: `TrackBreadth::Flex` reverted to `TrackBreadth::Fr` (our
+# fork's servo/stylo-derived variant name/shape; beta.1's is a newtype,
+# ours a bare float) — everything else (the taffy 0.12
+# AlignContent/AlignItems bitflag-style consts) is upstream's own change,
+# taken as-is. See support/patches/stylo_taffy/ and
+# docs/2026-07-12_ring3_fork_rename_publish_plan.md (T2).
+stylo_taffy = { path = "support/patches/stylo_taffy" }
 # Nova fork (serval-embedder branch on github.com/mark-ik/nova). Carries the
 # EmbedderObject native-data patch plus the reflector-liveness weak-ref API
 # (`EmbedderObject::into_weak_ref`/`from_weak_ref` + `clear_weak_ref_kept_objects`,
@@ -519,17 +544,19 @@ boa_gc = { git = "https://github.com/mark-ik/boa.git", branch = "serval" }
 # the dx12 suballocator in any build that compiles the dx12 backend (meerkat, via
 # scrying). Vendored, not a git fork, since the change is manifest-only.
 ipc-channel = { path = "support/patches/ipc-channel" }
-# stylo_taffy (serval-layout) depends on crates.io `stylo`/`stylo_atoms`
-# `^0.18` (stylo_taffy 0.3.0-alpha.5). serval pins the same crates from the
-# servo/stylo git rev, and `stylo` declares `links = "servo_style_crate"`
-# (only one Stylo allowed in the graph). Redirect the crates.io deps to the
-# git source so they unify with serval's Stylo instead of conflicting. The
-# fork branch mark-ik/servo-media-features is based on the v0.18.0 release tag
-# (rev 8bde0e9) plus additive Servo-mode media features, still declaring
-# 0.18.0, which satisfies stylo_taffy's `^0.18`. See
-# docs/2026-05-20_stylo_taffy_adoption_plan.md and the css transitions plan.
-stylo = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/servo-media-features" }
-stylo_atoms = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/servo-media-features" }
+# NOTE: stylo/stylo_atoms used to be redirected here via `[patch.crates-io]`
+# (unifying stylo_taffy's crates.io `^0.18` requirement with serval's git
+# rev, since `stylo` declares `links = "servo_style_crate"` — only one Stylo
+# allowed in the graph). Removed 2026-07-12 (T3 of
+# docs/2026-07-12_ring3_fork_rename_publish_plan.md, the stylo rename to
+# `serval-stylo`/`serval-stylo-atoms`): `[patch]` cannot rename its target
+# (the patch source's package name must match the registry name being
+# replaced), so every consumer now depends on the renamed git packages
+# directly instead — `[workspace.dependencies]` above for in-workspace
+# crates, and support/patches/stylo_taffy/Cargo.toml's own direct git deps
+# for the vendored stylo_taffy (which is what needed unifying with serval's
+# Stylo in the first place). See docs/2026-05-20_stylo_taffy_adoption_plan.md
+# and the css transitions plan for the original rationale.
 # vello patch removed 2026-05-15 per Mark's audit — bumping to vello 0.9
 # directly from crates.io. If vello upstream needs a fork applied later,
 # re-add here pinned to a specific upstream version.

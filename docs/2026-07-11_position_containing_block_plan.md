@@ -1,12 +1,13 @@
 # Position containing blocks: fixed to the ICB, absolute to its positioned ancestor
 
 **Date:** 2026-07-11
-**Status:** **F1, F2, the residual round, and the F3 inline round all landed
-2026-07-11** (fixed -> ICB; absolute -> nearest positioned ancestor; hit-walk
-target-frame deferral + completed CB predicate; out-of-flow islands in inline
-content). Remaining work is the trimmed F3 list at the bottom. Spun out of
-the layout roadmap's near-horizon entry (found 2026-07-10 by the WPT
-input-path work, H9 in the harness-exactness plan).
+**Status:** **Complete** (F1 + F2 + residual round + F3 inline round + F3
+remainder round landed 2026-07-11; the F3 final round — multi-root ICB
+sizing, positioned inline-block CBs, row-relative table offsets — landed
+2026-07-12). One named big rock remains (inline-blocks with block-level
+content, its own project) plus the small named residuals in each round's
+record. Spun out of the layout roadmap's near-horizon entry (found
+2026-07-10 by the WPT input-path work, H9 in the harness-exactness plan).
 **Scope:** the *layout* half of out-of-flow positioning in `serval-layout`. The
 paint half (deferred stacking layers, fixed layers countering document scroll)
 already exists (`is_out_of_flow` / `is_fixed` feeding `paint_stacking`, per the
@@ -307,15 +308,132 @@ line-position (needs the F3 static-position machinery below); a guarded
 `fixed` island approximates its CB as the nearest boxed positioned ancestor
 rather than the nearest transform ancestor specifically.
 
-### F3 — remaining, out of scope
+### F3 remainder round — landed 2026-07-11
 
-`sticky` (scroll-linked, different machinery), synthetic multi-root ICB
-sizing, **positioned-inline containing blocks** (a `position: relative`
-inline/inline-block as CB — no arena box today; unlocks the islands lane's
-legacy-flow set), and **static-position machinery** (the two-pass hoist
-carrying the original parent's flow position; unlocks the partial-auto inset
-guess, percentage sizing for all-auto-inset boxes, and line-accurate island
-static positions). Each is noted so it is not lost, none blocks F1/F2.
+**Static-position machinery (landed).** Not two-pass after all — one pass
+plus a location fixup. When the wrapper hoists a box with an auto *axis*
+(both insets `auto` on x or y), it leaves a zero-size anonymous
+**placeholder** in the original parent's flow (the parent attaches it in the
+box's place; the post-pass parents the real box under the CB alone). The
+placeholder's laid-out position IS the static position, so
+`apply_static_position_fixups` (after Taffy compute, before readback)
+rewrites the hoisted box's location on its auto axes to `placeholder +
+margin`, iterating to a fixed point for nested hoists. Sizing never depends
+on an auto axis, so no second Taffy pass is needed. This unlocked both
+re-scoped F2 residuals at once:
+
+- **All-auto-inset boxes now hoist** — their percentage geometry resolves
+  against the containing block (§10.2) *and* they keep their static position
+  (guard: `an_auto_inset_absolute_box_sizes_against_its_containing_block`).
+- **Partial-auto boxes take the ORIGINAL parent's flow position** on the auto
+  axis, not the CB's (guard:
+  `a_partial_auto_inset_box_takes_its_static_position_on_the_auto_axis`).
+
+Two WPT-caught corrections shaped the flex/grid rule: a fully-auto box under
+a flex/grid parent is **not hoisted at all** (its static position is
+alignment-aware — `align-items`/`justify-content` center abspos children,
+the `position-absolute-center-003/004` shapes — and a flow placeholder would
+take an item slot and a gap); a box with at least one resolved axis still
+hoists without a placeholder (`position-absolute-center-002` needs `left`
+against the CB), its auto axis taking Taffy's static guess in the CB.
+Margin collapsing held through the zero-size placeholders (Taffy
+collapse-through). Both guards verified failing with the machinery disabled
+in place (50%→50px against the wrapper; y at the CB-flow guess).
+
+**Sticky V1 (landed, css-position §6.3 — document scrollport).** Two pieces:
+
+- `CssStyle::inset()` **neutralizes sticky insets at layout** (stylo_taffy
+  maps `Sticky -> taffy::Relative`, which would apply `top: 20px` as a
+  static offset; sticky insets are scroll-linked constraints, and the
+  unscrolled position is the flow position). Covers block/flex/grid — all
+  three child-style paths return `CssStyle`.
+- **Scroll-linked shift baked into the retained layout.** Layout captures
+  each sticky box's flow location (`sticky_bases`, post-fixups);
+  `refresh_sticky_positions` re-derives `location = base + clamp(shift)` from
+  the CURRENT document scroll — pinned to the scrollport by the non-auto
+  insets, clamped to the parent's content box — and updates both the tree's
+  `final_layout` and the fragment plane's copies. Paint, hit-testing, and
+  rect queries read one refreshed truth; **no walk changed at all**. Hooked
+  at the two write points: `set_viewport_scroll` (and everything that
+  funnels through it) and `recompute_viewport` (every layout-changing path);
+  a no-op for sticky-free pages. Guards (falsified by disabling each piece):
+  `a_sticky_header_sticks_under_document_scroll_and_stops_at_its_section`
+  (pin, clamp, release, hit), `sticky_insets_do_not_offset_the_unscrolled_flow_position`.
+
+**Sticky V1 residuals, named:** the nearest **element** scroller is not
+consulted (a sticky box inside `overflow: scroll` tracks the document, not
+its scroller — the refresh architecture extends: thread the merged element
+offsets and resolve each box's nearest scrollport); percentage insets
+resolve against the viewport; nested sticky composes against the ancestor's
+unshifted position; `calc()` insets resolve to 0.
+
+Results: serval-layout 316, paint html→pixels 30, xilem-serval 101,
+serval-scripted 45, meerkat 247, all green; all nine WPT baselines hold at
+`unexpected=0`.
+
+### F3 final round — the two assessed items, landed 2026-07-12
+
+**Synthetic multi-root ICB sizing (landed).** Mechanism (a) from the
+assessment, cheaper than predicted: `LayoutPartialTree`'s
+`CoreContainerStyle` GAT became `CssStyle`, and `get_core_container_style`
+forces `100% x 100%` (plus `is_block` — the synthetic root's initial style
+computes `display: inline`, which would skip `compute_root_layout`'s
+size-resolution branch entirely; serval dispatches the box as a block either
+way) on the synthetic root — exactly the sizing the UA sheet's
+`html { width/height: 100% }` gives a real parsed root. The block/flex/grid
+*container*-style accessors construct their `NodeStyle` directly instead of
+delegating. Guard:
+`a_fixed_box_in_a_multi_root_host_document_fills_the_viewport`. Host-DOM
+consumers (xilem-serval, meerkat — the real multi-root exposure) hold.
+
+**Positioned inline-block containing blocks (landed, gated).** The sketched
+mechanism worked: `island_cb` (the renamed shared classification) returns
+`InlineBlock(id)` for a positioned inline-block CB; the island hoists to the
+nearest *boxed* CB for layout, and `apply_inline_cb_fixups` re-resolves its
+non-auto insets against the inline-block's parley-placed rect (read from
+`text_ctx.layouts` — the same `PositionedLayoutItem::InlineBox` readback
+paint uses) after layout. The badge pattern now anchors per spec (guards:
+`an_absolute_badge_anchors_to_its_positioned_inline_block_wrapper`,
+`a_nested_absolute_box_resolves_against_its_inline_block_containing_block` —
+the latter re-aimed after a vacuity catch: its group initially sat at (0,0),
+where root-resolved and CB-resolved coincide).
+
+**The WPT-caught gate, and what it exposed.** Ungated, the lane regressed
+the entire 19-test `position-relative-table-*` reftest family: every one
+anchors an absolute `.indicator` in a positioned inline-block `.group` whose
+*other* content is a table — and **block-level in-flow content inside a
+gathered inline-block is flattened to runs** (the table loses its grid), so
+the now-spec-placed red indicator sat amid degraded surroundings the green
+row could no longer cover. The gate (`inline_block_content_is_pure_inline`):
+spec-position an island only against an inline-block whose in-flow content
+is purely inline-level — coherence over pointwise correctness; mixed-content
+shapes stay in the legacy flow with their CB. The family holds at baseline;
+the *real* gap it names is **inline-blocks with block-level content need
+real box subtrees** (re-entrant sub-layout at measure time — the
+inline-block architecture project, the plan's one remaining big rock).
+
+**Row-relative table offsets (bonus, landed).** Chasing the family also
+landed the boxless twin of Taffy's `Relative` for table internals: a
+`position: relative` `<tr>` / row-group has no box (cells flatten into the
+grid), so `collect_table_rows` resolves its offset at build time (lengths;
+percentages a residual) and `cell_shifts` applies the sum to each cell's
+location after every compute. Guard:
+`a_relative_table_row_offsets_its_cells` (including the incremental flip,
+proving the shift survives recomputes over the retained tree).
+
+Results: serval-layout 320, paint html→pixels 30, xilem-serval 101,
+serval-scripted 45, meerkat 247, all green; all nine WPT baselines hold at
+`unexpected=0`.
+
+### The remaining big rock
+
+**Inline-blocks with block-level content** (named above): gathered
+inline-blocks flatten block descendants to runs — tables lose their grids,
+divs their boxes. Fixing it means real box subtrees measured by Taffy from
+within parley's inline-box measure (re-entrant sub-layout), which would also
+lift the islands gate and let the `position-relative-table-*` family pass
+for the right reasons. A project of its own; everything in this plan
+composes with it when it lands.
 
 ## Hazards, named
 

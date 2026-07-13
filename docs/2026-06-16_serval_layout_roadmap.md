@@ -138,11 +138,16 @@ scripted-DOM breadth, not a serval-layout engine primitive.
 These are real but bounded; recorded here so they are not lost.
 
 - **`position: fixed` resolves its insets against the *parent*, not the viewport**
-  — **promoted to `2026-07-11_position_containing_block_plan.md`; F1
-  (fixed -> ICB) and F2 (absolute -> nearest positioned ancestor) both landed
-  2026-07-11** (the WPT wheel quartet went green, cluster 42/42; css-position
-  reftests 60 -> 62; residuals and the F3 out-of-scope list live in that
-  plan). The entry below stands as the original diagnosis.
+  — **promoted to `2026-07-11_position_containing_block_plan.md`; the plan is
+  COMPLETE** (2026-07-11/12): F1 (fixed -> ICB), F2 (absolute -> nearest
+  positioned ancestor), the hit-walk/predicate residual round, out-of-flow
+  islands in inline content, static-position machinery (placeholder +
+  fixup), sticky V1 (document scrollport), synthetic multi-root ICB sizing,
+  positioned inline-block CBs (gated on pure-inline content), and
+  row-relative table offsets. The WPT wheel quartet went green (cluster
+  42/42); css-position reftests 60 -> 62. One big rock remains, named there:
+  inline-blocks with block-level content need real box subtrees. The entry
+  below stands as the original diagnosis.
   (Found 2026-07-10 by the WPT input-path work; diagnosed precisely, blocking 4
   WPT tests at the time.) A fixed box's containing block must be the **viewport**
   (the ICB); serval used the Taffy parent. Probe: for

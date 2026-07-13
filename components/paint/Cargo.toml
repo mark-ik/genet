@@ -35,7 +35,7 @@ stylo_traits = { workspace = true }
 # Matches serval-layout's taffy (its tests pass taffy::Size into
 # serval-layout::layout, so the versions must unify). See
 # docs/2026-05-20_stylo_taffy_adoption_plan.md.
-taffy = { version = "=0.11.0-experimental-cache-fix.3", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "float_layout", "calc", "detailed_layout_info"] }
+taffy = { version = "=0.12.1", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "float_layout", "calc", "content_size", "detailed_layout_info"] }
 webgl_wgpu = { workspace = true }
 
 [lints.clippy]

@@ -22,6 +22,6 @@ serde_json = { workspace = true }
 selectors = { workspace = true }
 servo_arc = { workspace = true }
 stylo_atoms = { workspace = true }
-stylo = { workspace = true }
+style = { workspace = true }
 stylo_traits = { workspace = true }
 url = { workspace = true }

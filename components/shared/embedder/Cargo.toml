@@ -39,7 +39,7 @@ servo-base = { workspace = true }
 servo-geometry = { workspace = true }
 servo-url = { workspace = true }
 strum = { workspace = true }
-stylo = { workspace = true }
+style = { workspace = true }
 stylo_traits = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }

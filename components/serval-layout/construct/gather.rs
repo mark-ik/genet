@@ -322,7 +322,10 @@ pub(crate) fn gather_child<'a, D>(
             // flow stands: near-anchor text beats a root-hoisted box. The two
             // decisions share `island_worthy` — they must agree.
             if super::is_out_of_flow(styles, child.id())
-                && super::island_worthy(dom, styles, &child)
+                && !matches!(
+                    super::island_cb(dom, styles, &child),
+                    super::IslandCb::Legacy
+                )
             {
                 return;
             }

@@ -51,7 +51,7 @@ servo-tracing = { workspace = true }
 servo-url = { workspace = true }
 skrifa = { workspace = true }
 smallvec = { workspace = true }
-stylo = { workspace = true }
+style = { workspace = true }
 stylo_atoms = { workspace = true }
 tracing = { workspace = true, optional = true }
 unicode-properties = { workspace = true }
