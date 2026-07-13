@@ -1,7 +1,42 @@
 # Serval → Genet: the engine rename
 
 **Date:** 2026-07-13
-**Status:** executing.
+**Status:** **LANDED.** Engine, fork family, and all five consumers renamed,
+verified, and pushed. GitHub repo is `mark-ik/genet` (old URLs redirect).
+One residual, below: the local checkout *folder* is still `repos/serval`.
+
+## Receipts
+
+| Wall | Result |
+| --- | --- |
+| `cargo check --workspace` (genet) | green |
+| `genet-layout` | 320 passed |
+| `genet-scripted` | 45 passed |
+| `servo-paint` html→pixels | 30 passed |
+| `serval-xilem` (protected crate) | 101 passed |
+| merecat builds against genet | green (16m51s, full cold resolve) |
+
+Every number matches the pre-rename baseline exactly.
+
+Commits: genet `7383cb73dfb`; stylo fork main `3703b212f6`; netrender
+`1040835e7`; mere `2fb78c4`, merecat `37e536f`, woodshed `dab7595`,
+strophe `f53f8c4`, isometry `d5e2e1e`.
+
+**Residual — the local folder.** `C:\Users\mark_\Code\repos\serval` could
+not be renamed to `genet`: Windows held the directory (VS Code +
+rust-analyzer + another lane's processes), and killing the user's editor was
+not an acceptable price. The five consumers' gitignored
+`.cargo/config.toml` patch tables therefore still point their *paths* at
+`repos/serval` (their URL keys and crate names are already `genet`). To
+finish: close the editor, `mv repos/serval repos/genet`, then flip
+`Code/repos/serval/` → `Code/repos/genet/` in those five files. Nothing
+else depends on the folder name.
+
+**Also renamed, found during execution:** `EngineId::SERVAL` → `GENET` in
+netrender's `paint_list_api` (sentinel *value* still 0 — no renumbering, no
+wire-format change), and new `genet` / `genet-embedder` branches on the boa
+and nova forks, since the sweep rewrote those `branch =` strings. The old
+fork branches are untouched.
 **Decision:** Mark, 2026-07-13 — *serval* "doesn't have enough internal
 resonance beyond 'fork of servo'," and undersells what the engine became
 (data-oriented doctrine, pure Rust, modularity, tree diffing most of all).

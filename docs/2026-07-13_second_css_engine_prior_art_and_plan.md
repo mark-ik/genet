@@ -2,9 +2,9 @@
 
 **Date:** 2026-07-13
 **Status:** research + proposed staging; E0a full-path audit and E0b Cambium
-lane choice/22-property clean-room seed landed. The first audit invalidated the
-proposed 33-accessor full-crate seam. The second chose Cambium structural UI as
-the bounded first lane.
+lane choice/40-property clean-room catalog contract landed. The first audit
+invalidated the proposed 33-accessor full-crate seam. The second chose Cambium
+structural UI as the bounded first lane.
 Mark's framing: "grow a rust alternative using firefox, chrome, servo,
 blitz, ladybird, and gosub as prior art... think it'd be neat to have two
 css engines. seems like that's what we do around here."
@@ -15,7 +15,7 @@ deliverable, the consumed-property audit),
 [2026-07-13_genet_consumed_css_property_audit.md](./2026-07-13_genet_consumed_css_property_audit.md)
 (the landed census and seam correction),
 [2026-07-13_cambium_css_lane_audit.md](./2026-07-13_cambium_css_lane_audit.md)
-(the first-lane decision and 22-property seed),
+(the first-lane decision and 40-property catalog contract),
 [2026-07-02_gosub_lessons.md](./2026-07-02_gosub_lessons.md) (the
 existing gosub harvest).
 
@@ -40,9 +40,10 @@ DOMs with small property needs that currently pay for the whole stylo
 build and runtime. Fullweb pages keep stylo. Per-document engine choice
 is the same shape as the browser multiplexer.
 
-The landed E0b audit chose Cambium's toolkit-owned structural CSS. It needs 22
-longhands when combined with Genet's baseline UA sheet. Engine-native Nematic
-does not use CSS, and cards are an application corpus for the Cambium lane.
+The landed E0b audit chose Cambium's toolkit-owned structural CSS. Its original
+22-longhand structural seed grew to 40 when the first real component-catalog
+theme was added. Engine-native Nematic does not use CSS, and cards are an
+application corpus for the Cambium lane.
 
 ## Prior art, engine by engine
 
@@ -143,9 +144,9 @@ document multiplexer.
 The consumed-property audit (Track 2a of the fork plan) was the shared first
 deliverable of both plans. It supplies the fork's hard keep-set and bounds the
 full swap at 126 longhands. The Cambium audit then supplied the first lean-engine
-database: 22 longhands with initial values, grammars, inheritance, animation
-classes, and specification sources. The future component-catalog theme must
-extend that seed before production-host claims.
+database: a 22-longhand structural seed with initial values, grammars,
+inheritance, animation classes, and specification sources. The component-catalog
+theme adds 18 longhands for a guarded 40-property contract.
 
 ## Licensing and home
 
@@ -174,10 +175,11 @@ for it.
   the 126-longhand full path, the 16 incumbent structs, and the wider API seam.
 - **E0b - lane choice + seed database: landed.** Cambium structural UI is the
   first lane. Its generated declarations plus Genet's baseline UA sheet produce
-  a 22-longhand seed. The checked-in `properties.toml` records name,
-  inheritance, initial value, grammar, seed values, animation class, and
-  specification source. The component-catalog theme audit remains the gate
-  before this seed becomes the production chrome contract.
+  a 22-longhand structural seed. The real Cambium component-catalog theme adds
+  18 longhands for a 40-property contract. The checked-in `properties.toml`
+  records name, inheritance, initial value, grammar, seed values, animation
+  class, and specification source. An executable guard expands the theme's
+  shorthands and rejects declarations absent from the database.
 - **E1 — codegen + values.** Rust generator emits property enums,
   the selected lane's concrete computed-value structs, initial/inheritance
   tables; the lean values layer (lengths, percentages, calc, color,

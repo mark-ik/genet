@@ -293,6 +293,14 @@ of the generic leaf seam.
 
 #### C3c - Nematic views and smolweb document adapter
 
+**Status (2026-07-13): partial.** `cambium-nematic` now owns the four native
+AST projections, their themes and tests, and a fetch-free retained document
+adapter behind its `document` feature. The default crate proves the views
+without compiling Genet's layout/render stack; the feature build proves the
+retained theme, scroll, link, and navigation path. The compatibility copies in
+Nematic and `genet-documents` remain until Pelt can consume Cambium from a
+stable source or `genet-documents` is replaced by the engine-native pipeline.
+
 - Keep Nematic's AST parsing and `EngineDocument` lowering in Nematic.
 - Move `nematic::views`, its view tests, and the view-driven
   `SmolwebDocument` into `cambium-nematic`.

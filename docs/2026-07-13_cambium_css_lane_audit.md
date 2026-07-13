@@ -1,8 +1,8 @@
 # Cambium CSS lane audit
 
 **Date:** 2026-07-13
-**Status:** E0b lane choice and clean-room seed database landed against Cambium
-`1f2e38d99ad4` and the Genet engine tree currently housed in this repository.
+**Status:** E0b lane choice, themed catalog fixture, and 40-property clean-room
+database landed. Source hashes are recorded below.
 
 This is the second receipt for the native CSS engine. The first audit found the
 full current engine path consumes 126 longhands. This audit chooses the first
@@ -21,15 +21,16 @@ toolkit is Cambium. The engine product is Genet; current `genet-*` packages,
 Rust types, repository paths, and the `genet-layout` crate are compatibility
 identifiers until their source rename lands.
 
-The lane is deliberately narrower than a complete host theme. It covers:
+The lane is deliberately narrower than a complete application theme. It covers:
 
 - CSS emitted by Cambium and Sprigging production source;
 - Genet's baseline UA stylesheet, which every styled DOM currently receives;
-- the selectors and values needed to render those declarations.
+- the selectors and values needed to render those declarations;
+- Cambium's first real component-catalog theme, covering its button, checkbox,
+  toggle, radio, select, slider, and text-field compositions.
 
-It excludes application-owned theme sheets because Cambium's proposed component
-catalog has not yet been implemented in the extracted workspace. That corpus
-must be added before this can be called the production host-chrome contract.
+It does not claim to be Merecat's production theme. The fixture is the bounded
+toolkit corpus that lets the engine grow before an application theme is ready.
 
 ## Why this lane
 
@@ -50,7 +51,10 @@ The other candidates do not give a cleaner first boundary:
 ## Exact seed
 
 Cambium and Sprigging emit **12 longhands**. Genet's baseline UA sheet adds
-**14 longhands**. Four overlap, producing a **22-longhand union**.
+**14 longhands**. Four overlap, producing the original **22-longhand structural
+seed**. The catalog theme exercises 30 longhands after expanding `border`,
+`margin`, and `padding`; 12 were already in the structural seed, so the theme
+adds 18 and produces a **40-longhand database**.
 
 The two toolkit shorthands were removed in Cambium `1f2e38d99ad4`:
 
@@ -65,13 +69,22 @@ the longhands below.
 | --- | ---: | --- |
 | Cambium/Sprigging production source | 12 | `color`, `display`, `font-style`, `height`, `left`, `overflow-x`, `overflow-y`, `position`, `text-decoration-line`, `top`, `width`, `z-index` |
 | Genet baseline UA sheet | 14 | `display`, `font-size`, `font-style`, `font-weight`, `height`, `list-style-type`, `margin-bottom`, `margin-left`, `margin-right`, `margin-top`, `padding-left`, `text-wrap-mode`, `white-space-collapse`, `width` |
-| **Union** | **22** | `color`, `display`, `font-size`, `font-style`, `font-weight`, `height`, `left`, `list-style-type`, `margin-bottom`, `margin-left`, `margin-right`, `margin-top`, `overflow-x`, `overflow-y`, `padding-left`, `position`, `text-decoration-line`, `text-wrap-mode`, `top`, `white-space-collapse`, `width`, `z-index` |
+| Structural union | 22 | The two rows above, with four overlaps collapsed |
+| Cambium catalog theme | 30 | Direct declarations plus `border`, `margin`, and `padding` expansion |
+| **Final union** | **40** | Structural seed plus the 18 additions below |
+
+The theme adds `background-color`, `font-family`, `line-height`,
+`padding-bottom`, `padding-right`, `padding-top`, and all twelve physical
+`border-*-{color,style,width}` longhands.
 
 Production evidence:
 
 - Cambium `crates/cambium/src/{arrangement,grid,highlight,overlay,select,slider,styled_field,tags}.rs`;
 - Sprigging `crates/sprigging/src/arrange.rs`;
-- current Genet path `components/genet-layout/ua_defaults.rs`.
+- current Genet path `components/genet-layout/ua_defaults.rs`;
+- Cambium `crates/cambium/examples/{component_catalog.rs,component_catalog.css}`;
+- Genet's audited snapshot
+  `docs/second-css-engine/fixtures/cambium-component-catalog.css`.
 
 The clean-room database is
 [`second-css-engine/properties.toml`](./second-css-engine/properties.toml). Each
@@ -82,7 +95,7 @@ normative property shape it grows toward.
 
 ## Boundary consequence
 
-This is not a 22-accessor swap inside the current `genet-layout` crate. That
+This is not a 40-accessor swap inside the current `genet-layout` crate. That
 crate still has the 126-longhand Stylo contract and broad Stylo lifecycle types.
 The first integration must provide a separate concrete style/layout path for
 Cambium documents behind Genet's document-facing runtime boundary. Computed
@@ -93,22 +106,25 @@ feature may omit one engine for a constrained build, but the default product
 needs both engines available so fullweb can keep Stylo while Cambium documents
 select the native engine.
 
-## Remaining E0 work
+## E0 closeout
 
-The lane choice and seed database are landed. Before E1 code generation starts:
+The lane choice, themed fixture, expanded database, and executable coverage
+guard are landed. `components/genet-layout/tests/native_css_seed.rs` parses the
+catalog declarations, expands every database-declared shorthand, and fails if a
+required longhand is absent.
 
-1. create the Cambium component-catalog/theme fixture;
-2. merge its application-owned property corpus into the database;
-3. add a fixture that fails when a Cambium-owned declaration is absent from the
-   database;
-4. settle the native engine's crate name and move the database into that crate.
+The E1 entry task is to settle the native engine's crate name, create that
+crate, and move the database and guard into it. Until then the files stay beside
+the plan and the guard stays in `genet-layout`.
 
-The stop rule is simple: do not call the 22-property seed the production chrome
-contract until the theme fixture is present and audited.
+The 40-property set is the catalog contract, not a promise about every future
+Merecat theme declaration. New declarations enter through the same failing
+fixture before the database grows.
 
 ## Done condition
 
-This audit is complete when the checked-in 22 names agree with Cambium and
-Sprigging's production-generated declarations plus Genet's baseline UA sheet,
-and `properties.toml` parses as TOML with exactly 22 unique property rows. That
-condition holds at the sources named above.
+This audit is complete when the checked-in names cover Cambium and Sprigging's
+production-generated declarations, Genet's baseline UA sheet, and the catalog
+theme after shorthand expansion; `properties.toml` must parse with exactly 40
+unique property rows. The executable guard and independent TOML check satisfy
+that condition.

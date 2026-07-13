@@ -1,0 +1,94 @@
+/* Audited snapshot of Cambium's component_catalog.css.
+ * The source commit is recorded in the lane audit. Keep this byte-for-byte
+ * aligned with Cambium when its catalog theme changes.
+ */
+
+.component-catalog {
+    background-color: #f4f6fa;
+    color: #202733;
+    font-family: system-ui;
+    line-height: 1.5;
+    width: 42rem;
+    margin: 1.5rem auto;
+    padding: 1.5rem;
+}
+
+.catalog-title {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin: 0 0 1rem;
+}
+
+.catalog-section {
+    background-color: #ffffff;
+    border: 1px solid #cdd3de;
+    margin: 0 0 1rem;
+    padding: 1rem;
+}
+
+.catalog-label {
+    display: block;
+    font-weight: 700;
+    margin: 0 0 0.5rem;
+}
+
+.catalog-row {
+    display: block;
+    margin: 0.5rem 0;
+}
+
+.catalog-button,
+.select-box,
+input {
+    background-color: #ffffff;
+    border: 1px solid #8b96a8;
+    color: #202733;
+    padding: 0.5rem 0.75rem;
+}
+
+.catalog-button:hover,
+.select-box:hover,
+.select-option:hover {
+    background-color: #e8eef8;
+}
+
+.checkbox,
+.toggle,
+.radio {
+    color: #33415a;
+    display: block;
+    padding: 0.25rem 0;
+}
+
+.checked,
+.selected {
+    font-weight: 700;
+}
+
+.select {
+    width: 16rem;
+}
+
+.select-list {
+    background-color: #ffffff;
+    border: 1px solid #8b96a8;
+    width: 16rem;
+    z-index: 10;
+}
+
+.select-option {
+    padding: 0.5rem 0.75rem;
+}
+
+.slider-track {
+    background-color: #cdd3de;
+    height: 0.5rem;
+    width: 16rem;
+}
+
+.slider-thumb {
+    background-color: #3568b8;
+    border: 1px solid #234b88;
+    height: 1rem;
+    width: 1rem;
+}

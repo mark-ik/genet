@@ -25,6 +25,12 @@ url = "https://www.w3.org/TR/css-lists-3/#propdef-list-style-type"
 [sources.css_box_4]
 url = "https://www.w3.org/TR/css-box-4/"
 
+[sources.css_backgrounds_3]
+url = "https://www.w3.org/TR/css-backgrounds-3/"
+
+[sources.css_inline_3]
+url = "https://www.w3.org/TR/css-inline-3/#propdef-line-height"
+
 [sources.css_overflow_3]
 url = "https://www.w3.org/TR/css-overflow-3/"
 
@@ -40,12 +46,145 @@ grammar = "<length-percentage> | auto, one to four values"
 seed_values = ["px", "em", "zero"]
 source = "css_box_4"
 
+[shorthands.padding]
+longhands = ["padding-top", "padding-right", "padding-bottom", "padding-left"]
+grammar = "<length-percentage [0,∞]>, one to four values"
+seed_values = ["px", "rem", "zero"]
+source = "css_box_4"
+
+[shorthands.border]
+longhands = [
+    "border-top-color", "border-right-color", "border-bottom-color", "border-left-color",
+    "border-top-style", "border-right-style", "border-bottom-style", "border-left-style",
+    "border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
+]
+grammar = "<line-width> || <line-style> || <color>"
+seed_values = ["px", "solid", "hex"]
+source = "css_backgrounds_3"
+
 [shorthands.white_space]
 css_name = "white-space"
 longhands = ["white-space-collapse", "text-wrap-mode"]
 grammar = "normal | pre | pre-wrap | pre-line | <white-space-collapse> || <text-wrap-mode>"
 seed_values = ["normal", "pre"]
 source = "css_text_4"
+
+[[property]]
+name = "background-color"
+inherited = false
+initial = "transparent"
+grammar = "<color>"
+seed_values = ["hex"]
+animation = "by-computed-value"
+source = "css_backgrounds_3"
+
+[[property]]
+name = "border-bottom-color"
+inherited = false
+initial = "currentcolor"
+grammar = "<color>"
+seed_values = ["hex"]
+animation = "by-computed-value"
+source = "css_backgrounds_3"
+
+[[property]]
+name = "border-bottom-style"
+inherited = false
+initial = "none"
+grammar = "<line-style>"
+seed_values = ["solid"]
+animation = "discrete"
+source = "css_backgrounds_3"
+
+[[property]]
+name = "border-bottom-width"
+inherited = false
+initial = "medium"
+grammar = "<line-width>"
+seed_values = ["px"]
+animation = "by-computed-value"
+source = "css_backgrounds_3"
+
+[[property]]
+name = "border-left-color"
+inherited = false
+initial = "currentcolor"
+grammar = "<color>"
+seed_values = ["hex"]
+animation = "by-computed-value"
+source = "css_backgrounds_3"
+
+[[property]]
+name = "border-left-style"
+inherited = false
+initial = "none"
+grammar = "<line-style>"
+seed_values = ["solid"]
+animation = "discrete"
+source = "css_backgrounds_3"
+
+[[property]]
+name = "border-left-width"
+inherited = false
+initial = "medium"
+grammar = "<line-width>"
+seed_values = ["px"]
+animation = "by-computed-value"
+source = "css_backgrounds_3"
+
+[[property]]
+name = "border-right-color"
+inherited = false
+initial = "currentcolor"
+grammar = "<color>"
+seed_values = ["hex"]
+animation = "by-computed-value"
+source = "css_backgrounds_3"
+
+[[property]]
+name = "border-right-style"
+inherited = false
+initial = "none"
+grammar = "<line-style>"
+seed_values = ["solid"]
+animation = "discrete"
+source = "css_backgrounds_3"
+
+[[property]]
+name = "border-right-width"
+inherited = false
+initial = "medium"
+grammar = "<line-width>"
+seed_values = ["px"]
+animation = "by-computed-value"
+source = "css_backgrounds_3"
+
+[[property]]
+name = "border-top-color"
+inherited = false
+initial = "currentcolor"
+grammar = "<color>"
+seed_values = ["hex"]
+animation = "by-computed-value"
+source = "css_backgrounds_3"
+
+[[property]]
+name = "border-top-style"
+inherited = false
+initial = "none"
+grammar = "<line-style>"
+seed_values = ["solid"]
+animation = "discrete"
+source = "css_backgrounds_3"
+
+[[property]]
+name = "border-top-width"
+inherited = false
+initial = "medium"
+grammar = "<line-width>"
+seed_values = ["px"]
+animation = "by-computed-value"
+source = "css_backgrounds_3"
 
 [[property]]
 name = "color"
@@ -64,6 +203,15 @@ grammar = "[ <display-outside> || <display-inside> ] | <display-listitem> | <dis
 seed_values = ["inline", "block", "inline-block", "none", "table", "table-row-group", "table-row", "table-cell", "table-caption"]
 animation = "discrete"
 source = "css_display_3"
+
+[[property]]
+name = "font-family"
+inherited = true
+initial = "depends-on-user-agent"
+grammar = "[ <font-family-name> | <generic-font-family> ]#"
+seed_values = ["system-ui"]
+animation = "discrete"
+source = "css_fonts_4"
 
 [[property]]
 name = "font-size"
@@ -109,6 +257,15 @@ grammar = "auto | <length-percentage>"
 seed_values = ["auto", "px", "percentage"]
 animation = "by-computed-value"
 source = "css_position_3"
+
+[[property]]
+name = "line-height"
+inherited = true
+initial = "normal"
+grammar = "normal | <number [0,∞]> | <length-percentage [0,∞]>"
+seed_values = ["number"]
+animation = "by-computed-value"
+source = "css_inline_3"
 
 [[property]]
 name = "list-style-type"
@@ -174,11 +331,38 @@ animation = "discrete"
 source = "css_overflow_3"
 
 [[property]]
+name = "padding-bottom"
+inherited = false
+initial = "0"
+grammar = "<length-percentage [0,∞]>"
+seed_values = ["0", "rem"]
+animation = "by-computed-value"
+source = "css_box_4"
+
+[[property]]
 name = "padding-left"
 inherited = false
 initial = "0"
-grammar = "<length-percentage>"
-seed_values = ["0", "px"]
+grammar = "<length-percentage [0,∞]>"
+seed_values = ["0", "px", "rem"]
+animation = "by-computed-value"
+source = "css_box_4"
+
+[[property]]
+name = "padding-right"
+inherited = false
+initial = "0"
+grammar = "<length-percentage [0,∞]>"
+seed_values = ["0", "rem"]
+animation = "by-computed-value"
+source = "css_box_4"
+
+[[property]]
+name = "padding-top"
+inherited = false
+initial = "0"
+grammar = "<length-percentage [0,∞]>"
+seed_values = ["0", "rem"]
 animation = "by-computed-value"
 source = "css_box_4"
 
