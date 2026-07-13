@@ -1,0 +1,9 @@
+[package]
+name = "genet-stylo"
+version = "0.0.1"
+edition = "2021"
+license = "MPL-2.0"
+repository = "https://github.com/mark-ik/stylo"
+description = "The genet engine's stylo fork: the style crate (lib name 'style'), Servo's CSS engine carried with genet-side media-feature divergences. NAME CLAIM: the real crate lives in mark-ik/stylo (style/); consume it as a git dependency."
+
+[workspace]

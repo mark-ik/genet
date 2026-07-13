@@ -1,0 +1,9 @@
+[package]
+name = "meristem"
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/mark-ik/serval"
+description = "Meristem: the view-tree diffing core beneath cambium (xilem-core heritage). NAME CLAIM: the real crate is being refactored out of mark-ik/serval; consume it as a git dependency."
+
+[workspace]

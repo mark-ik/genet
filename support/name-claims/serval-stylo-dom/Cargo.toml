@@ -1,9 +1,0 @@
-[package]
-name = "serval-stylo-dom"
-version = "0.0.1"
-edition = "2021"
-license = "MPL-2.0"
-repository = "https://github.com/mark-ik/stylo"
-description = "DOM traits for serval's stylo fork. NAME CLAIM: the real crate lives in mark-ik/stylo (stylo_dom/); consume it as a git dependency."
-
-[workspace]

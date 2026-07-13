@@ -1,0 +1,9 @@
+[package]
+name = "genet"
+version = "0.0.1"
+edition = "2021"
+license = "MPL-2.0"
+repository = "https://github.com/mark-ik/serval"
+description = "Genet: a data-oriented, modular Rust web engine built around tree diffing (the engine formerly known as serval). NAME CLAIM: the real project lives at github.com/mark-ik/serval pending the repo rename; components are consumed as git dependencies."
+
+[workspace]
