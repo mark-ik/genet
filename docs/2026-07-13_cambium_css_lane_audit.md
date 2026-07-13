@@ -2,7 +2,8 @@
 
 **Date:** 2026-07-13
 **Status:** E0b lane choice, themed catalog fixture, and 40-property clean-room
-database landed. Source hashes are recorded below.
+database landed. The E1 handoff into Livery has also landed. Source hashes are
+recorded below.
 
 Audited revisions: Cambium `a7c4603c` for the live catalog and Genet
 `c00daa92308` for the database, snapshot, and executable guard. The local
@@ -87,11 +88,11 @@ Production evidence:
 - Sprigging `crates/sprigging/src/arrange.rs`;
 - current Genet path `components/genet-layout/ua_defaults.rs`;
 - Cambium `crates/cambium/examples/{component_catalog.rs,component_catalog.css}`;
-- Genet's audited snapshot
-  `docs/second-css-engine/fixtures/cambium-component-catalog.css`.
+- Livery's audited snapshot
+  `components/livery/tests/fixtures/cambium-component-catalog.css`.
 
 The clean-room database is
-[`second-css-engine/properties.toml`](./second-css-engine/properties.toml). Each
+[`components/livery/properties.toml`](../components/livery/properties.toml). Each
 row records the CSS name, inheritance, initial value, grammar, seed values,
 animation class, and an official specification source. The `seed_values` field
 describes the values the audited corpus needs first; `grammar` records the
@@ -113,13 +114,11 @@ select the native engine.
 ## E0 closeout
 
 The lane choice, themed fixture, expanded database, and executable coverage
-guard are landed. `components/genet-layout/tests/native_css_seed.rs` parses the
-catalog declarations, expands every database-declared shorthand, and fails if a
-required longhand is absent.
-
-The E1 entry task is to settle the native engine's crate name, create that
-crate, and move the database and guard into it. Until then the files stay beside
-the plan and the guard stays in `genet-layout`.
+guard are landed. `components/livery/tests/catalog_contract.rs` checks the
+catalog declarations against Livery's generated property and shorthand tables
+and fails if a required longhand is absent. This completes the audit's E1
+handoff: the named engine crate now owns the database, fixture, generator, and
+guard.
 
 The 40-property set is the catalog contract, not a promise about every future
 Merecat theme declaration. New declarations enter through the same failing

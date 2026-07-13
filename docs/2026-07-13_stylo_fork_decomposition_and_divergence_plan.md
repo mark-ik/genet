@@ -148,9 +148,9 @@ the track that justifies 1b's split. Audit:
 **Interaction with the second-engine plan
 ([2026-07-13_second_css_engine_prior_art_and_plan.md](./2026-07-13_second_css_engine_prior_art_and_plan.md)):**
 the audit is the shared first deliverable of both plans. It supplies this
-track's hard keep-set and corrects the full swap boundary. The lean engine's
+track's hard keep-set and corrects the full swap boundary. Livery's
 database still requires a chosen lane and clean-room spec authorship. If the
-lean engine takes the
+Livery path takes the
 chrome/smolweb/card lanes, this track may de-prioritize (stylo stays
 fat for fullweb only) rather than run alongside.
 
@@ -273,5 +273,6 @@ divergence we stop carrying.
 - Ring-3 state as of 2026-07-13: the rename is incorporated into realigned
   fork `main`; the `genet` and `genet-stylo` crates.io names are claimed.
   `genet-stylo` is the replacement name for the current `genet-stylo` family.
-  The native second CSS engine remains unnamed. Implementation publication
-  stays Mark's per-crate call.
+  The native second CSS engine is Livery. The `livery` and `genet-livery`
+  crates.io names are claimed; implementation publication stays Mark's
+  per-crate call.

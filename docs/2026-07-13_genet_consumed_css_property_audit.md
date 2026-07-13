@@ -120,7 +120,8 @@ That splits the old E0 receipt into two parts:
 - **E0a, landed here:** current-consumer census and seam correction.
 - **E0b, landed separately:** the Cambium structural lane audit derives a
   22-longhand seed and authors the clean-room property database from
-  specifications. Its component-catalog theme expansion remains a pre-E1 gate.
+  specifications. Its component-catalog theme expansion landed as the
+  40-property input to Livery's E1 generator.
 
 ## Fork pruning use
 

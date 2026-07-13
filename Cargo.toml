@@ -8,6 +8,7 @@ members = [
     "components/webgl-wgpu",
     "components/webgl-essl",
     "components/genet-layout",
+    "components/livery",
     "components/genet-static-dom",
     "components/genet-extract",
     "components/genet-scripted-dom",
