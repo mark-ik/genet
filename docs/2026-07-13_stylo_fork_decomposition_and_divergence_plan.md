@@ -135,6 +135,13 @@ ComputedValues, smaller cascade tables). Cost: template-level divergence
 where upstream churns; the audit list must be data-driven (start from the
 33, walk what getComputedStyle/serval-extract/scripted CSSOM expose, gate
 conservatively). This is the track that justifies 1b's split.
+**Interaction with the second-engine plan
+([2026-07-13_second_css_engine_prior_art_and_plan.md](./2026-07-13_second_css_engine_prior_art_and_plan.md)):**
+the audit is the shared first deliverable of both plans — it is
+simultaneously this track's pruning list and the lean engine's property
+spec. Do it once; then choose per-lane. If the lean engine takes the
+chrome/smolweb/card lanes, this track may de-prioritize (stylo stays
+fat for fullweb only) rather than run alongside.
 
 **2b. Suppress the parallel machinery serval never uses.** Stylo carries
 rayon parallel traversal + a global style thread pool; serval drives the
@@ -158,16 +165,83 @@ by Servo someday, but per doctrine we just take it in the fork if it's real.
 the rule tree and cascade core (same), custom properties/@property
 (recently fixed upstream and the web needs them).
 
+## Track U — realign the fork line onto v0.19.0 (decided 2026-07-13)
+
+Mark's directive: rebase main on an upstream release and fold the branch
+fixes into main. Probed 2026-07-13 in a throwaway worktree; findings:
+
+**Topology (verified).** servo/stylo maintains `main` as a continuously
+*rebased* branch atop a pure Gecko-export `upstream` branch (sync.sh /
+sync-upstream.yml), so merge-bases against upstream land down on the
+Gecko line — the correct rebase base is the fork's own boundary. That
+boundary is exactly the **v0.18.0 tag** (`8bde0e96db`): the fork line is
+v0.18.0 + 11 Mark commits (tiers + pointer/hover + forced-color-adjust
+pair + animation fix + the ring-3 rename). Nobody pins `main` — serval
+pins `mark-ik/serval-publish-names`, mere pins
+`mark-ik/servo-media-features` — so building a realigned `main` has zero
+breakage window; consumers repoint deliberately afterwards.
+
+**The big finding: upstream v0.19.0 subsumed part of the fork.** Its
+MEDIA_FEATURES table has 15 entries: width, height, orientation,
+pointer, any-pointer, hover, any-hover, aspect-ratio, device-width,
+device-height, scan, resolution, device-pixel-ratio,
+-moz-device-pixel-ratio, prefers-color-scheme — and its Device carries
+`set_primary_pointer_capabilities` / `set_all_pointer_capabilities`
+with the same names and shapes the fork built, so serval's plumbing for
+those keeps compiling unchanged. Reconciliation per commit:
+
+| Fork commit | v0.19.0 | Action |
+| --- | --- | --- |
+| Tier A/B geometry (aspect-ratio, orientation, device-*, resolution) | present | drop (subsumed) |
+| multi-capability pointer/hover | present, same API | drop (subsumed) |
+| prefers-reduced-motion | absent | carry |
+| Tier C accessibility | absent | carry |
+| Tier D device-capability | absent | carry |
+| Tier E display-mode/scripting | absent | carry |
+| MediaEnvironment consolidation | upstream evolved Device differently | re-express carried tiers on upstream's Device shape (minimizes go-forward divergence) — or keep the consolidation and pay the skew; decide at the keyboard |
+| forced-color-adjust + revert | n/a | drop both (nets to zero) |
+| animation end-keyframe f32 fix | unknown | attempt; rebase drops it if already applied |
+| ring-3 rename | n/a | carry (Cargo.toml conflicts mechanical; versions become 0.19.0) |
+
+Post-realignment divergence: ~6 commits instead of 11, on a tagged
+release base. Bonus dissolved workaround: crates.io `stylo_taffy`
+requires stylo `^0.19` — the whole vendored-stylo_taffy dance exists
+because the fork sat at 0.18; at 0.19 the version families align (the
+vendor stays for the rename, but the version skew goes).
+
+**Execution shape** (a focused session of its own — the semantic
+reconciliation plus verification walls make it more than a probe):
+worktree at v0.19.0 → cherry-pick the carried commits per the table,
+re-expressing the tier plumbing on upstream's Device → fast-forward
+`main` to the result and push (old branches untouched until consumers
+repoint) → repoint serval's seven workspace entries + the stylo_taffy
+vendor, sweep serval-layout for 0.18→0.19 API churn → full serval
+verification (workspace check, suites, the nine WPT baselines) →
+repoint mere's two patch entries last, coordinated with whatever lane
+is active there. Reference for tier semantics:
+[2026-07-06_servo_media_feature_parity_plan.md](./2026-07-06_servo_media_feature_parity_plan.md).
+
+Track U goes FIRST — before profile overrides land anywhere and before
+1a/1b touch files — because it rewrites the base everything else diffs
+against.
+
 ## Upstream-sync posture
 
-Opportunistic, as with every fork: merge upstream *before* each big track
-lands (cheapest point), regenerate mako output after every sync (1a's
-script), and keep fork commits in the engine half where the 1b split
-concentrates them. The no-upstreaming doctrine stands — these divergences
-are ours.
+Opportunistic, as with every fork: realign onto tagged releases (Track U
+shape — releases, not main, because servo rebases main continuously),
+regenerate mako output after every sync (1a's script), and keep fork
+commits in the engine half where the 1b split concentrates them. The
+no-upstreaming doctrine stands — these divergences are ours. And as
+v0.19.0 just demonstrated by subsuming the pointer/hover tier, upstream
+convergence is a *gift* at realignment time: every subsumed commit is
+divergence we stop carrying.
 
 ## Order and done conditions
 
+0. **Track U realignment** (receipt: `main` = v0.19.0 + the carried
+   commits, pushed; serval repointed and fully green incl. WPT
+   baselines; mere repointed last). Everything below diffs against this
+   base.
 1. Track 0.1 profile overrides land in serval + mere (receipt: link-time
    delta on `cargo build -p serval-layout` dev).
 2. Track 2b verification (receipt: no style pool thread in a serval run's
