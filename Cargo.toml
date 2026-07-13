@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/cambium",
+    "crates/cambium-nematic",
     "crates/cambium-winit",
     "crates/meristem",
     "crates/sprigging",
@@ -16,3 +17,12 @@ repository = "https://github.com/mark-ik/cambium"
 [workspace.dependencies]
 tracing = "0.1.44"
 kurbo = "0.13.1"
+
+[patch.crates-io]
+# Genet's layout adapter is built against its renamed Stylo fork. Workspace
+# patches do not propagate through path dependencies, so Cambium repeats the
+# two vendored redirects required to keep one Stylo/Taffy graph.
+stylo_taffy = { path = "../serval/support/patches/stylo_taffy" }
+taffy = { path = "../serval/support/patches/taffy" }
+gpu-allocator = { path = "../serval/support/patches/gpu-allocator" }
+ipc-channel = { path = "../serval/support/patches/ipc-channel" }

@@ -3,17 +3,18 @@
 Cambium is a Genet-native reactive GUI toolkit. It combines Meristem's
 reactive view core with a Genet DOM backend and Sprigging custom leaves.
 
-This repository was extracted locally from the engine repository still named
-`serval`. The engine product is migrating to **Genet**; existing `serval-*`
-crate and Rust identifiers remain compatibility names until that source rename
-lands. Meristem, the Cambium backend, and Sprigging now live here; consumer and
-reverse-dependency migration remain staged work.
+This repository was extracted from Genet's former Serval tree. Existing
+`serval-*` Rust identifiers remain compatibility names inside Cambium while
+consumers migrate. Meristem, the Cambium backend, and Sprigging now live here;
+consumer and reverse-dependency migration remain staged work.
 
 ## Crates
 
 - `meristem`: renderer-independent reactive diff and message core
 - `cambium`: Genet backend, application runner, controls, and composition
 - `cambium-winit`: winit keyboard translation for Cambium applications
+- `cambium-nematic`: Nematic AST views, themes, and an optional retained Genet
+  document adapter
 - `sprigging`: engine-neutral custom leaves and arrangement geometry
 
 The crates use their own appropriate licenses: Cambium is MPL-2.0, Meristem is

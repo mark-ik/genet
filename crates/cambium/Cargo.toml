@@ -1,7 +1,7 @@
 [package]
 name = "cambium"
 version.workspace = true
-description = "A Meristem backend and application toolkit for Serval"
+description = "A Meristem backend and application toolkit for Genet"
 edition.workspace = true
 rust-version.workspace = true
 license = "MPL-2.0"
@@ -14,8 +14,8 @@ highlight = ["dep:illume", "dep:tinct"]
 [dependencies]
 meristem = { version = "0.1.0", path = "../meristem" }
 sprigging = { version = "0.1.0", path = "../sprigging" }
-serval-scripted-dom = "0.1.0"
-layout_dom_api = { package = "layout-dom-api", version = "0.1.0" }
+serval-scripted-dom = { package = "genet-scripted-dom", version = "0.1.0", path = "../../../serval/components/genet-scripted-dom" }
+layout_dom_api = { package = "layout-dom-api", version = "0.1.0", path = "../../../serval/components/shared/layout-dom" }
 unicode-segmentation = "1.13.2"
 illume = { version = "=0.0.2", optional = true }
 tinct = { version = "=0.1.2", optional = true }
