@@ -26,14 +26,15 @@ use std::hash::Hash;
 
 use engine_observables_api::{FragmentQuery, Point};
 use layout_dom_api::LayoutDom;
-use chisel::{LeafRegistry, RenderedLeaves};
-use paint_list_api::{ColorF, DeviceIntSize, PaintCmd};
+use paint_list_api::{ColorF, DeviceIntSize};
+#[cfg(test)]
+use paint_list_api::PaintCmd;
 use serval_layout::{
     BackgroundImagePlane, BoxTree, FragmentPlane, ImageLoader, ImagePlane, IncrementalLayout,
-    LeafPaintSource, ScrollOffsets, ServalLaneView, ServalPaintList, StylePlane, TextMeasureCtx,
+    ScrollOffsets, ServalLaneView, ServalPaintList, StylePlane, TextMeasureCtx,
     TextRange, accumulate_painted_origins, accumulated_translate, caret_byte_at_point,
     caret_byte_vertical, caret_color, caret_rect, emit_paint_list_with_layouts,
-    emit_paint_list_with_leaves, layout, paint_list_from_layout_dom, push_scrollbars, range_rects,
+    layout, paint_list_from_layout_dom, push_scrollbars, range_rects,
     run_cascade, selection_rects, selection_style,
 };
 use serval_scripted_dom::{NodeId, ScriptedDom};
@@ -232,101 +233,6 @@ pub fn paint_list_from_scripted_dom(
     plist
 }
 
-/// The chisel leaf-render adapter: exposes a [`RenderedLeaves`] buffer as
-/// serval-layout's [`LeafPaintSource`]. This crate is the orphan-rule-legal home
-/// for the impl, since it owns both the trait's crate and `RenderedLeaves`'s.
-struct LeafSource<'a>(&'a RenderedLeaves);
-
-impl LeafPaintSource for LeafSource<'_> {
-    fn leaf_commands(&self, key: u64) -> Option<&[PaintCmd]> {
-        self.0.get(key)
-    }
-}
-
-/// Variant of [`paint_list_from_scripted_dom`] that renders chisel widget leaves.
-///
-/// After layout, each `<chisel-leaf>` box is enumerated
-/// ([`BoxTree::chisel_leaf_boxes`]) and its `Leaf` in `registry` is rendered at the
-/// box's content-box size into `cache` — re-rendering only dirty or resized leaves
-/// (the leaf-tier retention gate) — then [`emit_paint_list_with_leaves`] splices
-/// each leaf's Path-A commands at its box. The caller retains `cache` across frames
-/// so unchanged leaves keep their buffers. No focused-field overlays: this is the
-/// leaf content path, not an editable surface.
-pub fn paint_list_from_scripted_dom_with_leaves(
-    dom: &ScriptedDom,
-    stylesheets: &[&str],
-    width: u32,
-    height: u32,
-    scroll_offsets: &ScrollOffsets<NodeId>,
-    registry: &mut LeafRegistry<u64>,
-    cache: &mut RenderedLeaves,
-) -> ServalPaintList {
-    let mut styles: StylePlane<NodeId> = StylePlane::new();
-    run_cascade(
-        dom,
-        &mut styles,
-        euclid::Size2D::new(width as f32, height as f32),
-        stylesheets,
-        None,
-    );
-    let images = ImagePlane::new();
-    let bg_images = BackgroundImagePlane::new();
-    let viewport = taffy::Size {
-        width: taffy::AvailableSpace::Definite(width as f32),
-        height: taffy::AvailableSpace::Definite(height as f32),
-    };
-    let (fragments, built, text_ctx) = layout(dom, &styles, &images, viewport);
-
-    // Render each laid-out leaf at its content-box size (dirty / resized only).
-    let sizes: std::collections::HashMap<u64, (f32, f32)> =
-        built.chisel_leaf_boxes().into_iter().collect();
-    registry.render_into(
-        |key| {
-            sizes.get(&key).map(|&(w, h)| chisel::Size {
-                width: w,
-                height: h,
-            })
-        },
-        cache,
-    );
-
-    let source = LeafSource(cache);
-    emit_paint_list_with_leaves(
-        dom,
-        &styles,
-        &fragments,
-        &built,
-        &text_ctx,
-        &images,
-        &bg_images,
-        scroll_offsets,
-        DeviceIntSize::new(width as i32, height as i32),
-        &source,
-    )
-}
-
-/// [`paint_list_from_scripted_dom_with_leaves`] lowered to a [`netrender::Scene`].
-pub fn scene_from_scripted_dom_with_leaves(
-    dom: &ScriptedDom,
-    stylesheets: &[&str],
-    width: u32,
-    height: u32,
-    scroll_offsets: &ScrollOffsets<NodeId>,
-    registry: &mut LeafRegistry<u64>,
-    cache: &mut RenderedLeaves,
-) -> netrender::Scene {
-    let plist = paint_list_from_scripted_dom_with_leaves(
-        dom,
-        stylesheets,
-        width,
-        height,
-        scroll_offsets,
-        registry,
-        cache,
-    );
-    paint::translate_paint_list(&plist)
-}
-
 /// `IncrementalLayout` session → `netrender::Scene`: the C3 chrome path. The
 /// session retains cascade + layout across frames, so a steady (attribute-only)
 /// frame skips the cascade+layout the stateless [`scene_from_scripted_dom`] redoes
@@ -371,44 +277,6 @@ where
         dom,
         &ScrollOffsets::default(),
         DeviceIntSize::new(width as i32, height as i32),
-    );
-    paint::translate_paint_list(&plist)
-}
-
-/// [`scene_from_session_dom`] plus chisel widget leaves: the retained-session
-/// (chrome) counterpart of [`scene_from_scripted_dom_with_leaves`]. Each laid-out
-/// `<chisel-leaf>` box is sized from the session's retained box tree, its `Leaf`
-/// re-rendered into `cache` only when dirty or resized, and the session emit
-/// splices the cached commands at the box.
-pub fn scene_from_session_dom_with_leaves<D>(
-    session: &IncrementalLayout<D::NodeId>,
-    dom: &D,
-    width: u32,
-    height: u32,
-    registry: &mut LeafRegistry<u64>,
-    cache: &mut RenderedLeaves,
-) -> netrender::Scene
-where
-    D: LayoutDom,
-    D::NodeId: Copy + Eq + Hash + Send + Sync + 'static,
-{
-    let sizes: std::collections::HashMap<u64, (f32, f32)> =
-        session.chisel_leaf_boxes().into_iter().collect();
-    registry.render_into(
-        |key| {
-            sizes.get(&key).map(|&(w, h)| chisel::Size {
-                width: w,
-                height: h,
-            })
-        },
-        cache,
-    );
-    let source = LeafSource(cache);
-    let plist = session.emit_paint_list_with_leaves(
-        dom,
-        &ScrollOffsets::default(),
-        DeviceIntSize::new(width as i32, height as i32),
-        &source,
     );
     paint::translate_paint_list(&plist)
 }
@@ -853,62 +721,6 @@ mod tests {
             blue < red,
             "z-index 3 paints after z-index 2 despite DOM order (blue at {blue}, red at {red})",
         );
-    }
-
-    /// End-to-end Path-A: a `<chisel-leaf key="7">` in the DOM plus a `Swatch`
-    /// registered under key 7 render through the whole chain — cascade → layout →
-    /// `BoxTree::chisel_leaf_boxes` → `LeafRegistry::render_into` at the content-box
-    /// size → `emit_paint_list_with_leaves` — so the leaf's command lands in the
-    /// paint list and the cache retains it.
-    #[test]
-    fn scripted_chisel_leaf_renders_its_leaf_into_the_paint_list() {
-        use paint_list_api::PaintList;
-        let mut dom = ScriptedDom::new();
-        let root = dom.document();
-        let leaf = dom.create_element(html("chisel-leaf"));
-        dom.set_attribute(leaf, attr("key"), "7");
-        dom.append_child(root, leaf);
-
-        let mut registry: LeafRegistry<u64> = LeafRegistry::new();
-        let green = ColorF {
-            r: 0.1,
-            g: 0.9,
-            b: 0.2,
-            a: 1.0,
-        };
-        registry.insert(
-            7,
-            Box::new(chisel::Swatch::new(
-                green,
-                chisel::Size {
-                    width: 20.0,
-                    height: 10.0,
-                },
-            )),
-        );
-        let mut cache = RenderedLeaves::new();
-
-        let plist = paint_list_from_scripted_dom_with_leaves(
-            &dom,
-            &["chisel-leaf { display:block; width:20px; height:10px }"],
-            200,
-            100,
-            &ScrollOffsets::default(),
-            &mut registry,
-            &mut cache,
-        );
-
-        let has_green = plist.commands().iter().any(|c| {
-            matches!(c, PaintCmd::DrawRect(r)
-                if (r.color.r - 0.1).abs() < 0.05
-                    && (r.color.g - 0.9).abs() < 0.05
-                    && (r.color.b - 0.2).abs() < 0.05)
-        });
-        assert!(
-            has_green,
-            "the chisel leaf's rendered command lands in the paint list"
-        );
-        assert_eq!(cache.len(), 1, "the leaf was rendered into the cache");
     }
 
     /// First element named `name` in `node`'s subtree (pre-order), or `None`.

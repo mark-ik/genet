@@ -17,10 +17,6 @@ path = "src/lib.rs"
 # The serval DOM + the engine pipeline this drives.
 serval-scripted-dom = { path = "../serval-scripted-dom" }
 serval-layout = { path = "../serval-layout" }
-# chisel widget leaves: the `_with_leaves` render entry renders each `<chisel-leaf>`
-# box's `Leaf` and splices its Path-A commands. serval-render is the orphan-rule-legal
-# home for the `RenderedLeaves` -> `LeafPaintSource` adapter (it owns both deps).
-chisel = { package = "serval-chisel", version = "0.1.0", path = "../chisel" }
 layout_dom_api = { workspace = true }
 # Paint-list -> netrender::Scene lowering (aliased `paint`), the Scene type, and
 # the paint/query value types.
@@ -38,9 +34,5 @@ taffy = { version = "=0.12.1", default-features = false, features = ["std", "taf
 euclid = { workspace = true }
 
 [dev-dependencies]
-# The lib tests drive the render pipeline through a `ServalAppRunner` (the serval
-# host spine), so xilem-serval is test-only here -- render.rs / a11y.rs do not
-# touch it.
-xilem-serval = { package = "serval-xilem", version = "0.1.0", path = "../xilem-serval" }
 # A parsed HTML document for the content-introspection (`inspect`) tests.
 serval-static-dom = { path = "../serval-static-dom" }

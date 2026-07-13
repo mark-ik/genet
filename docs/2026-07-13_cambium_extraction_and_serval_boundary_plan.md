@@ -252,6 +252,11 @@ would leave one distributed toolkit with a new name.
 
 #### C3a - Window input
 
+**Status (2026-07-13): landed.** `cambium-winit` owns key/modifier
+translation. `serval-winit-host` now builds and tests without a Cambium
+dependency. Pelt keeps a temporary app-side compatibility adapter until C4 can
+consume the extracted crate from a stable source.
+
 - Move `key_event_from_winit` and `modifiers_from_winit` from
   `serval-winit-host` to `cambium-winit`.
 - `cambium-winit` depends on winit and Cambium. Applications compose it beside
@@ -263,6 +268,13 @@ Done when `serval-winit-host` has no Cambium dependency and its tests still
 cover presentation, wheel normalization, and accessibility bridging.
 
 #### C3b - Sprigging render and accessibility adapters
+
+**Status (2026-07-13): landed.** The engine protocol is now
+`<custom-leaf>`/`custom_leaf_key`/`custom_leaf_boxes`; the old tag and accessor
+remain compatibility aliases. Cambium emits the neutral tag. The remaining gap
+was closed by moving `RenderedLeaves` assembly into Pelt and replacing
+`serval-render`'s Cambium-driven tests with direct DOM/render regressions.
+`serval-render` now has neither normal nor dev Cambium/Sprigging edges.
 
 - Keep Serval's neutral `LeafPaintSource` and `LeafA11ySource` contracts.
 - Neutralize the engine's current Chisel-specific DOM vocabulary. Rename the

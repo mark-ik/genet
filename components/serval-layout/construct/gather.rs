@@ -347,10 +347,10 @@ pub(crate) fn gather_child<'a, D>(
                     height,
                     source: child.id(),
                     block: None,
-                    // A `<chisel-leaf>` flowing inline gets no `BoxNode`, so the key
+                    // A `<custom-leaf>` flowing inline gets no `BoxNode`, so the key
                     // rides on the inline item; every other replaced element yields
-                    // `None`. Mirrors the block path's `BoxNode::chisel_leaf_key`.
-                    chisel_leaf_key: super::chisel_leaf_key_of(dom, child.id()),
+                    // `None`. Mirrors the block path's `BoxNode::custom_leaf_key`.
+                    custom_leaf_key: super::custom_leaf_key_of(dom, child.id()),
                 });
             } else if is_inline_block(styles, child.id()) {
                 // Atomic inline-block: gather its own inline content + box
@@ -372,9 +372,9 @@ pub(crate) fn gather_child<'a, D>(
                         background: inline_block_bg_of(styles, child.id()),
                     })),
                     // An inline-block is not replaced, so it never carries a leaf key;
-                    // a `<chisel-leaf>` nested inside it is gathered into its own
+                    // a `<custom-leaf>` nested inside it is gathered into its own
                     // `content` and picked up by that InlineContent's boxes.
-                    chisel_leaf_key: None,
+                    custom_leaf_key: None,
                 });
             } else {
                 // A non-replaced inline element flows transparently: its own

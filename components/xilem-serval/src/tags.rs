@@ -84,7 +84,7 @@ where
         )
 }
 
-/// A `<chisel-leaf>` element view: a custom-paint widget leaf.
+/// A `<custom-leaf>` element view: a host-painted widget leaf.
 ///
 /// The host registers a chisel `Leaf` under `key` (a stable `u64`) in its
 /// `LeafRegistry`; serval lays out a `width`×`height` block box and paint splices
@@ -93,17 +93,27 @@ where
 /// widget *is* its content). This mirrors [`external_texture`]: the view carries only
 /// the stable `key` + a box, and the host registers the payload under that key out of
 /// band. See `docs/2026-07-07_chisel_widget_leaf_design.md`.
-pub fn chisel_leaf<State, Action>(key: u64, width: u32, height: u32) -> El<(), State, Action>
+pub fn custom_leaf<State, Action>(key: u64, width: u32, height: u32) -> El<(), State, Action>
 where
     State: 'static,
     Action: 'static,
 {
-    el("chisel-leaf", ())
+    el("custom-leaf", ())
         .attr("key", key.to_string())
         .attr(
             "style",
             format!("display:block;width:{width}px;height:{height}px"),
         )
+}
+
+/// Compatibility constructor for the former Chisel-specific spelling.
+#[deprecated(note = "use custom_leaf")]
+pub fn chisel_leaf<State, Action>(key: u64, width: u32, height: u32) -> El<(), State, Action>
+where
+    State: 'static,
+    Action: 'static,
+{
+    custom_leaf(key, width, height)
 }
 
 /// A leaf element whose children are owned by the host, not the view tree.
@@ -199,25 +209,25 @@ mod tests {
         );
     }
 
-    /// `chisel_leaf(7, 20, 10)` builds a `<chisel-leaf>` element carrying the leaf
+    /// `custom_leaf(7, 20, 10)` builds a `<custom-leaf>` element carrying the leaf
     /// key and a block box sized via its `style` attribute — the element
     /// serval-layout treats as a replaced leaf whose paint is the host leaf's
     /// Path-A commands. Mirrors `external_texture_builds_keyed_element`.
     #[test]
-    fn chisel_leaf_builds_keyed_element() {
+    fn custom_leaf_builds_keyed_element() {
         use layout_dom_api::{LocalName, Namespace};
         let no_ns = Namespace::from("");
         let dom = Rc::new(RefCell::new(ScriptedDom::new()));
         let runner = ServalAppRunner::<_, _, _, ()>::new(
             dom.clone(),
-            |_: &()| chisel_leaf::<(), ()>(7, 20, 10),
+            |_: &()| custom_leaf::<(), ()>(7, 20, 10),
             (),
         );
         let d = dom.borrow();
         let root = runner.root();
         assert_eq!(
             d.element_name(root).unwrap().local.as_ref(),
-            "chisel-leaf",
+            "custom-leaf",
             "the view names the reserved element",
         );
         assert_eq!(

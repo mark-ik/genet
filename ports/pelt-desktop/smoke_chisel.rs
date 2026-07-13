@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Chisel first-pixels smoke: three `<chisel-leaf>` elements (Knob, Meter,
+//! Sprigging first-pixels smoke: three `<custom-leaf>` elements (Knob, Meter,
 //! GraphGlyph) laid out by a retained session, rendered through the session
 //! leaf path (`scene_from_session_dom_with_leaves`) to an offscreen wgpu
 //! target, read back, color-checked, and PNG-encoded as the human-eyes
@@ -13,14 +13,15 @@
 use chisel::{ColorF, GraphGlyph, GraphGlyphNode, Knob, LeafRegistry, Meter, RenderedLeaves, Size};
 use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, QualName};
 use serval_layout::IncrementalLayout;
-use serval_render::scene_from_session_dom_with_leaves;
 use serval_scripted_dom::ScriptedDom;
+
+use crate::tile_surface::scene_from_session_dom_with_leaves;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChiselSmokeOutcome {
     pub width: u32,
     pub height: u32,
-    /// `<chisel-leaf>` boxes the session laid out (attribution: layout seam).
+    /// `<custom-leaf>` boxes the session laid out (attribution: layout seam).
     pub leaf_boxes: usize,
     /// Leaves the registry actually painted (attribution: render gate).
     pub leaves_painted: usize,
@@ -56,17 +57,17 @@ pub fn run_chisel_smoke(out_png: Option<&std::path::Path>) -> Result<ChiselSmoke
     let body = dom.create_element(html("body"));
     dom.append_child(root, body);
     for key in ["1", "2", "3"] {
-        let leaf = dom.create_element(html("chisel-leaf"));
+        let leaf = dom.create_element(html("custom-leaf"));
         dom.set_attribute(leaf, attr("key"), key);
         dom.append_child(body, leaf);
     }
     // Flex row: flex items blockify, so each leaf takes the block-level
-    // replaced path (where `chisel_leaf_key` is stamped onto its box). Multiple
+    // replaced path (where `custom_leaf_key` is stamped onto its box). Multiple
     // inline-flowing replaced leaves ride `InlineContent` instead and are a
     // known chisel gap (see the catalog doc's open questions).
     let sheets = [
         "body { display: flex; padding: 8px; }",
-        "chisel-leaf { display: block; width: 48px; height: 48px; margin: 4px; }",
+        "custom-leaf { display: block; width: 48px; height: 48px; margin: 4px; }",
     ];
 
     // The leaves: knob at 2/3, meter at 0.7 with a 0.9 peak, a 4-node glyph
@@ -94,7 +95,7 @@ pub fn run_chisel_smoke(out_png: Option<&std::path::Path>) -> Result<ChiselSmoke
     // the cache and yields the attribution counts; the scene call's internal
     // render_into then no-ops on the clean cache (the retention gate).
     let session = IncrementalLayout::new(&dom, &sheets, W as f32, H as f32);
-    let boxes = session.chisel_leaf_boxes();
+    let boxes = session.custom_leaf_boxes();
     let sizes: std::collections::HashMap<u64, (f32, f32)> = boxes.iter().copied().collect();
     let leaves_painted = registry.render_into(
         |key| sizes.get(&key).map(|&(w, h)| Size { width: w, height: h }),

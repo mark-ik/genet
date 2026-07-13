@@ -152,12 +152,12 @@ pub(crate) struct BoxNode<Id> {
     /// `key` (a constellation actor scene, a scrying WebView, a pelt tile's external
     /// content lane). The box still participates in layout like a replaced element.
     pub(crate) external_texture_key: Option<u64>,
-    /// `Some(key)` => a chisel Path-A leaf (`<chisel-leaf key="…">`): paint emits
+    /// `Some(key)` => a host Path-A leaf (`<custom-leaf key="…">`): paint emits
     /// the leaf's own `PaintCmd` stream (pulled from the host's `LeafPaintSource`
     /// by this `key`) in place of serval-painted content. Sizes and participates
     /// in layout like a replaced element (CSS-driven, default object size). See
     /// `docs/2026-07-07_chisel_widget_leaf_design.md`.
-    pub(crate) chisel_leaf_key: Option<u64>,
+    pub(crate) custom_leaf_key: Option<u64>,
     /// `Some((row, col))` => this box is a `display: table-cell` flattened into
     /// its `display: table` ancestor's grid (see [`build_table`]). It is laid out
     /// as a grid item at the explicit 0-based `(row, col)` (injected by
@@ -186,7 +186,7 @@ impl<Id> BoxNode<Id> {
             replaced_size: None,
             replaced_intrinsic_size: None,
             external_texture_key: None,
-            chisel_leaf_key: None,
+            custom_leaf_key: None,
             grid_placement: None,
             source,
             cache: Cache::new(),
@@ -310,23 +310,19 @@ impl<Id: Copy + Eq + Hash> BoxTree<Id> {
             .and_then(|n| n.inline_content.as_ref())
     }
 
-    /// Enumerate laid-out `<chisel-leaf>` boxes as `(leaf key, content-box size in
-    /// device px)`. The host renders each chisel `Leaf` at this size before paint
-    /// (`chisel::LeafRegistry::render_into`); the key is the `<chisel-leaf key="…">`
-    /// value stamped onto the box during construction (`chisel_leaf_key`). The
-    /// content box is the border-box size minus border + padding — the same box
-    /// `paint_emit` splices the leaf into. See
-    /// `docs/2026-07-07_chisel_widget_leaf_design.md`.
-    pub fn chisel_leaf_boxes(&self) -> Vec<(u64, (f32, f32))> {
+    /// Enumerate laid-out `<custom-leaf>` boxes as `(leaf key, content-box size
+    /// in device px)`. The host renders each registered leaf at this size before
+    /// paint and supplies its commands through [`LeafPaintSource`](crate::LeafPaintSource).
+    pub fn custom_leaf_boxes(&self) -> Vec<(u64, (f32, f32))> {
         /// Walk an inline formatting context's boxes, reporting every inline
-        /// `<chisel-leaf>`. Recurses through inline-blocks, whose own inline
+        /// `<custom-leaf>`. Recurses through inline-blocks, whose own inline
         /// content may host further leaves.
         fn collect_inline_leaf_boxes<Id: Copy + Eq + Hash>(
             content: &InlineContent<Id>,
             out: &mut Vec<(u64, (f32, f32))>,
         ) {
             for item in &content.boxes {
-                if let Some(key) = item.chisel_leaf_key {
+                if let Some(key) = item.custom_leaf_key {
                     out.push((key, (item.width, item.height)));
                 }
                 if let Some(block) = &item.block {
@@ -339,7 +335,7 @@ impl<Id: Copy + Eq + Hash> BoxTree<Id> {
             .nodes
             .iter()
             .filter_map(|n| {
-                let key = n.chisel_leaf_key?;
+                let key = n.custom_leaf_key?;
                 let l = &n.final_layout;
                 let w = (l.size.width
                     - l.border.left
@@ -368,6 +364,12 @@ impl<Id: Copy + Eq + Hash> BoxTree<Id> {
             }
         }
         out
+    }
+
+    /// Compatibility name for hosts migrating to [`Self::custom_leaf_boxes`].
+    #[deprecated(note = "use custom_leaf_boxes")]
+    pub fn chisel_leaf_boxes(&self) -> Vec<(u64, (f32, f32))> {
+        self.custom_leaf_boxes()
     }
 
     /// The byte-range → source-element index for inline-formatting leaf `id` (keyed
@@ -677,7 +679,7 @@ where
                     let container_safe = n.inline_content.is_none()
                         && n.replaced_size.is_none()
                         && n.external_texture_key.is_none()
-                        && n.chisel_leaf_key.is_none();
+                        && n.custom_leaf_key.is_none();
                     // A container-unsafe target (a leaf box) refuses
                     // block-path hoists; an island retargets the root for
                     // the same must-land-somewhere reason.
@@ -1291,7 +1293,7 @@ where
         // `<external-texture>` carries a host-composited texture key; every other
         // replaced element yields `None` here.
         node.external_texture_key = crate::construct::external_texture_key_of(dom, elem.id());
-        node.chisel_leaf_key = crate::construct::chisel_leaf_key_of(dom, elem.id());
+        node.custom_leaf_key = crate::construct::custom_leaf_key_of(dom, elem.id());
         let i = tree.push(node);
         tree.node_map.insert(elem.id(), nid(i));
         return i;

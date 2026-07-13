@@ -1452,9 +1452,9 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     }
 
     /// [`emit_paint_list`](Self::emit_paint_list) plus a chisel
-    /// [`LeafPaintSource`]: splices each `<chisel-leaf>`'s Path-A commands at its
+    /// [`LeafPaintSource`]: splices each `<custom-leaf>`'s Path-A commands at its
     /// box on the retained (session) paint path. Pair with
-    /// [`chisel_leaf_boxes`](Self::chisel_leaf_boxes) to size the leaves before
+    /// [`custom_leaf_boxes`](Self::custom_leaf_boxes) to size the leaves before
     /// rendering them into the source. See
     /// `docs/2026-07-07_chisel_widget_leaf_design.md`.
     pub fn emit_paint_list_with_leaves<D>(
@@ -1490,12 +1490,15 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         plist
     }
 
-    /// The session's laid-out `<chisel-leaf>` boxes as `(key, content-box size)`,
-    /// from the retained box tree ([`BoxTree::chisel_leaf_boxes`]). The host
-    /// renders each registered leaf at this size (`chisel`'s `render_into`)
-    /// before emitting with leaves.
+    /// The session's laid-out `<custom-leaf>` boxes as `(key, content-box size)`.
+    pub fn custom_leaf_boxes(&self) -> Vec<(u64, (f32, f32))> {
+        self.built.custom_leaf_boxes()
+    }
+
+    /// Compatibility name for hosts migrating to [`Self::custom_leaf_boxes`].
+    #[deprecated(note = "use custom_leaf_boxes")]
     pub fn chisel_leaf_boxes(&self) -> Vec<(u64, (f32, f32))> {
-        self.built.chisel_leaf_boxes()
+        self.custom_leaf_boxes()
     }
 
     /// Emit the current layout while skipping any subtree whose root id appears in
@@ -2427,12 +2430,12 @@ mod tests {
         assert_eq!(display_of("input", Some("text")).as_deref(), Some("inline-block"));
     }
 
-    /// A `<chisel-leaf>` nested inside a native `<button>` (the widget catalog's
+    /// A `<custom-leaf>` nested inside a native `<button>` (the widget catalog's
     /// "native button wrapping a `GraphGlyph` leaf") is reported to the host
     /// whatever the button's `display`.
     ///
     /// A leaf reaches paint only if the host renders it, and the host renders
-    /// what `chisel_leaf_boxes` reports. A block button gives the leaf its own
+    /// what `custom_leaf_boxes` reports. A block button gives the leaf its own
     /// `BoxNode` (the replaced-leaf path). An `inline` or `inline-block` button
     /// establishes an inline formatting context, where the leaf gets no `BoxNode`
     /// and instead rides as an `InlineBoxItem` carrying the same key. Both are
@@ -2452,30 +2455,30 @@ mod tests {
             dom.append_child(h, body);
             let button = dom.create_element(html("button"));
             dom.append_child(body, button);
-            let leaf = dom.create_element(QualName::new(None, ns!(html), "chisel-leaf".into()));
+            let leaf = dom.create_element(QualName::new(None, ns!(html), "custom-leaf".into()));
             dom.set_attribute(leaf, attr("key"), "7");
             dom.append_child(button, leaf);
             dom
         }
 
         let dom = dom_with_leaf_in_button();
-        const LEAF: &str = "chisel-leaf { display: block; width: 20px; height: 20px; }";
+        const LEAF: &str = "custom-leaf { display: block; width: 20px; height: 20px; }";
         let want = vec![(7u64, (20.0, 20.0))];
 
         // Block button: the leaf takes the block replaced-leaf path (its own BoxNode).
         let block = IncrementalLayout::new(&dom, &[LEAF, "button { display: block; }"], W, H);
-        assert_eq!(block.chisel_leaf_boxes(), want, "block button");
+        assert_eq!(block.custom_leaf_boxes(), want, "block button");
 
         // inline-block button: the leaf rides inside the button's InlineBlockBox
         // content as an InlineBoxItem. This is `<button>`'s real UA display.
         let inline_block =
             IncrementalLayout::new(&dom, &[LEAF, "button { display: inline-block; }"], W, H);
-        assert_eq!(inline_block.chisel_leaf_boxes(), want, "inline-block button");
+        assert_eq!(inline_block.custom_leaf_boxes(), want, "inline-block button");
 
         // Unstyled button: serval gives `<button>` no UA display, so it is `inline`
         // and the leaf lands directly in the body's inline content.
         let unstyled = IncrementalLayout::new(&dom, &[LEAF], W, H);
-        assert_eq!(unstyled.chisel_leaf_boxes(), want, "inline (unstyled) button");
+        assert_eq!(unstyled.custom_leaf_boxes(), want, "inline (unstyled) button");
     }
 
     /// A color-only change: incremental restyle, layout skipped

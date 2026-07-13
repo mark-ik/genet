@@ -17,13 +17,13 @@ use accesskit::{
 };
 use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
 
-use crate::construct::chisel_leaf_key_of;
+use crate::construct::custom_leaf_key_of;
 use crate::fragment::FragmentPlane;
 
-/// Host-side source of chisel-leaf accessibility semantics.
+/// Host-side source of custom-leaf accessibility semantics.
 ///
 /// Mirrors [`LeafPaintSource`](crate::LeafPaintSource): serval-layout knows
-/// `<chisel-leaf key="…">` as an element, not chisel's types, so the host
+/// `<custom-leaf key="…">` as an element, not a toolkit's types, so the host
 /// bridges a leaf key to its registered leaf. A leaf fills its own AccessKit
 /// node (a knob announces as a slider carrying its value) and may override the
 /// role the tag walk assigned, since a leaf's interior is invisible to the DOM.
@@ -34,7 +34,7 @@ use crate::fragment::FragmentPlane;
 ///   a leaf can never disagree with layout about where it is.
 /// - **A name the author gave it.** The walk resolves `aria-label` (then direct
 ///   text) *before* calling the leaf, so an author who wrote
-///   `<chisel-leaf aria-label="Session graph">` has said what this instance is,
+///   `<custom-leaf aria-label="Session graph">` has said what this instance is,
 ///   and a leaf's generic self-description must not overwrite that. A leaf that
 ///   wants a fallback name checks [`AccessNode::label`] first and only fills a
 ///   gap. Roles and values carry no such rule: those are facts about the widget,
@@ -45,7 +45,7 @@ pub trait LeafA11ySource {
     fn describe_leaf(&mut self, key: u64, node: &mut AccessNode);
 }
 
-/// A source with no leaves: every `<chisel-leaf>` stays an opaque container.
+/// A source with no leaves: every `<custom-leaf>` stays an opaque container.
 /// What [`accesskit_tree`] and [`build_subtree`] use when the caller has none.
 pub struct NoLeafA11y;
 
@@ -166,7 +166,7 @@ where
 /// The shared subtree walk behind both [`accesskit_tree`] (the sealed engine
 /// tree) and [`build_subtree`] (a host stitching several subtrees). `id_of`
 /// assigns each node its id, `skip` prunes element subtrees the caller projects
-/// elsewhere, `leaves` fills in each `<chisel-leaf>`'s interior semantics, and
+/// elsewhere, `leaves` fills in each `<custom-leaf>`'s interior semantics, and
 /// `advertise_actions` gates whether controls declare the host action they
 /// accept (recording them in `actionable`) — off for the engine tree so hosts
 /// that don't route actions don't promise affordances they can't honor.
@@ -224,7 +224,7 @@ where
     // assigned, name itself, carry a value, and declare its own actions. It runs
     // after the DOM-derived semantics (so a leaf wins) and before bounds (so
     // layout wins on geometry).
-    if let Some(key) = chisel_leaf_key_of(dom, node) {
+    if let Some(key) = custom_leaf_key_of(dom, node) {
         leaves.describe_leaf(key, &mut access);
     }
 
@@ -398,7 +398,7 @@ where
     build_subtree_with_leaves(dom, fragments, root, id_of, skip, &mut NoLeafA11y)
 }
 
-/// [`build_subtree`], with each `<chisel-leaf>`'s interior filled in by `leaves`.
+/// [`build_subtree`], with each `<custom-leaf>`'s interior filled in by `leaves`.
 ///
 /// A leaf is a replaced element, so nothing about its interior reaches the DOM;
 /// without a source it projects as an unlabeled container. With one, a `Knob`
@@ -547,12 +547,12 @@ mod tests {
         let mut dom = ScriptedDom::new();
         let root = dom.document();
 
-        let named = dom.create_element(html("chisel-leaf"));
+        let named = dom.create_element(html("custom-leaf"));
         dom.set_attribute(named, attr_name("key"), "1");
         dom.set_attribute(named, attr_name("aria-label"), "Session graph");
         dom.append_child(root, named);
 
-        let unnamed = dom.create_element(html("chisel-leaf"));
+        let unnamed = dom.create_element(html("custom-leaf"));
         dom.set_attribute(unnamed, attr_name("key"), "2");
         dom.append_child(root, unnamed);
 
@@ -590,7 +590,7 @@ mod tests {
         );
     }
 
-    /// A `<chisel-leaf>` is a replaced element, so nothing about its interior
+    /// A `<custom-leaf>` is a replaced element, so nothing about its interior
     /// reaches the DOM. Without a source it projects as an opaque, unlabeled
     /// container; with one, the leaf names itself, promotes its own role, carries
     /// its value, and lands in the routable set on the strength of the action it
@@ -599,7 +599,7 @@ mod tests {
     fn chisel_leaf_interior_reaches_the_tree_through_its_source() {
         let mut dom = ScriptedDom::new();
         let root = dom.document();
-        let leaf = dom.create_element(html("chisel-leaf"));
+        let leaf = dom.create_element(html("custom-leaf"));
         dom.set_attribute(leaf, attr_name("key"), "7");
         dom.append_child(root, leaf);
 

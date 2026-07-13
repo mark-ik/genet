@@ -61,8 +61,8 @@ use crate::image_decode::{BackgroundImagePlane, DecodedImage, ImagePlane};
 use crate::style::StylePlane;
 use crate::text_measure::TextMeasureCtx;
 
-/// A host-provided source of pre-emitted Path-A paint commands for chisel leaf
-/// nodes (`<chisel-leaf key="…">`), keyed by the leaf's stable `key`. The host
+/// A host-provided source of pre-emitted Path-A paint commands for custom leaf
+/// nodes (`<custom-leaf key="…">`), keyed by the leaf's stable `key`. The host
 /// runs each dirty leaf's `paint` into a command buffer and exposes it here; this
 /// producer splices those commands at the leaf's box. serval-layout only queries,
 /// so it does not depend on the chisel crate. See
@@ -731,7 +731,7 @@ where
 /// Variant of [`emit_paint_list_with_layouts`] that also splices chisel Path-A
 /// leaves' commands from `leaves` (see [`LeafPaintSource`]). The host owns the
 /// leaf registry, runs each dirty leaf's paint into a buffer, and passes the
-/// buffer source here; the leaf's box is a `<chisel-leaf key="…">` replaced
+/// buffer source here; the leaf's box is a `<custom-leaf key="…">` replaced
 /// element. Zero document scroll, matching `emit_paint_list_with_layouts`.
 #[allow(clippy::too_many_arguments)]
 pub fn emit_paint_list_with_leaves<D>(
@@ -1371,7 +1371,7 @@ pub(crate) fn walk<Id>(
         }
     } else if let Some(decoded) = em.images_plane.get(dom_id) {
         emit_object_image(cv, content_box(&l), decoded, &mut em.images, commands);
-    } else if let Some(leaf_key) = node.chisel_leaf_key {
+    } else if let Some(leaf_key) = node.custom_leaf_key {
         // A chisel Path-A leaf paints its own command stream in place of
         // serval-painted content, in the leaf's local coordinates with (0,0) at
         // the content-box origin — the same content box `<img>` and
@@ -1833,8 +1833,8 @@ fn emit_inline_content<NodeId: Copy + Eq + Hash>(
                             emit_image_rect(rect, decoded, ImageRendering::Auto, images, commands);
                         }
                         emitted = true;
-                    } else if let Some(leaf_key) = item.chisel_leaf_key {
-                        // An inline `<chisel-leaf>`: splice its Path-A commands at the
+                    } else if let Some(leaf_key) = item.custom_leaf_key {
+                        // An inline `<custom-leaf>`: splice its Path-A commands at the
                         // laid-out inline rect. The commands are in the leaf's local
                         // coordinates with (0,0) at its own origin, so translate to the
                         // box origin — the inline twin of the block path's
@@ -4065,13 +4065,13 @@ mod tests {
         }
     }
 
-    /// End-to-end: a `<chisel-leaf key="7">` element is recognized as a replaced
+    /// End-to-end: a `<custom-leaf key="7">` element is recognized as a replaced
     /// leaf (construct), carries its key onto the box (box_tree), and paint pulls
     /// its Path-A commands from the `LeafPaintSource` and splices them.
     #[test]
     fn chisel_leaf_splices_its_path_a_commands() {
         let document = StaticDocument::parse(
-            "<html><body><chisel-leaf key='7' style='width:20px;height:10px'></chisel-leaf></body></html>",
+            "<html><body><custom-leaf key='7' style='width:20px;height:10px'></custom-leaf></body></html>",
         );
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
         run_cascade(
@@ -4142,7 +4142,7 @@ mod tests {
     #[test]
     fn chisel_leaf_offsets_commands_into_its_content_box() {
         let document = StaticDocument::parse(
-            "<html><body><chisel-leaf key='7' style='width:20px;height:10px;padding:10px;border:5px solid'></chisel-leaf></body></html>",
+            "<html><body><custom-leaf key='7' style='width:20px;height:10px;padding:10px;border:5px solid'></custom-leaf></body></html>",
         );
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
         run_cascade(
@@ -4208,7 +4208,7 @@ mod tests {
         );
     }
 
-    /// An **inline** `<chisel-leaf>` — one flowing beside text, so it gets no
+    /// An **inline** `<custom-leaf>` — one flowing beside text, so it gets no
     /// `BoxNode` and rides as an `InlineBoxItem` — still splices its Path-A
     /// commands, translated to its laid-out inline rect. Before 2026-07-09 the
     /// inline path dropped the leaf silently: no box, no key, no paint.
@@ -4217,7 +4217,7 @@ mod tests {
         // The leading text forces `<body>` into an inline formatting context, so
         // the leaf flows inline instead of taking the block replaced-leaf path.
         let document = StaticDocument::parse(
-            "<html><body>hi <chisel-leaf key='7' style='width:20px;height:10px'></chisel-leaf></body></html>",
+            "<html><body>hi <custom-leaf key='7' style='width:20px;height:10px'></custom-leaf></body></html>",
         );
         let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
         run_cascade(
@@ -4235,7 +4235,7 @@ mod tests {
 
         // The inline leaf is reported for host rendering at its reserved size.
         assert_eq!(
-            built.chisel_leaf_boxes(),
+            built.custom_leaf_boxes(),
             vec![(7u64, (20.0, 10.0))],
             "an inline leaf is reported to the host, or it never gets rendered",
         );

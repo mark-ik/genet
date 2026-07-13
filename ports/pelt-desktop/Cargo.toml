@@ -27,7 +27,7 @@ tile-surface = [
     "dep:serval-documents",
     "dep:netrender", "dep:serval-render", "dep:serval-static-dom", "dep:serval-layout",
     "dep:serval-scripted-dom", "dep:layout-dom-api", "dep:xilem-serval",
-    "dep:chisel", "dep:accesskit",
+    "dep:chisel", "dep:accesskit", "dep:paint_list_api", "dep:paint_list_render",
 ]
 # The on-screen static-document viewer (V1): the GPU-free `tile-surface` lib plus the
 # windowed present stack (`serval-winit-host` + `wgpu`). Default-on so `pelt --engine
@@ -156,6 +156,8 @@ chisel = { package = "serval-chisel", version = "0.1.0", path = "../../component
 # included) into an AccessKit tree; the windowed viewer pushes it to the OS
 # through `serval_winit_host::AccessKitBridge`.
 accesskit = { workspace = true, optional = true }
+paint_list_api = { workspace = true, optional = true }
+paint_list_render = { workspace = true, optional = true }
 # Spec `data:` URL decoding for the LocalFetcher (percent-encoded + base64 bodies).
 
 # Remote document loading (behind the `netfetch` feature): the netfetcher engine

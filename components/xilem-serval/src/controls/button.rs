@@ -29,7 +29,7 @@ where
 
 /// A `<button>` view over an arbitrary child sequence rather than a text label:
 /// `on_click(el("button", child), handler)`. This is how a chisel leaf rides
-/// inside a native control — `button_with(chisel_leaf(key, w, h), on_press)` is
+/// inside a native control — `button_with(custom_leaf(key, w, h), on_press)` is
 /// the catalog's "native `button` wrapping a tiny `GraphGlyph` leaf".
 ///
 /// Composition rule: the leaf only paints; the interaction lives here in the view
@@ -57,7 +57,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tags::chisel_leaf;
+    use crate::tags::custom_leaf;
     use crate::{AnyView, DomHandle, ServalAppRunner};
     use layout_dom_api::{LayoutDom, LocalName, Namespace};
     use serval_scripted_dom::{NodeId, ScriptedDom};
@@ -73,7 +73,7 @@ mod tests {
     /// interaction.
     fn glyph_button(_presses: &u32) -> BtnView {
         Box::new(button_with(
-            chisel_leaf::<u32, ()>(GLYPH_KEY, 20, 20),
+            custom_leaf::<u32, ()>(GLYPH_KEY, 20, 20),
             |presses: &mut u32, _click: PointerClick| {
                 *presses += 1;
             },
@@ -99,7 +99,7 @@ mod tests {
                 Some("button"),
                 "button_with yields a native <button> root",
             );
-            let leaf = child_named(&d, root, "chisel-leaf")
+            let leaf = child_named(&d, root, "custom-leaf")
                 .expect("the glyph leaf is a child of the button");
             assert_eq!(
                 d.attribute(leaf, &Namespace::from(""), &LocalName::from("key"))

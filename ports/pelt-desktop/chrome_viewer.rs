@@ -61,21 +61,55 @@ pub(crate) mod windowed {
     use netrender::external_texture::ExternalTexturePlacement;
     use netrender::{ColorLoad, NetrenderOptions};
     use serval_layout::ScrollKey;
-    use serval_winit_host::{
-        SurfaceHost, key_event_from_winit, modifiers_from_winit, wheel_delta_from_winit,
-    };
+    use serval_winit_host::{SurfaceHost, wheel_delta_from_winit};
     use winit::application::ApplicationHandler;
     use winit::dpi::PhysicalSize;
     use winit::event::{ElementState, MouseButton, WindowEvent};
     use winit::event_loop::{ActiveEventLoop, EventLoop};
-    use winit::keyboard::{Key, NamedKey};
+    use winit::keyboard::{Key, ModifiersState, NamedKey};
     use winit::window::{Window, WindowId};
-    use xilem_serval::{Modifiers, PointerClick};
+    use xilem_serval::{
+        Key as CambiumKey, KeyEvent, Modifiers, NamedKey as CambiumNamedKey, PointerClick,
+    };
 
     use super::{StaticViewerConfig, StaticViewerOutcome};
     use crate::chrome::{Chrome, ChromeIntent, StripSide};
     use crate::document::{ClickOutcome, LoadedDocument, LocalFetcher};
     use crate::href::resolve_href;
+
+    // Migration adapter. C4 replaces Pelt's compatibility dependency with
+    // `cambium-winit`; the Genet presentation crate is already GUI-independent.
+    fn key_event_from_winit(key: &Key, mods: Modifiers) -> Option<KeyEvent> {
+        let mapped = match key {
+            Key::Character(s) => CambiumKey::Character(s.to_string()),
+            Key::Named(named) => CambiumKey::Named(match named {
+                NamedKey::Backspace => CambiumNamedKey::Backspace,
+                NamedKey::Enter => CambiumNamedKey::Enter,
+                NamedKey::Tab => CambiumNamedKey::Tab,
+                NamedKey::Escape => CambiumNamedKey::Escape,
+                NamedKey::Space => CambiumNamedKey::Space,
+                NamedKey::ArrowLeft => CambiumNamedKey::ArrowLeft,
+                NamedKey::ArrowRight => CambiumNamedKey::ArrowRight,
+                NamedKey::ArrowUp => CambiumNamedKey::ArrowUp,
+                NamedKey::ArrowDown => CambiumNamedKey::ArrowDown,
+                NamedKey::Delete => CambiumNamedKey::Delete,
+                NamedKey::Home => CambiumNamedKey::Home,
+                NamedKey::End => CambiumNamedKey::End,
+                _ => CambiumNamedKey::Other,
+            }),
+            Key::Dead(_) | Key::Unidentified(_) => return None,
+        };
+        Some(KeyEvent::with_mods(mapped, mods))
+    }
+
+    fn modifiers_from_winit(state: ModifiersState) -> Modifiers {
+        Modifiers {
+            shift: state.shift_key(),
+            ctrl: state.control_key(),
+            alt: state.alt_key(),
+            meta: state.super_key(),
+        }
+    }
 
     /// A rect `(x, y, w, h)` in window pixels.
     type Rect = (u32, u32, u32, u32);

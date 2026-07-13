@@ -23,22 +23,60 @@ use std::rc::Rc;
 
 use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, QualName};
 use netrender::Scene;
+use paint_list_api::PaintCmd;
 use pelt_core::tile::{
     ContentSource, DocumentRef, DropTarget, SplitAxis, TabStack, TileEvent, TileId, TilePath,
     TileTree,
 };
 use accesskit::{NodeId as AccessNodeId, Tree, TreeId, TreeUpdate};
 use chisel::{ColorF, GraphGlyph, GraphGlyphNode, LeafRegistry, Meter, RenderedLeaves, Size};
-use serval_layout::IncrementalLayout;
-use serval_render::{ContentReport, scene_from_session_dom, scene_from_session_dom_with_leaves};
+use serval_layout::{IncrementalLayout, LeafPaintSource, ScrollOffsets};
+use serval_render::{ContentReport, scene_from_session_dom};
 use serval_scripted_dom::{NodeId, ScriptedDom};
 use xilem_serval::{
-    AnyView, DomHandle, PointerClick, ServalAppRunner, ServalCtx, ServalElement, chisel_leaf, el,
+    AnyView, DomHandle, PointerClick, ServalAppRunner, ServalCtx, ServalElement, custom_leaf, el,
     on_click,
 };
 
 use crate::document::{ClickOutcome, LoadedDocument, LocalFetcher};
 use crate::href::resolve_href;
+
+struct RenderedLeafSource<'a>(&'a RenderedLeaves);
+
+impl LeafPaintSource for RenderedLeafSource<'_> {
+    fn leaf_commands(&self, key: u64) -> Option<&[PaintCmd]> {
+        self.0.get(key)
+    }
+}
+
+/// Sprigging assembly belongs above the engine's neutral leaf source contract.
+pub(crate) fn scene_from_session_dom_with_leaves(
+    session: &IncrementalLayout<NodeId>,
+    dom: &ScriptedDom,
+    width: u32,
+    height: u32,
+    registry: &mut LeafRegistry<u64>,
+    cache: &mut RenderedLeaves,
+) -> Scene {
+    let sizes: HashMap<u64, (f32, f32)> = session.custom_leaf_boxes().into_iter().collect();
+    registry.render_into(
+        |key| {
+            sizes.get(&key).map(|&(width, height)| Size {
+                width,
+                height,
+            })
+        },
+        cache,
+    );
+    let source = RenderedLeafSource(cache);
+    let list = session.emit_paint_list_with_leaves(
+        dom,
+        &ScrollOffsets::default(),
+        paint_list_api::DeviceIntSize::new(width as i32, height as i32),
+        &source,
+    );
+    paint_list_render::translate_paint_list(&list)
+}
 
 /// The erased tile-frame view type.
 pub type TileView = Box<dyn AnyView<TileState, (), ServalCtx, ServalElement>>;
@@ -74,9 +112,9 @@ fn tile_view(state: &TileState) -> TileView {
             "div",
             (
                 el::<_, TileState, ()>("div", ()).attr("class", "tile-status-spacer"),
-                chisel_leaf::<TileState, ()>(TREE_GLYPH_LEAF_KEY, 20, 20)
+                custom_leaf::<TileState, ()>(TREE_GLYPH_LEAF_KEY, 20, 20)
                     .attr("class", "tile-status-leaf"),
-                chisel_leaf::<TileState, ()>(FRAME_METER_LEAF_KEY, 64, 8)
+                custom_leaf::<TileState, ()>(FRAME_METER_LEAF_KEY, 64, 8)
                     .attr("class", "tile-status-leaf"),
             ),
         )
@@ -348,7 +386,7 @@ const DEFAULT_TILE_CSS: &str = "\
 /// producer's texture into each), and an optional drag ghost (the dragged tab's
 /// preview) the host composites on top.
 /// Bridges chisel's `Leaf::accessibility` into serval-layout's a11y walk, which
-/// knows `<chisel-leaf>` as an element but not chisel's types. A newtype because
+/// knows `<custom-leaf>` as an element but not Sprigging's types. A newtype because
 /// both traits are foreign here (orphan rule), the same shape every host uses.
 struct LeafA11y<'a>(&'a mut LeafRegistry<u64>);
 
@@ -397,7 +435,7 @@ pub struct TileSurface {
     docs: HashMap<TileId, LoadedDocument>,
     sheets: Vec<String>,
     /// The status bar's chisel widget leaves (frame meter, tree glyph), keyed by
-    /// the `<chisel-leaf key>`s the frame view emits.
+    /// the `<custom-leaf key>`s the frame view emits.
     leaves: LeafRegistry<u64>,
     /// Retained Path-A buffers across frames: a leaf repaints only when its data
     /// or box size changed (the leaf-tier retention gate).
@@ -628,7 +666,7 @@ impl TileSurface {
     }
 
     /// Project the laid-out frame DOM into an AccessKit tree, with each
-    /// `<chisel-leaf>`'s interior filled in by the leaf itself: the status bar's
+    /// `<custom-leaf>`'s interior filled in by the leaf itself: the status bar's
     /// frame meter announces as a meter carrying its level, the tree glyph as a
     /// graphics object. Returns the tree plus the actionable nodes paired with
     /// their AccessKit ids, so the host can route a screen reader's request back

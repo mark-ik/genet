@@ -6,7 +6,7 @@
 //! header over virtualized, absolutely-placed rows.
 //!
 //! Geometry comes from [`chisel::GridSpec`]; row *content* comes from the
-//! caller's cell function (any view — text, a `chisel_leaf` sparkline, a
+//! caller's cell function (any view — text, a `custom_leaf` sparkline, a
 //! button), so the grid owns arrangement and nothing else. Only the
 //! [`VirtualWindow`](chisel::VirtualWindow) rows exist as DOM; scrolling is
 //! caller state (wire [`on_wheel`](crate::on_wheel) around the grid, clamping
@@ -127,7 +127,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tags::chisel_leaf;
+    use crate::tags::custom_leaf;
     use crate::{DomHandle, ServalAppRunner};
     use chisel::GridColumn;
     use layout_dom_api::{LayoutDom, LocalName, Namespace};
@@ -168,7 +168,7 @@ mod tests {
                 let i = if descending { rows - 1 - r } else { r };
                 if c == 2 {
                     // Sparkline-in-cell shape: a chisel leaf as a cell view.
-                    Box::new(chisel_leaf::<GridState, ()>(1000 + i as u64, 96, 16))
+                    Box::new(custom_leaf::<GridState, ()>(1000 + i as u64, 96, 16))
                 } else {
                     Box::new(el::<_, GridState, ()>("span", format!("r{i}c{c}")))
                 }
@@ -243,7 +243,7 @@ mod tests {
             .attribute(rows[0], &Namespace::from(""), &LocalName::from("data-row"))
             .unwrap_or_default();
         assert_eq!(first_row_class, "198", "window starts at scroll/24 minus overscan");
-        // The sparkline cell rides along: a chisel-leaf inside the row.
+        // The sparkline cell rides along: a custom leaf inside the row.
         let mut text = String::new();
         texts_under(&d, rows[0], &mut text);
         assert!(text.contains("r198c0"), "cell content reflects the row: {text}");

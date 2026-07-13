@@ -154,11 +154,9 @@ where
             // than a `local_name!` atom. It sizes like the default-object replaced
             // elements (300×150, CSS-overridable).
             || q.local.as_ref() == "external-texture"
-            // `<chisel-leaf>` is a custom-paint widget leaf (see `chisel_leaf_key_of`
-            // and `docs/2026-07-07_chisel_widget_leaf_design.md`): a replaced element
-            // whose paint is the host leaf's own Path-A `PaintCmd` stream, sized like
-            // the default-object replaced elements (300×150, CSS-overridable).
-            || q.local.as_ref() == "chisel-leaf"
+            // `<custom-leaf>` is a host-painted replaced element. The former
+            // `<chisel-leaf>` spelling remains accepted while consumers migrate.
+            || matches!(q.local.as_ref(), "custom-leaf" | "chisel-leaf")
     })
 }
 
@@ -187,18 +185,18 @@ where
         .ok()
 }
 
-/// The leaf key of a `<chisel-leaf key="…">` element: the stable `u64` the host
-/// registers its widget leaf under (in the chisel `LeafRegistry` /
-/// `LeafPaintSource`). The element carries only the key + a box; paint pulls the
-/// leaf's Path-A commands by this key. Missing / unparseable keys yield `None`
-/// (the leaf paints nothing). Mirrors [`external_texture_key_of`].
-pub(crate) fn chisel_leaf_key_of<D>(dom: &D, id: D::NodeId) -> Option<u64>
+/// The leaf key of a `<custom-leaf key="…">` element. The legacy
+/// `<chisel-leaf>` spelling remains readable during migration.
+pub(crate) fn custom_leaf_key_of<D>(dom: &D, id: D::NodeId) -> Option<u64>
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
     use html5ever::{LocalName, ns};
-    if dom.element_name(id)?.local.as_ref() != "chisel-leaf" {
+    if !matches!(
+        dom.element_name(id)?.local.as_ref(),
+        "custom-leaf" | "chisel-leaf"
+    ) {
         return None;
     }
     dom.attribute(id, &ns!(), &LocalName::from("key"))?

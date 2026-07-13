@@ -8,9 +8,9 @@
 //! presented on a winit window via netrender". The present mechanics — booting
 //! wgpu + a netrender [`Renderer`], configuring the surface, rasterizing a
 //! [`Scene`] into an offscreen texture, acquiring + compositing onto the
-//! backbuffer — and the winit→serval key / modifier mapping are identical
-//! between them, so they live here. Each host keeps only its own scene
-//! composition and input routing.
+//! backbuffer — are identical between them, so they live here. Each host keeps
+//! its own scene composition and input routing. Cambium keyboard translation
+//! lives in `cambium-winit`; this engine host does not depend on the GUI layer.
 //!
 //! Per-frame shape a host follows:
 //!
@@ -29,9 +29,7 @@ use std::sync::Arc;
 
 use netrender::{ColorLoad, NetrenderOptions, Renderer, Scene};
 use winit::event::MouseScrollDelta;
-use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey as WinitNamedKey};
 use winit::window::Window;
-use xilem_serval::{Key, KeyEvent, Modifiers, NamedKey};
 
 /// The shared present core: one wgpu device + netrender [`Renderer`], booted once
 /// and shared across **every** window. Per-window [`WindowSurface`]s are created
@@ -384,41 +382,6 @@ impl SurfaceHost {
     /// Acquire the surface backbuffer for this frame (`None` to skip on outdated).
     pub fn acquire(&self) -> Option<wgpu::SurfaceTexture> {
         self.surface.acquire(&self.core)
-    }
-}
-
-/// Map a winit logical key + modifiers to a serval [`KeyEvent`]; `None` for dead
-/// / unidentified keys with no routable mapping.
-pub fn key_event_from_winit(key: &WinitKey, mods: Modifiers) -> Option<KeyEvent> {
-    let mapped = match key {
-        WinitKey::Character(s) => Key::Character(s.to_string()),
-        WinitKey::Named(named) => Key::Named(match named {
-            WinitNamedKey::Backspace => NamedKey::Backspace,
-            WinitNamedKey::Enter => NamedKey::Enter,
-            WinitNamedKey::Tab => NamedKey::Tab,
-            WinitNamedKey::Escape => NamedKey::Escape,
-            WinitNamedKey::Space => NamedKey::Space,
-            WinitNamedKey::ArrowLeft => NamedKey::ArrowLeft,
-            WinitNamedKey::ArrowRight => NamedKey::ArrowRight,
-            WinitNamedKey::ArrowUp => NamedKey::ArrowUp,
-            WinitNamedKey::ArrowDown => NamedKey::ArrowDown,
-            WinitNamedKey::Delete => NamedKey::Delete,
-            WinitNamedKey::Home => NamedKey::Home,
-            WinitNamedKey::End => NamedKey::End,
-            _ => NamedKey::Other,
-        }),
-        WinitKey::Dead(_) | WinitKey::Unidentified(_) => return None,
-    };
-    Some(KeyEvent::with_mods(mapped, mods))
-}
-
-/// Map winit's modifier state to serval's [`Modifiers`].
-pub fn modifiers_from_winit(state: ModifiersState) -> Modifiers {
-    Modifiers {
-        shift: state.shift_key(),
-        ctrl: state.control_key(),
-        alt: state.alt_key(),
-        meta: state.super_key(),
     }
 }
 

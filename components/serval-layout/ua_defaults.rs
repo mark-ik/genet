@@ -78,7 +78,7 @@ fieldset, form, details, summary, dialog, menu {
    shipped no `display` for any of them, leaving them `inline`, where CSS
    `width` / `height` are ignored outright and an empty control (`<input>`) takes
    no box at all. `<button>` additionally hosts children: a replaced child (an
-   `<img>`, an `<external-texture>`, a `<chisel-leaf>`) flows in its inline
+   `<img>`, an `<external-texture>`, a `<custom-leaf>`) flows in its inline
    formatting context, which is now handled — inline replaced elements carry
    their leaf/texture payload as an `InlineBoxItem`.
 

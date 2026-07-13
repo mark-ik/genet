@@ -220,7 +220,7 @@ mod tests {
     use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, QualName};
     use serval_scripted_dom::{NodeId, ScriptedDom};
 
-    const SHEET: &[&str] = &["div, button, chisel-leaf { display: block; }"];
+    const SHEET: &[&str] = &["div, button, custom-leaf { display: block; }"];
 
     fn html(local: &str) -> QualName {
         QualName::new(
@@ -399,7 +399,7 @@ mod tests {
     fn a_leaf_interior_is_queryable_like_any_control() {
         let mut dom = ScriptedDom::new();
         let root = dom.document();
-        let leaf = dom.create_element(html("chisel-leaf"));
+        let leaf = dom.create_element(html("custom-leaf"));
         dom.set_attribute(leaf, attr_name("key"), "1");
         dom.append_child(root, leaf);
 
@@ -419,4 +419,3 @@ mod tests {
         assert_eq!(described.actionable(), vec![leaf]);
     }
 }
-
