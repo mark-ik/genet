@@ -1,13 +1,13 @@
 # Element view + scripted tier plan
 
-**Date:** 2026-06-16. **Parent:** `2026-06-16_serval_layout_roadmap.md` (Thread
+**Date:** 2026-06-16. **Parent:** `2026-06-16_genet_layout_roadmap.md` (Thread
 2). **Scope:** the external-texture element view and the scripted tier (JS
 engines + scripted DOM). This is a secondary plan: both threads are far more
 *built* than older docs imply, so the job here is to record true state with
 file:line and name the residual work, not to re-derive a design. It is spun out
 so the roadmap stays a map.
 
-The headline for both: the serval-layout / serval engine primitives are
+The headline for both: the genet-layout / genet engine primitives are
 **done**. The remaining work is consumer wiring (meerkat) and scripted-DOM
 breadth, not engine primitives.
 
@@ -15,7 +15,7 @@ breadth, not engine primitives.
 
 ## Part A — external-texture element view
 
-### State: done end to end (serval side)
+### State: done end to end (genet side)
 
 The chain is built and tested across four crates. This is the correction to any
 "still needs the element view" framing.
@@ -32,11 +32,11 @@ The chain is built and tested across four crates. This is the correction to any
    participates in layout as a replaced box (300x150, CSS-overridable).
 3. **Paint** (`paint_emit.rs:769-780`): when `external_texture_key` is `Some`,
    push `PaintCmd::DrawExternalTexture(ExternalTextureItem { placement,
-   texture_key, opacity })` instead of serval content. Tested:
+   texture_key, opacity })` instead of genet content. Tested:
    `external_texture_element_emits_a_compositor_pass` (`paint_emit.rs:3048`)
    asserts exactly one `DrawExternalTexture` carrying the key and no
    `DrawImage`.
-4. **Host composite** (`serval-winit-host/src/lib.rs`): `compose_external_texture`
+4. **Host composite** (`genet-winit-host/src/lib.rs`): `compose_external_texture`
    on the netrender `Renderer` blits the producer's registered `wgpu::Texture`
    onto the backbuffer.
 
@@ -45,7 +45,7 @@ landed (`a8832e2762a`), pelt-core's `ContentSource` names the
 `ExternalTexture(key)` lane, and the surface exposes
 `TileFrame::external_tiles = (tile, rect, key)` (`fdfd0b89850`).
 
-`serval-scripted-dom` has no external-texture references, correct by design:
+`genet-scripted-dom` has no external-texture references, correct by design:
 the element is a layout/paint/host concern that rides the normal
 `<external-texture key>` element through the standard DOM, not a scripted-DOM
 concern.
@@ -65,7 +65,7 @@ The one remaining piece is the meerkat-internal render-loop swap: build the
 surface's `TileEvent`s into `Workbench` mutations, re-project. This is a
 mere-repo live-render rewrite, verifiable by running meerkat, and is also gated
 on mere's window-composition P2+. It belongs to the mere agent, not to
-serval-layout.
+genet-layout.
 
 ---
 
@@ -76,12 +76,12 @@ serval-layout.
 Eight live crates under `components/`: `script-engine-api` (the Layer-0 VM
 trait), `script-engine-nova` / `-boa` / `-piccolo` (per-backend impls),
 `script-runtime-api` (the browser host surface: `dom.rs` 3259 LOC, `fetch.rs`,
-`selector.rs`, `webgl.rs`), `serval-scripted-dom` (the scripted DOM provider),
-`serval-scripted` (host-coupled glue).
+`selector.rs`, `webgl.rs`), `genet-scripted-dom` (the scripted DOM provider),
+`genet-scripted` (host-coupled glue).
 
 **Engines:**
 
-- **Nova (native, primary), working.** serval runs a fork ahead of upstream
+- **Nova (native, primary), working.** genet runs a fork ahead of upstream
   (`Code/crates/nova`), not upstream trynova
   (`2026-06-10_nova_conformance_campaign_plan.md:4-6`). Native-only by a hard
   constraint, not a choice: `nova_vm`'s `Value` asserts word-size equality
@@ -124,7 +124,7 @@ a loaded page's HTML into a live `ScriptedDom`, runs its inline `<script>`s,
 the mutation relayouts and renders, `--js boa|nova` selects the engine, the GC
 tick auto-fires at frame cadence, and `gc_soak_bounds_memory` (120 frames x
 50-node churn) holds memory bounded. The layout coupling is the live
-`IncrementalLayout` path (`serval-scripted/lib.rs:35,44`), with
+`IncrementalLayout` path (`genet-scripted/lib.rs:35,44`), with
 `relayout_if_dirty` retained as the diff-tested oracle.
 
 ### Residual scripted-tier work (the real backlog)
@@ -208,7 +208,7 @@ Ranked roughly by leverage toward real scripted pages:
    `platform` surface; `element.style` is an inline `CSSStyleDeclaration` over the
    `style` attribute (camelCase + `cssText` + `getPropertyValue`/`setProperty`/…).
    `getComputedStyle` lands as a cross-layer **`ComputedStyleHandler`** seam
-   mirroring `FetchHandler` (the runtime links no layout engine): serval-layout's
+   mirroring `FetchHandler` (the runtime links no layout engine): genet-layout's
    `IncrementalLayout::computed_value` serializes a node's computed longhand (a
    curated first-cut set via Stylo `clone_<longhand>().to_css_string()`; computed
    not used values), pelt's `ScriptedDocument` implements the trait over its
@@ -238,25 +238,25 @@ exhaust the id range. Recorded as a constraint, not on the near horizon.
 
 ---
 
-## Where these threads touch serval-layout
+## Where these threads touch genet-layout
 
 For the layout engine specifically, both threads are *consumed*, not *built*:
 
-- The element view's only serval-layout surface is the replaced-box field +
+- The element view's only genet-layout surface is the replaced-box field +
   paint pass (Part A items 2-3), both done.
-- The scripted tier's only serval-layout surface is `IncrementalLayout`
-  (re-exported through `serval-scripted`), the relayout-on-mutation engine,
+- The scripted tier's only genet-layout surface is `IncrementalLayout`
+  (re-exported through `genet-scripted`), the relayout-on-mutation engine,
   also done.
 
 So from the roadmap's seat, neither thread carries open *engine* work. Part A's
 open work is meerkat wiring; Part B's is scripted-DOM breadth and external
-script loading. Both live outside serval-layout, which is why they are here and
+script loading. Both live outside genet-layout, which is why they are here and
 not in the layout roadmap proper.
 
 ## Part C — xilem_serval directions (added 2026-06-24, grand audit §7)
 
 The grand audit (`2026-06-24_grand_audit.md` §7) audited xilem_serval (the third
-xilem_core backend; "xilem_web, but native, with serval as the engine"; ~6,801
+xilem_core backend; "xilem_web, but native, with genet as the engine"; ~6,801
 LOC, 54 tests, Stages 0-7 done) and ranked its next directions. The crate itself
 is in good shape; most of these are deepenings, and item 1 is the one real
 engine-gate.
@@ -270,11 +270,11 @@ engine-gate.
    deferred, because the host-side `transform:translate` interim (proven
    RepaintOnly) already holds the visible behavior. The biggest *ceiling*, not
    urgent; the strategic move when the perf/correctness case forces it.
-2. **Deepen + relocate a11y onto `ServalLaneView`.** `accesskit_tree()`
-   (`components/serval-render/src/a11y.rs`) is a live DOM->AccessKit mapping but
+2. **Deepen + relocate a11y onto `GenetLaneView`.** `accesskit_tree()`
+   (`components/genet-render/src/a11y.rs`) is a live DOM->AccessKit mapping but
    maps only a handful of tags, folds text into the owner's label, and does not
    read the ARIA attributes the controls already stamp (checkbox role/aria-checked,
-   etc.). Moving it engine-side onto `ServalLaneView` makes it reusable across
+   etc.). Moving it engine-side onto `GenetLaneView` makes it reusable across
    every consumer, not just the host. Cheap relative to payoff. (This is the same
    move listed as a capability sidequest; it lives here as the xilem/a11y owner.)
 3. **Cross-path event-model conformance guard.** Two capture->target->bubble
@@ -287,11 +287,11 @@ engine-gate.
 4. **Finish text-editing depth.** Click-to-place + soft-wrap ArrowUp/Down + a
    sticky goal column over the existing `set_caret_byte`/parley seam
    (`controls.rs` Tier 1 is hard `\n` lines only).
-5. **Evaluate a fine-grained update path.** `ServalAppRunner` reruns
+5. **Evaluate a fine-grained update path.** `GenetAppRunner` reruns
    `logic(&state)` and diffs the whole tree per dispatch (`runner.rs:150-176`).
    Not yet a measured blocker (binding perf is an explicit non-goal), but a large
    chrome will make whole-tree-rebuild-per-dispatch hot; a signals layer would be
-   the better impedance match to serval's mutation-recording incremental layout.
+   the better impedance match to genet's mutation-recording incremental layout.
 
 Caveat: item 1 and the architecture-2 surface-migration tail are host-side
 (Mere/meerkat) work the engine plan generates asks for, not xilem_serval crate

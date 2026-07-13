@@ -4,9 +4,9 @@
 
 //! Profile-neutral DOM trait.
 //!
-//! `LayoutDom` is the ID-first surface that `serval-layout` (and other
+//! `LayoutDom` is the ID-first surface that `genet-layout` (and other
 //! read-only DOM walkers — reader-mode, serialization, querySelector helpers)
-//! consume. It does not commit to a backing store: `serval-static-dom`'s
+//! consume. It does not commit to a backing store: `genet-static-dom`'s
 //! `StaticDocument` and a future scripted-DOM provider both implement it.
 //!
 //! Design rationale and prior art: see
@@ -41,7 +41,7 @@ pub trait LayoutDom {
     /// children are the roots: parsed HTML has exactly one (`<html>`), but a
     /// host-built synthetic DOM (an app chrome layer, a widget pool) may hang
     /// SEVERAL elements here with no wrapper — layout styles and paints every
-    /// one of them (serval-layout wraps them in a synthetic block root; see
+    /// one of them (genet-layout wraps them in a synthetic block root; see
     /// its `multi_root_document_paints_every_root_element` test). Or an
     /// element node (a re-rooted subtree view): that element is itself the
     /// root. Hosts do not need to invent an `<html>`/container element just
@@ -155,7 +155,7 @@ pub trait LayoutDom {
 
     // ---- class / tag queries --------------------------------------------
     //
-    // Pre-order subtree searches a host and serval-internal callers both reach for
+    // Pre-order subtree searches a host and genet-internal callers both reach for
     // (find the element painting a class, collect a class's placeholders, hit-test a
     // tag). Provided as defaults over `dom_children` / `attributes` / `element_name`
     // so neither side re-rolls the walk.
@@ -202,10 +202,10 @@ pub trait LayoutDom {
 
 /// Mutation extension for scripted DOMs (plan Part 3 / the layout_dom_api design's
 /// open question #1). Read-only consumers (reader-mode, serialization, static
-/// layout) implement only [`LayoutDom`]; `serval-scripted-dom` implements both.
+/// layout) implement only [`LayoutDom`]; `genet-scripted-dom` implements both.
 ///
 /// Mutators record *structural* change as [`DomMutation`] records — they carry no
-/// notion of dirty bits, style, or layout. serval-layout's scheduler drains the
+/// notion of dirty bits, style, or layout. genet-layout's scheduler drains the
 /// stream ([`Self::drain_mutations`]) and translates it into StylePlane/LayoutPlane
 /// invalidation; the DOM provider itself stays render-state-free.
 pub trait LayoutDomMut: LayoutDom {
@@ -256,7 +256,7 @@ pub trait LayoutDomMut: LayoutDom {
 
     /// Remove the attribute named `name` from `node` (no-op if absent). Records
     /// an [`DomMutation::AttributeChanged`] carrying the removed value as
-    /// `old_value` (the live DOM then reads as absent), so serval-layout builds
+    /// `old_value` (the live DOM then reads as absent), so genet-layout builds
     /// the Stylo snapshot the same way it does for a value change.
     fn remove_attribute(&mut self, node: Self::NodeId, name: QualName);
 
@@ -268,7 +268,7 @@ pub trait LayoutDomMut: LayoutDom {
     fn set_inner_html(&mut self, node: Self::NodeId, html: &str);
 
     /// Drain the structural mutations recorded since the last call into `out`.
-    /// The provider records WHAT changed; serval-layout decides what to invalidate.
+    /// The provider records WHAT changed; genet-layout decides what to invalidate.
     fn drain_mutations(&mut self, out: &mut Vec<DomMutation<Self::NodeId>>);
 }
 
@@ -284,7 +284,7 @@ pub enum DomMutation<Id> {
     ///
     /// `old_value` is the attribute's value *before* this change (`None`
     /// if the attribute was newly added). It is plain pre-mutation DOM
-    /// data — not render state — and lets serval-layout reconstruct a
+    /// data — not render state — and lets genet-layout reconstruct a
     /// Stylo `ElementSnapshot` at restyle time (the old value is gone from
     /// the live DOM by then). See
     /// `docs/2026-05-25_fine_grained_restyle_plan.md`.

@@ -1,6 +1,6 @@
 # nematic
 
-`nematic` is the smolweb engine family for serval and its hosts. It has two
+`nematic` is the smolweb engine family for genet and its hosts. It has two
 products: `nematic::blocks`-style **document engines** (the default) that
 lower Gemini, Gopher, Spartan, Finger, plain text, Markdown, RSS/Atom, and
 the knot note format into inker's portable block model — the stored/authored
@@ -9,14 +9,14 @@ feature, **`nematic::views`**: native per-format xilem-serval views over
 errand's ASTs, the idiom-preserving live-render lane (real focusable links,
 per-format classes, per-site theming; no lowest-common-denominator lowering).
 
-> **Home:** [`mark-ik/serval`](https://github.com/mark-ik/serval), at
+> **Home:** [`mark-ik/genet`](https://github.com/mark-ik/genet), at
 > `components/nematic` (adopted 2026-07). The former standalone repository is archived
 > and links here.
 
 
-For fullweb rendering (CSS, JS, embedded media), mere routes through Serval
+For fullweb rendering (CSS, JS, embedded media), mere routes through Genet
 (the Servo/wgpu fork) or a system webview. **Nematic does not own an HTML
-reader-mode lane** — that's Serval's future "three-head Hekate" mode
+reader-mode lane** — that's Genet's future "three-head Hekate" mode
 (smolweb extract / middlenet / fullweb negotiator for the same HTML input).
 Nematic stays for protocols whose grammar the engine can fully parse
 natively.

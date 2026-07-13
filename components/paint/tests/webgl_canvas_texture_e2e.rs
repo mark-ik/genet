@@ -5,7 +5,7 @@
 //! W4 WebGL-over-wgpu bridge receipt.
 //!
 //! Drives a synthetic WebGL canvas texture from `servo-webgl-wgpu`
-//! through the Serval paint path:
+//! through the Genet paint path:
 //!
 //! `WebGlContext` -> painter external texture registry ->
 //! `PaintCmd::DrawExternalTexture` (carried inside a `PaintEnvelope`) ->
@@ -73,7 +73,7 @@ fn envelope_with_webgl_canvas() -> PaintEnvelope {
     let overlay = LayoutRect::new(LayoutPoint::new(28.0, 28.0), LayoutPoint::new(36.0, 36.0));
 
     PaintEnvelope {
-        engine: EngineId::SERVAL,
+        engine: EngineId::GENET,
         viewport: DeviceIntSize::new(VIEWPORT as i32, VIEWPORT as i32),
         generation: 0,
         commands: vec![

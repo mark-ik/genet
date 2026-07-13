@@ -1,0 +1,29 @@
+[package]
+name = "genet-scripted-dom"
+version = "0.1.0"
+repository = "https://github.com/mark-ik/genet"
+publish = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Mutable scripted-DOM provider: LayoutDom + LayoutDomMut over a NodeId arena, recording DomMutations for genet-layout invalidation."
+
+[lib]
+name = "genet_scripted_dom"
+path = "lib.rs"
+
+[dependencies]
+engine_observables_api = { workspace = true }
+layout-dom-api = { version = "0.1.0", path = "../shared/layout-dom", features = ["capture"] }
+markup5ever = { workspace = true }
+# The HTML serializer (the `serialize` fn + `SerializeOpts` + void-element/escaping
+# logic) lives in html5ever; markup5ever only carries the `Serialize`/`Serializer`
+# traits. Already a genet workspace dep (genet-static-dom uses it for parsing).
+html5ever = { workspace = true }
+# Reused for `set_inner_html` fragment parsing: parse via StaticDocument (a LayoutDom),
+# then walk it into the mutable arena. Avoids a second TreeSink impl.
+genet-static-dom = { version = "0.1.0", path = "../genet-static-dom" }
+
+[dev-dependencies]
+postcard = { workspace = true }

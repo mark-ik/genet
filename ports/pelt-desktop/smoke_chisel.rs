@@ -12,8 +12,8 @@
 
 use chisel::{ColorF, GraphGlyph, GraphGlyphNode, Knob, LeafRegistry, Meter, RenderedLeaves, Size};
 use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, QualName};
-use serval_layout::IncrementalLayout;
-use serval_scripted_dom::ScriptedDom;
+use genet_layout::IncrementalLayout;
+use genet_scripted_dom::ScriptedDom;
 
 use crate::tile_surface::scene_from_session_dom_with_leaves;
 
@@ -183,7 +183,7 @@ mod tests {
     #[test]
     fn chisel_leaves_render_to_pixels() {
         let receipt = std::path::Path::new(
-            "C:/Users/mark_/Code/testing/serval/images/2026-07-08_chisel_first_pixels.png",
+            "C:/Users/mark_/Code/testing/genet/images/2026-07-08_chisel_first_pixels.png",
         );
         let out = run_chisel_smoke(Some(receipt)).expect("smoke renders");
         assert_eq!(out.leaf_boxes, 3, "layout seam found all leaves: {out:?}");

@@ -7,19 +7,19 @@ members = [
     "components/xpath",
     "components/webgl-wgpu",
     "components/webgl-essl",
-    "components/serval-layout",
-    "components/serval-static-dom",
-    "components/serval-extract",
-    "components/serval-scripted-dom",
-    "components/serval-scripted",
-    "components/serval-scripted-worker",
-    "components/serval-static-html",
+    "components/genet-layout",
+    "components/genet-static-dom",
+    "components/genet-extract",
+    "components/genet-scripted-dom",
+    "components/genet-scripted",
+    "components/genet-scripted-worker",
+    "components/genet-static-html",
     "components/xilem-core",
     "components/xilem-serval",
     "components/chisel",
     "components/verso-tile",
     # The engine-management layer, adopted from mere 2026-07-10
-    # (docs/2026-07-09_inker_serval_adoption_plan.md): inker (contracts +
+    # (docs/2026-07-09_inker_genet_adoption_plan.md): inker (contracts +
     # document/surface registries) with its surface adapters + document-canvas
     # + knot-editor-host nested, and nematic promoted to a top-level component.
     "components/inker",
@@ -42,14 +42,14 @@ members = [
     "components/tinct",
     # The content lanes as session engines (2026-07-10 session-engines plan):
     # static/scripted/smolweb retained documents, promoted out of pelt.
-    "components/serval-documents",
-    "components/serval-winit-host",
-    "components/serval-render",
+    "components/genet-documents",
+    "components/genet-winit-host",
+    "components/genet-render",
     "components/shared/layout-dom",
     "components/script-engine-api",
     # script-engine-boa joined the workspace 2026-05-25. The old blocker (boa
     # 0.21.1's icu_normalizer ~2.0 vs parley 0.9's ^2.1.1) was resolved by forking
-    # boa to crates/boa (`serval` branch) and widening its icu family ~2.0 -> ^2.1,
+    # boa to crates/boa (`genet` branch) and widening its icu family ~2.0 -> ^2.1,
     # which resolves to icu 2.2.0 — the version nova_vm's temporal_rs -> icu_calendar
     # chain forces, and which parley accepts. Patched in via [patch.crates-io] below.
     "components/script-engine-boa",
@@ -59,7 +59,7 @@ members = [
     "ports/pelt-core",
     "ports/pelt-desktop",
     "ports/pelt",
-    "ports/serval-wpt",
+    "ports/genet-wpt",
     "tests/unit/*",
 ]
 default-members = ["ports/pelt"]
@@ -92,7 +92,7 @@ rust-version = "1.86.0"
 
 [workspace.dependencies]
 accesskit = { version = "0.24.0", features = ["serde"] }
-# Platform AccessKit adapters for the winit host bridge (serval-winit-host::a11y),
+# Platform AccessKit adapters for the winit host bridge (genet-winit-host::a11y),
 # tracking accesskit 0.24. Target-gated in the consuming crate, so a non-native
 # build (wasm) never pulls them.
 accesskit_windows = "0.32"
@@ -104,7 +104,7 @@ argon2 = { version = "0.5", features = ["alloc"] }
 arrayvec = "0.7"
 async-tungstenite = { version = "0.34", features = ["tokio-rustls-webpki-roots"] }
 atomic_refcell = "0.1.14"
-# aws-lc-rs removed 2026-05-15 per Mark's directive: serval should default to
+# aws-lc-rs removed 2026-05-15 per Mark's directive: genet should default to
 # pure-Rust crypto, not aws-lc's NASM-required C+asm crypto. The only consumers
 # (components/script, components/net) are now either gated out (script via
 # tests/unit/script exclusion above) or already dead (net). Crypto provider
@@ -217,7 +217,7 @@ nex-protocol = { version = "=0.1.1", path = "components/errand/protocols/nex-pro
 spartan-protocol = { version = "=0.1.1", path = "components/errand/protocols/spartan-protocol" }
 guppy-protocol = { version = "=0.1.1", path = "components/errand/protocols/guppy-protocol" }
 inker = { version = "=0.1.0", path = "components/inker" }
-serval-documents = { version = "=0.1.0", path = "components/serval-documents" }
+genet-documents = { version = "=0.1.0", path = "components/genet-documents" }
 nematic = { version = "=0.1.0", path = "components/nematic" }
 document-canvas = { version = "=0.1.0", path = "components/inker/document-canvas" }
 knot-editor-host = { version = "=0.1.0", path = "components/inker/knot-editor-host" }
@@ -232,7 +232,7 @@ netrender_device = { git = "https://github.com/mark-ik/netrender.git", branch = 
 # `masonry_winit` git deps left with pelt-viewer's retirement, 2026-06-12. The
 # last survivor, `xilem_core`, was vendored into `components/xilem-core` (a
 # verbatim Apache-2.0 mirror of upstream main) and is consumed by
-# `components/xilem-serval` via a path dep, so a bare serval clone needs no
+# `components/xilem-serval` via a path dep, so a bare genet clone needs no
 # mark-ik/xilem fork checkout.)
 peniko = "0.6"
 percent-encoding = "2.3"
@@ -273,16 +273,16 @@ strum = { version = "0.28", features = ["derive"] }
 # see docs/2026-07-12_ring3_fork_rename_publish_plan.md). Cargo's extern-name
 # binding rule: with no `package =` override, a dependency is visible under
 # its target's OWN `[lib] name`; ADDING `package =` (needed here, since the
-# real crate is renamed to `serval-stylo`) switches that to the TOML key
+# real crate is renamed to `genet-stylo`) switches that to the TOML key
 # instead — so the key must equal the desired import name (`style::...`,
 # used workspace-wide) or every consumer's source breaks. `stylo_atoms` /
 # `stylo_dom` / `stylo_static_prefs` have no such mismatch (their `[lib]
 # name` already equals their old package name), so their keys are untouched.
-style = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "serval-stylo" }
-stylo_atoms = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "serval-stylo-atoms" }
-stylo_dom = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "serval-stylo-dom" }
+style = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "genet-stylo" }
+stylo_atoms = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "genet-stylo-atoms" }
+stylo_dom = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "genet-stylo-dom" }
 stylo_malloc_size_of = { git = "https://github.com/mark-ik/stylo", branch = "main" }
-stylo_static_prefs = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "serval-stylo-static-prefs" }
+stylo_static_prefs = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "genet-stylo-static-prefs" }
 stylo_traits = { git = "https://github.com/mark-ik/stylo", branch = "main" }
 syn = { version = "2", default-features = false, features = ["clone-impls", "derive", "parsing"] }
 synstructure = "0.13"
@@ -306,7 +306,7 @@ unicode_categories = "0.1.1"
 # (portable lexer: djot structure + code injection + prose entities) and tinct
 # (perceptual seed-to-palette, with the syntax-role palette). Both are standalone
 # sibling libs; xilem-serval is the assembly point that maps illume's kinds onto
-# tinct's roles, so every serval host gets highlighted editing for free.
+# tinct's roles, so every genet host gets highlighted editing for free.
 # Adopted as components 2026-07-10 (inker-adoption plan, companion rehomes):
 # the text/editing column consolidates here — illume spans, tinct palettes,
 # knot-editor-host editor model, xilem-serval text surfaces. Both keep
@@ -369,17 +369,17 @@ net_traits = { package = "servo-net-traits", version = "=0.2.0", path = "compone
 paint = { package = "servo-paint", version = "=0.2.0", path = "components/paint" }
 paint_api = { package = "servo-paint-api", version = "=0.2.0", path = "components/shared/paint" }
 # Moved to the netrender workspace as a neutral, engine-agnostic crate
-# (extraction plan 2026-05-20). serval is now a consumer, not the owner.
+# (extraction plan 2026-05-20). genet is now a consumer, not the owner.
 paint_list_api = { git = "https://github.com/mark-ik/netrender.git", branch = "main", version = "0.1.0" }
 # The PaintCmd -> netrender::Scene translator; also lives in the netrender
-# workspace so any engine (serval, nematic, inker) can reuse the lowering.
+# workspace so any engine (genet, nematic, inker) can reuse the lowering.
 paint_list_render = { git = "https://github.com/mark-ik/netrender.git", branch = "main", version = "0.1.0" }
-paint_types = { package = "serval-paint-types", version = "=0.1.0", path = "components/shared/paint-types" }
+paint_types = { package = "genet-paint-types", version = "=0.1.0", path = "components/shared/paint-types" }
 pixels = { package = "servo-pixels", version = "=0.2.0", path = "components/pixels" }
 profile = { package = "servo-profile", version = "=0.2.0", path = "components/profile" }
 profile_traits = { package = "servo-profile-traits", version = "=0.2.0", path = "components/shared/profile" }
 # `servo = "..."` workspace.dep removed 2026-05-15 per Mark's audit:
-# serval used to be servo-the-fork, but the umbrella servo crate is no
+# genet used to be servo-the-fork, but the umbrella servo crate is no
 # longer load-bearing. The two examples that depended on it
 # (examples/wgpu-embedder, examples/non-presenting-wgpu-embedder) were
 # removed from workspace.members in the same diff. Other servo-* entries
@@ -495,12 +495,12 @@ sonic-rs = { path = "support/patches/sonic-rs-0.5.8" }
 # taffy fork, re-vendored 2026-07-12 onto the newest STABLE release (0.12.1 —
 # `float_layout` graduated from experimental, ending the need to ride the
 # experimental-cache-fix line). Carries three patches, each upstreamed at our
-# own pace (see support/patches/taffy/SERVAL_PATCHES.md + UPSTREAM_PR.md):
+# own pace (see support/patches/taffy/GENET_PATCHES.md + UPSTREAM_PR.md):
 # `find_content_slot` width-fit (a full-width float yielded a zero-width slot
 # at its right edge, placing a fixed-width BFC child there instead of below
 # the float — present on taffy `main` too), a float exclusion-band accessor
-# (feeds serval's parley-measured inline float wrap), and flex `order` (taffy
-# does not model CSS `order`). Only the `=0.12.1` requirement (serval-layout +
+# (feeds genet's parley-measured inline float wrap), and flex `order` (taffy
+# does not model CSS `order`). Only the `=0.12.1` requirement (genet-layout +
 # stylo_taffy) is redirected; the workspace's plain taffy 0.10.1 is
 # unaffected. See docs/2026-07-12_ring3_fork_rename_publish_plan.md (T0) and
 # docs/2026-05-31_css_rendering_conformance_plan.md (floats × BFC, the
@@ -508,7 +508,7 @@ sonic-rs = { path = "support/patches/sonic-rs-0.5.8" }
 taffy = { path = "support/patches/taffy" }
 # stylo_taffy fork, vendored 2026-07-12 at 0.3.0-beta.1 (the first stylo_taffy
 # release targeting taffy 0.12.x; alpha.5/6 still pinned the experimental
-# line). Two edits from the published source, both to match serval's actual
+# line). Two edits from the published source, both to match genet's actual
 # stylo fork surface rather than the registry `stylo` lineage stylo_taffy's
 # authors track: `TrackBreadth::Flex` reverted to `TrackBreadth::Fr` (our
 # fork's servo/stylo-derived variant name/shape; beta.1's is a newtype,
@@ -517,14 +517,14 @@ taffy = { path = "support/patches/taffy" }
 # taken as-is. See support/patches/stylo_taffy/ and
 # docs/2026-07-12_ring3_fork_rename_publish_plan.md (T2).
 stylo_taffy = { path = "support/patches/stylo_taffy" }
-# Nova fork (serval-embedder branch on github.com/mark-ik/nova). Carries the
+# Nova fork (genet-embedder branch on github.com/mark-ik/nova). Carries the
 # EmbedderObject native-data patch plus the reflector-liveness weak-ref API
 # (`EmbedderObject::into_weak_ref`/`from_weak_ref` + `clear_weak_ref_kept_objects`,
 # G1 in docs/2026-06-11_gc_arena_dom_plan.md). Git dep so a bare clone resolves
 # without the sibling checkout; for local nova dev, the gitignored
 # `Code/.cargo/config.toml` `paths` override redirects this to `../../crates/nova`.
-nova_vm = { git = "https://github.com/mark-ik/nova", branch = "serval-embedder" }
-# Boa fork (serval branch on github.com/mark-ik/boa) tracking boa-upstream main
+nova_vm = { git = "https://github.com/mark-ik/nova", branch = "genet-embedder" }
+# Boa fork (genet branch on github.com/mark-ik/boa) tracking boa-upstream main
 # (the 1.0.0-dev line). Carries an additive source patch — `JsObject::downgrade()`
 # + `WeakJsObject`, for the reflector-liveness weak cache (G1 in
 # docs/2026-06-11_gc_arena_dom_plan.md). boa_engine pulls its sibling boa_* crates
@@ -532,12 +532,12 @@ nova_vm = { git = "https://github.com/mark-ik/nova", branch = "serval-embedder" 
 # crates.io (by script-engine-boa) and need patching. Git deps so a bare clone
 # resolves; for local boa dev, the gitignored `Code/.cargo/config.toml` `paths`
 # override redirects these to `../../crates/boa`.
-# See docs/2026-05-20_serval_script_engine_plan.md.
-boa_engine = { git = "https://github.com/mark-ik/boa.git", branch = "serval" }
-boa_gc = { git = "https://github.com/mark-ik/boa.git", branch = "serval" }
+# See docs/2026-05-20_genet_script_engine_plan.md.
+boa_engine = { git = "https://github.com/mark-ik/boa.git", branch = "genet" }
+boa_gc = { git = "https://github.com/mark-ik/boa.git", branch = "genet" }
 # ipc-channel: in-process fork, vendored at support/patches/ipc-channel (like
 # taffy + gpu-allocator). Servo's multiprocess IPC transport is vestigial in
-# serval's single-process embedding (pelt; and mere's library use), so the fork
+# genet's single-process embedding (pelt; and mere's library use), so the fork
 # defaults to ipc-channel's built-in force-inprocess backend and makes the OS deps
 # optional. That drops the windows 0.61 dependency, whose loose <=0.62 range
 # otherwise let gpu-allocator latch onto 0.61.3 while wgpu-hal forces 0.62, breaking
@@ -545,16 +545,16 @@ boa_gc = { git = "https://github.com/mark-ik/boa.git", branch = "serval" }
 # scrying). Vendored, not a git fork, since the change is manifest-only.
 ipc-channel = { path = "support/patches/ipc-channel" }
 # NOTE: stylo/stylo_atoms used to be redirected here via `[patch.crates-io]`
-# (unifying stylo_taffy's crates.io `^0.18` requirement with serval's git
+# (unifying stylo_taffy's crates.io `^0.18` requirement with genet's git
 # rev, since `stylo` declares `links = "servo_style_crate"` — only one Stylo
 # allowed in the graph). Removed 2026-07-12 (T3 of
 # docs/2026-07-12_ring3_fork_rename_publish_plan.md, the stylo rename to
-# `serval-stylo`/`serval-stylo-atoms`): `[patch]` cannot rename its target
+# `genet-stylo`/`genet-stylo-atoms`): `[patch]` cannot rename its target
 # (the patch source's package name must match the registry name being
 # replaced), so every consumer now depends on the renamed git packages
 # directly instead — `[workspace.dependencies]` above for in-workspace
 # crates, and support/patches/stylo_taffy/Cargo.toml's own direct git deps
-# for the vendored stylo_taffy (which is what needed unifying with serval's
+# for the vendored stylo_taffy (which is what needed unifying with genet's
 # Stylo in the first place). See docs/2026-05-20_stylo_taffy_adoption_plan.md
 # and the css transitions plan for the original rationale.
 # vello patch removed 2026-05-15 per Mark's audit — bumping to vello 0.9

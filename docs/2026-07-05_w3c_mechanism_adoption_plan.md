@@ -8,14 +8,14 @@ protocol.
 (focused-card churn, fix 2), the standards-correct reform precedents (document scroll as
 viewport scroll; ports to components).
 
-**Thesis**: wherever serval lacks a platform mechanism, the meerkat host invents a protocol.
+**Thesis**: wherever genet lacks a platform mechanism, the meerkat host invents a protocol.
 Each adoption below deletes a host protocol and moves the decision into the engine where the
 spec already defines its semantics. Ranked: P1 and P3 are the perf levers, P5 is the
 correctness-debt lever; the rest follow as their consumers demand.
 
 ## P1. Visibility + lifecycle (fix 2, absorbs idle scheduling)
 
-- `Document.visibilityState` + `visibilitychange` in serval-scripted; host drives it per card
+- `Document.visibilityState` + `visibilitychange` in genet-scripted; host drives it per card
   (focused card visible, preview cards hidden, closed-but-warm frozen per Page Lifecycle
   `freeze`/`resume`).
 - Per spec: rAF does not fire while hidden; timers may be throttled (HTML spec license). Full
@@ -32,7 +32,7 @@ correctness-debt lever; the rest follow as their consumers demand.
 
 - The host band protocol (`request_scroll`, band caps, UV-shift composite) is a bespoke
   `content-visibility: auto`. Implement `contain` (layout/paint) and `content-visibility` in
-  serval-layout so the engine skips layout+paint for offscreen subtrees itself.
+  genet-layout so the engine skips layout+paint for offscreen subtrees itself.
 - Band emission then becomes engine-native windowing; the host protocol shrinks to a viewport
   report.
 - **Done when** a tall document with `content-visibility: auto` sections lays out and paints
@@ -61,7 +61,7 @@ correctness-debt lever; the rest follow as their consumers demand.
 
 - Sequential focus navigation (`tabindex` order), `:focus`/`:focus-visible` matching in the
   cascade, focus fixup on element removal, per WHATWG. Replaces host-owned focus bookkeeping;
-  unblocks the keyboard-dispatch item ("gated on a serval focus model").
+  unblocks the keyboard-dispatch item ("gated on a genet focus model").
 - **Done when** Tab/Shift-Tab order matches the spec on the shell document, `:focus-visible`
   styles the ring (host ring overlay retired), and removing the focused node moves focus per
   fixup rules.
@@ -99,7 +99,7 @@ naming-only and can ride any settings pass.
 - 2026-07-05: plan written from the fix-2 discussion; no code yet. P1 is the entry point.
 - 2026-07-05 (later): P1 core + host wiring landed. ScriptedDocument::set_hidden/freeze/resume
   (hidden clamps the timer pump to 1/s anchored at the hide; frozen runs nothing;
-  visibilitychange/freeze/resume dispatch at the document; behavioral test in serval-scripted,
+  visibilitychange/freeze/resume dispatch at the document; behavioral test in genet-scripted,
   41/41). Meerkat: ContentCommand::SetLifecycle through the contract wire;
   Constellation::apply_presentation sends it deduped from what the frame drew (presented cards
   visible, other actives hidden; freeze reserved for the per-site policy). Bycatch: the splice's
@@ -107,7 +107,7 @@ naming-only and can ride any settings pass.
   caught by the capture-replay parity suite, regression test added). Remaining P1 tail: the
   JS-visible document.visibilityState property (script-engine work) and the per-site
   policy setting (never-throttle / throttle / freeze) in mere-domain settings. Next: P3.
-- 2026-07-05 (later still): P3 ENGINE half landed (serval-layout).
+- 2026-07-05 (later still): P3 ENGINE half landed (genet-layout).
   `IncrementalLayout::set_prefers_color_scheme` swaps the Stylist Device
   (`cascade::set_stylist_color_scheme`: set_device + dirty origins + flush — the rule tree
   survives, so the persistent plane's rule nodes stay valid), forces a root-subtree re-match

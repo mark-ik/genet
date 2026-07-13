@@ -15,7 +15,7 @@ event-loop/task-source surface of `components/script-runtime-api/lib.rs`
 
 - Spec-mapped code uses `// Step N:` with short verbatim spec text for the
   step the next line realizes, numbering matching the spec.
-- Serval embedding decisions use ordinary comments without `Step`; keep host
+- Genet embedding decisions use ordinary comments without `Step`; keep host
   policy separate from spec text.
 - `// Note:` is reserved for real code/spec discrepancies, not implementation
   explanations; keep the global count small (parent budgeted under 10).
@@ -63,7 +63,7 @@ event-loop/task-source surface of `components/script-runtime-api/lib.rs`
    allocation order in the `script-runtime-api` suite and deterministically
    surfaced a pre-existing failure in the E4 trace guards:
    `scheduler_trace_ndjson_on_boa`/`_on_nova` panic inside
-   serval-scripted-dom's doc-tag fence ("NodeId from a different document
+   genet-scripted-dom's doc-tag fence ("NodeId from a different document
    (id tag 96, this doc 97)" / "NodeId refers to a live node") once enough
    runtimes have been created in the process. Repro:
    `cargo test -p script-runtime-api --lib` (any thread count); any 98-test

@@ -1,0 +1,78 @@
+[package]
+name = "genet-wpt"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "genet-native web-platform-tests runner; subset-selectable."
+
+[[bin]]
+name = "genet-wpt"
+path = "src/main.rs"
+
+[dependencies]
+# Phase 1 (crash-smoke): parse + layout, no GPU.
+genet-static-dom = { path = "../../components/genet-static-dom" }
+genet-layout = { path = "../../components/genet-layout" }
+# H7a rendering session: the testharness lane's IncrementalLayout runs over the
+# runtime's live (mutable) DOM, whose node ids are genet-scripted-dom's.
+genet-scripted-dom = { path = "../../components/genet-scripted-dom" }
+layout_dom_api = { workspace = true }
+# H7b: `test_driver_internal.action_sequence` hands WebDriver Actions JSON to
+# the drive loop, which parses it with the pinned protocol types and runs it
+# through the shared tick interpreter (embedder_traits::webdriver_actions).
+webdriver = { workspace = true }
+# MANIFEST.json reader (harness-exactness H1): the upstream WPT manifest is JSON.
+serde_json = { workspace = true }
+
+# Phase 2 (reftests): render to pixels via the paint + netrender path
+# (the same public API the html_to_pixels_e2e test drives) and compare.
+paint = { workspace = true }
+paint_api = { workspace = true }
+paint_list_api = { workspace = true }
+paint_types = { workspace = true }
+netrender = { workspace = true }
+wgpu = { workspace = true }
+embedder_traits = { workspace = true }
+servo-base = { workspace = true }
+dpi = { workspace = true }
+euclid = { workspace = true }
+image = { workspace = true }
+# Must match genet-layout's experimental pin (layout() takes a taffy::Size).
+taffy = { version = "=0.12.1", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "float_layout", "calc", "content_size", "detailed_layout_info"] }
+
+# Phase 3 (testharness): run testharness.js + the test's scripts on the host
+# surface and read results, with the JS engine selectable via `--engine`
+# (boa | nova). Boa is the pure-Rust conformance oracle; Nova is the native
+# primary. The harness path is generic over `ScriptEngine`. Nova's RegExp now
+# uses regress (ECMAScript engine), so the host runs testharness.js as-is (the
+# old regex shim is retired).
+script-engine-api = { path = "../../components/script-engine-api" }
+script-runtime-api = { path = "../../components/script-runtime-api" }
+script-engine-boa = { path = "../../components/script-engine-boa" }
+script-engine-nova = { path = "../../components/script-engine-nova" }
+
+# Optional `fetch()` over netfetcher (the `netfetch` feature): wires the runtime's
+# FetchHandler seam to the netfetcher engine (sibling repo). Off by default so the
+# normal runner stays free of the async network stack. fetch/ WPT tests
+# additionally need the WPT server + Fetch API JS objects (a larger lift).
+netfetcher = { git = "https://github.com/mark-ik/netfetcher.git", branch = "main", optional = true }
+tokio = { version = "1", features = ["rt"], optional = true }
+bytes = { version = "1", optional = true }
+url = { workspace = true, optional = true }
+
+[features]
+netfetch = ["dep:netfetcher", "dep:tokio", "dep:bytes", "dep:url"]
+
+[dev-dependencies]
+# Offline mock server for the fetch()->netfetcher integration test.
+mockito = "1"
+# Real wgpu-backed WebGL context for running the Khronos conformance suite
+# through the harness: a WgpuWebGl bridge implements script-runtime-api's
+# WebGlHandler over webgl-wgpu's WebGlContext. Dev-only — the runner binary
+# stays graphics-free; only the conformance test wires a GPU.
+webgl_wgpu = { workspace = true }
+pollster = "0.4"

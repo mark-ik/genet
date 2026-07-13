@@ -26,23 +26,23 @@ impl SurfaceTargetId {
     }
 }
 
-/// The serval HTML engine's **static** rung (the profile ladder's base): parse →
+/// The genet HTML engine's **static** rung (the profile ladder's base): parse →
 /// style/layout → paint, with no JS in its dependency graph. The default HTML route
-/// and the id existing per-node pins persist, so it keeps the legacy `serval.web`
-/// value rather than `serval.static`. See [`ServalRung`].
-pub const ENGINE_SERVAL_WEB: &str = "serval.web";
-/// The serval HTML rungs above static (the profile ladder; see [`ServalRung`]). A node
+/// and the id existing per-node pins persist, so it keeps the legacy `genet.web`
+/// value rather than `genet.static`. See [`GenetRung`].
+pub const ENGINE_GENET_WEB: &str = "genet.web";
+/// The genet HTML rungs above static (the profile ladder; see [`GenetRung`]). A node
 /// pins one of these to escalate capability. Additive, and gated by host registration:
 /// until a rung is registered in the host's `EngineRegistry`, it is not `is_available`,
-/// so a pin to it falls back to the static route (`route_filtered`). serval scales
+/// so a pin to it falls back to the static route (`route_filtered`). genet scales
 /// internally from the static composition up to a full browser
-/// (serval `docs/2026-05-12_serval_profile_ladder_plan.md`); these ids select the rung.
-pub const ENGINE_SERVAL_INTERACTIVE: &str = "serval.interactive";
-pub const ENGINE_SERVAL_SCRIPTED: &str = "serval.scripted";
-/// The scripted serval rung backed by Nova instead of Boa. Same ladder rung,
+/// (genet `docs/2026-05-12_genet_profile_ladder_plan.md`); these ids select the rung.
+pub const ENGINE_GENET_INTERACTIVE: &str = "genet.interactive";
+pub const ENGINE_GENET_SCRIPTED: &str = "genet.scripted";
+/// The scripted genet rung backed by Nova instead of Boa. Same ladder rung,
 /// distinct host-visible engine id so a node can pin the JS backend explicitly.
-pub const ENGINE_SERVAL_SCRIPTED_NOVA: &str = "serval.scripted.nova";
-pub const ENGINE_SERVAL_FULLWEB: &str = "serval.fullweb";
+pub const ENGINE_GENET_SCRIPTED_NOVA: &str = "genet.scripted.nova";
+pub const ENGINE_GENET_FULLWEB: &str = "genet.fullweb";
 /// Mere-managed system-WebView tile driven by the in-house `scrying`
 /// library. Embedded-frame composition into the host's wgpu surface
 /// (frames captured via `webview2-com` on Windows / `objc2-web-kit` +
@@ -50,7 +50,7 @@ pub const ENGINE_SERVAL_FULLWEB: &str = "serval.fullweb";
 ///
 /// Preferred non-Servo path. Not in the default routing policy —
 /// opt-in per tile via `EngineRouteRequest::pinned_engine` or a
-/// per-host override. Auto-fallback rule (serval rendering failure
+/// per-host override. Auto-fallback rule (genet rendering failure
 /// → propose `scrying.web`) is a follow-up; the routing surface
 /// already supports it via `pinned_engine`.
 ///
@@ -99,7 +99,7 @@ pub fn is_surface_engine(engine_id: &str) -> bool {
     )
 }
 
-/// A rung of the serval HTML render ladder. serval is one engine that scales from a
+/// A rung of the genet HTML render ladder. genet is one engine that scales from a
 /// static, JS-free composition up to a full browser; the rung selects *how much of the
 /// web stack* a page is given. Each rung is **additive** over the one below, and each
 /// is a principled composition — the static rung carries no JS in its dependency graph
@@ -107,10 +107,10 @@ pub fn is_surface_engine(engine_id: &str) -> bool {
 /// escalation, never the default. The default HTML route is [`Static`](Self::Static);
 /// a node pins a higher rung to opt in. Ordered by capability (the derived `Ord`).
 ///
-/// Canonical: serval `docs/2026-05-12_serval_profile_ladder_plan.md`; Mere framing:
+/// Canonical: genet `docs/2026-05-12_genet_profile_ladder_plan.md`; Mere framing:
 /// `design_docs/mere_docs/implementation_strategy/2026-06-23_render_ladder_and_extraction_plan.md`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ServalRung {
+pub enum GenetRung {
     /// parse → style/layout → paint. No JS. The default, and the safe/fast base.
     Static,
     /// + forms / focus / input / accessibility. Still no JS.
@@ -121,54 +121,54 @@ pub enum ServalRung {
     FullWeb,
 }
 
-impl ServalRung {
+impl GenetRung {
     /// Every rung, ascending by capability — the ladder a picker offers.
-    pub const ALL: [ServalRung; 4] = [
-        ServalRung::Static,
-        ServalRung::Interactive,
-        ServalRung::Scripted,
-        ServalRung::FullWeb,
+    pub const ALL: [GenetRung; 4] = [
+        GenetRung::Static,
+        GenetRung::Interactive,
+        GenetRung::Scripted,
+        GenetRung::FullWeb,
     ];
 
-    /// The engine id that selects this rung. Static keeps the legacy [`ENGINE_SERVAL_WEB`]
+    /// The engine id that selects this rung. Static keeps the legacy [`ENGINE_GENET_WEB`]
     /// id so existing pins resolve; the higher rungs have their own ids.
     pub fn engine_id(self) -> &'static str {
         match self {
-            ServalRung::Static => ENGINE_SERVAL_WEB,
-            ServalRung::Interactive => ENGINE_SERVAL_INTERACTIVE,
-            ServalRung::Scripted => ENGINE_SERVAL_SCRIPTED,
-            ServalRung::FullWeb => ENGINE_SERVAL_FULLWEB,
+            GenetRung::Static => ENGINE_GENET_WEB,
+            GenetRung::Interactive => ENGINE_GENET_INTERACTIVE,
+            GenetRung::Scripted => ENGINE_GENET_SCRIPTED,
+            GenetRung::FullWeb => ENGINE_GENET_FULLWEB,
         }
     }
 
     /// A short label for the picker UI.
     pub fn label(self) -> &'static str {
         match self {
-            ServalRung::Static => "Static",
-            ServalRung::Interactive => "Interactive",
-            ServalRung::Scripted => "Scripted",
-            ServalRung::FullWeb => "Full Web",
+            GenetRung::Static => "Static",
+            GenetRung::Interactive => "Interactive",
+            GenetRung::Scripted => "Scripted",
+            GenetRung::FullWeb => "Full Web",
         }
     }
 }
 
-/// The serval render rung an `engine_id` selects, or `None` when it is not a serval
+/// The genet render rung an `engine_id` selects, or `None` when it is not a genet
 /// HTML rung (a nematic, surface, or marker engine).
-pub fn serval_rung(engine_id: &str) -> Option<ServalRung> {
+pub fn genet_rung(engine_id: &str) -> Option<GenetRung> {
     match engine_id {
-        ENGINE_SERVAL_WEB => Some(ServalRung::Static),
-        ENGINE_SERVAL_INTERACTIVE => Some(ServalRung::Interactive),
-        ENGINE_SERVAL_SCRIPTED | ENGINE_SERVAL_SCRIPTED_NOVA => Some(ServalRung::Scripted),
-        ENGINE_SERVAL_FULLWEB => Some(ServalRung::FullWeb),
+        ENGINE_GENET_WEB => Some(GenetRung::Static),
+        ENGINE_GENET_INTERACTIVE => Some(GenetRung::Interactive),
+        ENGINE_GENET_SCRIPTED | ENGINE_GENET_SCRIPTED_NOVA => Some(GenetRung::Scripted),
+        ENGINE_GENET_FULLWEB => Some(GenetRung::FullWeb),
         _ => None,
     }
 }
 
-/// Whether `engine_id` names any rung of the serval HTML render ladder. The tier-1
-/// counterpart to [`is_surface_engine`]: a serval rung produces a portable
+/// Whether `engine_id` names any rung of the genet HTML render ladder. The tier-1
+/// counterpart to [`is_surface_engine`]: a genet rung produces a portable
 /// [`crate::EngineDocument`], not a GPU surface frame.
-pub fn is_serval_rung(engine_id: &str) -> bool {
-    serval_rung(engine_id).is_some()
+pub fn is_genet_rung(engine_id: &str) -> bool {
+    genet_rung(engine_id).is_some()
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -194,7 +194,7 @@ pub struct EngineRouteRequest {
     /// sniff. Routing prefers content-type rules to scheme rules when this
     /// is set, so the same address can re-route after the host learns the
     /// MIME type from a response (e.g. an HTTPS URL serving `text/markdown`
-    /// re-routes from Serval to the markdown engine on the second pass).
+    /// re-routes from Genet to the markdown engine on the second pass).
     #[serde(default)]
     pub content_type: Option<String>,
     /// Per-node engine pin. When set, routing uses this engine ID directly
@@ -343,7 +343,7 @@ impl Default for EngineRoutePolicy {
             rules: vec![
                 EngineRouteRule::new(
                     ["http", "https"],
-                    ENGINE_SERVAL_WEB,
+                    ENGINE_GENET_WEB,
                     SurfaceContractMode::CompositedTexture,
                 ),
                 EngineRouteRule::new(
@@ -394,7 +394,7 @@ impl Default for EngineRoutePolicy {
                 // Content-type rules: when a fetcher learns the MIME type,
                 // these win over scheme rules so an HTTPS response of
                 // `text/markdown` re-routes to the markdown engine instead
-                // of staying on Serval.
+                // of staying on Genet.
                 EngineRouteRule::content_type(
                     ["text/markdown", "text/x-markdown"],
                     ENGINE_NEMATIC_MARKDOWN,
@@ -427,12 +427,12 @@ impl Default for EngineRoutePolicy {
                     ENGINE_NEMATIC_KNOT_DJOT,
                     SurfaceContractMode::CompositedTexture,
                 ),
-                // HTML by content-type routes to serval regardless of scheme, so a
+                // HTML by content-type routes to genet regardless of scheme, so a
                 // local `file://` page or an HTTPS response that turns out to be HTML
-                // both land on the web engine. (Web-standard content → serval.)
+                // both land on the web engine. (Web-standard content → genet.)
                 EngineRouteRule::content_type(
                     ["text/html", "application/xhtml+xml"],
-                    ENGINE_SERVAL_WEB,
+                    ENGINE_GENET_WEB,
                     SurfaceContractMode::CompositedTexture,
                 ),
                 // Smolweb content-type refinements: a fetch that learns one of these

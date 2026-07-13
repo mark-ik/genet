@@ -12,7 +12,7 @@ use std::rc::Rc;
 use layout_dom_api::{LayoutDom, NodeKind};
 use markup5ever::{LocalName, Namespace, Prefix};
 use script_engine_api::{NativeFn, ScriptEngine};
-use serval_scripted_dom::{NodeId, ScriptedDom};
+use genet_scripted_dom::{NodeId, ScriptedDom};
 use xpath::Node as _;
 
 use super::*;

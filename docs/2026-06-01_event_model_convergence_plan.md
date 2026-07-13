@@ -1,6 +1,6 @@
 # Event-model convergence plan (2026-06-01)
 
-The audit's [#1 priority](./2026-05-29_serval_holistic_audit.md): serval has
+The audit's [#1 priority](./2026-05-29_genet_holistic_audit.md): genet has
 **two** capture→target→bubble dispatchers, and they have already drifted. This
 plan pins the divergence with evidence, defines the one propagation/cancellation
 contract both must satisfy, and sequences the work to close the gap and keep it
@@ -9,9 +9,9 @@ closed.
 ## Why this matters
 
 One DOM, one event model is the load-bearing synergy between Arc A (web
-conformance: WPT event tests) and Arc B (serval-as-host: native handlers drive
+conformance: WPT event tests) and Arc B (genet-as-host: native handlers drive
 the UI). The host plan states it directly ([host
-plan](./2026-05-27_serval_as_host_xilem_serval_plan.md) §Gap 2): "One event
+plan](./2026-05-27_genet_as_host_xilem_serval_plan.md) §Gap 2): "One event
 model, two entry points (native handlers and JS listeners), one propagation
 algorithm." Today there are two algorithms, maintained independently, and a
 behavior added to one silently fails to appear in the other.
@@ -25,7 +25,7 @@ conformance test** is the convergence mechanism, not a refactor-to-one-function.
 | | JS dispatcher | Native dispatcher |
 | --- | --- | --- |
 | Where | `script-runtime-api/dom.rs` (`Node.prototype.dispatchEvent`, JS bootstrap) | `xilem-serval/src/runner.rs` (`dispatch_click`/`dispatch_key`, `phase_ordered_paths`) |
-| Tree | JS DOM mirror, walks `parentNode` | xilem view-path chain, walks `dom.parent` + handler registry in `ServalCtx` |
+| Tree | JS DOM mirror, walks `parentNode` | xilem view-path chain, walks `dom.parent` + handler registry in `GenetCtx` |
 | Effect | calls listener-array callbacks | routes `xilem_core` messages along `view_path`, collects bubbled `Action`s |
 | Phase order | capture(root→target) · target(c then b) · bubble(target→root) | capture(chain reversed) · bubble(chain) — same order |
 
@@ -86,7 +86,7 @@ load-bearing subset (defer the rest explicitly):
 - **`currentTarget`:** the node whose listeners are firing; reset after.
 
 **Deferred (named, not silently dropped):** `composedPath` / shadow trees
-(serval has no shadow DOM yet), passive listeners + scroll-blocking semantics,
+(genet has no shadow DOM yet), passive listeners + scroll-blocking semantics,
 `eventPhase` as an observable constant, retargeting. None blocks the two arcs
 today.
 
@@ -180,6 +180,6 @@ coordinate so it doesn't land on top of the agent's in-flight pointer work.
 
 ## Receipts to update as this lands
 
-- WPT: `serval-wpt testharness dom/events/<subset>` pass count before/after
+- WPT: `genet-wpt testharness dom/events/<subset>` pass count before/after
   step 1 (the event-dispatch conformance tests).
 - A green cross-path conformance test (step 3) — the standing anti-drift guard.

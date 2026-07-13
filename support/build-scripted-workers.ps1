@@ -29,7 +29,7 @@ try {
     rustup run $Wasm64Toolchain cargo build `
         --manifest-path (Join-Path $repo "Cargo.toml") `
         --release `
-        --package serval-scripted-worker `
+        --package genet-scripted-worker `
         --no-default-features `
         --features engine-nova `
         --target wasm64-unknown-unknown `
@@ -41,7 +41,7 @@ try {
 rustup run $StableToolchain cargo build `
     --manifest-path (Join-Path $repo "Cargo.toml") `
     --release `
-    --package serval-scripted-worker `
+    --package genet-scripted-worker `
     --no-default-features `
     --features engine-boa `
     --target wasm32-unknown-unknown
@@ -52,18 +52,18 @@ New-Item -ItemType Directory -Force -Path $novaOut | Out-Null
 New-Item -ItemType Directory -Force -Path $boaOut | Out-Null
 
 & $wasmBindgen.Source `
-    (Join-Path $target "wasm64-unknown-unknown/release/serval_scripted_worker.wasm") `
+    (Join-Path $target "wasm64-unknown-unknown/release/genet_scripted_worker.wasm") `
     --target web `
     --out-dir $novaOut `
-    --out-name serval-scripted-nova-wasm64
+    --out-name genet-scripted-nova-wasm64
 
 & $wasmBindgen.Source `
-    (Join-Path $target "wasm32-unknown-unknown/release/serval_scripted_worker.wasm") `
+    (Join-Path $target "wasm32-unknown-unknown/release/genet_scripted_worker.wasm") `
     --target web `
     --out-dir $boaOut `
-    --out-name serval-scripted-boa-wasm32
+    --out-name genet-scripted-boa-wasm32
 
-Copy-Item (Join-Path $repo "components/serval-scripted-worker/loader.mjs") $out -Force
-Copy-Item (Join-Path $repo "components/serval-scripted-worker/worker-bootstrap.mjs") $out -Force
+Copy-Item (Join-Path $repo "components/genet-scripted-worker/loader.mjs") $out -Force
+Copy-Item (Join-Path $repo "components/genet-scripted-worker/worker-bootstrap.mjs") $out -Force
 
-Write-Output "Generated serval-scripted-nova-wasm64 and serval-scripted-boa-wasm32 in $out"
+Write-Output "Generated genet-scripted-nova-wasm64 and genet-scripted-boa-wasm32 in $out"

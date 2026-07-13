@@ -59,7 +59,7 @@ scopes.
 - **xilem-serval** already is the composition library in embryo: `button`,
   `toggle`, `radio`, `select`, `slider`, `field` / `styled_field`, `menu`,
   `overlay`, `grid`, `editor`, `highlight`, `arrangement`. Promoted compositions
-  land here. It stays serval-downstream (uses `ScriptedDom` concretely) and does
+  land here. It stays genet-downstream (uses `ScriptedDom` concretely) and does
   not spin out, so it is a stable home.
 - **chisel** holds the leaves (`GraphGlyph`, `Meter`, `Knob`, `Path`,
   `SceneSlot`) and the arrangement engine (`arrange`, `grid`). A `chisel-glyphs`

@@ -3,8 +3,8 @@ name = "knot-editor-host"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-# Not workspace: serval's workspace repository still points at upstream servo.
-repository = "https://github.com/mark-ik/serval"
+# Not workspace: genet's workspace repository still points at upstream servo.
+repository = "https://github.com/mark-ik/genet"
 description = "Host-side reuse-lexers for the knot editor: precise inner-language injection over parsers the workspace already ships, layered as overrides on the portable illume pack. Markdown via pulldown-cmark today; CSS/HTML/JS/Turtle to follow."
 readme = "README.md"
 documentation = "https://docs.rs/knot-editor-host"

@@ -1,13 +1,13 @@
 [package]
 name = "layout-dom-api"
 version = "0.1.0"
-repository = "https://github.com/mark-ik/serval"
+repository = "https://github.com/mark-ik/genet"
 publish = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Profile-neutral DOM trait consumed by serval-layout and other read-only DOM walkers (reader-mode, serialization, selectors)."
+description = "Profile-neutral DOM trait consumed by genet-layout and other read-only DOM walkers (reader-mode, serialization, selectors)."
 
 [lib]
 name = "layout_dom_api"

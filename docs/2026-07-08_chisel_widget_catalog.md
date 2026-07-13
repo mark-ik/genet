@@ -136,7 +136,7 @@ sheet). Pure views-layer sugar crate, zero engine changes.
 1. **PaintCx path helpers.** `stroke_path` / `fill_path` / `arc` on `PaintCx`;
    done when a polyline leaf reads as three lines of leaf code.
 2. **First glyph leaves: GraphGlyph, Meter, Knob.** ~~Done when each renders via
-   the serval-render `_with_leaves` test path, Knob proves the
+   the genet-render `_with_leaves` test path, Knob proves the
    pointer-wrap-around-leaf pattern, and GraphGlyph draws inside a native
    button.~~ **Landed 2026-07-09.** The leaves themselves already existed in
    `chisel::glyphs`; this closed the three done-conditions:
@@ -158,12 +158,12 @@ sheet). Pure views-layer sugar crate, zero engine changes.
    xilem-serval `placed` / `arrangement` views; both done conditions hit in
    tests (10k rows → <30 DOM children at the honest full extent; drag/raise =
    attribute diff on a retained node), and z-over-DOM paint order proven at
-   the serval-render level. Unlocks cards, grids, editors, TUI. (Note:
+   the genet-render level. Unlocks cards, grids, editors, TUI. (Note:
    xilem-serval's `overlay::Placement` is an unrelated type; `chisel::Placement`
    is not re-exported at that crate's root.)
 4. **Path-B rasterize seam.** ~~done when the orrery renders as a chisel leaf~~
    **Landed 2026-07-08, in two shapes** (the port taught the split):
-   - *chisel `SceneSlot` / `PaintCx::scene`* (serval `2f38249`): a leaf encodes a
+   - *chisel `SceneSlot` / `PaintCx::scene`* (genet `2f38249`): a leaf encodes a
      `vello::Scene`; `RenderedLeaves` splices one `DrawExternalTexture` at the box
      and epoch-gates the scene for a host rasterize pass. For vello-native widget
      leaves (a future waveform's zoomed view).
@@ -247,7 +247,7 @@ items, ranked:
      inline-box arm splices their Path-A commands at the laid-out inline rect,
      chained onto the same replaced-payload `if`/`else if` as the inline `<img>`.
    - *Unblocked, and a bug fix in its own right:* `<button>` now gets its
-     standards-correct `button { display: inline-block }` UA default. serval
+     standards-correct `button { display: inline-block }` UA default. genet
      previously shipped **no** `display` rule for `<button>`, leaving it `inline`,
      which silently ignored CSS `width`/`height` on every button.
    - Guards: `a_chisel_leaf_inside_a_button_is_reported_at_every_button_display`
@@ -263,7 +263,7 @@ items, ranked:
      background at its used rect, so a sized input yields a 200x30 rect; falsified
      by dropping `input` from the rule).
    - *Still open:* intrinsic sizing. An unsized control shrink-to-fits its content
-     rather than honoring `<input size>` / `<textarea rows cols>`, and serval draws
+     rather than honoring `<input size>` / `<textarea rows cols>`, and genet draws
      no control widgets at all (no border, no `<select>` popup); a `<select>` just
      flows its `<option>` text. Authored CSS sizing now works, which is what the
      leaf work needed. The TUI open question (3) is unaffected — that one is about

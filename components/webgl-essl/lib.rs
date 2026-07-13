@@ -27,7 +27,7 @@
 //!    vec_n constructors, and Float/Vec_n binary arithmetic.
 //!
 //! Architecture note:
-//! `serval/docs/2026-05-28_webgl_essl_rust_frontend_spike.md`. Borrow
+//! `genet/docs/2026-05-28_webgl_essl_rust_frontend_spike.md`. Borrow
 //! doctrine: read mature peers (chumsky / mozangle / naga / rspirv)
 //! for technique, take what fits, attribute when copying expression.
 

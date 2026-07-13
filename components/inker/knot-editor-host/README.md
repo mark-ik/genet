@@ -7,7 +7,7 @@ ties source text to the rendered preview through the same engine path the
 rest of the family uses (inker's `EngineDocument` + nematic's
 `DjotKnotEngine`).
 
-> **Home:** [`mark-ik/serval`](https://github.com/mark-ik/serval), at
+> **Home:** [`mark-ik/genet`](https://github.com/mark-ik/genet), at
 > `components/inker/knot-editor-host` (adopted from mere 2026-07-10 with the
 > engine-management family). Markdown via pulldown-cmark today;
 > CSS/HTML/JS/Turtle to follow.

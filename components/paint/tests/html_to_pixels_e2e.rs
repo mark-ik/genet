@@ -9,17 +9,17 @@
 //!
 //! - `c4_smoke_probe.rs` — synthetic `PaintEnvelope` → Scene → master.
 //! - `paint_render_e2e.rs` — `SendPaintList` → render → master.
-//! - serval-layout's `paint_emit::tests::*` — cascade + layout +
+//! - genet-layout's `paint_emit::tests::*` — cascade + layout +
 //!   emission produce the right `PaintCmd` shape.
 //!
 //! Nothing yet drove a real HTML string all the way through.
 //! This file does:
 //!
-//! 1. Parse HTML via `serval_static_dom::StaticDocument::parse`.
+//! 1. Parse HTML via `genet_static_dom::StaticDocument::parse`.
 //! 2. Run the Stylo cascade with a stylesheet that paints `<body>`.
 //! 3. Refresh Taffy styles from cascaded `ComputedValues`.
 //! 4. Run layout → `FragmentPlane` + cached parley `Layout`s.
-//! 5. Emit `ServalPaintList` (with glyph runs).
+//! 5. Emit `GenetPaintList` (with glyph runs).
 //! 6. Wrap into `PaintEnvelope::from_list`.
 //! 7. Ship via `PaintMessage::SendPaintList` through `Paint`.
 //! 8. `Paint::render(webview_id)`.
@@ -45,10 +45,10 @@ use paint_api::wgpu_readback::read_texture_to_image;
 use paint_list_api::{DeviceIntSize, PaintEnvelope};
 use paint_types::PipelineId;
 use paint_types::units::{DeviceIntRect, LayoutSize};
-use serval_layout::{
+use genet_layout::{
     BackgroundImagePlane, ImagePlane, StylePlane, emit_paint_list_with_layouts, layout, run_cascade,
 };
-use serval_static_dom::StaticDocument;
+use genet_static_dom::StaticDocument;
 use servo_base::id::{PainterId, PipelineNamespace, PipelineNamespaceId, WebViewId};
 
 const VIEWPORT: u32 = 128;
@@ -97,12 +97,12 @@ fn paint_info_for(pid: PipelineId) -> PaintDisplayListInfo {
 /// the producer side of the pipeline so the actual test bodies stay
 /// focused on render + readback.
 fn html_to_envelope(html: &str, stylesheets: &[&str]) -> PaintEnvelope {
-    html_to_envelope_with_loader(html, stylesheets, &serval_layout::NoImageLoader)
+    html_to_envelope_with_loader(html, stylesheets, &genet_layout::NoImageLoader)
 }
 
 /// `html_to_envelope` variant that resolves remote `<img>` srcs
 /// through `loader` (the host's resource cache, here a test fake).
-fn html_to_envelope_with_loader<L: serval_layout::ImageLoader>(
+fn html_to_envelope_with_loader<L: genet_layout::ImageLoader>(
     html: &str,
     stylesheets: &[&str],
     loader: &L,
@@ -182,7 +182,7 @@ fn html_to_pixels_drives_full_pipeline() {
     let webview_id = WebViewId::new(painter_id);
 
     let envelope = html_to_envelope(
-        "<html><body><p>Hello, serval!</p></body></html>",
+        "<html><body><p>Hello, genet!</p></body></html>",
         // Empty stylist — every element gets Stylo defaults (transparent
         // background, initial color). The probe doesn't need a
         // stylesheet to validate the seam.
@@ -236,7 +236,7 @@ fn html_to_pixels_cascaded_background_color_renders_to_master() {
 
     // `body { background-color: rgb(255, 0, 0); }` — pure red.
     //
-    // serval-layout's UA-defaults stylesheet (always prepended by
+    // genet-layout's UA-defaults stylesheet (always prepended by
     // `run_cascade`) sets `html, body { display: block; width: 100%;
     // height: 100% }`, and `construct` gives the synthetic Taffy
     // root explicit viewport dimensions for those `100%`s to resolve
@@ -283,7 +283,7 @@ fn html_to_pixels_cascaded_background_color_renders_to_master() {
     );
 }
 
-/// Text renders to actual glyph pixels. `<p>Hello serval</p>` on a
+/// Text renders to actual glyph pixels. `<p>Hello genet</p>` on a
 /// white body with the default black text color: scan the top-left
 /// region where the text lays out and assert some pixels are
 /// markedly darker than white — i.e., glyphs rasterized. This is the
@@ -298,7 +298,7 @@ fn html_to_pixels_cascaded_background_color_renders_to_master() {
 #[test]
 fn html_to_pixels_text_rasterizes_glyphs() {
     let image = render_to_image(
-        "<html><body><p>Hello serval</p></body></html>",
+        "<html><body><p>Hello genet</p></body></html>",
         &[
             "body { background-color: rgb(255, 255, 255); }",
             // Explicit black text; also the Stylo default, but pin it.
@@ -549,7 +549,7 @@ fn draw_image_rasterizes_from_side_table() {
     };
 
     let envelope = PaintEnvelope {
-        engine: EngineId::SERVAL,
+        engine: EngineId::GENET,
         viewport: DeviceIntSize::new(VIEWPORT as i32, VIEWPORT as i32),
         generation: 0,
         commands: vec![
@@ -625,7 +625,7 @@ fn draw_repeating_image_tiles_from_side_table() {
     };
 
     let envelope = PaintEnvelope {
-        engine: EngineId::SERVAL,
+        engine: EngineId::GENET,
         viewport: DeviceIntSize::new(VIEWPORT as i32, VIEWPORT as i32),
         generation: 0,
         commands: vec![
@@ -766,7 +766,7 @@ fn html_to_pixels_img_object_fit_cover_positions_and_clips() {
     );
 }
 
-/// Remote `<img>` (http URL) renders via the ImageLoader seam. serval
+/// Remote `<img>` (http URL) renders via the ImageLoader seam. genet
 /// doesn't fetch — a test loader stands in for the host's resource
 /// cache, handing back PNG bytes for the URL. The producer decodes
 /// them through the loader, sizes the box intrinsically, and emits
@@ -779,7 +779,7 @@ fn html_to_pixels_img_via_loader_renders() {
         url: String,
         png: Vec<u8>,
     }
-    impl serval_layout::ImageLoader for FakeLoader {
+    impl genet_layout::ImageLoader for FakeLoader {
         fn load(&self, url: &str) -> Option<Vec<u8>> {
             (url == self.url).then(|| self.png.clone())
         }
@@ -1380,7 +1380,7 @@ fn html_to_pixels_block_siblings_stack_vertically() {
 /// (Inline text *wrapping around* a float is a separate path, now wired
 /// at the IFC seam: a paragraph's parley line boxes narrow per-line
 /// around the float's exclusion band and reclaim the column below it.
-/// Covered by `serval-layout`'s `inline_text_wraps_around_left_float`;
+/// Covered by `genet-layout`'s `inline_text_wraps_around_left_float`;
 /// this test stays focused on block-level displacement.)
 #[test]
 fn html_to_pixels_float_left_places_blocks_side_by_side() {

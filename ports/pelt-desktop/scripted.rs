@@ -4,10 +4,10 @@
 
 //! Pelt adapter for the host-neutral scripted document owner.
 //!
-//! (The `serval_scripted::ResourceFetcher` impl for `LocalFetcher` moved to
-//! `serval-documents` with the lanes — the orphan rule wants it beside the
+//! (The `genet_scripted::ResourceFetcher` impl for `LocalFetcher` moved to
+//! `genet-documents` with the lanes — the orphan rule wants it beside the
 //! fetcher it is implemented for.)
 
-pub use serval_scripted::{
+pub use genet_scripted::{
     ResourceFetcher as ScriptResourceFetcher, ScriptedDocument, ScriptedEngine,
 };

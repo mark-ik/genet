@@ -3,7 +3,7 @@
 Status: **research note, 2026-05-25.** Not a committed decision — captures
 the analysis + a proposed direction + its sidequests, pitfalls, and
 contradictions, for review. Supersedes parts of
-[2026-05-20_serval_script_engine_plan.md](./2026-05-20_serval_script_engine_plan.md)
+[2026-05-20_genet_script_engine_plan.md](./2026-05-20_genet_script_engine_plan.md)
 if adopted (see [Contradictions](#contradictions-to-reconcile)).
 
 > **Superseded for browser backend selection (2026-06-24).** The implemented
@@ -14,7 +14,7 @@ if adopted (see [Contradictions](#contradictions-to-reconcile)).
 
 ## The question
 
-How does serval run JS across its profiles — **native** (desktop app) and
+How does genet run JS across its profiles — **native** (desktop app) and
 **wasm** (PWA / extension) — given that a browser wasm sandbox forbids a
 native JIT (no W^X, no runtime native codegen)?
 
@@ -52,7 +52,7 @@ Being explicit about what's grounded vs. recalled, per doc policy.
   — won't build on wasm; needs a fork-gate.
 - `ecmascript_atomics` is **optional** (behind `array-buffer` /
   `shared-array-buffer`) — gate off for wasm.
-- Boa is blocked from serval's workspace by `icu_normalizer ~2.0` vs
+- Boa is blocked from genet's workspace by `icu_normalizer ~2.0` vs
   parley's `^2.1.1` — a fork-and-bump resolves it.
 
 **External claims (training knowledge, ~Jan 2026 — verify against current
@@ -81,7 +81,7 @@ upstream before relying):**
   against shipped JS → fast wasm the browser optimizes. Plain Boa stays as
   the `eval`/dynamic-code fallback. Boa keeps its conformance-oracle role
   on top (now double duty).
-- **No JS JIT anywhere.** Cranelift re-enters *only* if serval runs wasm
+- **No JS JIT anywhere.** Cranelift re-enters *only* if genet runs wasm
   **components/plugins** natively (Wasmtime backend, or `.cwasm` AOT) — a
   separate subsystem from either JS engine.
 - **Nova-on-wasm64:** implemented as an experimental worker artifact. Tier-3 risk
@@ -91,13 +91,13 @@ upstream before relying):**
 ## Why our own JS engine in-browser at all (the load-bearing question)
 
 A PWA already has a world-class JS engine — the host browser's. Why ship
-Boa-as-wasm instead of using it? Because **serval is the web platform**:
-content JS must run against **serval's** reimplemented DOM (its box-tree /
+Boa-as-wasm instead of using it? Because **genet is the web platform**:
+content JS must run against **genet's** reimplemented DOM (its box-tree /
 layout / event model), not the host page's DOM. The host's JS engine binds
 to the host's object model; using it would mean reimplementing the entire
 JS↔DOM binding layer over a foreign engine's assumptions. A self-contained
-engine (Boa/Nova) bound to serval's DOM is the clean approach. *(Rejected
-alternative: bridge content-JS to the host engine via serval-DOM host
+engine (Boa/Nova) bound to genet's DOM is the clean approach. *(Rejected
+alternative: bridge content-JS to the host engine via genet-DOM host
 functions — fights the host's object model; brittle.)* The cost of this is
 real — see the perf-ceiling pitfall.
 
@@ -105,7 +105,7 @@ real — see the perf-ceiling pitfall.
 
 - **wizer pre-initialization** — weval's sibling (also Fallin/BA): snapshot
   the wasm module post-init for faster startup. Orthogonal easy win for any
-  serval-in-wasm build, weval or not.
+  genet-in-wasm build, weval or not.
 - **Typed dialect + weval stacking** — weval kills dispatch overhead; a
   typed scripting dialect would *also* kill type-dispatch, stacking toward
   JIT-grade perf. Connects to the "we control our scripting profile"
@@ -160,7 +160,7 @@ real — see the perf-ceiling pitfall.
 ## Contradictions to reconcile
 
 1. **"The wasm target is the no-JS profile"**
-   ([script-engine plan L47](./2026-05-20_serval_script_engine_plan.md), L657:
+   ([script-engine plan L47](./2026-05-20_genet_script_engine_plan.md), L657:
    *"the wasm-safe profile = the no-JS profile"*) → **overturned.** wasm
    becomes the **Boa+weval JS** profile.
 2. **"Boa stays only as a conformance oracle"** (script-engine plan L50) →
@@ -171,7 +171,7 @@ real — see the perf-ceiling pitfall.
 4. **"Rhai works everywhere wasm32 ships"** (memory:
    `project_browser_pwa_shapes_scripting`) → **disambiguate, not a real
    conflict:** Rhai is **Mere's app/extension scripting**; Boa/Nova is
-   **serval's web-content JS**. Two distinct scripting domains that can both
+   **genet's web-content JS**. Two distinct scripting domains that can both
    live on wasm — but the docs read like a contradiction until that split is
    stated explicitly.
 5. **"Wait-and-see: memory64 vs the Boa pin bump"** (earlier stance) →
@@ -196,6 +196,6 @@ real — see the perf-ceiling pitfall.
 - **Name the scripting-domain split** — Rhai (app) vs Boa/Nova (content JS)
   — explicitly, so the "Rhai on wasm" memory and this note stop reading as
   contradictory.
-- **Decide native wasm-component story** (separate) — does serval/Mere run
+- **Decide native wasm-component story** (separate) — does genet/Mere run
   wasm plugins natively? If yes, that's the only place Cranelift/Wasmtime
   AOT belongs.

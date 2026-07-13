@@ -274,7 +274,7 @@ Planned reads as the project moves up the mountain:
   This crate replaces §3's "naga `glsl-in`" path; the extend-and-shed
   port plan in §3.4 remains the fallback if step 1's parser breadth
   proves intractable, which the receipt suggests it will not.
-- Two-lanes framing: [2026-05-29_serval_two_lanes.md](2026-05-29_serval_two_lanes.md).
+- Two-lanes framing: [2026-05-29_genet_two_lanes.md](2026-05-29_genet_two_lanes.md).
   WebGL is Lane C content; Mere's orrery is not a WebGL surface.
 - WebGL adapter today: [components/webgl-wgpu/lib.rs](../components/webgl-wgpu/lib.rs)
   and the W4 paint receipt at

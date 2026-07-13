@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-24
 **Status:** plan. Spun out of the gterzian/formal-web harvest (`2026-06-24_formal_web_lessons.md`, idea 1) and the grand audit §6 BYOB gap. The highest-value, bounded steal: it closes an audit-named gap against the *same* JS engine (Boa) and *same* spec, with a ready-made reference implementation and conformance test.
-**Thesis:** serval's `ReadableStream` is buffered and `getReader` ignores `{mode:'byob'}` (`components/script-runtime-api/fetch.rs:842`; the gap is flagged at `fetch.rs:452`). formal-web ships a complete `type:"bytes"` controller; port it onto serval's stream surface rather than re-derive the Streams spec's pull-into machinery.
+**Thesis:** genet's `ReadableStream` is buffered and `getReader` ignores `{mode:'byob'}` (`components/script-runtime-api/fetch.rs:842`; the gap is flagged at `fetch.rs:452`). formal-web ships a complete `type:"bytes"` controller; port it onto genet's stream surface rather than re-derive the Streams spec's pull-into machinery.
 
 ## Reference (do not re-derive)
 
@@ -16,12 +16,12 @@ formal-web's byte-stream files, against Boa:
 
 ### B1 — Failing micro-test first
 
-Add a serval micro-test mirroring `byob-debug.html` (the six cases above), reporting via `window.__formalWebTestResult` (per the WPT-harness plan's H4 governance), landed RED against the current buffered reader at `fetch.rs:842`.
+Add a genet micro-test mirroring `byob-debug.html` (the six cases above), reporting via `window.__formalWebTestResult` (per the WPT-harness plan's H4 governance), landed RED against the current buffered reader at `fetch.rs:842`.
 - **Done when** the micro-test exists, runs in the harness, and fails for the right reason (no BYOB reader), pinning the target behavior before any port.
 
 ### B2 — Port the byte controller + BYOB reader
 
-Bring over the pull-into descriptor queue, the `ArrayBufferViewDescriptor` (element size + alignment), `respond(n)` / `respondWithNewView(view)`, the `{min}` read option, and SharedArrayBuffer rejection. Re-verify every Boa API against serval's Boa pin (the fork may have skewed since formal-web's pin; this is the main porting friction).
+Bring over the pull-into descriptor queue, the `ArrayBufferViewDescriptor` (element size + alignment), `respond(n)` / `respondWithNewView(view)`, the `{min}` read option, and SharedArrayBuffer rejection. Re-verify every Boa API against genet's Boa pin (the fork may have skewed since formal-web's pin; this is the main porting friction).
 - **Done when** the B1 micro-test passes, including the alignment/element-size TypeErrors and the close/cancel edge cases.
 
 ### B3 — Wire `getReader({mode:'byob'})`
@@ -46,7 +46,7 @@ B1 -> B2 -> B3 -> B4. B1 first is the formal-web discipline (pin the target with
 
 ## Findings
 
-- 2026-06-24 (grand audit + formal-web harvest): serval's ReadableStream is buffered with no BYOB; `getReader` ignores `{mode:'byob'}` (`fetch.rs:842`). formal-web's controller is a direct reference on the same engine + spec. Main risk is Boa API skew vs serval's pin, surfaced in B2.
+- 2026-06-24 (grand audit + formal-web harvest): genet's ReadableStream is buffered with no BYOB; `getReader` ignores `{mode:'byob'}` (`fetch.rs:842`). formal-web's controller is a direct reference on the same engine + spec. Main risk is Boa API skew vs genet's pin, surfaced in B2.
 
 ## Progress
 

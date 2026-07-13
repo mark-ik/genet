@@ -5,7 +5,7 @@
 //! [`OptionalAction`]: let an event handler return `()`, an `Action`, or an
 //! `Option<Action>`, uniformly.
 //!
-//! Stage 3a of `docs/2026-05-27_serval_as_host_xilem_serval_plan.md`. Mirrors
+//! Stage 3a of `docs/2026-05-27_genet_as_host_xilem_serval_plan.md`. Mirrors
 //! `xilem_web`'s `optional_action.rs` line for line: a sealed marker trait
 //! [`Action`] tags the types an app uses as bubbling actions, and
 //! [`OptionalAction`] lets [`on_click`](crate::on_click)'s handler be

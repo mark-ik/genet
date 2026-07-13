@@ -5,14 +5,14 @@ invalidation pipeline is un-stubbed and live; incremental restyle drives
 the layout loop, skipping layout for paint-only changes. Diff-tested
 against full re-cascade. See [Outcome](#outcome-2026-05-25). Executes the
 6-step arc sketched in
-[2026-05-20_serval_script_engine_plan.md](./2026-05-20_serval_script_engine_plan.md)
+[2026-05-20_genet_script_engine_plan.md](./2026-05-20_genet_script_engine_plan.md)
 (§ "Fine-grained restyle"). Grounded in the Stylo source
-(`servo/stylo` rev `572ecba`) + the current serval stubs.
+(`servo/stylo` rev `572ecba`) + the current genet stubs.
 
 ## The problem
 
 `run_cascade` re-cascades the **whole document** every pass. Stylo's
-incremental machinery is deliberately stubbed in serval:
+incremental machinery is deliberately stubbed in genet:
 
 - `adapter_stylo.rs`: `has_dirty_descendants`→`false`,
   `set/unset_dirty_descendants`→no-op, `has_snapshot`→`false`,
@@ -34,14 +34,14 @@ the mutation happens* (the old value is gone by restyle time). But
 [`DomMutation`](../components/shared/layout-dom/lib.rs) is deliberately
 **render-state-free** — the DOM provider records *what* changed and
 nothing more; all style / dirty-bit / invalidation state lives on the
-serval-layout side (planes design; an earlier `mark_dirty`-on-the-DOM
+genet-layout side (planes design; an earlier `mark_dirty`-on-the-DOM
 draft was rejected for leaking render state into the DOM).
 
 **Decision: enrich `DomMutation` with the old value** (option 1). An old
 attribute value is plain DOM data — not a dirty bit, not style, not
 layout coupling — so carrying it on the mutation record keeps the
 provider render-state-free *in the sense the principle means*, while all
-snapshot-building + invalidation stays in serval-layout. (Option 3 —
+snapshot-building + invalidation stays in genet-layout. (Option 3 —
 scripted-dom owning a `SnapshotMap` — was ruled out: it pulls Stylo into
 the engine-neutral mutable-DOM crate. Option 2 — a neutral side-channel
 in scripted-dom — keeps it Stylo-free but puts snapshot *machinery* in
@@ -64,7 +64,7 @@ the DOM crate, more than the principle wants.)
   &mut ElementData, &mut SelectorCaches)`.
 - `TreeStyleInvalidator::new(element, prev_sibling, next_sibling,
   &SharedStyleContext, processor).invalidate() -> InvalidationResult`.
-- `compute_layout_damage` is serval's `TElement` method; servo/blitz
+- `compute_layout_damage` is genet's `TElement` method; servo/blitz
   compute `RestyleDamage` (REPAINT vs RECONSTRUCT/RELAYOUT) from old-vs-new
   `ComputedValues`.
 
@@ -73,9 +73,9 @@ the DOM crate, more than the principle wants.)
 **1 — Snapshot data + capture + builder (this increment).**
 
 - `DomMutation::AttributeChanged` gains `old_value: Option<String>`
-  (`None` = the attr was newly added). `serval-scripted-dom::set_attribute`
+  (`None` = the attr was newly added). `genet-scripted-dom::set_attribute`
   records the prior value before overwriting.
-- `serval-layout`: `snapshot::build_snapshot_map(dom, &[DomMutation]) ->
+- `genet-layout`: `snapshot::build_snapshot_map(dom, &[DomMutation]) ->
   SnapshotMap` — one `ServoElementSnapshot` per changed element:
   `class_changed` / `id_changed` / `other_attributes_changed` +
   `changed_attrs`, and `attrs` populated with the **old** values (so
@@ -139,8 +139,8 @@ minimal restyle. The coarse-oracle diff-test is already in place.
 Done — the four increments landed across six commits (plan + 1/2/3/4a/4b):
 
 - **1 — snapshots.** `DomMutation::AttributeChanged` carries `old_value`
-  (captured in `serval-scripted-dom::set_attribute`);
-  `serval_layout::build_snapshot_map` reconstructs each changed element's
+  (captured in `genet-scripted-dom::set_attribute`);
+  `genet_layout::build_snapshot_map` reconstructs each changed element's
   pre-mutation attr set into a Stylo `SnapshotMap`. Tests: snapshot
   reports the *old* class/id (not the live value).
 - **2 — adapter bits.** `StyleEntry` gained dirty-descendant +
@@ -160,7 +160,7 @@ Done — the four increments landed across six commits (plan + 1/2/3/4a/4b):
   `RestyleOutcome { needs_relayout }`, read from the `RestyleDamage` Stylo
   stores on `ElementData` during the restyle (`StylePlane::reset_damage` /
   `aggregate_damage`). `compute_layout_damage` stays empty — it's the
-  servo-flow augmentation hook; serval lays out with taffy, so the generic
+  servo-flow augmentation hook; genet lays out with taffy, so the generic
   damage is the right signal. Test: color → repaint-only, width → relayout.
 - **4b — live wiring.** `IncrementalLayout` persists `StylePlane` +
   `FragmentPlane`; `apply(mutations)` routes attribute-only batches through
@@ -170,7 +170,7 @@ Done — the four increments landed across six commits (plan + 1/2/3/4a/4b):
   cascade+layout (color = RepaintOnly box-unchanged; width = Restyled
   matches full; append = FullRecompute).
 
-Receipts: `serval-layout --lib` 47, `serval-scripted` 4 — green.
+Receipts: `genet-layout --lib` 47, `genet-scripted` 4 — green.
 
 **Deviations from the original done-conditions, recorded:**
 
@@ -182,7 +182,7 @@ Receipts: `serval-layout --lib` 47, `serval-scripted` 4 — green.
   2026-05-25:** the structural FragmentPlane-splice was folded into
   `IncrementalLayout` (full re-cascade + incremental subtree splice over
   the persistent styles, `Applied::Spliced`, full-layout fallback), so one
-  engine handles both restyle and structural relayout; `serval-scripted`
+  engine handles both restyle and structural relayout; `genet-scripted`
   re-exports it as its live entry and dropped the superseded stateless
   `relayout_incremental`.
 - `compute_layout_damage` was **not** un-stubbed (left empty) — see 4a;
@@ -194,7 +194,7 @@ setting `:hover`/`:focus` state at runtime + incremental state-change
 restyle (the matching + state storage are scaffolded — see above).
 
 *Done 2026-05-25 (this session): increments 1–4; structural-splice
-unification into `IncrementalLayout` + serval-scripted adoption; `[attr]`
+unification into `IncrementalLayout` + genet-scripted adoption; `[attr]`
 selectors (`attr_matches` + full old-attr-set snapshots); **partial cascade
 for structural changes** (`restyle_structural` — only the affected subtrees
 re-cascade); **state-pseudo-class matching scaffold**

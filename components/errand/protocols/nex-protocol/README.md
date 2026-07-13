@@ -1,6 +1,6 @@
 # nex-protocol
 
-> **Home:** [`mark-ik/serval`](https://github.com/mark-ik/serval), at
+> **Home:** [`mark-ik/genet`](https://github.com/mark-ik/genet), at
 > `components/errand/protocols/nex-protocol` (adopted 2026-07). The former standalone repository is archived
 > and links here.
 

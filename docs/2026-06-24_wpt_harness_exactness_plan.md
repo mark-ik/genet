@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-24
 **Status:** in progress — H1 is wired into the normal runner path (manifest-backed discovery by default; legacy walk demoted to `--walk-discovery`), **H2a (Nova snapshot clone through the harness)**, H2b (cross-engine compare), **H3 (checked-in testharness expectations + local/CI guard)**, and **H5 (test262 runner + hang-safe full-corpus run)** landed. The remaining H2 question is no longer "can we wire snapshots?", but "is the Nova lane stable enough on broad release-mode corpora for the throughput win to matter?" H4 is partial: per-test reason metadata landed, but the full opt-in policy / per-subtest metadata layer remains open. Spun out of the grand audit (`2026-06-24_grand_audit.md` §2, levers 1/3/5); continues and supersedes the discovery/expectations portions of the WPT runner plan (`2026-05-26_wpt_runner_plan.md`).
-**Thesis:** the binding constraint on serval's WPT scoreboard is the harness, not the engine. What runs and how much runs gates the value of every engine fix. This plan closes the three harness levers in dependency order: exactness (what runs), throughput (how much runs), then a tracked scoreboard + regression guard (so movement is real and stays).
+**Thesis:** the binding constraint on genet's WPT scoreboard is the harness, not the engine. What runs and how much runs gates the value of every engine fix. This plan closes the three harness levers in dependency order: exactness (what runs), throughput (how much runs), then a tracked scoreboard + regression guard (so movement is real and stays).
 
 ## Why this and not engine work first
 
@@ -27,18 +27,18 @@ Amortize the dominant per-test cost.
 - **2026-06-30 implementation spike:** a direct derive-based `GcAgent`/`Agent`/`Heap` clone probe in the Nova fork does **not** compile and should not be pursued as a mechanical patch. The blockers are structural:
   - `Heap` contains non-clone `SoAVec` arenas (`arrays`, `maps`, `sets`, `finalization_registrys`) and `soavec 0.2.0` does not implement `Clone` for `SoAVec`.
   - Core heap records lack `Clone`, including `ArrayBufferHeapData`, `ECMAScriptFunctionHeapData`, `ElementArrays`, `Environments`, `ObjectRecord`, `RegExpHeapData`, `ScriptRecord`, `SourceCodeHeapData`, `SourceTextModuleRecord`, and module `LoadedModules`.
-  - A raw structural clone would be unsound even if it compiled: Serval's Nova host hooks carry the microtask job queue and module cache, while the realm `[[HostDefined]]` slot carries DOM host data, reflector roots, pending host promises, and the release queue. A snapshot clone must replace those with fresh per-clone host state.
-- **Landed primitive (2026-06-30):** Nova now has an explicit `GcAgent::snapshot_clone` path with host-hook replacement and realm `[[HostDefined]]` reset semantics, plus Nova-side isolation tests. Serval exposes that as optional `ScriptEngineSnapshot`, `Runtime::snapshot_clone`, and a `NovaHarnessTemplate` that snapshots after `testharness.js` load so `--engine nova` reuses a post-harness heap per test without re-evaluating the harness source.
-- **Empirical 2026-06-30 release probe:** the snapshot seam works on stable slices, but the broad `dom` corpus is still not Nova-safe enough for H2 to be considered complete. `serval-wpt testharness dom --engine nova` overflows the main-thread stack in release before producing a final aggregate, so the throughput win is currently gated by engine/runtime stability on the wide lane. On the smaller checked slices the shape is better: `dom/abort` completes at exact coarse parity with Boa in 1.38s vs 1.17s, `html/webappapis/timers` completes at exact coarse parity in 1.48s vs 1.62s, and `dom/nodes` completes with the same coarse buckets as Boa in 4.44s vs 34.36s.
-- **Stack overflow resolved (2026-07-01):** isolated to `dom/events/AddEventListenerOptions-signal.any.js` — a test that re-dispatches an event from within its own listener, unbounded because the AbortSignal abort does not stop the re-entrant recursion. Boa throws a catchable `RuntimeLimit(Recursion)`; Nova's fixed 3500-execution-context cap (whose own comment admitted it "caused stack overflow") let the OS stack overflow first, since a re-entrant host callback burns far more native stack per level than a plain JS call. **Fixed two ways:** (1) the runner runs on a 512MB stack (serval `72b07ecf647`) — belt-and-suspenders, and it also covers serval's own non-Nova recursion (parser/layout); (2) **Nova's `check_call_depth` now measures *actual* stack use via a stack-pointer proxy** (address-of-local, anchored at the outermost JS entry) against a host budget (`AgentOptions::stack_limit_bytes`, default 768KiB), portable to native *and* wasm — `stacker` returns `None` on wasm, and a wasm shadow-stack overflow silently corrupts linear memory rather than trapping, so a proactive guard is mandatory there (nova `cce0f09b`). **Broad `dom --engine nova` now completes in ~12s at 90 all-pass / 2194 subtests — exact parity with the checked Boa `dom` baseline (88 / 2122).**
+  - A raw structural clone would be unsound even if it compiled: Genet's Nova host hooks carry the microtask job queue and module cache, while the realm `[[HostDefined]]` slot carries DOM host data, reflector roots, pending host promises, and the release queue. A snapshot clone must replace those with fresh per-clone host state.
+- **Landed primitive (2026-06-30):** Nova now has an explicit `GcAgent::snapshot_clone` path with host-hook replacement and realm `[[HostDefined]]` reset semantics, plus Nova-side isolation tests. Genet exposes that as optional `ScriptEngineSnapshot`, `Runtime::snapshot_clone`, and a `NovaHarnessTemplate` that snapshots after `testharness.js` load so `--engine nova` reuses a post-harness heap per test without re-evaluating the harness source.
+- **Empirical 2026-06-30 release probe:** the snapshot seam works on stable slices, but the broad `dom` corpus is still not Nova-safe enough for H2 to be considered complete. `genet-wpt testharness dom --engine nova` overflows the main-thread stack in release before producing a final aggregate, so the throughput win is currently gated by engine/runtime stability on the wide lane. On the smaller checked slices the shape is better: `dom/abort` completes at exact coarse parity with Boa in 1.38s vs 1.17s, `html/webappapis/timers` completes at exact coarse parity in 1.48s vs 1.62s, and `dom/nodes` completes with the same coarse buckets as Boa in 4.44s vs 34.36s.
+- **Stack overflow resolved (2026-07-01):** isolated to `dom/events/AddEventListenerOptions-signal.any.js` — a test that re-dispatches an event from within its own listener, unbounded because the AbortSignal abort does not stop the re-entrant recursion. Boa throws a catchable `RuntimeLimit(Recursion)`; Nova's fixed 3500-execution-context cap (whose own comment admitted it "caused stack overflow") let the OS stack overflow first, since a re-entrant host callback burns far more native stack per level than a plain JS call. **Fixed two ways:** (1) the runner runs on a 512MB stack (genet `72b07ecf647`) — belt-and-suspenders, and it also covers genet's own non-Nova recursion (parser/layout); (2) **Nova's `check_call_depth` now measures *actual* stack use via a stack-pointer proxy** (address-of-local, anchored at the outermost JS entry) against a host budget (`AgentOptions::stack_limit_bytes`, default 768KiB), portable to native *and* wasm — `stacker` returns `None` on wasm, and a wasm shadow-stack overflow silently corrupts linear memory rather than trapping, so a proactive guard is mandatory there (nova `cce0f09b`). **Broad `dom --engine nova` now completes in ~12s at 90 all-pass / 2194 subtests — exact parity with the checked Boa `dom` baseline (88 / 2122).**
 - **Done when (met 2026-07-01)** a broad release-mode `dom` run on Nova completes without the stack overflow, still preserves fresh per-test harness state, and keeps the measured per-test cost dominated by the test body rather than harness re-eval.
 
 ### H2b — Per-engine scoring + cross-engine diff (the Nova-improvement driver)
 
-`run_test` is already generic over `E: ScriptEngine`, so scoring both engines on one corpus and diffing is a small addition with outsized value. A test that **passes on Boa but fails on Nova is a Nova JS-engine gap** (a fork improvement; watching this bucket shrink is the Nova-to-Boa gap closing). A test that **fails on both is a serval-platform gap** (layout / DOM, not the engine). This converts the scoreboard into a per-test worklist routed to the right owner, and operationalizes the audit's keep-Nova-80-and-Boa-94-distinct: Nova is the primary "are we improving" number, Boa the platform ceiling, `Boa − Nova` the Nova fork's remaining JS work. The two engines also map to the two PWA lanes (Nova/wasm64 on Chrome/Firefox; Boa/wasm32 on WebKit). Buildable on subsets today (no snapshot needed); H2a's snapshot is what makes it affordable on the full corpus.
+`run_test` is already generic over `E: ScriptEngine`, so scoring both engines on one corpus and diffing is a small addition with outsized value. A test that **passes on Boa but fails on Nova is a Nova JS-engine gap** (a fork improvement; watching this bucket shrink is the Nova-to-Boa gap closing). A test that **fails on both is a genet-platform gap** (layout / DOM, not the engine). This converts the scoreboard into a per-test worklist routed to the right owner, and operationalizes the audit's keep-Nova-80-and-Boa-94-distinct: Nova is the primary "are we improving" number, Boa the platform ceiling, `Boa − Nova` the Nova fork's remaining JS work. The two engines also map to the two PWA lanes (Nova/wasm64 on Chrome/Firefox; Boa/wasm32 on WebKit). Buildable on subsets today (no snapshot needed); H2a's snapshot is what makes it affordable on the full corpus.
 
 - **Done when** a `compare <subset>` run reports the 2x2 (both-pass / both-fail / Boa-only / Nova-only) and the Boa-only set is surfaced as Nova's worklist.
-- **Empirical (2026-06-25, `compare` landed):** across `dom/abort`, `dom/nodes` (302 tests), and `html/webappapis/timers`, **Boa and Nova are at exact parity — zero Boa-only (Nova) gaps**; every failure fails on *both* engines (e.g. dom/nodes 56 both-pass / 215 both-fail). So on WPT, **the failures are serval-platform** (DOM / layout / parsing — the audit's object-fit / interface-table / CSS levers), not the JS engine, and improving Nova moves nothing here. The Nova-vs-Boa gap is **ECMAScript language conformance (test262, which WPT excludes by design)**, so the **Nova worklist comes from a test262 runner scoring Nova, not from WPT-`compare`**. WPT-`compare`'s standing role is therefore **regression detection** (catch a future Nova divergence from the Boa oracle) and parity confirmation, not the Nova worklist. The manifest already carries a `test262` item type; a test262-`compare` (different harness: `$262` + frontmatter, not testharness.js) is the lever for Nova's actual gaps.
+- **Empirical (2026-06-25, `compare` landed):** across `dom/abort`, `dom/nodes` (302 tests), and `html/webappapis/timers`, **Boa and Nova are at exact parity — zero Boa-only (Nova) gaps**; every failure fails on *both* engines (e.g. dom/nodes 56 both-pass / 215 both-fail). So on WPT, **the failures are genet-platform** (DOM / layout / parsing — the audit's object-fit / interface-table / CSS levers), not the JS engine, and improving Nova moves nothing here. The Nova-vs-Boa gap is **ECMAScript language conformance (test262, which WPT excludes by design)**, so the **Nova worklist comes from a test262 runner scoring Nova, not from WPT-`compare`**. WPT-`compare`'s standing role is therefore **regression detection** (catch a future Nova divergence from the Boa oracle) and parity confirmation, not the Nova worklist. The manifest already carries a `test262` item type; a test262-`compare` (different harness: `$262` + frontmatter, not testharness.js) is the lever for Nova's actual gaps.
 
 ### H3 — Corpora re-score + checked-in expectations + regression guard (lever 5)
 
@@ -46,14 +46,14 @@ Turn measurement into a guardrail.
 - Re-run hostable testharness subsets on H1 and publish current aggregates. Fetch remains a server-mode/netfetch lane because it needs `wpt serve`, the `netfetch` feature, and local host mapping; it does not belong in the default disk-mode guard. The CSS re-score is already carried by the CSS conformance scoreboard.
 - Landed mechanism: `testharness` accepts `--write-expectations <file>` and `--expectations <file>`. The JSON format is per-test URL -> coarse status (`pass`, `fail`, `error`, `no-results`, `skip`) with optional pinned `reason`; the check fails on changed status, changed pinned reason, missing expectation, or stale expectation so `unexpected=0` is enforceable.
 - Checked baselines:
-  - `ports/serval-wpt/expectations/testharness/dom_boa.json` pins the full hostable `dom` manifest subset on Boa in release mode. **Corrected 2026-07-09 by reading the file:** 91 all-pass, 363 with-failures, 71 errored, 84 no-results, 51 skipped, over 660 tests. (The "88 / 365 / 72" figures quoted here and in the grand audit predate the file's 2026-07-05 rebase.) The errored + no-results set is triaged in H6.
-  - `ports/serval-wpt/expectations/testharness/dom_abort_boa.json` keeps the focused abort slice pinned: 2 all-pass, 4 with-failures, 0 errored, 0 no-results, 3 skipped; subtests 29/37 passed.
-  - `ports/serval-wpt/expectations/testharness/dom_nodes_boa.json` keeps the focused DOM-nodes slice pinned: 57 all-pass, 205 with-failures, 12 errored, 14 no-results, 42 skipped; subtests 1655/5365 passed.
-  - `ports/serval-wpt/expectations/testharness/html_webappapis_timers_boa.json` pins the timer/event-loop smoke slice: 4 all-pass, 0 with-failures, 8 errored, 0 no-results, 0 skipped; subtests 7/7 passed.
+  - `ports/genet-wpt/expectations/testharness/dom_boa.json` pins the full hostable `dom` manifest subset on Boa in release mode. **Corrected 2026-07-09 by reading the file:** 91 all-pass, 363 with-failures, 71 errored, 84 no-results, 51 skipped, over 660 tests. (The "88 / 365 / 72" figures quoted here and in the grand audit predate the file's 2026-07-05 rebase.) The errored + no-results set is triaged in H6.
+  - `ports/genet-wpt/expectations/testharness/dom_abort_boa.json` keeps the focused abort slice pinned: 2 all-pass, 4 with-failures, 0 errored, 0 no-results, 3 skipped; subtests 29/37 passed.
+  - `ports/genet-wpt/expectations/testharness/dom_nodes_boa.json` keeps the focused DOM-nodes slice pinned: 57 all-pass, 205 with-failures, 12 errored, 14 no-results, 42 skipped; subtests 1655/5365 passed.
+  - `ports/genet-wpt/expectations/testharness/html_webappapis_timers_boa.json` pins the timer/event-loop smoke slice: 4 all-pass, 0 with-failures, 8 errored, 0 no-results, 0 skipped; subtests 7/7 passed.
 - Separate server-mode baseline:
-  - `ports/serval-wpt/expectations/testharness/fetch_api_basic_boa.json` pins the live-server `fetch/api/basic` slice on Boa in release mode with `--spawn-server`: 8 all-pass, 8 with-failures, 2 errored, 20 no-results, 0 skipped; subtests 81/119 passed.
-- Local guard: `support/wpt/check-testharness-baselines.ps1` builds `serval-wpt` release and checks all listed baselines; `-NoBuild` reuses an existing release binary.
-- Separate fetch guard: `support/wpt/check-testharness-fetch-baselines.ps1` builds `serval-wpt` release with `--features netfetch`, spawns `wpt serve`, and checks the live-server `fetch/api/basic` baseline. This lane remains local-only for now because it depends on local host mapping and takes several minutes per run.
+  - `ports/genet-wpt/expectations/testharness/fetch_api_basic_boa.json` pins the live-server `fetch/api/basic` slice on Boa in release mode with `--spawn-server`: 8 all-pass, 8 with-failures, 2 errored, 20 no-results, 0 skipped; subtests 81/119 passed.
+- Local guard: `support/wpt/check-testharness-baselines.ps1` builds `genet-wpt` release and checks all listed baselines; `-NoBuild` reuses an existing release binary.
+- Separate fetch guard: `support/wpt/check-testharness-fetch-baselines.ps1` builds `genet-wpt` release with `--features netfetch`, spawns `wpt serve`, and checks the live-server `fetch/api/basic` baseline. This lane remains local-only for now because it depends on local host mapping and takes several minutes per run.
 - CI guard: `.github/workflows/wpt-harness.yml` runs the default disk-mode guard on push and pull request.
 - **Done condition: met for the default hostable testharness lane.** A local or CI run now fails on changed, missing, or stale expectations.
 
@@ -91,7 +91,7 @@ dashboard into a regression gate:
 - **Local deterministic micro-tests below the WPT level.** Small `.html` tests
   reporting via testharness.js OR a plain `window.__formalWebTestResult` object
   (same shape testharnessreport produces), mounted so they reuse upstream
-  `/resources/testharness.js`. These let serval lock an event-loop / parser /
+  `/resources/testharness.js`. These let genet lock an event-loop / parser /
   streams milestone *before* the corresponding WPT directory is enabled — which
   matters now, while whole directories are gated by the H1/H2 work. (The
   `byob-debug.html`-style micro-test is the model; see the BYOB streams plan.)
@@ -111,7 +111,7 @@ H2b's finding (WPT excludes ECMAScript, so the Nova-vs-Boa gap lives in test262)
 test262 runner the actual Nova-improvement lever. The full corpus (53,166 tests) is vendored
 at `tests/wpt/tests/third_party/test262`.
 
-- **Built** (`ports/serval-wpt/src/test262.rs` + `main.rs`): frontmatter parse (includes /
+- **Built** (`ports/genet-wpt/src/test262.rs` + `main.rs`): frontmatter parse (includes /
   flags / negative / features), harness assembly (assert.js + sta.js + includes, strict
   variants, raw), per-engine run + pass/fail vs `negative:`, and `test262 <subset>` running
   **both engines and diffing** (Boa-pass / Nova-fail = a Nova gap). Module tests run via
@@ -206,7 +206,7 @@ capability it loads:
    `no-results`).* Those tests call `runTest` from `document.body.onload`, then
    `await` two `requestAnimationFrame` turns, then `test_driver.Actions()…send()`,
    then poll via rAF. Six layers must exist before the last one matters, and
-   serval has **none** of the first four:
+   genet has **none** of the first four:
    - ~~**No window `EventTarget`.**~~ **Corrected 2026-07-10:** the testharness
      lane *does* have one. `EVENT_TARGET_BOOTSTRAP` (`script-runtime-api/lib.rs`)
      gives `globalThis` add/remove/dispatchEvent over a standalone `EventTarget`
@@ -254,7 +254,7 @@ capability it loads:
    - the CSS **transitions** plan's T3 WPT slice was never wired, for exactly this
      reason (`2026-07-05_css_transitions_plan.md`, T3).
 
-   A driven rendering loop in `serval-wpt` (construct a session over the test DOM;
+   A driven rendering loop in `genet-wpt` (construct a session over the test DOM;
    per turn: fire `load` once, drain rAF callbacks, tick animations, harvest and
    dispatch transition + animation events) is the single harness capability that
    unblocks all three. It belongs to this plan; the DOM prerequisites above do not.
@@ -264,7 +264,7 @@ capability it loads:
    phase-1 core is reachable **in-process**, because `test_driver` is an embedder
    hook rather than a protocol: `testdriver.js` routes every command through
    `window.test_driver_internal`, whose shipped defaults throw and whose
-   `testdriver-vendor.js` is a blank file by design. So `serval-wpt` supplies that
+   `testdriver-vendor.js` is a blank file by design. So `genet-wpt` supplies that
    object and binds it to the core, the way the runtime already exposes
    `__matchMedia` / `__dispatchSynthetic`. No HTTP and no WebDriver adapter on this
    path; the adapter is needed only to run WPT's own `webdriver/` conformance
@@ -284,14 +284,14 @@ this consumer's needs: element origins resolve through a caller-supplied closure
 (here, the harness session's geometry) and tick durations are **reported, never
 slept** (here, mapped onto the harness's clock). Both purity rules are exactly
 what a headless consumer requires. **The hookup (H7b) is this plan's lane**, per
-their suggestion to coordinate rather than land it unilaterally; `ports/serval-wpt`
+their suggestion to coordinate rather than land it unilaterally; `ports/genet-wpt`
 is this plan's edit surface. Their remaining phase-1 items (condition-wait etc.)
 touch only their crates and can proceed in parallel with no hazard.
 
 ### H7a — the rendering loop
 
 Give the testharness lane the layout session it has never had. Construct an
-`IncrementalLayout` over the runtime's live DOM (the pattern serval-scripted's
+`IncrementalLayout` over the runtime's live DOM (the pattern genet-scripted's
 tests already prove: session + `ComputedStyleBridge`); back `getComputedStyle`
 with it. Each drive turn: drain DOM mutations -> `apply`, run rAF callbacks
 (`run_animation_frame_callbacks`), `tick_animations`, then
@@ -317,7 +317,7 @@ testharness run now gets it. Results, honestly stated:
   AnimationEvent` — the bootstrap constructors are factory-shaped, not
   prototype-chained — and Web Animations' `.animation` attribute). Guard:
   `animationevent_types_survives_the_rendering_session` (harness) +
-  `negative_delay_and_the_f32_boundary_tick_survive` (serval-layout).
+  `negative_delay_and_the_f32_boundary_tick_survive` (genet-layout).
 - **Deliberate rebases, deltas named**: `dom` and `dom/nodes` each +1 all-pass
   (`dom/nodes/moveBefore/preserve-render-blocking-script.html` fail -> pass,
   subtests 2230 -> 2233); `html/webappapis/timers` 4 all-pass / 8 errored ->
@@ -334,7 +334,7 @@ testharness run now gets it. Results, honestly stated:
   `None` today, and interpolation tests assert positional longhands via
   `getComputedStyle`; (c) Web Animations API surface (out of scope).
 - **The stylo fork gained a load-bearing fix** (`mark-ik/stylo` `56e70cacdb`,
-  serval lock repinned): Stylo's keyframe search casts f64 progress to f32
+  genet lock repinned): Stylo's keyframe search casts f64 progress to f32
   against f32 start percentages, so a progress in `(1 - 2^-24, 1.0)` — which an
   accumulated 16.667ms frame clock produces routinely — fell into a
   `debug_unreachable` and panicked the process. Six css-animations tests panicked
@@ -357,7 +357,7 @@ tick, advance the harness clock by `duration_ms` and dispatch the tick's
 additionally needs `onX` handler attributes and `TouchEvent` (DOM work, links
 2 and 6 — not this plan's).
 
-**Landed 2026-07-10.** The seam is WPT's own: `collect_scripts` splices serval's
+**Landed 2026-07-10.** The seam is WPT's own: `collect_scripts` splices genet's
 backend (`TESTDRIVER_VENDOR_JS`) in place of the deliberately-blank
 `testdriver-vendor.js`, in document order — after `testdriver.js` defines the
 throwing defaults, before any test script can call them. The vendor sets
@@ -393,7 +393,7 @@ duration, render a turn, settle the Promise.
 
 The DOM-side prerequisites (H6's chain links 2 and 6), which the harness plan
 does not own but which the harness lane is the reason to prioritize. Both are in
-`script-runtime-api` (the runtime), not `serval-wpt`.
+`script-runtime-api` (the runtime), not `genet-wpt`.
 
 ### H8a — event-handler IDL attributes (`el.onclick = fn`, link 2)
 
@@ -486,7 +486,7 @@ moved from `no-results` (dead — never registered a subtest, because
   `error` -> `no-results`. They are shadow-DOM-blocked either way (they call
   `attachShadow` inside a `load` handler) and score zero subtests in both states;
   the change is a direct consequence of H8c correctly *not* propagating the
-  listener's exception. Residual fidelity gap noted: serval's results bridge does
+  listener's exception. Residual fidelity gap noted: genet's results bridge does
   not surface testharness's *harness-level* error status, so a test whose only
   failure is a thrown handler with no registered subtests reads as `no-results`
   rather than a reasoned error. Separate item.
@@ -511,7 +511,7 @@ input gap (below).
      origin *before* pressing — that move must not fabricate a `touchmove`.
      Position is still tracked, so the press lands right.
    - A touch that never went down cannot lift.
-2. **Bridge: typed events, and the touchstart target** (`serval-wpt/harness.rs`).
+2. **Bridge: typed events, and the touchstart target** (`genet-wpt/harness.rs`).
    `InputEvent::Touch` / `Wheel` now go through typed dispatch. Per Touch Events,
    **every event for one touch point goes to the element the touch started on**,
    not a fresh hit-test, so the bridge remembers that target per touch id for the
@@ -555,7 +555,7 @@ input gap (below).
 
 `wheel` / `mousewheel` on-`div` fail because their `#div` is
 `position: fixed; top:0; right:0; bottom:0; left:0` with no width/height, and
-serval resolves a **fixed** box's insets against its **parent** instead of the
+genet resolves a **fixed** box's insets against its **parent** instead of the
 **viewport** (the ICB). Probed directly: the div computes to `(0, 0, 800, 0)` —
 width 800 resolves fine from `left:0`+`right:0`, but height is 0 because the
 parent `body` has `height: auto`, which is 0 (its only child is out of flow). Give
@@ -563,13 +563,13 @@ parent `body` has `height: auto`, which is 0 (its only child is out of flow). Gi
 hit-tests correctly. So inset-derived sizing *works*; the containing block is
 wrong.
 
-Confirmed further: serval-layout has **no fixed-vs-absolute handling at all** — it
+Confirmed further: genet-layout has **no fixed-vs-absolute handling at all** — it
 hands stylo's style to `stylo_taffy::TaffyStyloStyle` and inherits Taffy's
 absolute positioning, which is parent-relative by construction. `fixed` and
 `absolute` are indistinguishable today. Closing it means *introducing* the
 containing-block concept (ICB for `fixed`, nearest positioned ancestor for
 `absolute`), with paint-order and scroll consequences. **Owned by the layout lane,
-not this plan** — filed in `2026-06-16_serval_layout_roadmap.md`'s near-horizon
+not this plan** — filed in `2026-06-16_genet_layout_roadmap.md`'s near-horizon
 threads with the full diagnosis. It is the only thing between this cluster and
 42/42, and it mis-sizes any fixed overlay (sticky header, modal backdrop) whose
 parent has an auto height, so it is not a WPT-only curiosity.
@@ -609,26 +609,26 @@ reliably land in `no-subtests`: a third of them throw instead.
 ## Findings
 
 - Historical 2026-06-24 finding (from the grand audit, adversarially verified at the time): the runner was 2,770 LOC (`main.rs` 1,671), had no MANIFEST reader in the run path, and had no checked-in expectations guard. This is now stale for the default hostable testharness lane: manifest discovery is wired into normal commands, JSON expectations exist, and the checked baselines run under a local/CI guard.
-- `harness.rs` bench prescribed the snapshot-clone pool; H2a is now implemented as a Nova-owned `snapshot_clone` capability and a `NovaHarnessTemplate` in `serval-wpt`. The remaining finding is empirical, not architectural: broad release-mode `dom` on Nova still overflows the main-thread stack before a final aggregate.
+- `harness.rs` bench prescribed the snapshot-clone pool; H2a is now implemented as a Nova-owned `snapshot_clone` capability and a `NovaHarnessTemplate` in `genet-wpt`. The remaining finding is empirical, not architectural: broad release-mode `dom` on Nova still overflows the main-thread stack before a final aggregate.
 - fetch/ runs only behind an off-by-default feature and the server-mode lane (`--spawn-server`). The checked `fetch/api/basic` guard remains local because it depends on WPT server startup and host mapping. Testharness XHTML/.xht files are skipped; XML reftest handling is separate. CSP, websockets/, and h3 are unrunnable through the runner despite netfetcher shipping the transports.
 - The "re-score floats/normal-flow/css-backgrounds" sub-lever is already largely done inside the CSS conformance doc's scoreboard; H3's residual value is fresh dom/fetch aggregates + the expectations guard, not re-scoring CSS from scratch.
 
 ## Progress
 
 - 2026-06-24 — Plan created from the grand audit. No code yet. H1 is the entry point.
-- 2026-06-25 — **H1 reader + `manifest` command landed** (serval `a9703342ecd`): a MANIFEST.json reader (`ports/serval-wpt/src/manifest.rs` — URLs / kind / refs / fuzzy / pre-expanded variants; unit-tested + integration-tested against the real ~39MB manifest) and `serval-wpt manifest <subset>`. **Validated vs the walk on `dom/nodes`:** manifest 319 runnable (testharness 302, reftest 3, crashtest 14) vs walk 342 — the walk over-counts (38 `load` + 2 `reference` non-tests) and under-counts variants (+17 testharness), confirming the heuristic enumeration scores the wrong set. Additive (the run path still walks; slice 3 wires the manifest through it).
+- 2026-06-25 — **H1 reader + `manifest` command landed** (genet `a9703342ecd`): a MANIFEST.json reader (`ports/genet-wpt/src/manifest.rs` — URLs / kind / refs / fuzzy / pre-expanded variants; unit-tested + integration-tested against the real ~39MB manifest) and `genet-wpt manifest <subset>`. **Validated vs the walk on `dom/nodes`:** manifest 319 runnable (testharness 302, reftest 3, crashtest 14) vs walk 342 — the walk over-counts (38 `load` + 2 `reference` non-tests) and under-counts variants (+17 testharness), confirming the heuristic enumeration scores the wrong set. Additive (the run path still walks; slice 3 wires the manifest through it).
 - 2026-06-25 — **H2 corrected** (above): the snapshot goes in **Nova**, not Boa (Boa is the pristine oracle); added **H2b** (per-engine scoring + cross-engine diff) as the Nova-improvement driver.
-- 2026-06-25 — **H2b `compare` landed** (serval `c27d98d4145`): runs each testharness test on Boa + Nova and routes failures (both-fail = serval-platform, Boa-only = Nova gap). **Finding:** Boa/Nova at exact parity on `dom/abort`, `dom/nodes`, `html/webappapis/timers` (0 Nova gaps); WPT failures are serval-platform, so the Nova worklist is a **test262** matter, and WPT-`compare`'s role is regression-detection. Gotcha: run the runner in **release** (debug frames overflow the stack on bounded-deep recursion; the audit's "panic-free on both engines" holds in release).
+- 2026-06-25 — **H2b `compare` landed** (genet `c27d98d4145`): runs each testharness test on Boa + Nova and routes failures (both-fail = genet-platform, Boa-only = Nova gap). **Finding:** Boa/Nova at exact parity on `dom/abort`, `dom/nodes`, `html/webappapis/timers` (0 Nova gaps); WPT failures are genet-platform, so the Nova worklist is a **test262** matter, and WPT-`compare`'s role is regression-detection. Gotcha: run the runner in **release** (debug frames overflow the stack on bounded-deep recursion; the audit's "panic-free on both engines" holds in release).
 - 2026-06-28 — **H5 test262 runner landed**: core + run-path + cross-engine `test262 <subset>` (`5df84ab9e23`, `d133f56350f`), confirming the H2b finding empirically (`built-ins/Temporal/Now` 66/66 boa-only — Nova lacks Temporal; `optional-chaining` at parity). Parallelized across cores (shared work-index, `8a5a393b1bb`); **measured ~3.2x, not the hoped ~14x** — jemalloc (`servo-allocator`) is already linked, so the ceiling is memory-bandwidth + per-test agent churn, not the allocator. Module support via `eval_module` (`d149fc649e5`); negative **error-type** matching via `ScriptEngine::describe_error` (`016dffea9fd`); `--worklist-out` full dump (`1b5feddb8d8`).
-- 2026-06-28 — **hang-safe runner** (`90ae2edc268`, `aefc0db6103`, `f690f364f22`): the engines can't be step-metered (`eval_bounded` is unbounded for Boa+Nova) and a *non-async* `Promise.race` iterator-close test hangs serval, so a corpus run needs **per-test worker-subprocess isolation** + kill-on-`--timeout` (default 30s), not an in-process watchdog. Each timeout is attributed to the engine that never reported. This subsumes the parallelism for test262 and makes test262 corpus-safety independent of H2a. `async` was built + validated per-test but reverted (corpus-scale memory accumulation; pending investigation).
+- 2026-06-28 — **hang-safe runner** (`90ae2edc268`, `aefc0db6103`, `f690f364f22`): the engines can't be step-metered (`eval_bounded` is unbounded for Boa+Nova) and a *non-async* `Promise.race` iterator-close test hangs genet, so a corpus run needs **per-test worker-subprocess isolation** + kill-on-`--timeout` (default 30s), not an in-process watchdog. Each timeout is attributed to the engine that never reported. This subsumes the parallelism for test262 and makes test262 corpus-safety independent of H2a. `async` was built + validated per-test but reverted (corpus-scale memory accumulation; pending investigation).
 - 2026-06-29 — **full corpus run** (53,166 tests): `both-pass=35858 both-fail=3374 boa-only=7818 (Nova gap) nova-only=513 timeout=21 skipped=5582` → Nova 76.5% / Boa 91.8%. **The Nova worklist is 75% Temporal** (5,873 of 7,818); next tiers RegExp/Iterator/Set/Promise + a 533-test language-core tail; see the H5 result section. Found a systematic Nova Promise-combinator iterator-close **hang family** (6 tests) and perf cliffs on both engines (Nova: Array/defineProperty `length`, `decodeURI`; Boa: `Date/dst-offset-caching`).
-- 2026-06-29 — **H1 normal-runner wiring + H3a expectation mechanism landed**: `list`, `run`, `reftest`, `dump`, `testharness`, and `compare` now discover from MANIFEST.json by default; `--walk-discovery` keeps the old heuristic path as a diagnostic fallback. Manifest-selected generated `.any.html` variants retain their WPT URL while resolving scripts from the backing `.any.js` file. Reftest refs/fuzzy come from the manifest with HTML parsing as fallback. `testharness --write-expectations <file>` writes JSON status baselines and `--expectations <file>` fails on changed/missing/stale statuses. Verified with `cargo check -p serval-wpt`, manifest unit tests, expectation guard unit tests, `serval-wpt list dom/abort` (9 manifest-backed variants) and `serval-wpt list dom/abort --walk-discovery` (10 heuristic files, including `.any.js` misclassified as load). Debug `testharness` still stack-overflows as previously documented; release-mode broad baselines remain the next H3 step.
-- 2026-06-29 — **First checked-in WPT guard landed**: generated `ports/serval-wpt/expectations/testharness/dom_abort_boa.json` from release-mode `serval-wpt testharness dom/abort --engine boa`. Baseline is 2 all-pass / 4 with-failures / 0 errored / 0 no-results / 3 skipped, subtests 29/37 passed. Added `support/wpt/check-testharness-baselines.ps1`; verified `powershell -ExecutionPolicy Bypass -File support/wpt/check-testharness-baselines.ps1 -NoBuild` reports `unexpected=0`.
-- 2026-06-30 — **H3 completed for the default hostable testharness lane**: added release-mode Boa baselines for full `dom` (`dom_boa.json`), focused `dom/nodes` (`dom_nodes_boa.json`), and `html/webappapis/timers` (`html_webappapis_timers_boa.json`); wired all checked expectations into `support/wpt/check-testharness-baselines.ps1`; added `.github/workflows/wpt-harness.yml` so push/PR CI runs the same guard. Verified `cargo build --release -p serval-wpt` and `powershell -ExecutionPolicy Bypass -File support/wpt/check-testharness-baselines.ps1 -NoBuild` with `unexpected=0`.
-- 2026-06-30 — **H2a landed as an explicit Nova snapshot seam**: the direct derive-based structural-clone route was rejected, then replaced with `GcAgent::snapshot_clone`, Nova-side isolation tests, `ScriptEngineSnapshot`, `Runtime::snapshot_clone`, and a `NovaHarnessTemplate` in `serval-wpt` that reuses a post-`testharness.js` Nova heap per test.
-- 2026-06-30 — **First release-mode Nova throughput probe on the WPT lane**: `serval-wpt testharness dom --engine nova` still overflows the main-thread stack before a full aggregate, so the broad lane is not yet stable enough to cash in the snapshot-template win. The smaller checked slices do complete: `dom/abort` at exact coarse parity with Boa in 1.38s vs 1.17s, `html/webappapis/timers` at exact coarse parity in 1.48s vs 1.62s, and `dom/nodes` with the same coarse buckets as Boa in 4.44s vs 34.36s.
+- 2026-06-29 — **H1 normal-runner wiring + H3a expectation mechanism landed**: `list`, `run`, `reftest`, `dump`, `testharness`, and `compare` now discover from MANIFEST.json by default; `--walk-discovery` keeps the old heuristic path as a diagnostic fallback. Manifest-selected generated `.any.html` variants retain their WPT URL while resolving scripts from the backing `.any.js` file. Reftest refs/fuzzy come from the manifest with HTML parsing as fallback. `testharness --write-expectations <file>` writes JSON status baselines and `--expectations <file>` fails on changed/missing/stale statuses. Verified with `cargo check -p genet-wpt`, manifest unit tests, expectation guard unit tests, `genet-wpt list dom/abort` (9 manifest-backed variants) and `genet-wpt list dom/abort --walk-discovery` (10 heuristic files, including `.any.js` misclassified as load). Debug `testharness` still stack-overflows as previously documented; release-mode broad baselines remain the next H3 step.
+- 2026-06-29 — **First checked-in WPT guard landed**: generated `ports/genet-wpt/expectations/testharness/dom_abort_boa.json` from release-mode `genet-wpt testharness dom/abort --engine boa`. Baseline is 2 all-pass / 4 with-failures / 0 errored / 0 no-results / 3 skipped, subtests 29/37 passed. Added `support/wpt/check-testharness-baselines.ps1`; verified `powershell -ExecutionPolicy Bypass -File support/wpt/check-testharness-baselines.ps1 -NoBuild` reports `unexpected=0`.
+- 2026-06-30 — **H3 completed for the default hostable testharness lane**: added release-mode Boa baselines for full `dom` (`dom_boa.json`), focused `dom/nodes` (`dom_nodes_boa.json`), and `html/webappapis/timers` (`html_webappapis_timers_boa.json`); wired all checked expectations into `support/wpt/check-testharness-baselines.ps1`; added `.github/workflows/wpt-harness.yml` so push/PR CI runs the same guard. Verified `cargo build --release -p genet-wpt` and `powershell -ExecutionPolicy Bypass -File support/wpt/check-testharness-baselines.ps1 -NoBuild` with `unexpected=0`.
+- 2026-06-30 — **H2a landed as an explicit Nova snapshot seam**: the direct derive-based structural-clone route was rejected, then replaced with `GcAgent::snapshot_clone`, Nova-side isolation tests, `ScriptEngineSnapshot`, `Runtime::snapshot_clone`, and a `NovaHarnessTemplate` in `genet-wpt` that reuses a post-`testharness.js` Nova heap per test.
+- 2026-06-30 — **First release-mode Nova throughput probe on the WPT lane**: `genet-wpt testharness dom --engine nova` still overflows the main-thread stack before a full aggregate, so the broad lane is not yet stable enough to cash in the snapshot-template win. The smaller checked slices do complete: `dom/abort` at exact coarse parity with Boa in 1.38s vs 1.17s, `html/webappapis/timers` at exact coarse parity in 1.48s vs 1.62s, and `dom/nodes` with the same coarse buckets as Boa in 4.44s vs 34.36s.
 - 2026-06-30 — **H4a reason metadata landed**: `testharness` expectations can now pin an optional per-test `reason` in addition to coarse status, and the runner emits explicit reasons for capability skips / early error classes. Rewrote the focused checked baselines (`dom_abort_boa.json`, `dom_nodes_boa.json`, `html_webappapis_timers_boa.json`) to exercise the format without re-basing the broad dirty-tree `dom_boa.json`.
-- 2026-06-30 — **First checked fetch/server-mode baseline landed locally**: release-mode `serval-wpt --features netfetch testharness fetch/api/basic --spawn-server --engine boa` completed in about 7.9 minutes with 8 all-pass / 8 with-failures / 2 errored / 20 no-results / 0 skipped, subtests 81/119 passed. Checked in `fetch_api_basic_boa.json` plus `support/wpt/check-testharness-fetch-baselines.ps1`. This remains a separate local guard, not default CI, because it depends on local host mapping and live server startup.
-- 2026-07-01 — **test262 `async` re-enabled** (serval `493454cdc5c`): the corpus-scale memory blow-up that forced the earlier revert was traced to two *non-async* Promise infinite-hangs spinning in shared threads, not async. Per-test worker-subprocess isolation bounds each async test to its own reaped process, so it cannot recur. Restores `run_262_async` (`$DONE` via a `print`→buffer shim + `run_event_loop` + the `AsyncTestComplete` sentinel) + `Runtime::value_to_string`. `built-ins/Promise/race` skipped 63→0, +6 gaps surfaced; recovers the ~5,582 skipped corpus-wide.
-- 2026-07-01 — **Nova Promise iterator-close hang family fixed** (nova fork `e9765334` + `b5201d12`): the combinators used `inner_promise_then` (internal reaction wiring), bypassing the observable `.then` method and never `IteratorClose`-ing, so an infinite iterable with a throwing/overridden `then` looped forever. Fix: `perform_promise_race` creates the capability's shared resolve/reject resolving functions and `Invoke`s the real `.then`; `all`/`allSettled`/`any` (all via `perform_promise_group`) materialize per-element resolve/reject functions — a new optional `group_element` payload on `PromiseResolvingFunctionHeapData` driving the existing `PromiseGroup::settle`, guarded by `[[AlreadyCalled]]` — then `Invoke` `.then` and `IteratorClose` on abrupt (setting `[[Done]]` so the caller does not close twice). Validated in serval: race 2 hangs → pass (nova-only=0); full `built-ins/Promise` (677) both-pass 453→469, boa-only 180→170, **timeout 6→0, nova-only=0** (16 gaps closed: the group/any hangs + observable-`.then` conformance tests, zero regressions). This clears the Promise-combinator half of the stability track; the Nova broad-corpus stack overflow (H2) and the perf cliffs remain.
-- 2026-07-01 — **H2 stack-overflow gate cleared** (serval `72b07ecf647`, nova `cce0f09b`): the broad `dom --engine nova` overflow isolated to a re-entrant event-dispatch test whose recursion Nova's fixed 3500-context cap couldn't bound before the OS stack overflowed. Fixed by running the runner on a 512MB stack **and** replacing Nova's count cap with an actual-stack-use guard (stack-pointer proxy, portable to wasm; `stacker` is native-only). Broad `dom --engine nova` now completes in ~12s at 90 all-pass / 2194 subtests — parity with the Boa `dom` baseline. See the H2 "Stack overflow resolved" bullet. Remaining stability item: the perf cliffs (Array/defineProperty `length`, `decodeURI`).
+- 2026-06-30 — **First checked fetch/server-mode baseline landed locally**: release-mode `genet-wpt --features netfetch testharness fetch/api/basic --spawn-server --engine boa` completed in about 7.9 minutes with 8 all-pass / 8 with-failures / 2 errored / 20 no-results / 0 skipped, subtests 81/119 passed. Checked in `fetch_api_basic_boa.json` plus `support/wpt/check-testharness-fetch-baselines.ps1`. This remains a separate local guard, not default CI, because it depends on local host mapping and live server startup.
+- 2026-07-01 — **test262 `async` re-enabled** (genet `493454cdc5c`): the corpus-scale memory blow-up that forced the earlier revert was traced to two *non-async* Promise infinite-hangs spinning in shared threads, not async. Per-test worker-subprocess isolation bounds each async test to its own reaped process, so it cannot recur. Restores `run_262_async` (`$DONE` via a `print`→buffer shim + `run_event_loop` + the `AsyncTestComplete` sentinel) + `Runtime::value_to_string`. `built-ins/Promise/race` skipped 63→0, +6 gaps surfaced; recovers the ~5,582 skipped corpus-wide.
+- 2026-07-01 — **Nova Promise iterator-close hang family fixed** (nova fork `e9765334` + `b5201d12`): the combinators used `inner_promise_then` (internal reaction wiring), bypassing the observable `.then` method and never `IteratorClose`-ing, so an infinite iterable with a throwing/overridden `then` looped forever. Fix: `perform_promise_race` creates the capability's shared resolve/reject resolving functions and `Invoke`s the real `.then`; `all`/`allSettled`/`any` (all via `perform_promise_group`) materialize per-element resolve/reject functions — a new optional `group_element` payload on `PromiseResolvingFunctionHeapData` driving the existing `PromiseGroup::settle`, guarded by `[[AlreadyCalled]]` — then `Invoke` `.then` and `IteratorClose` on abrupt (setting `[[Done]]` so the caller does not close twice). Validated in genet: race 2 hangs → pass (nova-only=0); full `built-ins/Promise` (677) both-pass 453→469, boa-only 180→170, **timeout 6→0, nova-only=0** (16 gaps closed: the group/any hangs + observable-`.then` conformance tests, zero regressions). This clears the Promise-combinator half of the stability track; the Nova broad-corpus stack overflow (H2) and the perf cliffs remain.
+- 2026-07-01 — **H2 stack-overflow gate cleared** (genet `72b07ecf647`, nova `cce0f09b`): the broad `dom --engine nova` overflow isolated to a re-entrant event-dispatch test whose recursion Nova's fixed 3500-context cap couldn't bound before the OS stack overflowed. Fixed by running the runner on a 512MB stack **and** replacing Nova's count cap with an actual-stack-use guard (stack-pointer proxy, portable to wasm; `stacker` is native-only). Broad `dom --engine nova` now completes in ~12s at 90 all-pass / 2194 subtests — parity with the Boa `dom` baseline. See the H2 "Stack overflow resolved" bullet. Remaining stability item: the perf cliffs (Array/defineProperty `length`, `decodeURI`).

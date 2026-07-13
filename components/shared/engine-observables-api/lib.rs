@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 //! `engine_observables_api` — the common-minimum query traits every
-//! Hekate render lane (Nematic / Serval / Scrying) publishes for
+//! Hekate render lane (Nematic / Genet / Scrying) publishes for
 //! downstream consumers (mere-host, Apparatus inspector, Hekate
 //! indexing/extract pipeline).
 //!

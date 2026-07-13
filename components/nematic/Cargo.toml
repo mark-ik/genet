@@ -5,14 +5,14 @@ name = "nematic"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-# Not workspace: serval's workspace repository still points at upstream servo.
-repository = "https://github.com/mark-ik/serval"
+# Not workspace: genet's workspace repository still points at upstream servo.
+repository = "https://github.com/mark-ik/genet"
 description = "Portable smolweb rendering engine — Gemini, Gopher, Markdown, feeds, and the knot note format, lowered to the inker document model."
 documentation = "https://docs.rs/nematic"
 readme = "README.md"
 keywords = ["smolweb", "gemini", "gopher", "rendering", "engine"]
 categories = ["web-programming", "rendering"]
-# Override serval's workspace-wide publish = false: nematic is a published crate.
+# Override genet's workspace-wide publish = false: nematic is a published crate.
 publish = true
 
 [features]
@@ -41,14 +41,14 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 # Version req so the crate can publish: locally the path satisfies it; on
 # the registry the xilem-serval name-claim stub does (a consumer enabling
-# `views` from crates.io needs the real component, i.e. the serval git dep,
-# until serval's view stack publishes for real).
+# `views` from crates.io needs the real component, i.e. the genet git dep,
+# until genet's view stack publishes for real).
 xilem-serval = { package = "serval-xilem", version = "0.1.0", path = "../xilem-serval", optional = true }
 
 [dev-dependencies]
 # The views tests build into a real ScriptedDom and inspect the result
 # (moved with the views from the retired smolweb-views component).
-serval-scripted-dom = { path = "../serval-scripted-dom" }
+genet-scripted-dom = { path = "../genet-scripted-dom" }
 layout_dom_api = { package = "layout-dom-api", path = "../shared/layout-dom" }
 
 # `test = true` runs the example's embedded round-trip tests under `cargo test`.

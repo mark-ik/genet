@@ -1,6 +1,6 @@
-# Serval workspace audit — state snapshot (2026-05-16)
+# Genet workspace audit — state snapshot (2026-05-16)
 
-Point-in-time snapshot of the serval workspace after the audit landed on 2026-05-15 and the follow-on commits on 2026-05-16. Companion to [archive/2026-05-05_serval_netrender_cut_plan.md](./archive/2026-05-05_serval_netrender_cut_plan.md) (strategy; archived 2026-05-17) and [archive/2026-05-13_p2_layout_dom_provider_design.md](./archive/2026-05-13_p2_layout_dom_provider_design.md) (next phase; superseded by [planes architecture](./2026-05-17_serval_layout_planes_architecture.md); archived 2026-05-17).
+Point-in-time snapshot of the genet workspace after the audit landed on 2026-05-15 and the follow-on commits on 2026-05-16. Companion to [archive/2026-05-05_genet_netrender_cut_plan.md](./archive/2026-05-05_genet_netrender_cut_plan.md) (strategy; archived 2026-05-17) and [archive/2026-05-13_p2_layout_dom_provider_design.md](./archive/2026-05-13_p2_layout_dom_provider_design.md) (next phase; superseded by [planes architecture](./2026-05-17_genet_layout_planes_architecture.md); archived 2026-05-17).
 
 ## Live workspace shape
 
@@ -12,7 +12,7 @@ After the SpiderMonkey-opt-in + `components/servo` + aws-lc-rs + example-bins tr
 - **`tests/unit/script` is excluded** in `workspace.exclude`. That single line is the gate: re-adding it pulls `mozjs_sys` back in along with all its build-env requirements.
 - **aws-lc-rs removed** from `workspace.dependencies`. `components/net/Cargo.toml` now uses rustls's `ring` feature. If crypto comes back through a revived components/net, `ring` (pre-built asm) or `rustls-rustcrypto` (pure Rust) are the canonical choices.
 - **2 demo bins removed**: `examples/wgpu-embedder`, `examples/non-presenting-wgpu-embedder`.
-- **~56 `servo-*` entries remain** in `workspace.dependencies` — mostly `*-traits` / `*-api` interface crates still reached. The `package = "servo-..."` lines on otherwise serval-friendly crates leak fork origin even where the workspace-local name is clean.
+- **~56 `servo-*` entries remain** in `workspace.dependencies` — mostly `*-traits` / `*-api` interface crates still reached. The `package = "servo-..."` lines on otherwise genet-friendly crates leak fork origin even where the workspace-local name is clean.
 
 ## Dead-on-disk components (next deletion-pass candidates)
 
@@ -43,29 +43,29 @@ Flag any plan that re-enables JS-engine work so this cost is on the table.
 
 ## Update — 2026-06-12: `ports/pelt-viewer` retired
 
-The Masonry-era Xilem viewer (serval pipeline → netrender rasterize → **CPU
+The Masonry-era Xilem viewer (genet pipeline → netrender rasterize → **CPU
 pixel readback** → `ImageData` → Masonry `image_view`; adapted from
 `wgpu-graft/demo-servo-xilem`, predating direct present) was deleted. Its one
 consumer was `pelt --engine viewer`'s fallthrough, which now exits with a
-pointer at the `pelt-live` bin until a serval-native viewer mode is built on
+pointer at the `pelt-live` bin until a genet-native viewer mode is built on
 the pelt-core / pelt-desktop contracts; pelt's smoke suite (its live value) is
 untouched, and `--netrender-smoke` now exits clean instead of falling through
 into a viewer window. Dividends: the `xilem` / `masonry` / `masonry_winit`
 git deps left the workspace entirely (pelt-viewer was their sole consumer), so
-the xilem fork's one remaining serval consumer is `xilem_core`
+the xilem fork's one remaining genet consumer is `xilem_core`
 (xilem-serval's direct git dep); a duplicated experimental taffy pin went with
 it; the `viewer-netfetch` feature (and its mockito `ResourceFetcher`
 integration test) was dropped rather than ported — meerkat exercises
 netfetcher for real, and `pelt-core`'s `ResourceFetcher` contract keeps its
-definition awaiting the serval-native viewer. Git-revivable. Verified:
-`cargo check` on pelt (default features), pelt-live, serval-layout,
+definition awaiting the genet-native viewer. Git-revivable. Verified:
+`cargo check` on pelt (default features), pelt-live, genet-layout,
 xilem-serval.
 
 ## Strategic anchors
 
-- **Blitz/Serval convergence is now feasible to evaluate side-by-side.** The trim was the precondition; serval's shape is finally narrow enough to compare against linebender's `blitz` `packages/*` and read the overlap. Don't defer the audit further; propose it when next relevant.
-- **W3C capability knockout pattern**: serval cuts deliberately delete or stub W3C-coupled features (WebXR, WebGL service workers in the viewer profile, etc.) rather than migrating them through every refactor. The dead-components list above is the next pass of the same pattern. Surface the tradeoff explicitly when proposing a delete-or-stub.
-- **Three-head Hekate**: the planned evolution is serval as a smolweb-extract / middlenet / fullweb negotiator over the same HTML input — three render modes, one engine. Design only as of 2026-05-16; no implementation. HTML-reader-mode work belongs *inside serval* (any depth), not in [nematic](../../mere/) (smolweb-only protocol engine).
+- **Blitz/Genet convergence is now feasible to evaluate side-by-side.** The trim was the precondition; genet's shape is finally narrow enough to compare against linebender's `blitz` `packages/*` and read the overlap. Don't defer the audit further; propose it when next relevant.
+- **W3C capability knockout pattern**: genet cuts deliberately delete or stub W3C-coupled features (WebXR, WebGL service workers in the viewer profile, etc.) rather than migrating them through every refactor. The dead-components list above is the next pass of the same pattern. Surface the tradeoff explicitly when proposing a delete-or-stub.
+- **Three-head Hekate**: the planned evolution is genet as a smolweb-extract / middlenet / fullweb negotiator over the same HTML input — three render modes, one engine. Design only as of 2026-05-16; no implementation. HTML-reader-mode work belongs *inside genet* (any depth), not in [nematic](../../mere/) (smolweb-only protocol engine).
 
 ## Sidequests on the table
 

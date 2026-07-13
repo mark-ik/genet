@@ -1,10 +1,10 @@
-# chisel: custom-paint widget leaves for the serval host
+# chisel: custom-paint widget leaves for the genet host
 
 **Status (2026-07-07):** proposed; first design pass. Defines a small, sharp
 widget-leaf layer that lets imperative custom-paint widgets (knobs, meters,
-waveforms, graph canvases) live as first-class serval elements without a second
+waveforms, graph canvases) live as first-class genet elements without a second
 UI engine. Sits beside the reactive backend from
-[2026-05-27_serval_as_host_xilem_serval_plan.md](./2026-05-27_serval_as_host_xilem_serval_plan.md)
+[2026-05-27_genet_as_host_xilem_serval_plan.md](./2026-05-27_genet_as_host_xilem_serval_plan.md)
 and rides the paint seams from
 [2026-05-17_paintlist_polyglot_renderer.md](./2026-05-17_paintlist_polyglot_renderer.md).
 Working crate name **`chisel`** (needs a crates.io check before reservation).
@@ -17,14 +17,14 @@ Code samples are **illustrative** unless marked implementation-ready.
   `paint_list_api` + `accesskit`). Ships the `Leaf` trait, `PaintCx` (Path A),
   `LeafRegistry<K>`, and a `Swatch` leaf; a unit test drives measure → emit one
   `DrawRect` → `paint_dirty` clears (green).
-- **Path-A layout seam wired in serval-layout (additive, green).** `<chisel-leaf
+- **Path-A layout seam wired in genet-layout (additive, green).** `<chisel-leaf
   key="…">` is a replaced element (`construct::is_replaced` +
   `chisel_leaf_key_of`), the key rides onto the box node (`box_tree`), and
   `paint_emit` splices the leaf's commands via a new `LeafPaintSource` trait +
   `emit_paint_list_with_leaves` entry point (existing entry points forward through
   an unchanged `emit_inner`, so no call site moved). An end-to-end test parses a
   `<chisel-leaf>`, lays it out, and asserts the source's command lands in the
-  `ServalPaintList` (`paint_emit::tests::chisel_leaf_splices_its_path_a_commands`).
+  `GenetPaintList` (`paint_emit::tests::chisel_leaf_splices_its_path_a_commands`).
 - **Leaf-tier retention cache (the new gate).** `RenderedLeaves` +
   `LeafRegistry::render_into` re-render a leaf only when it is `paint_dirty`, is
   uncached, **or its box size changed** since the cached buffer was painted (the
@@ -47,11 +47,11 @@ Code samples are **illustrative** unless marked implementation-ready.
 - **Render path landed (full Path-A chain proven end to end).**
   `BoxTree::chisel_leaf_boxes` enumerates laid-out `<chisel-leaf>` boxes as
   `(key, content-box size)` (a method, so no `lib.rs` export needed).
-  `serval-render`'s `paint_list_from_scripted_dom_with_leaves` /
+  `genet-render`'s `paint_list_from_scripted_dom_with_leaves` /
   `scene_from_scripted_dom_with_leaves` run cascade → layout → enumerate →
   `LeafRegistry::render_into` (at content-box sizes, dirty/resized only) →
   `emit_paint_list_with_leaves`, with the `RenderedLeaves` → `LeafPaintSource`
-  adapter as a newtype there (the orphan-rule-legal home). `serval-layout/lib.rs`
+  adapter as a newtype there (the orphan-rule-legal home). `genet-layout/lib.rs`
   re-exports the two symbols. Test
   `render::tests::scripted_chisel_leaf_renders_its_leaf_into_the_paint_list`:
   a `<chisel-leaf key="7">` + a `Swatch` under key 7 → the leaf's command lands in
@@ -59,18 +59,18 @@ Code samples are **illustrative** unless marked implementation-ready.
 - **Session (retained) leaf path + FIRST PIXELS (2026-07-08).**
   `emit_paint_list_scrolled_with_leaves` (paint_emit) →
   `IncrementalLayout::emit_paint_list_with_leaves` + `chisel_leaf_boxes()`
-  (session accessor) → `serval_render::scene_from_session_dom_with_leaves`. The
+  (session accessor) → `genet_render::scene_from_session_dom_with_leaves`. The
   pelt-desktop smoke (`smoke_chisel.rs`, `png-reftest` feature) renders a Knob,
   Meter, and GraphGlyph through the session path to an offscreen wgpu target,
   color-checks the readback, and writes the receipt
-  (`testing/serval/images/2026-07-08_chisel_first_pixels.png`). The outcome
+  (`testing/genet/images/2026-07-08_chisel_first_pixels.png`). The outcome
   carries attribution counts (leaf boxes found / leaves painted) so a failure
   names its seam.
 - **Blockification fix (engine, standards-correct).** The smoke exposed a spec
   bug: `establishes_inline_context` decided purely from the children, so a flex
   row of replaced elements (imgs, chisel leaves) collapsed into one inline leaf
   and lost per-child boxes. Per CSS Display 3 §2.4 flex/grid children blockify;
-  the container now returns false before the child scan. 265 serval-layout
+  the container now returns false before the child scan. 265 genet-layout
   tests green.
 - **Known gap:** replaced chisel leaves flowing in a *real* inline context
   (mixed with text, or 2+ side by side in a plain block) ride `InlineContent`
@@ -96,18 +96,18 @@ Code samples are **illustrative** unless marked implementation-ready.
 
 The Linebender GUI stack is `xilem` (reactive) over `masonry` (retained widget
 tree, own layout / paint / event / a11y passes) over `vello` / `parley` /
-`accesskit` (substrate). serval already provides the middle and the substrate:
-`ScriptedDom` is the retained tree, serval-layout runs cascade + Taffy + paint
-emit, the host routes hit-tests, and serval-layout emits an accesskit tree.
+`accesskit` (substrate). genet already provides the middle and the substrate:
+`ScriptedDom` is the retained tree, genet-layout runs cascade + Taffy + paint
+emit, the host routes hit-tests, and genet-layout emits an accesskit tree.
 netrender bottoms out in the same vello, and both stacks shape text with parley.
 
 So we do not port Masonry. We keep Xilem's authoring idiom (already reused as
 `xilem-serval`, the third `xilem_core` backend) and add one small thing: a
-contract for a **leaf** that plugs into serval's four existing passes and paints
+contract for a **leaf** that plugs into genet's four existing passes and paints
 something the CSS vocabulary cannot say. That contract is `chisel`. It borrows
 Masonry's four-pass idiom, not its code.
 
-The payoff line: there is one instance of each pass (serval's), already running
+The payoff line: there is one instance of each pass (genet's), already running
 every frame. A chisel leaf contributes one node's worth to each. No second
 engine.
 
@@ -116,7 +116,7 @@ engine.
 chisel is deliberately narrow. It is **not**:
 
 - **A Masonry port.** No retained widget tree, no `BoxConstraints` layout
-  recursion, no Masonry passes. serval owns all of that.
+  recursion, no Masonry passes. genet owns all of that.
 - **The form-control catalog.** `button`, `checkbox`, `text_field`, `slider`,
   `select`, `radio_group`, `textarea` already exist as native `xilem-serval`
   views emitting common `PaintCmd`s. Anything the paint vocabulary can express
@@ -148,11 +148,11 @@ A leaf paints one of two ways, chosen per leaf:
   (`scene_op_boundary` in the compositor pass), external textures sit at any
   z-position in painter order, mid-page, not just topmost. Result: the widget's
   imperative paint code runs verbatim, at the cost of one texture. Preferred for
-  shader effects, video, live 3D, anything not sayable in the vocabulary. serval
+  shader effects, video, live 3D, anything not sayable in the vocabulary. genet
   already has `<external-texture>` as a replaced element on exactly this path
   (WebGL canvas uses it), so Path B is reuse, not new renderer machinery.
 
-Both paths target the neutral seam crates, so a leaf never depends on the serval
+Both paths target the neutral seam crates, so a leaf never depends on the genet
 engine concretely.
 
 ## The `Leaf` trait (illustrative)
@@ -160,10 +160,10 @@ engine concretely.
 ```rust
 // chisel — engine-neutral, against the seam crates.
 pub trait Leaf {
-    /// Intrinsic sizing, wired to serval's Taffy measure fn for this node
+    /// Intrinsic sizing, wired to genet's Taffy measure fn for this node
     /// (a chisel leaf is a replaced element, like an image, that measures
     /// itself). Returning a different size than last frame requests relayout
-    /// through serval's ordinary IncrementalLayout path.
+    /// through genet's ordinary IncrementalLayout path.
     fn measure(&mut self, known: SizeHint, available: SizeHint) -> Size;
 
     /// Paint. `PaintCx` exposes both flavors; the leaf uses one:
@@ -171,19 +171,19 @@ pub trait Leaf {
     ///   Path B: `cx.scene()` hands out a vello::Scene the host rasterizes.
     fn paint(&mut self, cx: &mut PaintCx);
 
-    /// Input. serval hit-test lands on this node and forwards here. Internal
+    /// Input. genet hit-test lands on this node and forwards here. Internal
     /// interaction mutates `self` and marks paint-dirty (no reactive round
     /// trip); a semantic change returns an action that xilem-serval routes up
     /// the message cycle (the Masonry widget/app split).
     fn event(&mut self, ev: &LeafEvent) -> Option<LeafAction>;
 
-    /// Semantics. Fill this node's accesskit node during serval-layout's
+    /// Semantics. Fill this node's accesskit node during genet-layout's
     /// accesskit_tree walk (a knob still announces as a slider).
     fn accessibility(&mut self, node: &mut accesskit::Node);
 
     /// Retention gates. Two signals, because they gate different passes:
     ///   `paint_dirty` gates the repaint gate (has paint output changed?);
-    ///   `layout_dirty` gates serval's relayout (has intrinsic size or, for an
+    ///   `layout_dirty` gates genet's relayout (has intrinsic size or, for an
     ///   arrangement leaf, child placement changed?). An interaction that only
     ///   redraws sets paint-dirty; one that resizes sets both.
     fn paint_dirty(&self) -> bool;
@@ -198,11 +198,11 @@ the four passes plus one dirty query.
 
 ## Where retained state lives
 
-Xilem's model is reactive diffing over *retained* widgets. In serval the
+Xilem's model is reactive diffing over *retained* widgets. In genet the
 retained tree is the DOM, and DOM nodes are uniform `NodeId`s we do not want to
 fatten. So a leaf's retained struct lives neither in the view (ephemeral,
 rebuilt each update) nor in the DOM node. It lives in a **node-keyed registry
-the host owns**, exactly like serval's existing `ExternalTextureRegistry` /
+the host owns**, exactly like genet's existing `ExternalTextureRegistry` /
 font / image registries:
 
 ```text
@@ -212,7 +212,7 @@ LeafRegistry: NodeId -> { leaf: Box<dyn Leaf>, cached_paint: PaintCache }
 This is the architectural translation of "retained widgets": the DOM stays
 uniform, widget state sits in a side-table keyed by node, and the reactive diff
 writes props into the entry rather than rebuilding it. It mirrors the pattern
-serval already trusts for external textures.
+genet already trusts for external textures.
 
 ## Retention: four gates, one per pass
 
@@ -223,7 +223,7 @@ through all four untouched. Three already exist; chisel adds one.
 | Gate | Skips | Keyed on | Owner | Status |
 | --- | --- | --- | --- | --- |
 | `memoize` | view rebuild + diff | data equality | `xilem_core` | exists (re-exported in xilem-serval) |
-| retained DOM + `IncrementalLayout` | relayout | which nodes mutated | serval-layout | exists |
+| retained DOM + `IncrementalLayout` | relayout | which nodes mutated | genet-layout | exists |
 | leaf dirty flag + `PaintCache` | repaint | widget-declared staleness | **chisel** | **new** |
 | netrender tile cache | rasterization | SceneOp content hash | netrender | exists |
 
@@ -235,9 +235,9 @@ The frame loop:
    writes new props into the `LeafRegistry` entry and the leaf flips
    `paint_dirty`, plus `layout_dirty` if the change also affects its size or (for
    an arrangement leaf) child placement.
-3. serval relayouts only mutated nodes. The leaf's measure fn (and, for an
+3. genet relayouts only mutated nodes. The leaf's measure fn (and, for an
    arrangement leaf, its child placement) re-runs only when `layout_dirty` is set.
-4. At paint, serval consults `paint_dirty`. Clean reuses the cached texture
+4. At paint, genet consults `paint_dirty`. Clean reuses the cached texture
    (Path B) or cached commands (Path A); no `paint()` call. Dirty repaints, and
    even then the tile cache may reuse rasterization if the content hash is
    unchanged.
@@ -248,51 +248,51 @@ dirty bit plus a cache.
 
 ## Integration seams
 
-How a chisel leaf attaches to each of serval's four passes:
+How a chisel leaf attaches to each of genet's four passes:
 
 1. **Layout.** A *paint leaf* is a childless **replaced element** (the same
    machinery as `<img>` and `<external-texture>`) whose intrinsic size feeds
-   `construct::replaced_intrinsic_size` from `Leaf::measure`; serval owns the
+   `construct::replaced_intrinsic_size` from `Leaf::measure`; genet owns the
    box, the leaf only contributes an intrinsic size. An *arrangement leaf* owns
    child placement; see [Arrangement leaves](#arrangement-leaves) below.
 2. **Paint.** During `paint_emit`, a leaf node either splices its Path-A
    `PaintCmd`s into the stream at its position, or emits a
    `DrawExternalTexture` referencing the host-rasterized texture from
    `Leaf::paint`.
-3. **Input.** serval's existing hit-test + `dispatch_click` / `dispatch_key`
+3. **Input.** genet's existing hit-test + `dispatch_click` / `dispatch_key`
    ancestor walk lands on the leaf node and forwards to `Leaf::event`. Returned
    actions ride the faithful `xilem_core` message cycle up to the app.
-4. **Semantics.** serval-layout's `accesskit_tree` walk consults the
+4. **Semantics.** genet-layout's `accesskit_tree` walk consults the
    `LeafRegistry` for leaf nodes and lets `Leaf::accessibility` fill the node.
 
 ## Arrangement leaves
 
 A leaf that owns a private layout algorithm keeps its children **first-class to
-serval** rather than sealing them inside an opaque box. It does this by placing
+genet** rather than sealing them inside an opaque box. It does this by placing
 them, not by running a second layout engine:
 
-- Children are real serval nodes (native views or nested leaves), created under
+- Children are real genet nodes (native views or nested leaves), created under
   the leaf node with `position: absolute`.
 - The leaf computes each child's offset and writes it as the child's absolute
-  `left` / `top` computed values. serval measures the children's own boxes; the
+  `left` / `top` computed values. genet measures the children's own boxes; the
   leaf reads those measures and places. One layout engine, custom arrangement.
 - **Z-awareness is native.** The leaf assigns each child a stacking value
-  (`z-index`), and serval-layout's existing `paint_stacking` (CSS 2.1 Appendix E
+  (`z-index`), and genet-layout's existing `paint_stacking` (CSS 2.1 Appendix E
   ordering) interleaves them correctly against each other, against the leaf's own
   Path-A paint, and against a Path-B texture via the `scene_op_boundary`
   ordered-composite path. chisel never runs a private compositor; it only
-  chooses z, and serval orders. This is the "z-level awareness / compatibility"
+  chooses z, and genet orders. This is the "z-level awareness / compatibility"
   requirement: a chisel container composes into the same stacking model as every
-  other serval node, so it nests inside, and contains, ordinary DOM without a
+  other genet node, so it nests inside, and contains, ordinary DOM without a
   seam.
 
 The result keeps hit-test, accessibility, and paint working per child for free,
-because each child is an ordinary serval node. What the leaf owns is arrangement
+because each child is an ordinary genet node. What the leaf owns is arrangement
 (x / y / z), nothing else.
 
 The known hard edge is **incremental-layout reconciliation.** Because placement
 runs in the leaf rather than in Taffy flow, a child resize has to flow back
-through the leaf's arrangement and re-mark `layout_dirty` so serval reflows the
+through the leaf's arrangement and re-mark `layout_dirty` so genet reflows the
 affected absolute offsets. The first cut may re-place all children on any child
 change; a dirty-tracked subset is a later refinement. This is the one place the
 one-engine story costs bookkeeping, and it is worth naming up front.
@@ -308,26 +308,26 @@ chisel                            Leaf, PaintCx, LeafRegistry, RenderedLeaves, c
     depends on: paint_list_api + accesskit (Path A today). vello/kurbo/peniko
                 join when Path B (own vello::Scene) lands. No layout_dom_api
                 needed: the registry is generic over the host's leaf key (u64).
-    depends on: NOT xilem, NOT masonry, NOT serval-engine
+    depends on: NOT xilem, NOT masonry, NOT genet-engine
 
-xilem-serval                      reactive backend (stays a serval component)
-    depends on: xilem_core (tracked branch), serval_scripted_dom,
+xilem-serval                      reactive backend (stays a genet component)
+    depends on: xilem_core (tracked branch), genet_scripted_dom,
                 layout_dom_api, chisel (to expose leaves as views)
 ```
 
 Decisions:
 
-- **chisel starts as a serval component** (`components/chisel`), engine-neutral
-  against the seam crates. It is a *sibling* of serval-layout (both target the
+- **chisel starts as a genet component** (`components/chisel`), engine-neutral
+  against the seam crates. It is a *sibling* of genet-layout (both target the
   seams), not a downstream of the engine.
 - **Spinning chisel to its own repo is gated on the seam crates becoming
   standalone-consumable.** A chisel repo can only be as one-way and standalone as
   `paint_list_api` and `layout_dom_api` are. Until those are consumable outside
-  the serval workspace, a repo would carry serval as a workspace dep and have the
+  the genet workspace, a repo would carry genet as a workspace dep and have the
   wgpu-sibling name without the wgpu-sibling one-way property. Revisit when the
   seams are extractable and chisel's contract has stopped churning.
 - **xilem-serval does not spin out.** It consumes `ScriptedDom` concretely, so it
-  is serval-downstream, not a sibling; a repo would invert the one-way direction.
+  is genet-downstream, not a sibling; a repo would invert the one-way direction.
   It is also still landing features (Stages 0-7). A later fork could genericize it
   over `layout_dom_api::LayoutDomMut` to make it a standalone "xilem_core backend
   for any LayoutDom engine," but that trades away its current "one node type, no
@@ -353,7 +353,7 @@ Two tiers, and the catalog grows mostly on the native tier:
 First catalog targets (done-conditions, not a schedule):
 
 - A `Leaf` + `PaintCx` + `LeafRegistry` scaffold that renders one trivial
-  Path-A leaf (a filled path) as a serval element, laid out by Taffy, with a
+  Path-A leaf (a filled path) as a genet element, laid out by Taffy, with a
   passing headed smoke.
 - One Path-B leaf (an arbitrary `vello::Scene`) composited via
   `DrawExternalTexture` at a mid-page z-position, proving the ordered-composite
@@ -365,7 +365,7 @@ First catalog targets (done-conditions, not a schedule):
 
 ## Seam verification (2026-07-07)
 
-Read against serval's actual code. All four attachment points exist; one framing
+Read against genet's actual code. All four attachment points exist; one framing
 corrected, one open question closed.
 
 1. **Layout seam — confirmed, reframed.** The intrinsic-size hook is the
@@ -380,7 +380,7 @@ corrected, one open question closed.
    already emits `DrawExternalTexture` for external-texture elements. Path A adds
    one emit branch (splice the leaf's cached `Vec<PaintCmd>` from the
    `LeafRegistry`); Path B reuses the existing external-texture emit.
-3. **Input seam — confirmed.** `ServalLaneView::hit_test` plus xilem-serval's
+3. **Input seam — confirmed.** `GenetLaneView::hit_test` plus xilem-serval's
    `dispatch_click` / `dispatch_key` ancestor walk (per the host plan doc). The
    leaf node is the hit target; forward to `Leaf::event`.
 4. **Semantics seam — confirmed.** `a11y::accesskit_tree(dom, fragments, focus)`
@@ -406,7 +406,7 @@ sheds the bespoke host-composite branch.
 
 - **Internal layout: arrangement leaves, not opaque.** A leaf with a private
   layout keeps children first-class via absolute placement, and z-order is native
-  through serval's `paint_stacking`. See [Arrangement leaves](#arrangement-leaves).
+  through genet's `paint_stacking`. See [Arrangement leaves](#arrangement-leaves).
 - **Dirty granularity: two signals.** `paint_dirty` and `layout_dirty`, since
   they gate different passes.
 - **Path-B texture registry: reuse netrender's** `install_external_texture`; no
@@ -429,7 +429,7 @@ sheds the bespoke host-composite branch.
 
 ## Relationship to existing docs
 
-- [2026-05-27_serval_as_host_xilem_serval_plan.md](./2026-05-27_serval_as_host_xilem_serval_plan.md)
+- [2026-05-27_genet_as_host_xilem_serval_plan.md](./2026-05-27_genet_as_host_xilem_serval_plan.md)
   — the reactive backend chisel leaves are authored through. chisel is the leaf
   layer that plan's views wrap.
 - [2026-05-17_paintlist_polyglot_renderer.md](./2026-05-17_paintlist_polyglot_renderer.md)

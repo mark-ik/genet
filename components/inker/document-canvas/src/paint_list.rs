@@ -6,7 +6,7 @@
 //!
 //! Walks a [`crate::DocumentRenderPacket`] and emits an [`InkerPaintList`]
 //! — an implementation of [`paint_list_api::PaintList`], the engine-facing
-//! display-list vocabulary shared across the Mere/Serval renderer
+//! display-list vocabulary shared across the Mere/Genet renderer
 //! ecosystem. The list lowers to a `netrender::Scene` via
 //! `paint_list_render` (see [`crate::netrender_backend`]); it can equally
 //! cross IPC or sit in a capture/replay fixture, since the vocabulary is

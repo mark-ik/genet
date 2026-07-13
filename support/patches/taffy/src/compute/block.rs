@@ -166,7 +166,7 @@ impl BlockContext<'_> {
     /// inward from the content-box edges. Empty when no floats are active at or
     /// below `min_y` (block-local).
     ///
-    /// serval patch (float wrap-around): the per-line widths that let a
+    /// genet patch (float wrap-around): the per-line widths that let a
     /// paragraph's lines wrap to the side of a float and reclaim the full
     /// column below it. Mirrors the coordinate handling of
     /// [`Self::find_content_slot`] (subtract `y_offset` to reach block-local y;
@@ -931,7 +931,7 @@ fn perform_final_layout_on_in_flow_children(
 
                     #[cfg(feature = "float_layout")]
                     if has_active_floats {
-                        // serval patch: a fixed-width BFC child must clear a
+                        // genet patch: a fixed-width BFC child must clear a
                         // float it cannot fit beside, so pass its outer width as
                         // the slot's minimum. Auto-width children pass 0.0 and
                         // keep stretch-to-slot behaviour.

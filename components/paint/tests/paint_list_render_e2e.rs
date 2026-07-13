@@ -31,7 +31,7 @@ const VIEWPORT: u32 = 256;
 fn synthesize_one_rect_paint_envelope() -> (PaintEnvelope, PaintDisplayListInfo, PipelineId) {
     let pid = PipelineId::default();
     let envelope = PaintEnvelope {
-        engine: EngineId::SERVAL,
+        engine: EngineId::GENET,
         viewport: DeviceIntSize::new(VIEWPORT as i32, VIEWPORT as i32),
         generation: 0,
         commands: vec![PaintCmd::DrawRect(RectItem {

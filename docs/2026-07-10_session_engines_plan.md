@@ -5,9 +5,9 @@
 no code yet.
 
 Companion to
-[2026-07-09_inker_serval_adoption_plan.md](./2026-07-09_inker_serval_adoption_plan.md)
+[2026-07-09_inker_genet_adoption_plan.md](./2026-07-09_inker_genet_adoption_plan.md)
 (this doc is its done condition 6, widened per Mark to a formalization pass
-across serval, inker, nematic, and errand) and
+across genet, inker, nematic, and errand) and
 [2026-07-09_native_automation_plan.md](./2026-07-09_native_automation_plan.md)
 (the settle/observe seam below is that plan's quiescence contract, not a
 second invention). Supersedes the "errand/nematic concern reorg" open
@@ -32,7 +32,7 @@ verified in source:
 
 meerkat's content actor dispatches these as a cfg-and-if ladder
 (`handlers.rs::render`), and the inker registry only ever sees nematic's
-block engines. The `serval.*` routing ids resolve to nothing. Every new host
+block engines. The `genet.*` routing ids resolve to nothing. Every new host
 (merecat first) would re-write the ladder.
 
 The reason the ladder exists: neither of inker's two engine kinds fits.
@@ -49,7 +49,7 @@ Every content engine is classified by output type and lifecycle:
 | Kind | Trait | Lifecycle | Output | Examples |
 | --- | --- | --- | --- | --- |
 | Document engine | `Engine` (exists) | request/response | `EngineDocument` (blocks: serializable, storable) | nematic formats, knots, clips, rhai outputs |
-| Session engine | `SessionEngine` (new) | retained session | paint frame (`Scene`) + interaction | serval static, serval scripted (Boa/Nova), smolweb native |
+| Session engine | `SessionEngine` (new) | retained session | paint frame (`Scene`) + interaction | genet static, genet scripted (Boa/Nova), smolweb native |
 | Surface engine | `SurfaceEngine` (exists) | external producer | GPU texture stream | scrying, graft, weld |
 
 The three kinds rhyme deliberately: same registry pattern, same routing
@@ -108,13 +108,13 @@ and a kind-resolution facade so hosts stop hand-matching: given an engine
 id, answer document / session / surface / host-handled. Routing is
 untouched; decisions already carry ids.
 
-**serval** gets the formalization Mark asked for: the three lane types
-promote OUT of pelt into a new component, **`components/serval-documents`**
+**genet** gets the formalization Mark asked for: the three lane types
+promote OUT of pelt into a new component, **`components/genet-documents`**
 (review decision 2026-07-10: "session" is load-bearing family-wide for
 app/persistence sessions — mere's session-runtime, merecat's session.rs,
 "window = graph-shaped session" — and the trait is already
 `DocumentSession`), that implements `SessionEngine` for
-`serval.web`, `serval.scripted`, `serval.scripted.nova`, and the smolweb
+`genet.web`, `genet.scripted`, `genet.scripted.nova`, and the smolweb
 lane, behind the same feature ladder pelt uses today (tile-surface /
 scripted / scripted-nova / smolweb). Pelt returns to being a thin reference
 shell that consumes the component like any other host. The convenience
@@ -125,7 +125,7 @@ components.
 smolweb-views and becomes the whole smolweb engine family with two products,
 `nematic::blocks` (the existing `Engine` impls, for stored/clip/summary
 content) and `nematic::views` (the native per-format views that
-serval-documents' smolweb session renders through). Per-format features so
+genet-documents' smolweb session renders through). Per-format features so
 apps pick gemini in, spartan out. Block lowering stops being the render
 path anywhere.
 
@@ -155,13 +155,13 @@ architecture plan's sequencing note. It never learns the ladder existed.
 1. **inker session contracts.** Traits + `SessionRegistry<F>` + kind facade
    land with unit tests; no consumer yet. Done when inker tests cover
    spawn/dispatch/kind-resolution and the crate still has no paint deps.
-   **DONE 2026-07-10** (serval 2dca9ed8e3c): 88 inker tests, no new deps;
+   **DONE 2026-07-10** (genet 2dca9ed8e3c): 88 inker tests, no new deps;
    review deltas in (scroll_to on the contract, EngineKindIndex
    non-generic, flags-not-kind resolution).
-2. **serval-documents component.** The three pelt types move, implement the
+2. **genet-documents component.** The three pelt types move, implement the
    traits, pelt consumes the component. Done when pelt's viewers and
    reftests are green against the component and pelt-desktop no longer
-   defines the document types. **DONE 2026-07-10** (serval 8851ec90102):
+   defines the document types. **DONE 2026-07-10** (genet 8851ec90102):
    component 28 tests all-features; pelt 24 default + 29 full-feature;
    pelt's windowed smolweb glue stays pelt-side (local traits for the
    foreign type); ScriptedSessionEngine<E, Fetch> mirrors
@@ -170,7 +170,7 @@ architecture plan's sequencing note. It never learns the ladder existed.
 3. **meerkat rides the registry** — RESCOPED per review 2026-07-10 to the
    **render + input path only**. The ladder in `content/handlers.rs` and
    the scripted/smolweb spawn special-casing reduce to registry dispatch;
-   `engine_present` stops special-casing `serval.*`. The **observation
+   `engine_present` stops special-casing `genet.*`. The **observation
    half** (ScriptedDocument::extract, selection/find primitives, the
    engine-subtree a11y walk, dispatch_event/dom_snapshot) deliberately
    keeps concrete-type access through `as_any` downcasts until the
@@ -179,13 +179,13 @@ architecture plan's sequencing note. It never learns the ladder existed.
    would design it twice. Trigger, recorded family-style: when the
    automation plan's observe/actuate core specifies its read surface, the
    downcasts convert to that contract and this phase's residue retires.
-   Done when meerkat's suite is green and no `ENGINE_SERVAL_*` match arms
+   Done when meerkat's suite is green and no `ENGINE_GENET_*` match arms
    remain in the render/input dispatch (observation downcasts are counted
    and listed, not hidden). **DONE 2026-07-10** (mere 92f7a0a): one
    session field, actor-held SessionRegistry, meerkat-local rung engines
    beside their seam types; downcast residue = extract-on-show, dom/layout
    stats, freeze/resume lifecycle (the listed observation set);
-   ENGINE_SERVAL_* survives only as engine_id() registration constants +
+   ENGINE_GENET_* survives only as engine_id() registration constants +
    the test-only construction seam. Receipts: default 82+247; scripted 253
    (RUST_MIN_STACK=16M — Boa on 2MB test threads overflows; the feature
    build did not even compile at baseline, so this fixes a red, not
@@ -193,25 +193,25 @@ architecture plan's sequencing note. It never learns the ladder existed.
 4. **merecat content lane.** merecat spawns sessions through the same
    facade for its first web render. Done when the merecat vertical slice
    renders an https page through a registry-dispatched session.
-   **DONE 2026-07-11** (merecat d1e6234, serval 41ee1b962b0): the prepped
+   **DONE 2026-07-11** (merecat d1e6234, genet 41ee1b962b0): the prepped
    runner arm went live exactly as its handoff contract said — route,
-   spawn through the SessionRegistry (static lane under serval.web),
+   spawn through the SessionRegistry (static lane under genet.web),
    sessions held port-side keyed by node id, focused session composed
    into the layered present and the scenario self-capture. Receipt:
    scenarios/rung4_content.scn, RESULT ok, capture shows the rendered
    page under the caption chip (testing/merecat/images/
    rung4_content_live.png). The receipt caught two bugs the unit tests
    could not: URL-round-trip node resolution (fixed via
-   focused_member()) and serval's root-background propagation treating a
-   sole absolute host widget as a document root (fixed serval-side with
+   focused_member()) and genet's root-background propagation treating a
+   sole absolute host widget as a document root (fixed genet-side with
    a regression test) — the prep's "don't mistake green tests for the
    lane working" caution, vindicated.
 5. **nematic views + errand wire absorption.** smolweb-views merges into
    nematic as `nematic::views`; finger shaping moves to errand; the smolweb
-   session in serval-documents consumes nematic views for all formats it has
+   session in genet-documents consumes nematic views for all formats it has
    views for. Done when smolweb-views is retired as a separate component
    and native coverage includes the wrapper protocols via gemtext/markdown
-   view reuse. **DONE 2026-07-11** (serval 00d87a51fba): views merged
+   view reuse. **DONE 2026-07-11** (genet 00d87a51fba): views merged
    behind nematic's `views` feature, component retired, consumers flipped;
    wrapper protocols verified already riding the gemtext fallthrough
    (their bodies ARE gemtext); nex gained its first native view (listing
@@ -226,7 +226,7 @@ architecture plan's sequencing note. It never learns the ladder existed.
 
 ## Open questions (review-resolved items recorded 2026-07-10)
 
-- ~~Component naming~~ RESOLVED: `serval-documents` (see above).
+- ~~Component naming~~ RESOLVED: `genet-documents` (see above).
 - ~~Cookie/fetcher seams~~ RESOLVED in the same spirit as the leaning: one
   construction path, realized as **engine-held seams at registration** (the
   concrete `SessionEngine` is constructed with its fetcher/jar/theme; the

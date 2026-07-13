@@ -4,21 +4,21 @@
 **Status:** Track U landed; decomposition tracks remain proposed (Mark's
 framing: "we have a fork, and we should use it," opportunistically taking
 from upstream as with every fork). Grounding facts verified against the fork
-and the Genet repository currently named `serval` this session.
+and the Genet repository currently named `genet` this session.
 
-**Naming migration:** Genet is the engine formerly called Serval.
-`genet-stylo` supersedes the `serval-stylo` package family; current repository,
+**Naming migration:** Genet is the engine formerly called Genet.
+`genet-stylo` supersedes the `genet-stylo` package family; current repository,
 branch, package, and source identifiers keep their existing names until their
 respective rename commits land.
 
 Coordinates with the completed ring-3 fork rename
 ([2026-07-12_ring3_fork_rename_publish_plan.md](./2026-07-12_ring3_fork_rename_publish_plan.md)):
-the renamed `serval-stylo` family is now on fork `main` at `eec60c2464`.
+the renamed `genet-stylo` family is now on fork `main` at `eec60c2464`.
 Everything here that moves files lands on that renamed family.
 
 ## The fork today (verified 2026-07-13)
 
-- **Divergence is shallow**: fork `main` is v0.19.0 plus eight Serval
+- **Divergence is shallow**: fork `main` is v0.19.0 plus eight Genet
   commits (seven behavior/refactor commits and the ring-3 rename). They
   carry the media-feature
   tiers A–E (the fork's identity: geometry, device-capability,
@@ -33,7 +33,7 @@ Everything here that moves files lands on that renamed family.
   the derive crates, and `to_shmem` are already separate members.
 - **Gecko is cfg'd out, not gone**: `gecko/`, `gecko_bindings/`,
   `gecko_string_cache/` (~7k) compile only under the `gecko` feature, which
-  serval never enables. Deleting them is hygiene, not compile speed — and
+  genet never enables. Deleting them is hygiene, not compile speed — and
   pure merge tax. Leave them.
 - **The build needs a Python interpreter (only)**: `style/build.rs` finds
   `python.exe`/`python3` (or `PYTHON3`) and runs `properties/build.py`,
@@ -45,25 +45,25 @@ Everything here that moves files lands on that renamed family.
   interpreter on PATH. Output: `OUT_DIR/properties.rs` at **97,717 lines /
   4.4 MB** — every longhand's specified/computed types, parse/serialize,
   the PropertyDeclaration/LonghandId enums, cascade tables, and the
-  ComputedValues style structs serval-layout's accessors live on. So the
+  ComputedValues style structs genet-layout's accessors live on. So the
   crate's *effective* compile surface is ~167k lines (69k handwritten +
   98k generated), not the 75.6k the source count suggests — and a quarter
   of it is one file rustc cannot parallelize over.
-- **serval-layout is the SOLE stylo consumer** in the whole engine
-  (serval-render/scripted/extract: zero style imports). Its measured
+- **genet-layout is the SOLE stylo consumer** in the whole engine
+  (genet-render/scripted/extract: zero style imports). Its measured
   surface after the landed audit is 126 consumed longhands across 16
   incumbent style structs: 59 through `stylo_taffy`, 73 through direct
-  Serval reads, 30 through `getComputedStyle`, and 13 animation/transition
+  Genet reads, 30 through `getComputedStyle`, and 13 animation/transition
   controls, with overlaps. There are 257 `style::` references across 24
   source files. One crate to change, but a much wider seam than the earlier
   33-accessor estimate.
 
 ## Track 0 — zero-divergence wins (do first, no fork edits)
 
-1. **Dev-profile package overrides.** Neither serval nor mere carries a
+1. **Dev-profile package overrides.** Neither genet nor mere carries a
    `[profile.dev.package]` entry for the stylo family. Add
    `opt-level = 1`-style / reduced-debuginfo overrides for
-   `serval-stylo` + `selectors` in serval's and mere's workspace profiles
+   `genet-stylo` + `selectors` in genet's and mere's workspace profiles
    (the same mechanism both already use for jemalloc/num-bigint). Faster
    dev links and smaller incremental artifacts for every consumer, zero
    divergence, one commit per workspace.
@@ -71,7 +71,7 @@ Everything here that moves files lands on that renamed family.
    style crate **including its full dependency tree**, empty target, dev
    profile, on the primary Windows laptop: **30m 35s**. That is the
    whole-tree number, not style alone; the per-crate attribution needs a
-   `cargo build --timings` critical-path graph for serval-layout, to be
+   `cargo build --timings` critical-path graph for genet-layout, to be
    captured before/after each track lands so wins are receipts, not vibes.
 
 ## Track 1 — decomposition (compile speed)
@@ -101,17 +101,17 @@ generator keeps template merges trivial.
 
 **1b. Split the monolith on its natural fault line.** Three crates:
 
-    serval-stylo-values   (values/, color/, logical_geometry, str/parser helpers — ~48k)
-      -> serval-stylo-props (the mako-generated longhand tables + cascade glue)
-        -> serval-stylo      (stylist, matching, traversal, invalidation, sharing,
+    genet-stylo-values   (values/, color/, logical_geometry, str/parser helpers — ~48k)
+      -> genet-stylo-props (the mako-generated longhand tables + cascade glue)
+        -> genet-stylo      (stylist, matching, traversal, invalidation, sharing,
                               rule tree, stylesheets, media queries — the engine)
 
 Why it pays, honestly stated: rustc pipelines *between* crates, and the
-style crate is today the serialization point on serval's cold-build
+style crate is today the serialization point on genet's cold-build
 critical path — one giant node nothing downstream can start behind.
 Splitting lets values/props/engine pipeline, and metadata reuse means
 iterating on engine code (where all nine fork commits live) stops paying
-values' 48k each time. What it does NOT buy: serval-layout still rebuilds
+values' 48k each time. What it does NOT buy: genet-layout still rebuilds
 whenever any piece changes.
 
 **The merge tax, named:** file moves conflict with upstream merges
@@ -126,14 +126,14 @@ exactly that).
 ## Track 2 — divergences with outsized benefit (Genet ≠ Servo ≠ Firefox)
 
 **2a. The property lane: prune to what Genet renders.** The single
-biggest lever. Genet's current Serval-named path consumes 126 longhands
+biggest lever. Genet's current Genet-named path consumes 126 longhands
 through 16 structs; Stylo compiles ~450 longhands, each with
 specified/computed/animated types,
 parse/serialize impls, and derive expansions, most feeding capabilities
 Genet deliberately knocked out (the W3C-knockout doctrine applies: delete
 now, rebuild deliberately later). Mako already supports per-product
 gating — add a `genet` product lane to the templates that drops longhand
-families serval-layout cannot consume (ruby, MathML-adjacent, paged/print
+families genet-layout cannot consume (ruby, MathML-adjacent, paged/print
 media, view-transitions, scroll-driven animation timelines, the long tail
 of -webkit compat). The landed audit is a hard keep-set, not a deletion
 allowlist: shorthands, keyframes, `transition-property`, CSS-wide keywords,
@@ -144,7 +144,7 @@ ComputedValues, smaller cascade tables). Cost: template-level divergence
 where upstream churns; subtraction from the keep-set must be gated in
 generated-property batches and verified through the full WPT walls. This is
 the track that justifies 1b's split. Audit:
-[2026-07-13_serval_consumed_css_property_audit.md](./2026-07-13_serval_consumed_css_property_audit.md).
+[2026-07-13_genet_consumed_css_property_audit.md](./2026-07-13_genet_consumed_css_property_audit.md).
 **Interaction with the second-engine plan
 ([2026-07-13_second_css_engine_prior_art_and_plan.md](./2026-07-13_second_css_engine_prior_art_and_plan.md)):**
 the audit is the shared first deliverable of both plans. It supplies this
@@ -154,13 +154,13 @@ lean engine takes the
 chrome/smolweb/card lanes, this track may de-prioritize (stylo stays
 fat for fullweb only) rather than run alongside.
 
-**2b. Suppress the parallel machinery serval never uses.** Stylo carries
-rayon parallel traversal + a global style thread pool; serval drives the
+**2b. Suppress the parallel machinery genet never uses.** Stylo carries
+rayon parallel traversal + a global style thread pool; genet drives the
 cascade on its own thread, single-lane. Verify the pool never spawns under
-serval's usage (`STYLE_THREAD_POOL` is lazy — confirm nothing tickles it),
+genet's usage (`STYLE_THREAD_POOL` is lazy — confirm nothing tickles it),
 and if it does, gate it. Startup + memory win, near-zero merge cost.
 
-**2c. Style-sharing cache and bloom filter, tuned for serval's DOMs.**
+**2c. Style-sharing cache and bloom filter, tuned for genet's DOMs.**
 Chrome DOMs are tiny; smolweb documents are simple; meerkat cards are
 shallow. The sharing cache and bloom setup are tuned for Gecko-scale
 documents and may be pure overhead below some node count. Measure-first
@@ -188,7 +188,7 @@ Gecko line — the correct rebase base is the fork's own boundary. That
 boundary was exactly the **v0.18.0 tag** (`8bde0e96db`): the old fork line was
 v0.18.0 + 11 Mark commits (tiers + pointer/hover + forced-color-adjust
 pair + animation fix + the ring-3 rename). At probe time nobody pinned
-`main`: serval pinned `mark-ik/serval-publish-names`, while mere pinned
+`main`: genet pinned `mark-ik/genet-publish-names`, while mere pinned
 `mark-ik/servo-media-features`. That gave the realignment a zero-breakage
 window; both consumers now deliberately pin `main`.
 
@@ -198,7 +198,7 @@ pointer, any-pointer, hover, any-hover, aspect-ratio, device-width,
 device-height, scan, resolution, device-pixel-ratio,
 -moz-device-pixel-ratio, prefers-color-scheme — and its Device carries
 `set_primary_pointer_capabilities` / `set_all_pointer_capabilities`
-with the same names and shapes the fork built, so serval's plumbing for
+with the same names and shapes the fork built, so genet's plumbing for
 those keeps compiling unchanged. Reconciliation per commit:
 
 | Fork commit | v0.19.0 | Action |
@@ -223,11 +223,11 @@ requires stylo `^0.19` — the whole vendored-stylo_taffy dance exists
 because the fork sat at 0.18; at 0.19 the version families align (the
 vendor stays for the rename, but the version skew goes).
 
-**Landed 2026-07-13.** Fork `main` is `eec60c2464`; Serval `main` is
-`0c5fc79e9b6`; Mere `main` is `34f4d90`. The Serval sweep covered Device
+**Landed 2026-07-13.** Fork `main` is `eec60c2464`; Genet `main` is
+`0c5fc79e9b6`; Mere `main` is `34f4d90`. The Genet sweep covered Device
 construction, native pointer capability setters, font-face computed values,
 variation settings, stylo_taffy's v0.19 API, and the new shape-radius enum.
-The workspace check, 320 serval-layout tests, focused paint/Xilem/scripted
+The workspace check, 320 genet-layout tests, focused paint/Xilem/scripted
 suites, seven testharness baselines, and two GPU reftest baselines are green.
 Mere's supported Meerkat check is green on the repointed graph. Reference
 for tier semantics:
@@ -251,11 +251,11 @@ divergence we stop carrying.
 ## Order and done conditions
 
 0. **Track U realignment: landed.** `main` = v0.19.0 + the carried
-   commits, pushed; Serval repointed and green including WPT baselines;
+   commits, pushed; Genet repointed and green including WPT baselines;
    Mere repointed last. Everything below diffs against this base.
-1. Track 0.1 profile overrides land in serval + mere (receipt: link-time
-   delta on `cargo build -p serval-layout` dev).
-2. Track 2b verification (receipt: no style pool thread in a serval run's
+1. Track 0.1 profile overrides land in genet + mere (receipt: link-time
+   delta on `cargo build -p genet-layout` dev).
+2. Track 2b verification (receipt: no style pool thread in a genet run's
    thread list).
 3. Track 1a mako pre-generation (receipt: fresh clone builds with no
    Python on PATH).
@@ -272,6 +272,6 @@ divergence we stop carrying.
 
 - Ring-3 state as of 2026-07-13: the rename is incorporated into realigned
   fork `main`; the `genet` and `genet-stylo` crates.io names are claimed.
-  `genet-stylo` is the replacement name for the current `serval-stylo` family.
+  `genet-stylo` is the replacement name for the current `genet-stylo` family.
   The native second CSS engine remains unnamed. Implementation publication
   stays Mark's per-crate call.

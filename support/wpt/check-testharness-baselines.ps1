@@ -7,9 +7,9 @@ $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 if (-not $NoBuild) {
-    cargo build --manifest-path (Join-Path $repo "Cargo.toml") --release -p serval-wpt
+    cargo build --manifest-path (Join-Path $repo "Cargo.toml") --release -p genet-wpt
     if ($LASTEXITCODE -ne 0) {
-        throw "cargo build -p serval-wpt --release failed with exit code $LASTEXITCODE"
+        throw "cargo build -p genet-wpt --release failed with exit code $LASTEXITCODE"
     }
 }
 
@@ -18,43 +18,43 @@ if ($LASTEXITCODE -ne 0) {
     throw "cargo metadata failed with exit code $LASTEXITCODE"
 }
 
-$exeName = if ($IsWindows -or $env:OS -eq "Windows_NT") { "serval-wpt.exe" } else { "serval-wpt" }
+$exeName = if ($IsWindows -or $env:OS -eq "Windows_NT") { "genet-wpt.exe" } else { "genet-wpt" }
 $runner = Join-Path $metadata.target_directory (Join-Path "release" $exeName)
 if (-not (Test-Path $runner)) {
-    throw "release serval-wpt binary not found at $runner; rerun without -NoBuild"
+    throw "release genet-wpt binary not found at $runner; rerun without -NoBuild"
 }
 
 $baselines = @(
     @{
         Subset = "dom"
         Engine = "boa"
-        Expectations = "ports/serval-wpt/expectations/testharness/dom_boa.json"
+        Expectations = "ports/genet-wpt/expectations/testharness/dom_boa.json"
     },
     @{
         Subset = "dom/abort"
         Engine = "boa"
-        Expectations = "ports/serval-wpt/expectations/testharness/dom_abort_boa.json"
+        Expectations = "ports/genet-wpt/expectations/testharness/dom_abort_boa.json"
     },
     @{
         Subset = "dom/nodes"
         Engine = "boa"
-        Expectations = "ports/serval-wpt/expectations/testharness/dom_nodes_boa.json"
+        Expectations = "ports/genet-wpt/expectations/testharness/dom_nodes_boa.json"
     },
     @{
         Subset = "html/webappapis/timers"
         Engine = "boa"
-        Expectations = "ports/serval-wpt/expectations/testharness/html_webappapis_timers_boa.json"
+        Expectations = "ports/genet-wpt/expectations/testharness/html_webappapis_timers_boa.json"
     },
     @{
         # matchMedia over a default device (no GPU / render needed).
         Subset = "css/mediaqueries"
         Engine = "boa"
-        Expectations = "ports/serval-wpt/expectations/testharness/css_mediaqueries_boa.json"
+        Expectations = "ports/genet-wpt/expectations/testharness/css_mediaqueries_boa.json"
     },
     @{
         Subset = "css/css-position"
         Engine = "boa"
-        Expectations = "ports/serval-wpt/expectations/testharness/css_position_boa.json"
+        Expectations = "ports/genet-wpt/expectations/testharness/css_position_boa.json"
     },
     @{
         # `@keyframes` parsing + computed values. The event-order and
@@ -64,7 +64,7 @@ $baselines = @(
         # moves visibly when that lands.
         Subset = "css/css-animations"
         Engine = "boa"
-        Expectations = "ports/serval-wpt/expectations/testharness/css_animations_boa.json"
+        Expectations = "ports/genet-wpt/expectations/testharness/css_animations_boa.json"
     }
 )
 

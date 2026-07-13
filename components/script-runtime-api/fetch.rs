@@ -5,7 +5,7 @@
 //! The `fetch()` host seam.
 //!
 //! `fetch()` is the one host capability that needs the network, which Mere owns
-//! (the layering: serval/the runtime never link a network stack). So the runtime
+//! (the layering: genet/the runtime never link a network stack). So the runtime
 //! exposes a *sync* [`FetchHandler`] trait — a host (e.g. the WPT runner, or
 //! Mere) implements it over an async engine like netfetcher, doing the async work
 //! inside (`block_on`) — and the JS `fetch()` / `Request` / `Response` / `Headers`
@@ -1201,7 +1201,7 @@ const FETCH_BOOTSTRAP: &str = r#"
   // content is spliced as text here (the one remaining lossy spot for binary file
   // parts); text fields and filenames round-trip exactly.
   function serializeFormData(fd) {
-    var boundary = '----serval' + Math.floor(Math.random() * 0x100000000).toString(16) + Math.floor(Math.random() * 0x100000000).toString(16);
+    var boundary = '----genet' + Math.floor(Math.random() * 0x100000000).toString(16) + Math.floor(Math.random() * 0x100000000).toString(16);
     var s = '';
     for (var i = 0; i < fd._l.length; i++) {
       var name = fd._l[i][0], value = fd._l[i][1];

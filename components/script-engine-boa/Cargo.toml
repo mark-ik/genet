@@ -1,7 +1,7 @@
 # Boa backend for script-engine-api. Pure Rust, builds on all targets — it is the
 # wasm32 scripting backend and compatibility artifact (Nova is 64-bit-target-only;
 # see Appendix B in
-# docs/2026-05-20_serval_script_engine_plan.md) and the native conformance oracle.
+# docs/2026-05-20_genet_script_engine_plan.md) and the native conformance oracle.
 [package]
 name = "script-engine-boa"
 version = "0.0.0"
@@ -17,9 +17,9 @@ path = "lib.rs"
 script-engine-api = { path = "../script-engine-api" }
 boa_engine = "=1.0.0-dev"
 boa_gc = "=1.0.0-dev"
-# Both resolve to crates/boa via serval's root [patch.crates-io]. crates/boa now
-# mirrors boa-upstream main verbatim (synced 2026-06-01) — no serval patch: the
+# Both resolve to crates/boa via genet's root [patch.crates-io]. crates/boa now
+# mirrors boa-upstream main verbatim (synced 2026-06-01) — no genet patch: the
 # old icu-family widen is obsolete because upstream itself moved to the icu 2.2.x
-# line that serval's graph (nova -> temporal_rs -> icu_calendar, parley 0.9)
+# line that genet's graph (nova -> temporal_rs -> icu_calendar, parley 0.9)
 # already forces. Upstream is on the 1.0.0-dev line, hence the `=1.0.0-dev`
-# pre-release match. See ../../docs/2026-05-20_serval_script_engine_plan.md.
+# pre-release match. See ../../docs/2026-05-20_genet_script_engine_plan.md.

@@ -9,8 +9,8 @@
 //! [`lens`](crate::lens) like the other controls; the app scales the fraction to
 //! its own range.
 
-use crate::pod::ServalElement;
-use crate::{PointerEvent, ServalCtx, View, el, on_pointer};
+use crate::pod::GenetElement;
+use crate::{PointerEvent, GenetCtx, View, el, on_pointer};
 
 /// The state of a [`slider`]: a normalized value in `0.0..=1.0`. Composable via
 /// [`lens`](crate::lens).
@@ -37,7 +37,7 @@ impl Slider {
 ///
 /// `+ use<>` keeps the opaque type from borrowing `state` (the percentage is
 /// formatted into an owned style string).
-pub fn slider(state: &Slider) -> impl View<Slider, (), ServalCtx, Element = ServalElement> + use<> {
+pub fn slider(state: &Slider) -> impl View<Slider, (), GenetCtx, Element = GenetElement> + use<> {
     let pct = state.value.clamp(0.0, 1.0) * 100.0;
     // The thumb: an absolute box at `left: pct%` of the relative track.
     let thumb = el::<_, Slider, ()>("div", ())

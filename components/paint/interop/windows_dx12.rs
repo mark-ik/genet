@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Direction-neutral D3D12 fence wrapper for serval's C4 compositor
+//! Direction-neutral D3D12 fence wrapper for genet's C4 compositor
 //! adapter.
 //!
 //! Pairs the wgpu D3D12 device with an OS-compositor consumer

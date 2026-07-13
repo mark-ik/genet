@@ -1,11 +1,11 @@
-# Orrery transform-motion perf spike (serval-layout)
+# Orrery transform-motion perf spike (genet-layout)
 
 **Date**: 2026-06-01
-**Context**: the perf spike gating Mere's serval-as-host orrery flip (mere
-`design_docs/mere_docs/implementation_strategy/2026-06-01_serval_host_flip_plan.md`
-P0 / `2026-05-29_serval_as_host_evaluation.md` §8). Cross-repo: requested by Mere,
-measured here because the machinery is serval's.
-**Where**: `components/serval-layout/incremental.rs` (`#[cfg(test)]`) +
+**Context**: the perf spike gating Mere's genet-as-host orrery flip (mere
+`design_docs/mere_docs/implementation_strategy/2026-06-01_genet_host_flip_plan.md`
+P0 / `2026-05-29_genet_as_host_evaluation.md` §8). Cross-repo: requested by Mere,
+measured here because the machinery is genet's.
+**Where**: `components/genet-layout/incremental.rs` (`#[cfg(test)]`) +
 `cascade.rs` (instrumentation).
 
 ---
@@ -40,11 +40,11 @@ unchanged. Control `width_change_relayouts_control`: a width change →
 
 Source-grounded (pinned stylo): both `transform` and `translate` declare
 `servo_restyle_damage = "recalculate_overflow"` = `0b0111`, which does not contain
-`RELAYOUT` = `0b1111`. serval gates relayout solely on `contains(RELAYOUT)`
+`RELAYOUT` = `0b1111`. genet gates relayout solely on `contains(RELAYOUT)`
 (`cascade.rs`), so a transform change is paint-tier. **Transform motion does not
 force reflow.** The central §8 fear is unfounded.
 
-## Three serval prerequisites for the orrery's *continuous* motion (all resolved)
+## Three genet prerequisites for the orrery's *continuous* motion (all resolved)
 
 The gate above is necessary, not sufficient. The spike surfaced three gaps that
 blocked the orrery's actual mechanism (mutate each node's transform every frame).
@@ -54,7 +54,7 @@ behaviour and pinned as regression guards.
 - **(A) Incremental restyle ignored inline-`style` changes.** Setting
   `style="transform:…"` registered no paint-tier damage on the incremental path:
   `snapshot.rs` marks a `style`-attribute change `other_attributes_changed`, which
-  only drives `[attr]`-selector invalidation, and serval emitted no hint to
+  only drives `[attr]`-selector invalidation, and genet emitted no hint to
   re-apply the inline declaration block. **Fix** (`cascade.rs`,
   `restyle_with_snapshots`): on a `style`-attribute mutation, force a full
   re-cascade of the element's subtree (`RestyleHint::restyle_subtree`). The
@@ -147,7 +147,7 @@ session. Damage is unchanged from the `restyle_subtree` cut (same
 
 Relayout-classification gate: **favorable** (transform is paint-tier; the §8 fear
 is retired). Orrery transform-driven motion: **A + B + C all resolved**, all
-serval-side, verified single-threaded and parallel — and the inline-transform path
+genet-side, verified single-threaded and parallel — and the inline-transform path
 now runs on the **cheap replacement restyle** (no per-frame selector re-match) via
 the persistent `Stylist`. The Mere flip plan's orrery phase (P1) is unblocked. The
 tests are regression guards pinned to the current stylo rev (572ecba).

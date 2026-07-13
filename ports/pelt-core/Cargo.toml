@@ -1,13 +1,13 @@
 [package]
 name = "pelt-core"
 version = "0.1.0"
-repository = "https://github.com/mark-ik/serval"
+repository = "https://github.com/mark-ik/genet"
 publish = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Host-shell core contracts for pelt, the serval reference shell: engine profiles, shell-engine capabilities, the ResourceFetcher seam, and tile contracts."
+description = "Host-shell core contracts for pelt, the genet reference shell: engine profiles, shell-engine capabilities, the ResourceFetcher seam, and tile contracts."
 
 [lib]
 name = "pelt_core"

@@ -29,7 +29,7 @@ harnesses, off-the-shelf WebDriver clients, and in-process agents alike.
 The framing decision, made before this plan: **the native observation/actuation
 core is the product; WebDriver classic and BiDi are thin protocol adapters over
 it.** Puppeteer and Selenium have their shape because they drive an engine they
-do not own, from outside, through a cross-vendor bottleneck. Serval owns the
+do not own, from outside, through a cross-vendor bottleneck. Genet owns the
 engine, so the driver lives inside it. Spec endpoints exist for ecosystem
 compatibility (thirtyfour, WPT), never as the core's design driver.
 
@@ -45,21 +45,21 @@ The survey that motivated this plan found the skeleton largely standing:
    `NodeId`, so every lane (static, scripted, host UI) can publish it. This is
    the native core's read side.
 
-   It is a **contracts** crate and must stay one. `serval-layout`,
-   `serval-scripted-dom` and `serval-render` all depend on it and implement its
+   It is a **contracts** crate and must stay one. `genet-layout`,
+   `genet-scripted-dom` and `genet-render` all depend on it and implement its
    traits (`FragmentQuery`, `InteractionState`, `DomArenaStats`), so it sits
-   *below* the layout engine. The core needs `serval-layout` for geometry and the
+   *below* the layout engine. The core needs `genet-layout` for geometry and the
    semantic tree, so housing the core here would close a cycle
-   (`engine-observables-api` -> `serval-layout` -> `engine-observables-api`).
+   (`engine-observables-api` -> `genet-layout` -> `engine-observables-api`).
    Grow it for read contracts, including the quiescence contract; never for
    mechanism. See "Where the core lives" below.
 
 2. **Element location.** `script-runtime-api/dom/query_traverse.rs` already
    implements querySelector-style traversal. Selector matching also lives in
-   serval-layout via stylo's `selectors`.
+   genet-layout via stylo's `selectors`.
 
 3. **A unified semantic tree with an actuation loop, in a11y form.**
-   `serval-winit-host/src/a11y.rs` (AccessKit bridge): serval-layout's
+   `genet-winit-host/src/a11y.rs` (AccessKit bridge): genet-layout's
    `build_subtree` projects the laid-out DOM into AccessKit nodes (roles from
    ARIA `role=` then tag, names from `aria-label` then direct text,
    `aria-checked` toggled state, absolute bounds from the fragment plane) and
@@ -77,15 +77,15 @@ The survey that motivated this plan found the skeleton largely standing:
 4. **WebDriver seam types survived the knockout, already retargeted.**
    `shared/embedder/webdriver.rs` keeps `WebDriverCommandMsg`,
    `WebDriverScriptCommand`, prompt types, load-status plumbing, and defines
-   `WebDriverJSResult = Result<JSValue, JavaScriptEvaluationError>` in serval's
+   `WebDriverJSResult = Result<JSValue, JavaScriptEvaluationError>` in genet's
    own script-engine types (not SpiderMonkey's). The `webdriver` handler crate
    (HTTP server, protocol types) is still a pinned workspace dep
    (`Cargo.toml` \[workspace.dependencies\], v0.53).
 
 5. **Scripting is not a blocker.** Servo's `webdriver_server` was deleted
    2026-05-20 because it was coupled to the SpiderMonkey script thread and
-   constellation. Serval has since rebuilt its own stack: `serval-static-dom`,
-   `serval-scripted-dom`, `script-engine-nova`/`-boa`/`-piccolo` behind
+   constellation. Genet has since rebuilt its own stack: `genet-static-dom`,
+   `genet-scripted-dom`, `script-engine-nova`/`-boa`/`-piccolo` behind
    `script-engine-api`. ExecuteScript backs onto the nova lane.
 
 6. **Host UI is DOM-backed.** xilem-serval builds real elements
@@ -152,7 +152,7 @@ The survey that motivated this plan found the skeleton largely standing:
     Mere's agent harness brief commits to one tool vocabulary: the model's
     tools are the registry's `enabled_actions`, every action gated, every
     mutation carrying a provenance edge, "never a parallel catalog." An agent
-    calling serval-drive directly would be exactly that parallel channel and
+    calling genet-drive directly would be exactly that parallel channel and
     would bypass the gate spine. So for agents the core is the mechanism
     beneath a tool ring, not an API they hold raw: the brief's three rings
     (registry actions, graph reads, outbound MCP) gain a fourth, **page
@@ -166,7 +166,7 @@ The survey that motivated this plan found the skeleton largely standing:
     agent loop's consent model.
 
 11. **WPT reaches the core directly, but the core is one link in a six-link
-    chain, and its actuate side assumes a host surface `serval-wpt` does not
+    chain, and its actuate side assumes a host surface `genet-wpt` does not
     have.** (Added 2026-07-09, verified against the tree and against the WPT
     harness-exactness plan's H6 triage.)
 
@@ -181,7 +181,7 @@ The survey that motivated this plan found the skeleton largely standing:
       currently places the tick model in phase 4 ("the Actions tick model onto
       sequenced input synthesis") while the synthesis primitives sit in phase 1.
       For WPT the **tick interpreter must live in the core**, with phase 4's
-      adapter and `serval-wpt`'s `test_driver_internal` as two consumers of it.
+      adapter and `genet-wpt`'s `test_driver_internal` as two consumers of it.
       Phase 1's actuate bullet now says so.
     - **The core supplies link 5 of 6.** The harness-exactness plan's H6 traced
       `dom/events/non-cancelable-when-passive` (40 tests, all `no-results`) and
@@ -195,7 +195,7 @@ The survey that motivated this plan found the skeleton largely standing:
       original "no load is ever fired" came from a grep quoting `"load"` where
       the code has `'load'`. Still genuinely missing: `onX` handler attributes,
       the cluster's actual first blocker since it registers via
-      `document.body.onload`, and the rAF pump — `serval-wpt` never calls
+      `document.body.onload`, and the rAF pump — `genet-wpt` never calls
       `Runtime::run_animation_frame_callbacks`. See the harness plan's H7 for
       the corrected sequencing and the claimed hookup.)* On link 6: `passive`
       listener options **are** implemented (`preventDefault` ignored), but
@@ -205,8 +205,8 @@ The survey that motivated this plan found the skeleton largely standing:
       the event types.
     - **Hosted-surface assumption.** Phase 1 actuate synthesizes "into the same
       input path winit events take" and resolves handles "to in-view center via
-      serval-layout geometry, scroll-into-view if needed." That presumes a window,
-      an input path, a layout session, and hit-testing. The `serval-wpt`
+      genet-layout geometry, scroll-into-view if needed." That presumes a window,
+      an input path, a layout session, and hit-testing. The `genet-wpt`
       testharness lane has none: it builds a `Runtime` over a `StaticDocument` and
       **never constructs an `IncrementalLayout`**. There is no geometry to resolve
       a handle against and no input path to inject into. Driving the core from WPT
@@ -231,12 +231,12 @@ Five layers, each a phase. Lower layers never depend on higher ones.
   [P4] classic adapter   [P5] BiDi adapter      (no adapter: direct calls)
         \______________________|______________________/
                                |
-                [P1] automation core (serval-drive)
+                [P1] automation core (genet-drive)
           observe: semantic tree, state queries, quiescence
           actuate: element-targeted input, action routing
                                |
         engine-observables-api . a11y projection . query_traverse
-        serval-layout geometry . input path      . script-engine-api
+        genet-layout geometry . input path      . script-engine-api
                                |
                 [P2] chisel leaf registration
                 [P3] trust gate (wraps every entry)
@@ -247,12 +247,12 @@ Five layers, each a phase. Lower layers never depend on higher ones.
 #### Where the core lives: no new crate
 
 The core is a set of capabilities, not an object, and each one already has a home
-that needs **no new dependency**. Founding `serval-drive` up front was the wrong
+that needs **no new dependency**. Founding `genet-drive` up front was the wrong
 instinct: it would freeze a public API before the plan's own hardest question
 (handle-identity anchoring) is answered, and force a naming and licensing
 decision that buys nothing yet.
 
-- **`serval-layout` takes the observe and geometry half.** It already carries the
+- **`genet-layout` takes the observe and geometry half.** It already carries the
   semantic tree (`build_subtree`), stylo's selector machinery over the DOM
   (`adapter_stylo.rs` implements `selectors::Element` / `OpaqueElement`), the
   fragment plane for bounds and in-view centers, hit-testing, caret and
@@ -264,7 +264,7 @@ decision that buys nothing yet.
 - **`shared/embedder` takes the actuate seam.** It already holds `input_events.rs`
   and `webdriver.rs` (`WebDriverCommandMsg`, `WebDriverScriptCommand`,
   `WebDriverJSResult`) and already depends on `accesskit`, `keyboard-types` and
-  `euclid`. It depends on no window, and `serval-wpt` already depends on it. The
+  `euclid`. It depends on no window, and `genet-wpt` already depends on it. The
   surface trait and the Actions tick interpreter belong beside the seam types
   that survived the knockout.
 - **`engine-observables-api` takes quiescence as a contract**, beside
@@ -272,15 +272,15 @@ decision that buys nothing yet.
   to quiescence and layout knows when it is idle; only the host sees all three,
   so `settled()` is a trait implemented per lane and joined by the host.
 - **The WebDriver endpoint is a port**, not a core crate. It belongs beside
-  `serval-wpt`.
+  `genet-wpt`.
 
-`serval-layout` and `shared/embedder` are siblings; neither depends on the other.
+`genet-layout` and `shared/embedder` are siblings; neither depends on the other.
 That is correct, because the thing that composes geometry with input is the
 consumer, which has both.
 
 **What a crate would eventually buy** is only the composition façade: resolve a
 handle, find its in-view center, scroll it into view, synthesize the tick, await
-settled. A few hundred lines, eventually shared by pelt, strophe, `serval-wpt`
+settled. A few hundred lines, eventually shared by pelt, strophe, `genet-wpt`
 and the classic adapter. Extract it when the *second* consumer wants the same
 composition; by then its shape is known, and lifting a façade off crates that are
 already libraries is mechanical. Naming waits for that moment.
@@ -294,15 +294,15 @@ trait, so it blocks nothing.
 **Observe:**
 
 - Semantic tree snapshot: reuse the AccessKit projection
-  (`serval_layout::build_subtree`) as the one semantic tree. Automation reads
+  (`genet_layout::build_subtree`) as the one semantic tree. Automation reads
   the same tree screen readers do; divergence between what a user's AT sees and
   what a test asserts becomes impossible. Leaf interiors are absent from that
   tree until phase 2 wires `Leaf::accessibility()` (finding 3); phase 1 targets
   DOM and host-projected nodes only, and must not be specified against leaf
   children it cannot yet see.
 - Element query: role / accessible-name / routability queries over the one
-  `Projection`, landed as `serval-layout`'s `query` module. CSS selector queries
-  ride serval-layout's existing stylo adapters, **not** `query_traverse`, which
+  `Projection`, landed as `genet-layout`'s `query` module. CSS selector queries
+  ride genet-layout's existing stylo adapters, **not** `query_traverse`, which
   would pull `script-engine-api` in through `script-runtime-api`. `find_one`
   answers `None` on an ambiguous match rather than the first hit.
 - Handle registry. **The identity rule inverted once checked against the tree
@@ -324,7 +324,7 @@ trait, so it blocks nothing.
   handle (window / webview). Mere is one-state-N-windows, the scenario format
   already targets windows with `@<n>`, and WebDriver classic requires window
   handles; retrofitting the axis later would break the whole API.
-- State reads: text, attributes, geometry (from serval-layout), interaction
+- State reads: text, attributes, geometry (from genet-layout), interaction
   state (`InteractionQuery`), loading state.
 - **Quiescence, scoped by source — the contract landed 2026-07-09**
   (`engine-observables-api::quiescence`): a `PendingWork` snapshot per surface
@@ -351,19 +351,19 @@ trait, so it blocks nothing.
 
 **Actuate:**
 
-- Element-targeted input: resolve handle to in-view center via serval-layout
+- Element-targeted input: resolve handle to in-view center via genet-layout
   geometry, scroll-into-view if needed, then synthesize pointer/key events
   into the same input path winit events take (host converts via the existing
   `key_event_from_winit`-adjacent types, so synthetic and real events are
   indistinguishable downstream).
   - **The surface is a seam, not winit.** Actuate must be defined against a
     trait the winit host implements and a headless surface (geometry + event
-    sink, no window) also implements, or `serval-wpt` cannot use the core at all
+    sink, no window) also implements, or `genet-wpt` cannot use the core at all
     (finding 11). Do not bake winit into the core's actuate signature.
 - **The WebDriver Actions tick model lives here, in the core**, not in the
   phase-4 adapter: ordered input sources, per-tick dispatch, pointer/key/wheel
   source state. WPT's `test_driver.action_sequence` hands over exactly this JSON,
-  so the classic adapter and `serval-wpt`'s `test_driver_internal` are two
+  so the classic adapter and `genet-wpt`'s `test_driver_internal` are two
   consumers of one interpreter (finding 11). Phase 4 translates HTTP onto it; it
   does not own it.
 
@@ -436,7 +436,7 @@ needs both. They are not interchangeable, and choosing by who owns the state:
   implements today.
 
 **Step zero — landed 2026-07-09.** The declared contract is now true.
-serval-layout gained a `LeafA11ySource` trait mirroring `LeafPaintSource` (the
+genet-layout gained a `LeafA11ySource` trait mirroring `LeafPaintSource` (the
 walk knows `<chisel-leaf key="…">` as an element, not chisel's types, so the
 host bridges the key to its leaf), and `build_subtree_with_leaves` threads it
 through the walk via the existing `construct::chisel_leaf_key_of`. A leaf runs
@@ -510,13 +510,13 @@ cookies onto the net component; prompts onto the surviving prompt types. Command
 whose substrate does not exist yet return spec-correct `unsupported operation`
 rather than fakes.
 
-**Scope note:** this phase is **not** what lets `serval-wpt` run the ordinary
+**Scope note:** this phase is **not** what lets `genet-wpt` run the ordinary
 `test_driver` corpus; that rides phase 1 in-process (finding 11). What needs an
 adapter is WPT's own `webdriver/` conformance suite, which tests this phase.
 
 **Done when:** thirtyfour, unpatched, runs a session against pelt: navigate,
 find by CSS, click, read text. WPT's `webdriver/` conformance suite (vendored at
-`tests/wpt/tests/webdriver/`) runs under `ports/serval-wpt` with a recorded
+`tests/wpt/tests/webdriver/`) runs under `ports/genet-wpt` with a recorded
 pass/fail baseline (a baseline, not a target; gaps become follow-on items with
 the spec section named).
 
@@ -559,7 +559,7 @@ live session and drives an interaction loop with no polling.
     as in-process agents. WPT's `testdriver.js` resolves every command through
     `window.test_driver_internal`, whose default methods merely throw
     `"… is not implemented by testdriver-vendor.js"`. The embedder supplies that
-    object. `serval-wpt` binds it straight to host functions, exactly as the
+    object. `genet-wpt` binds it straight to host functions, exactly as the
     runtime already exposes `__matchMedia` / `__dispatchSynthetic`. No HTTP, no
     session negotiation, no `webdriver` crate. **This payoff lands three phases
     earlier than this plan previously implied.**
@@ -575,7 +575,7 @@ live session and drives an interaction loop with no polling.
 - CDP compatibility. BiDi is the standards lane; CDP emulation is a different,
   larger bet, revisit only if a concrete consumer appears.
 - Driving third-party engines (scry/graft/weld multiplexer lanes). The core is
-  serval-native; a multiplexer story would be a separate plan.
+  genet-native; a multiplexer story would be a separate plan.
 - The agent loop itself (context assembly, inference, gating policy, run
   provenance). Owned by mere's agent harness brief; this plan only supplies
   the page-content ring and the observation feed (finding 10).
@@ -602,7 +602,7 @@ live session and drives an interaction loop with no polling.
   evidence.
 - **Scenario-verb integration home.** Whether the `find` / `click <query>`
   scenario verbs live mere-side (scenario runner calls the core) or
-  serval-side (a shared verb layer other apps' runners reuse). Decide when
+  genet-side (a shared verb layer other apps' runners reuse). Decide when
   the first element verb is actually needed by a scenario; the core's API is
   the same either way.
 - **Semantic-children granularity for dense leaves.** A dense leaf should not
@@ -613,11 +613,11 @@ live session and drives an interaction loop with no polling.
   genuinely dense leaf (isometry's map) instead.
 
 - **Shape of the surface seam.** Actuate needs geometry and an event sink. The
-  winit host has both; `serval-wpt`'s testharness lane has neither today (no
+  winit host has both; `genet-wpt`'s testharness lane has neither today (no
   layout session at all). Does the core take a `Surface` trait (geometry +
   event sink + rasterize), or does it require callers to hand it an
   `IncrementalLayout` plus an input sink? Settle before phase 1's actuate API
-  freezes, because `serval-wpt` is the second consumer and it is headless
+  freezes, because `genet-wpt` is the second consumer and it is headless
   (finding 11).
 
 - ~~**Does the core need its own crate?**~~ **Settled 2026-07-09: no.** Every
@@ -635,7 +635,7 @@ live session and drives an interaction loop with no polling.
   sign flip). Delivery needs no new trait: `WebDriverCommandMsg::InputEvent`
   survived the knockout and is the seam. With this, every phase-1 capability
   except the composition façade has landed in an existing crate: query +
-  handles (serval-layout), quiescence contract (engine-observables-api), tick
+  handles (genet-layout), quiescence contract (engine-observables-api), tick
   interpretation (shared/embedder), semantic drive proven against pelt.
 
 - 2026-07-09: **quiescence contract landed** in
@@ -651,7 +651,7 @@ live session and drives an interaction loop with no polling.
   assembly per surface and the condition-wait built on top.
 
 - 2026-07-09: **phase 1 begun; handle identity settled by inverting it.** The
-  `query` module landed in `serval-layout` (`ElementQuery` by role / accessible
+  `query` module landed in `genet-layout` (`ElementQuery` by role / accessible
   name / routability; `find_one` refuses an ambiguous match). The walk now retains
   each node's DOM origin and returns a `Projection`, the single semantic
   projection that `accesskit_tree`, `build_subtree` and queries are all views
@@ -660,7 +660,7 @@ live session and drives an interaction loop with no polling.
 
   The handle question turned out mis-stated rather than hard. Checked against the
   tree: `rebuild` reuses the node (xilem-serval `element.rs`), and `push` /
-  `drop_subtree` never recycle an arena index (`serval-scripted-dom`). So a raw
+  `drop_subtree` never recycle an arena index (`genet-scripted-dom`). So a raw
   DOM id survives rebuilds and cannot alias a live element, while the proposed
   `role + label` anchor would have rebound to a same-named sibling. Handles are
   node ids; role and name are captured for diagnosis. A test asserts the
@@ -671,13 +671,13 @@ live session and drives an interaction loop with no polling.
   the same DOM yields nothing without a leaf source.
 
 - 2026-07-09: **placement settled: no new crate.** Verified against the manifests
-  rather than the layer diagram. `serval-layout` depends on
+  rather than the layer diagram. `genet-layout` depends on
   `engine-observables-api`, so the core cannot live there (cycle). No existing
-  crate occupies the slot above `serval-layout` and below both the windowed hosts
-  and the headless `serval-wpt` (which deps `script-engine-api`/`-boa`/`-nova`
+  crate occupies the slot above `genet-layout` and below both the windowed hosts
+  and the headless `genet-wpt` (which deps `script-engine-api`/`-boa`/`-nova`
   and neither `winit` nor `xilem-serval`) — but none is needed, because the core
   decomposes into capabilities that already have homes: observe/geometry/handles
-  into `serval-layout` (whose stylo selector adapters make `query_traverse`
+  into `genet-layout` (whose stylo selector adapters make `query_traverse`
   unnecessary), the surface trait and Actions tick interpreter into
   `shared/embedder` beside `webdriver.rs` and `input_events.rs`, and `settled()`
   as a contract into `engine-observables-api`. Only the composition façade would
@@ -726,10 +726,10 @@ live session and drives an interaction loop with no polling.
     license for a non-Servo-derived component).
   - Findings 1, 2, 4, 5, 8, 10 verified accurate as written. `query_traverse.rs`
     is at the cited path; `WebDriverJSResult` is at `webdriver.rs:273` over
-    serval's own `JSValue`; the four script-engine crates exist; `webdriver`
+    genet's own `JSValue`; the four script-engine crates exist; `webdriver`
     v0.53 is still a pinned workspace dep.
 - 2026-07-09: **phase 2 step zero implemented.** `LeafA11ySource` +
-  `NoLeafA11y` + `build_subtree_with_leaves` in serval-layout, wired into the
+  `NoLeafA11y` + `build_subtree_with_leaves` in genet-layout, wired into the
   walk through `construct::chisel_leaf_key_of`; `Knob` announces as a slider
   (value + `SetValue`/`Increment`/`Decrement`), `Meter` as a read-only meter.
   The actionable handback now records any node advertising a routable action,
@@ -745,14 +745,14 @@ live session and drives an interaction loop with no polling.
   scope corrected). Three changes, in decreasing order of consequence:
   - The WPT payoff was mis-phased. `test_driver` is an embedder hook
     (`window.test_driver_internal`, whose shipped defaults throw and whose
-    `testdriver-vendor.js` is deliberately blank), so `serval-wpt` reaches the
+    `testdriver-vendor.js` is deliberately blank), so `genet-wpt` reaches the
     core **in-process at phase 1**. Phase 4 is needed only to run WPT's own
     `webdriver/` conformance suite. The plan previously pointed all of WPT at
     phase 4.
   - The Actions tick model was mis-layered. `test_driver.action_sequence` receives
     WebDriver Actions tick JSON, so the interpreter belongs in the phase-1 core
     with phase 4 and `test_driver_internal` as two consumers, not in the adapter.
-  - Phase 1 actuate silently assumed a hosted (winit) surface. `serval-wpt` has no
+  - Phase 1 actuate silently assumed a hosted (winit) surface. `genet-wpt` has no
     window, no input path, and no `IncrementalLayout` at all, so the actuate API
     must be defined against a surface seam. Added as an open question, since it
     constrains the API before it freezes.

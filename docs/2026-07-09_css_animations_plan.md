@@ -17,7 +17,7 @@ pre-T1 state. Read the code, not the plan.
 
 What was actually broken was the **lifecycle**, described below as A2.
 **Scope:** CSS animations (`@keyframes` + the `animation-*` properties) in
-serval's Boa/Nova lane, style-tier, host-clocked. Same machinery as transitions:
+genet's Boa/Nova lane, style-tier, host-clocked. Same machinery as transitions:
 this plan enables the sibling half that was knocked out alongside the transition
 hooks, not a new subsystem.
 **Related:** `2026-07-05_css_transitions_plan.md` (the machinery this reuses;
@@ -59,7 +59,7 @@ the animation half:
   `take_transition_events`, dispatch off the cascade through the runtime) is a
   template the animation events copy.
 - Stylo's Servo-mode traversal already runs the animation start/tick algorithm
-  inside `process_animations`; `@keyframes` parsing is stylo's, not serval's.
+  inside `process_animations`; `@keyframes` parsing is stylo's, not genet's.
 
 So the delta is wiring and semantics, not a new tier.
 
@@ -78,7 +78,7 @@ corrected in place.
 
 **The whole defect was one missing state transition.** Stylo creates every
 `@keyframes` animation in `AnimationState::Pending` and *never promotes it*; Servo
-does that from its script thread, and serval, having no such step, left every
+does that from its script thread, and genet, having no such step, left every
 animation `Pending` forever. That single omission produced every symptom:
 
 - `Animation::iterate_if_necessary` returns early unless the state is `Running`,
@@ -114,7 +114,7 @@ whole iterations catches up. `Paused` is left alone. Three consequences:
   since neither changes what is painted.
 
 **Done when:** ~~an `alternate`, `iteration-count: 2` … animation holds its
-final-frame value~~ **met.** Guards in `serval-layout`, all falsified by disabling
+final-frame value~~ **met.** Guards in `genet-layout`, all falsified by disabling
 `advance_css_animations`:
 `css_animation_interpolates_then_finishes_and_goes_idle`,
 `css_animation_honors_iteration_count_and_direction` (samples at t=2.5s, a quarter
@@ -133,7 +133,7 @@ guard `animationevent_types_survives_the_rendering_session`.)*
 ### A3: animation events + WPT measurement
 
 - **Animation lifecycle events — *landed 2026-07-09*.** New
-  `components/serval-layout/animation_events.rs` (a peer of `transition_events.rs`,
+  `components/genet-layout/animation_events.rs` (a peer of `transition_events.rs`,
   not a fork of it): `AnimationEventRecord` / `AnimationEventKind` and
   `harvest_animation_events`, drained by `IncrementalLayout::take_animation_events`
   in the same per-frame step as transition events. `Runtime::dispatch_animation_event`
@@ -153,14 +153,14 @@ guard `animationevent_types_survives_the_rendering_session`.)*
     pruning it. The two can now be drained in either order.
   - **Phase is clock-derived**, so `animationstart` waits out `animation-delay`
     even though `advance_css_animations` promotes to `Running` immediately.
-  - Guards (serval-layout): `animation_events_fire_start_then_end`,
+  - Guards (genet-layout): `animation_events_fire_start_then_end`,
     `animation_start_waits_for_the_delay`,
     `animation_iteration_fires_on_every_boundary_but_the_last`,
     `a_coarse_tick_emits_the_iteration_boundary_before_the_end`,
     `an_infinite_animation_emits_iterations_and_never_ends`,
     `a_finished_forwards_animation_does_not_re_emit`,
     `animation_cancel_fires_when_the_animation_is_removed`. End to end through real
-    listeners on both engines (serval-scripted):
+    listeners on both engines (genet-scripted):
     `animation_events_dispatch_to_listeners_on_boa` / `_on_nova`.
 - **Reduced motion — *landed 2026-07-09*.** `AnimationMode::Disabled` now covers
   animations: `max_transition_end` became `max_animation_end` and also considers
@@ -188,11 +188,11 @@ guard `animationevent_types_survives_the_rendering_session`.)*
     time, whatever the style tier does. The same wall blocks the CSS **transitions**
     plan's T3 WPT slice (never wired, for this reason) and 85 of the 155 dead `dom`
     tests (see the harness-exactness plan's H6). One harness capability — a driven
-    rendering loop in `serval-wpt` — unblocks all three.
+    rendering loop in `genet-wpt` — unblocks all three.
     **Update 2026-07-10: that loop landed** (harness plan H7a), and two of the
     three engine levers it exposed landed with it: the `AnimationEvent` /
     `TransitionEvent` bootstrap constructors are prototype-chained (so
-    `instanceof` holds; pinned end-to-end in the serval-scripted dispatch
+    `instanceof` holds; pinned end-to-end in the genet-scripted dispatch
     guards on both engines), and `computed_query` serializes the box insets
     (`left`/`right`/`top`/`bottom`) plus `transform` (an animated inset is now
     readable via `getComputedStyle`; pinned in
@@ -225,6 +225,6 @@ guarded by unit + end-to-end tests on both engines.
 
 - No animation runtime or wall-clock coupling in netrender (its D2 doctrine is a
   constraint on this plan).
-- No serval-scripted (Servo lane) work; that lane inherits Servo's own animation
+- No genet-scripted (Servo lane) work; that lane inherits Servo's own animation
   path if it ever goes live in meerkat.
 - No smolweb involvement; nematic has no CSS animation surface.

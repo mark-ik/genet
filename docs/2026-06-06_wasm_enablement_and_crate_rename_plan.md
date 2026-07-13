@@ -1,16 +1,16 @@
-# serval wasm enablement: de-IPC + crate rename (de-servo-fication)
+# genet wasm enablement: de-IPC + crate rename (de-servo-fication)
 
 Two intertwined efforts, planned together because they touch the same ~33 crates
 and would otherwise double the churn:
 
-1. **De-IPC for wasm.** serval-layout (and eventually the serval engine) cannot
+1. **De-IPC for wasm.** genet-layout (and eventually the genet engine) cannot
    build for `wasm32-unknown-unknown` because the inherited Servo foundation drags
    multiprocess machinery (`ipc-channel`, `IpcSharedMemory`, `generic_channel`,
    `tikv-jemalloc-sys`) plus a wasm-hostile randomness dep (`uuid` v4). None of it
-   runs in serval's single-process model; on wasm it does not even compile.
+   runs in genet's single-process model; on wasm it does not even compile.
 2. **De-servo-fication (rename).** 33 crates still carry the `servo-*` package
-   prefix. They are serval's now (cut, slimmed, or about to be). The prefix is
-   fork residue. Rename to a serval-owned namespace, **except** where a crate is a
+   prefix. They are genet's now (cut, slimmed, or about to be). The prefix is
+   fork residue. Rename to a genet-owned namespace, **except** where a crate is a
    thin fork tracking an upstream Servo/Mozilla crate (lineage matters there).
 
 The de-IPC pass touches every foundational crate's Cargo.toml + code; the rename
@@ -69,13 +69,13 @@ transport-neutral boundary where *selected* command/update DTOs are
 
 Trajectory: **threads now, Web Workers next for PWA/browser, OS processes only if
 untrusted.** Keep the seam serializable; do not keep Servo's IPC museum alive for
-its own sake. The serval de-IPC pass below simply stops pretending the gated
+its own sake. The genet de-IPC pass below simply stops pretending the gated
 native IPC preserves a toggle.
 
 ## Findings (verified 2026-06-06, isolated worktree `wasm-fonts-cut`)
 
-- **serval-layout reaches the runtime only through `servo-layout-api`** (two edges:
-  via `servo-fonts`, and direct). Both are **vestigial**: serval-layout's text path
+- **genet-layout reaches the runtime only through `servo-layout-api`** (two edges:
+  via `servo-fonts`, and direct). Both are **vestigial**: genet-layout's text path
   is parley/fontique, and its source never references `layout_api`, `base`,
   `fonts`, `net_traits`, `embedder_traits`, `paint_api`, or `paint_types`. Removing
   the `layout_api` + direct `servo-base` deps compiles clean (native) and kills the
@@ -90,19 +90,19 @@ native IPC preserves a toggle.
      `servo-malloc-size-of` (`IpcSharedMemory` `MallocSizeOf` impls) + `servo-pixels`
      (`base::generic_channel`).
 - **These foundational crates are NOT cruft.** Stylo *requires* `malloc_size_of`;
-  serval-layout uses `pixels`. They are genuine substrate shot through with Servo's
+  genet-layout uses `pixels`. They are genuine substrate shot through with Servo's
   multiprocess machinery, which is dead on single-process wasm. (Contrast the
-  vestigial `layout_api`, which serval simply never used.)
+  vestigial `layout_api`, which genet simply never used.)
 
 ## The approach decision (per crate, do not presume)
 
 For each crate the de-IPC touches, choose deliberately: **gate** (cfg/feature the
 IPC code native-only, keep the crate), **slim** (rip the IPC machinery out as a
-serval cut), or **drop** (serval-layout should not pull it at all).
+genet cut), or **drop** (genet-layout should not pull it at all).
 
 | Crate | Native-only machinery | Proposed disposition | Note |
 |---|---|---|---|
-| `servo-layout-api` | net_traits, fonts | **drop from serval-layout** (done) | vestigial; serval uses parley |
+| `servo-layout-api` | net_traits, fonts | **drop from genet-layout** (done) | vestigial; genet uses parley |
 | `servo-allocator` | jemalloc `#[global_allocator]` | **drop from the lib chain** | a library must not set the global allocator; that is the final binary's call. Find why `servo-base` pulls it and sever |
 | `servo-base` | ipc-channel (L21), generic_channel | **gate** (`multiprocess` feature / cfg(not wasm)) | the IPC foundation; preserve for the native multiprocess toggle |
 | `servo-malloc-size-of` | `IpcSharedMemory` impls, ipc_channel | **gate** the IpcSharedMemory `MallocSizeOf` impl native-only | Stylo-required; keep, slim the IPC impl |
@@ -120,20 +120,20 @@ consumer Cargo.toml + every `use base::` / `net_traits::` / etc. in code.
 
 **Settle this before the mechanical pass (do not presume one namespace):** the
 crates are not uniform.
-- **serval-owned cuts** (`servo-base`, `servo-net-traits`, `servo-layout-api`,
-  `servo-fonts`, `servo-embedder-traits`, `servo-paint*`, ...): serval has cut or
-  slimmed these. Rename to a serval namespace.
+- **genet-owned cuts** (`servo-base`, `servo-net-traits`, `servo-layout-api`,
+  `servo-fonts`, `servo-embedder-traits`, `servo-paint*`, ...): genet has cut or
+  slimmed these. Rename to a genet namespace.
 - **Thin forks tracking upstream Servo/Mozilla crates** (`servo-malloc-size-of`,
   `servo_arc`, `servo-url`, `servo-geometry`): these mirror published crates;
   renaming complicates pulling upstream fixes. Keep the name (lineage) unless
-  serval has diverged enough to own them outright.
+  genet has diverged enough to own them outright.
 
-Open: the target namespace (`serval-*`? folded into existing serval names?) and the
+Open: the target namespace (`genet-*`? folded into existing genet names?) and the
 per-crate keep-vs-rename call.
 
 ## Coordination risk (load-bearing)
 
-serval is under active concurrent work (webgl-wgpu, the deferred fetch-seam). A
+genet is under active concurrent work (webgl-wgpu, the deferred fetch-seam). A
 mass crate rename rewrites nearly every Cargo.toml + many `use` lines across the
 repo and would collide catastrophically with any in-flight branch. **The rename
 must be a coordinated, serialized event** (a quiet tree, everyone rebased), an
@@ -142,13 +142,13 @@ crates) and can land incrementally ahead of it.
 
 ## Phases (done-conditions, not dates)
 
-- **P0 (done): archaeology + vestigial cut.** Worktree proves serval-layout → the
+- **P0 (done): archaeology + vestigial cut.** Worktree proves genet-layout → the
   runtime is via vestigial `servo-layout-api`; removing it + the direct `servo-base`
   dep kills net/fonts/hyper/mio, native-green. uuid + jemalloc + ipc blockers
   mapped.
-- **P1: de-IPC serval-layout to wasm. DONE 2026-06-06.**
-  `cargo build -p serval-layout --target wasm32-unknown-unknown --lib` succeeds
-  (exit 0) and `cargo build -p serval-layout` (native) is unchanged. The build-loop
+- **P1: de-IPC genet-layout to wasm. DONE 2026-06-06.**
+  `cargo build -p genet-layout --target wasm32-unknown-unknown --lib` succeeds
+  (exit 0) and `cargo build -p genet-layout` (native) is unchanged. The build-loop
   found the real blockers, far narrower than the dependency archaeology implied: the
   IPC machinery (`ipc-channel`, `tokio`, `generic_channel`) **compiles for wasm
   unchanged and never needed gating**. The actual gates, all `cfg(not(target_arch =
@@ -163,24 +163,24 @@ crates) and can land incrementally ahead of it.
   4. `servo-paint-types`: a unit-placeholder `NativeFontHandle` for non-native
      targets (wasm fonts come from the host).
   5. `servo-base`: a wasm arm for `cross_process_instant`'s platform clock.
-  6. `serval-layout` `host_loader`: the local-file resolution (`from_directory_path`
+  6. `genet-layout` `host_loader`: the local-file resolution (`from_directory_path`
      / `to_file_path`) gated to filesystem targets; wasm resources come from the
      host loader.
   Lesson: the runtime build-loop beat the static dependency analysis. The "fat IPC
   machinery" fear overstated it; the real wall was jemalloc (a C build) + uuid
   randomness + a handful of native-API code spots.
 - **P2: the wasm tail.** Rebuild surfaces the next tier (accesskit, Stylo
-  internals, font/system). Gate or replace until serval-layout is wasm-green, then
-  the orrery's serval-layout-using path.
+  internals, font/system). Gate or replace until genet-layout is wasm-green, then
+  the orrery's genet-layout-using path.
 - **P3: the rename (coordinated).** De-servo-fy package names per the settled
-  namespace decision, in one serialized pass when the serval tree is quiet.
+  namespace decision, in one serialized pass when the genet tree is quiet.
   *Done:* no `servo-*` package names remain except deliberate upstream-tracking
   forks.
 
 ## Decisions (resolved 2026-06-06, Mark)
 
-- **Scope: orrery-first.** P1/P2 target serval-layout to wasm (enough to run the
-  orrery in a browser). The full serval engine to wasm is a later deliberate pass.
+- **Scope: orrery-first.** P1/P2 target genet-layout to wasm (enough to run the
+  orrery in a browser). The full genet engine to wasm is a later deliberate pass.
 - **Disposition: gate native-only (a low-risk wasm enabler, not toggle-preservation).**
   `cfg(not(target_arch = "wasm32"))` for every IPC/jemalloc dep: the cheap way to
   get wasm building without disturbing native. The gated native code is
@@ -188,29 +188,29 @@ crates) and can land incrementally ahead of it.
   armillary boundary + Web Workers (see "Isolation backends"). Slimming is the
   eventual end-state once the wasm pass is green and nothing native exercises the
   IPC path.
-- **Rename: serval-owned cuts only.** De-servo the crates serval has cut/slimmed;
+- **Rename: genet-owned cuts only.** De-servo the crates genet has cut/slimmed;
   keep the thin upstream-tracking fork names (`malloc_size_of`, `servo_arc`, `url`,
   `geometry`) for lineage.
 
 ## Open questions (still need a call)
 
-- **Rename namespace:** the serval-owned prefix that replaces `servo-` (e.g.
-  `serval-*`, or folded into existing serval names). Mark's call before P3.
-- **Timing** of the rename (P3) vs the other agent's in-flight serval work: a
+- **Rename namespace:** the genet-owned prefix that replaces `servo-` (e.g.
+  `genet-*`, or folded into existing genet names). Mark's call before P3.
+- **Timing** of the rename (P3) vs the other agent's in-flight genet work: a
   serialized, coordinated event on a quiet tree.
 
 ## Progress
 
 - **2026-06-06.** Wrote this plan. Worktree `wasm-fonts-cut` (branch off HEAD,
   isolated from the other agent's tree) holds the P0 state: the tier-2 vestigial
-  cut applied (`layout_api` + direct `servo-base` removed from serval-layout,
+  cut applied (`layout_api` + direct `servo-base` removed from genet-layout,
   native build green), uuid `js` feature added experimentally, and the
   jemalloc / ipc-channel blockers mapped to `servo-base` / `servo-allocator` /
   `malloc-size-of` / `pixels`. No foundational gating and no rename started:
   both are gated on the disposition + namespace decisions above.
-- **2026-06-06.** Decisions resolved (Mark): scope orrery-first (serval-layout to
+- **2026-06-06.** Decisions resolved (Mark): scope orrery-first (genet-layout to
   wasm), disposition gate-native-only (preserve the multiprocess toggle), rename
-  serval-owned cuts only. P1 (gate the foundational crates native-only) begins;
+  genet-owned cuts only. P1 (gate the foundational crates native-only) begins;
   rename namespace + timing remain open.
 - **2026-06-06.** Reframed the disposition rationale (Mark + the other agent
   concur): gating Servo IPC native-only is a low-risk wasm enabler, NOT preservation
@@ -223,10 +223,10 @@ crates) and can land incrementally ahead of it.
   constellation plan. Corrected the browser framing: the browser runs many wasm
   instances in Web Workers (separate memories); the real constraint is no OS
   processes / fork.
-- **2026-06-06. P1 DONE.** serval-layout builds for `wasm32-unknown-unknown`
+- **2026-06-06. P1 DONE.** genet-layout builds for `wasm32-unknown-unknown`
   (exit 0); native unchanged. Six `cfg(not(wasm32))` gates (uuid js / malloc_size_of
   servo-allocator / servo-url file-paths / paint-types NativeFontHandle / servo-base
-  cross-process clock / serval-layout host_loader file-paths) plus the P0 vestigial
+  cross-process clock / genet-layout host_loader file-paths) plus the P0 vestigial
   cut. `ipc-channel` / `tokio` compiled for wasm unchanged, so no IPC gating was
   needed at all: the real blockers were jemalloc + uuid + native-API code spots, not
   the IPC substrate. The build-loop (runtime verification) beat the dependency-graph
@@ -237,26 +237,26 @@ crates) and can land incrementally ahead of it.
 
 Driven from the Woodshed cross-platform question ("would Woodshed-on-xilem_serval
 render in a browser?"), a spike now exercises the full engine-core chain on
-`wasm32-unknown-unknown` at `examples/serval_web_smoke/` (standalone workspace,
+`wasm32-unknown-unknown` at `examples/genet_web_smoke/` (standalone workspace,
 netrender_smoke pattern):
 
 - **Wasm-green on main, verified 2026-07-04:** `xilem-serval`,
-  `serval-scripted-dom`, `serval-layout` all `cargo check` clean for wasm32 with
-  zero errors — P1's result has landed and holds beyond serval-layout.
+  `genet-scripted-dom`, `genet-layout` all `cargo check` clean for wasm32 with
+  zero errors — P1's result has landed and holds beyond genet-layout.
 - **netrender manifest half done** (netrender commit `6520d74ed`): wgpu backend
   features are now per-target — native keeps dx12/metal/vulkan (identical
   resolved set), wasm32 selects `webgpu`; pollster moved native-only beside the
   blocking `boot()` wrappers. netrender + paint_list_render + netrender_text all
   check green for wasm32. This closes the "add the wgpu webgpu feature" item
   from the 2026-06-24 correction above.
-- **Host-font seam added** (`serval_layout::register_host_font`): host-supplied
+- **Host-font seam added** (`genet_layout::register_host_font`): host-supplied
   TTF/OTF blobs register into every `TextMeasureCtx` under their own family
   names and append to the `sans-serif` generic — the "wasm fonts come from the
   host" hook. Harmless on native (fonts join system discovery).
-- The smoke builds a woodshed-flavored view tree through `ServalAppRunner`,
+- The smoke builds a woodshed-flavored view tree through `GenetAppRunner`,
   lays it out, emits a band, lowers via `translate_paint_cmd_stream`, and
   presents through `boot_async` + a WebGPU canvas surface. It mirrors the
-  serval-workspace `[patch.crates-io]` entries (stylo/stylo_atoms git-rev,
+  genet-workspace `[patch.crates-io]` entries (stylo/stylo_atoms git-rev,
   taffy + sonic-rs vendored) because patches are per-workspace-root.
 
 **Receipt: PASS (2026-07-04).** The page renders in Chrome over WebGPU — pills
@@ -264,9 +264,9 @@ nav, sidebar, rounded panels, note/root dots, Roboto text — captured via CDP
 screenshot. Two runtime walls fell on the way, both now fixed in the libraries:
 
 1. **`std::time::Instant` panics on wasm** ("time not implemented"): the
-   unconditional diagnostics timer in `lay_out_content` (serval-layout) and the
+   unconditional diagnostics timer in `lay_out_content` (genet-layout) and the
    frame-profiling / per-frame-diagnostic timers in netrender. Fixed with
-   `web-time` (wasm-only dep; native untouched). The `SERVAL_LAYOUT_TIMING`
+   `web-time` (wasm-only dep; native untouched). The `GENET_LAYOUT_TIMING`
    probes are env-gated and dead on wasm, left as-is.
 2. **Browser swapchains reject vello's storage-texture write**: the fine/compose
    stages bind the render target as an `RGBA8Unorm` storage texture, but a
@@ -275,7 +275,7 @@ screenshot. Two runtime walls fell on the way, both now fixed in the libraries:
    and blit (`wgpu::util::TextureBlitter`) — the meerkat shape, where scenes
    never see the swapchain. The smoke does this; any future web shell must too.
 
-This was the first actual *execution* of serval-layout on wasm, not just a
+This was the first actual *execution* of genet-layout on wasm, not just a
 compile. Remaining for a real web embedding: a resize/rAF loop, input
 translation, and the smoke's `[patch]` mirror kept in sync.
 
@@ -292,7 +292,7 @@ Two threads to fold into the roadmap here:
 
 **Delivery direction (ranked).**
 
-1. **Ship the reader-PWA wasm lane first.** serval-layout is wasm-green (P1) and
+1. **Ship the reader-PWA wasm lane first.** genet-layout is wasm-green (P1) and
    netfetcher binds the browser fetch, so a DOM-only / structured-HTML / smolweb
    reader with a tiny omit-JS bundle is the strongest near-term case. Treat the
    Boa-scripted wasm tier as the next milestone, not the v1 bar.
@@ -339,9 +339,9 @@ the loop is cooperative (delays order tasks, they do not truly wait), microtask
 checkpoints are coarse (around timer batches, not per-task), and ReadableStream is
 buffered (no BYOB, no truly-async producers). Remaining work: per-task microtask
 checkpoints, true async timers/streams, BYOB readers, broader task sources, and
-wiring serval's own WPT runner to a real off-thread fetch source the way meerkat
+wiring genet's own WPT runner to a real off-thread fetch source the way meerkat
 already does (`repos/mere/crates/meerkat/src/fetch.rs:145-195`).
 
-**Agent-cluster as the Web-Worker / Atomics boundary (added 2026-06-24, from the gterzian/formal-web harvest, `docs/2026-06-24_formal_web_lessons.md`).** formal-web models the spec's `Agent { id, can_block, event_loop_id }` / `AgentCluster` as plain data, decoupled from its OS process. That concept is exactly the isolation primitive this plan's Web-Worker direction needs: adopt **agent-cluster as the SharedArrayBuffer / Atomics boundary**, and bind `EventLoopId` to an armillary actor on native and to a **Web Worker** on wasm (not an OS process). Carry the spec's **`can_block`** flag — a worker agent may block on `Atomics.wait`, a window agent may not — so the same abstraction enforces the rule on both backends. This is the agent-level refinement of the "Web Worker is the browser-relevant isolation backend" point above: the transport-neutral boundary moves *agent clusters*, and `can_block` is per-agent metadata it carries. The deferred BYOB-reader / true-async-stream work is spun out to serval's `2026-06-24_byob_streams_plan.md`; the per-task microtask-checkpoint tightening + scheduler trace validation to `archive/2026-06-24_event_loop_rigor_plan.md` (completed 2026-07-05).
-  Next: P2 = orrery-host to wasm (the orrery's serval-layout-using path), which will
+**Agent-cluster as the Web-Worker / Atomics boundary (added 2026-06-24, from the gterzian/formal-web harvest, `docs/2026-06-24_formal_web_lessons.md`).** formal-web models the spec's `Agent { id, can_block, event_loop_id }` / `AgentCluster` as plain data, decoupled from its OS process. That concept is exactly the isolation primitive this plan's Web-Worker direction needs: adopt **agent-cluster as the SharedArrayBuffer / Atomics boundary**, and bind `EventLoopId` to an armillary actor on native and to a **Web Worker** on wasm (not an OS process). Carry the spec's **`can_block`** flag — a worker agent may block on `Atomics.wait`, a window agent may not — so the same abstraction enforces the rule on both backends. This is the agent-level refinement of the "Web Worker is the browser-relevant isolation backend" point above: the transport-neutral boundary moves *agent clusters*, and `can_block` is per-agent metadata it carries. The deferred BYOB-reader / true-async-stream work is spun out to genet's `2026-06-24_byob_streams_plan.md`; the per-task microtask-checkpoint tightening + scheduler trace validation to `archive/2026-06-24_event_loop_rigor_plan.md` (completed 2026-07-05).
+  Next: P2 = orrery-host to wasm (the orrery's genet-layout-using path), which will
   surface orrery-host's own deps.

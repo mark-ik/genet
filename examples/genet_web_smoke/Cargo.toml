@@ -1,0 +1,69 @@
+[package]
+name = "genet-web-smoke"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone project — intentionally NOT a genet workspace member
+# (same pattern as ../netrender_smoke). Proves the genet engine core
+# renders in a browser: xilem-serval view tree -> ScriptedDom ->
+# genet-layout -> PaintList -> paint_list_render -> netrender ->
+# WebGPU canvas surface. No Servo shell, no winit, no JS engine.
+#
+# Build (from genet/ root):
+#   cargo build --manifest-path examples/genet_web_smoke/Cargo.toml --target wasm32-unknown-unknown
+#   wasm-bindgen --target web --out-dir examples/genet_web_smoke/pkg \
+#     examples/genet_web_smoke/target/wasm32-unknown-unknown/debug/genet_web_smoke.wasm
+#   python -m http.server -d examples/genet_web_smoke 8000
+# then open http://localhost:8000 in a WebGPU browser (Chrome/Edge).
+#
+# netrender crates are direct path deps into the sibling checkout for
+# this first receipt; convert to git deps (mark-ik/netrender) once the
+# per-target-webgpu commit is pushed, per the netrender_smoke pattern.
+
+[lib]
+name = "genet_web_smoke"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[workspace]
+
+[dependencies]
+# genet engine core (path deps resolve workspace-inherited fields
+# against the genet workspace root).
+xilem-serval = { path = "../../components/xilem-serval" }
+genet-scripted-dom = { path = "../../components/genet-scripted-dom" }
+genet-layout = { path = "../../components/genet-layout" }
+
+# rasterizer stack (sibling netrender checkout).
+netrender = { path = "../../../netrender/netrender" }
+netrender_device = { path = "../../../netrender/netrender_device" }
+paint_list_api = { path = "../../../netrender/paint_list_api" }
+paint_list_render = { path = "../../../netrender/paint_list_render" }
+
+wgpu = { version = "29", default-features = false, features = ["std", "wgsl", "webgpu"] }
+
+# web glue. wasm-bindgen pinned exactly to the installed CLI version.
+wasm-bindgen = "=0.2.126"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "console",
+] }
+console_error_panic_hook = "0.1"
+
+# Mirrors the genet workspace [patch.crates-io] entries this dependency
+# graph needs (patches are per-workspace-root, and this example is its
+# own workspace). Same rationale comments as genet/Cargo.toml.
+[patch.crates-io]
+# Unify stylo_taffy's crates.io stylo/stylo_atoms ^0.18 with genet's git
+# rev (the v0.18.0 tag) — `links = "servo_style_crate"` allows one Stylo.
+stylo = { git = "https://github.com/servo/stylo", rev = "8bde0e96db888b7f188830bea261e72b2006fd73" }
+stylo_atoms = { git = "https://github.com/servo/stylo", rev = "8bde0e96db888b7f188830bea261e72b2006fd73" }
+# taffy float-slot width fix carried by genet.
+taffy = { path = "../../support/patches/taffy" }
+# ahash runtime-rng/getrandom-0.3 drop for the wasm graph.
+sonic-rs = { path = "../../support/patches/sonic-rs-0.5.8" }

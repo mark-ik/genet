@@ -16,10 +16,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use layout_dom_api::{DomMutation, LayoutDom, LayoutDomMut, Namespace, NodeKind};
-use serval_scripted_dom::{NodeId, ScriptedDom};
+use genet_scripted_dom::{NodeId, ScriptedDom};
 use xilem_core::{MessageCtx, MessageResult, View};
 
-use crate::{DomHandle, El, ServalCtx, ServalElement, el};
+use crate::{DomHandle, El, GenetCtx, GenetElement, el};
 
 // --- MARK: read helpers -------------------------------------------------------
 
@@ -97,16 +97,16 @@ fn app_logic(with_middle: bool, attr_on: bool) -> TestView {
 /// the live state for subsequent rebuilds.
 struct Harness {
     dom: DomHandle,
-    ctx: ServalCtx,
-    root_el: ServalElement,
+    ctx: GenetCtx,
+    root_el: GenetElement,
     view: TestView,
-    view_state: <TestView as View<(), (), ServalCtx>>::ViewState,
+    view_state: <TestView as View<(), (), GenetCtx>>::ViewState,
 }
 
 impl Harness {
     fn build(with_middle: bool, attr_on: bool) -> Self {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut ctx = ServalCtx::new(dom.clone());
+        let mut ctx = GenetCtx::new(dom.clone());
         let view = app_logic(with_middle, attr_on);
         let (root_el, view_state) = view.build(&mut ctx, &mut ());
         // Attach the produced root under the document root.
@@ -128,7 +128,7 @@ impl Harness {
     fn rebuild(&mut self, with_middle: bool, attr_on: bool) {
         let next = app_logic(with_middle, attr_on);
         let mut node = self.root_el.node;
-        let mut_ref = crate::ServalElementMut {
+        let mut_ref = crate::GenetElementMut {
             node: &mut node,
             dom: self.dom.clone(),
             parent: None,
@@ -315,19 +315,19 @@ fn message_to_unknown_path_is_handled() {
     // No event wiring in Stage 1a, but the message plumbing must compile and
     // route. A bare text view returns Stale for any message.
     let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-    let mut ctx = ServalCtx::new(dom.clone());
+    let mut ctx = GenetCtx::new(dom.clone());
     let view = "hello";
-    let (mut element, mut state) = View::<(), (), ServalCtx>::build(&view, &mut ctx, &mut ());
+    let (mut element, mut state) = View::<(), (), GenetCtx>::build(&view, &mut ctx, &mut ());
     let mut node = element.node;
     let env = xilem_core::Environment::new();
     let mut msg = MessageCtx::new(env, Vec::new(), xilem_core::DynMessage::new(()));
-    let mut_ref = crate::ServalElementMut {
+    let mut_ref = crate::GenetElementMut {
         node: &mut node,
         dom: dom.clone(),
         parent: None,
     };
     let result: MessageResult<()> =
-        View::<(), (), ServalCtx>::message(&view, &mut state, &mut msg, mut_ref, &mut ());
+        View::<(), (), GenetCtx>::message(&view, &mut state, &mut msg, mut_ref, &mut ());
     assert!(matches!(result, MessageResult::Stale));
     element.node = node;
 }
@@ -340,10 +340,10 @@ mod keyed {
     use std::rc::Rc;
 
     use layout_dom_api::LayoutDom;
-    use serval_scripted_dom::{NodeId, ScriptedDom};
+    use genet_scripted_dom::{NodeId, ScriptedDom};
     use xilem_core::{MessageCtx, MessageResult, Mut, View, ViewMarker};
 
-    use crate::{Keyed, ServalAppRunner, ServalCtx, ServalElement, el};
+    use crate::{Keyed, GenetAppRunner, GenetCtx, GenetElement, el};
 
     #[derive(Default)]
     struct KeyedStats {
@@ -373,25 +373,25 @@ mod keyed {
 
     impl ViewMarker for TaggedText {}
 
-    impl View<KeyedDemo, (), ServalCtx> for TaggedText {
-        type Element = ServalElement;
-        type ViewState = <&'static str as View<KeyedDemo, (), ServalCtx>>::ViewState;
+    impl View<KeyedDemo, (), GenetCtx> for TaggedText {
+        type Element = GenetElement;
+        type ViewState = <&'static str as View<KeyedDemo, (), GenetCtx>>::ViewState;
 
         fn build(
             &self,
-            ctx: &mut ServalCtx,
+            ctx: &mut GenetCtx,
             app_state: &mut KeyedDemo,
         ) -> (Self::Element, Self::ViewState) {
             let _ = app_state;
             self.stats.borrow_mut().builds.push(self.id);
-            View::<KeyedDemo, (), ServalCtx>::build(&self.id, ctx, app_state)
+            View::<KeyedDemo, (), GenetCtx>::build(&self.id, ctx, app_state)
         }
 
         fn rebuild(
             &self,
             prev: &Self,
             view_state: &mut Self::ViewState,
-            ctx: &mut ServalCtx,
+            ctx: &mut GenetCtx,
             element: Mut<'_, Self::Element>,
             app_state: &mut KeyedDemo,
         ) {
@@ -400,7 +400,7 @@ mod keyed {
                 "keyed rebuild paired different logical children"
             );
             self.stats.borrow_mut().rebuilds.push(self.id);
-            View::<KeyedDemo, (), ServalCtx>::rebuild(
+            View::<KeyedDemo, (), GenetCtx>::rebuild(
                 &self.id, &prev.id, view_state, ctx, element, app_state,
             );
         }
@@ -408,11 +408,11 @@ mod keyed {
         fn teardown(
             &self,
             view_state: &mut Self::ViewState,
-            ctx: &mut ServalCtx,
+            ctx: &mut GenetCtx,
             element: Mut<'_, Self::Element>,
         ) {
             self.stats.borrow_mut().teardowns.push(self.id);
-            View::<KeyedDemo, (), ServalCtx>::teardown(&self.id, view_state, ctx, element);
+            View::<KeyedDemo, (), GenetCtx>::teardown(&self.id, view_state, ctx, element);
         }
 
         fn message(
@@ -422,7 +422,7 @@ mod keyed {
             element: Mut<'_, Self::Element>,
             app_state: &mut KeyedDemo,
         ) -> MessageResult<()> {
-            View::<KeyedDemo, (), ServalCtx>::message(
+            View::<KeyedDemo, (), GenetCtx>::message(
                 &self.id, view_state, message, element, app_state,
             )
         }
@@ -430,7 +430,7 @@ mod keyed {
 
     fn keyed_logic(
         demo: &KeyedDemo,
-    ) -> impl View<KeyedDemo, (), ServalCtx, Element = ServalElement> + use<> {
+    ) -> impl View<KeyedDemo, (), GenetCtx, Element = GenetElement> + use<> {
         let children: Keyed<&'static str, TaggedText> = demo
             .ids
             .iter()
@@ -457,7 +457,7 @@ mod keyed {
     #[test]
     fn keyed_middle_insert_retains_later_child_state() {
         let stats = Rc::new(RefCell::new(KeyedStats::default()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             Rc::new(RefCell::new(ScriptedDom::new())),
             keyed_logic,
             KeyedDemo {
@@ -483,7 +483,7 @@ mod keyed {
     #[test]
     fn keyed_middle_delete_retains_later_child_state() {
         let stats = Rc::new(RefCell::new(KeyedStats::default()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             Rc::new(RefCell::new(ScriptedDom::new())),
             keyed_logic,
             KeyedDemo {
@@ -512,7 +512,7 @@ mod keyed {
 
         let stats = Rc::new(RefCell::new(KeyedStats::default()));
         let dom_handle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom_handle.clone(),
             keyed_logic,
             KeyedDemo {
@@ -572,11 +572,11 @@ mod portable {
     use std::rc::Rc;
 
     use layout_dom_api::{DomMutation, LayoutDom, LayoutDomMut};
-    use serval_scripted_dom::{NodeId, ScriptedDom};
+    use genet_scripted_dom::{NodeId, ScriptedDom};
     use xilem_core::{MessageCtx, MessageResult, Mut, View, ViewMarker};
 
     use crate::{
-        El, OnClick, PointerClick, PortableKeyed, ServalAppRunner, ServalCtx, ServalElement, el,
+        El, OnClick, PointerClick, PortableKeyed, GenetAppRunner, GenetCtx, GenetElement, el,
         on_click,
     };
 
@@ -620,13 +620,13 @@ mod portable {
 
     impl ViewMarker for Tile {}
 
-    impl View<MoveDemo, (), ServalCtx> for Tile {
-        type Element = ServalElement;
-        type ViewState = <Inner as View<MoveDemo, (), ServalCtx>>::ViewState;
+    impl View<MoveDemo, (), GenetCtx> for Tile {
+        type Element = GenetElement;
+        type ViewState = <Inner as View<MoveDemo, (), GenetCtx>>::ViewState;
 
         fn build(
             &self,
-            ctx: &mut ServalCtx,
+            ctx: &mut GenetCtx,
             app_state: &mut MoveDemo,
         ) -> (Self::Element, Self::ViewState) {
             self.stats.borrow_mut().builds.push(self.id);
@@ -637,7 +637,7 @@ mod portable {
             &self,
             prev: &Self,
             view_state: &mut Self::ViewState,
-            ctx: &mut ServalCtx,
+            ctx: &mut GenetCtx,
             element: Mut<'_, Self::Element>,
             app_state: &mut MoveDemo,
         ) {
@@ -648,7 +648,7 @@ mod portable {
         fn teardown(
             &self,
             view_state: &mut Self::ViewState,
-            ctx: &mut ServalCtx,
+            ctx: &mut GenetCtx,
             element: Mut<'_, Self::Element>,
         ) {
             self.stats.borrow_mut().teardowns.push(self.id);
@@ -684,7 +684,7 @@ mod portable {
 
     fn move_logic(
         demo: &MoveDemo,
-    ) -> impl View<MoveDemo, (), ServalCtx, Element = ServalElement> + use<> {
+    ) -> impl View<MoveDemo, (), GenetCtx, Element = GenetElement> + use<> {
         el::<_, MoveDemo, ()>(
             "div",
             (
@@ -724,7 +724,7 @@ mod portable {
     fn cross_parent_move_preserves_element_state_and_handlers() {
         let stats = Rc::new(RefCell::new(Stats::default()));
         let dom = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             move_logic,
             MoveDemo {
@@ -784,7 +784,7 @@ mod portable {
     fn target_before_source_falls_back_to_fresh_build_and_drain() {
         let stats = Rc::new(RefCell::new(Stats::default()));
         let dom = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             move_logic,
             MoveDemo {
@@ -824,7 +824,7 @@ mod portable {
     fn removed_key_parks_then_drains_to_real_teardown() {
         let stats = Rc::new(RefCell::new(Stats::default()));
         let dom = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             move_logic,
             MoveDemo {
@@ -867,9 +867,9 @@ mod multi {
     use std::rc::Rc;
 
     use layout_dom_api::{LayoutDom, NodeKind};
-    use serval_scripted_dom::{NodeId, ScriptedDom};
+    use genet_scripted_dom::{NodeId, ScriptedDom};
 
-    use crate::{DomHandle, El, OnClick, PointerClick, ServalMultiRunner, el, on_click};
+    use crate::{DomHandle, El, OnClick, PointerClick, GenetMultiRunner, el, on_click};
 
     struct Counter {
         count: u32,
@@ -904,7 +904,7 @@ mod multi {
     /// single `update` lands in every projection's dom.
     #[test]
     fn one_update_projects_into_every_window() {
-        let mut runner = ServalMultiRunner::<_, _, _, ()>::new(Counter { count: 0 });
+        let mut runner = GenetMultiRunner::<_, _, _, ()>::new(Counter { count: 0 });
         let (dom_a, dom_b) = (fresh_dom(), fresh_dom());
         let a = runner.push_projection(dom_a.clone(), click_view);
         let b = runner.push_projection(dom_b.clone(), click_view);
@@ -924,7 +924,7 @@ mod multi {
     /// churn N windows every frame.
     #[test]
     fn update_local_rebuilds_only_that_projection() {
-        let mut runner = ServalMultiRunner::<_, _, _, ()>::new(Counter { count: 0 });
+        let mut runner = GenetMultiRunner::<_, _, _, ()>::new(Counter { count: 0 });
         let (dom_a, dom_b) = (fresh_dom(), fresh_dom());
         let a = runner.push_projection(dom_a.clone(), click_view);
         let b = runner.push_projection(dom_b.clone(), click_view);
@@ -941,7 +941,7 @@ mod multi {
     /// in the same pass — the mirror fan-outs' replacement.
     #[test]
     fn dispatch_in_one_window_updates_the_others() {
-        let mut runner = ServalMultiRunner::<_, _, _, ()>::new(Counter { count: 0 });
+        let mut runner = GenetMultiRunner::<_, _, _, ()>::new(Counter { count: 0 });
         let (dom_a, dom_b) = (fresh_dom(), fresh_dom());
         let a = runner.push_projection(dom_a.clone(), click_view);
         let b = runner.push_projection(dom_b.clone(), click_view);
@@ -957,7 +957,7 @@ mod multi {
     /// Focus and pointer capture are per-window interaction state, not shared.
     #[test]
     fn focus_is_per_window() {
-        let mut runner = ServalMultiRunner::<_, _, _, ()>::new(Counter { count: 0 });
+        let mut runner = GenetMultiRunner::<_, _, _, ()>::new(Counter { count: 0 });
         let a = runner.push_projection(fresh_dom(), click_view);
         let b = runner.push_projection(fresh_dom(), click_view);
         let root_a = runner.root(a).unwrap();
@@ -971,7 +971,7 @@ mod multi {
     /// shared state and the other windows are untouched.
     #[test]
     fn remove_projection_tears_down_its_tree_only() {
-        let mut runner = ServalMultiRunner::<_, _, _, ()>::new(Counter { count: 0 });
+        let mut runner = GenetMultiRunner::<_, _, _, ()>::new(Counter { count: 0 });
         let (dom_a, dom_b) = (fresh_dom(), fresh_dom());
         let a = runner.push_projection(dom_a.clone(), click_view);
         let b = runner.push_projection(dom_b.clone(), click_view);
@@ -1001,8 +1001,8 @@ mod multi {
 
 // --- MARK: Stage 3a — component composition (backend-only) --------------------
 //
-// These prove the `xilem_core` composition vocabulary works over `ServalCtx`
-// using only this crate + the `ScriptedDom` — no serval-layout/netrender. The
+// These prove the `xilem_core` composition vocabulary works over `GenetCtx`
+// using only this crate + the `ScriptedDom` — no genet-layout/netrender. The
 // `pelt-live` suite asserts the same with full render-path coverage; these are
 // the boundary-level twin, so a `lens`/`map_action`/`OptionalAction` regression
 // is caught even with the engine stack absent.
@@ -1013,10 +1013,10 @@ mod composition {
     use std::rc::Rc;
 
     use layout_dom_api::{LayoutDom, NodeKind};
-    use serval_scripted_dom::{NodeId, ScriptedDom};
+    use genet_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{
-        DomHandle, PointerClick, ServalAppRunner, ServalCtx, ServalElement, View, el, lens,
+        DomHandle, PointerClick, GenetAppRunner, GenetCtx, GenetElement, View, el, lens,
         map_action, on_click,
     };
 
@@ -1051,7 +1051,7 @@ mod composition {
     // input lifetime (else it can't be a single `V` for `FnMut(&_) -> V`).
     fn counter_button(
         count: &mut u32,
-    ) -> impl View<u32, (), ServalCtx, Element = ServalElement> + use<> {
+    ) -> impl View<u32, (), GenetCtx, Element = GenetElement> + use<> {
         on_click(
             el::<_, u32, ()>("button", count.to_string()),
             |c: &mut u32, _ev| *c += 1,
@@ -1063,7 +1063,7 @@ mod composition {
         right: u32,
     }
 
-    fn app_view(_s: &App) -> impl View<App, (), ServalCtx, Element = ServalElement> + use<> {
+    fn app_view(_s: &App) -> impl View<App, (), GenetCtx, Element = GenetElement> + use<> {
         el::<_, App, ()>(
             "div",
             (
@@ -1079,7 +1079,7 @@ mod composition {
     fn lens_isolates_substate() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
         let mut runner =
-            ServalAppRunner::<_, _, _, ()>::new(dom.clone(), app_view, App { left: 0, right: 0 });
+            GenetAppRunner::<_, _, _, ()>::new(dom.clone(), app_view, App { left: 0, right: 0 });
         let root = runner.root();
 
         let (left, right) = {
@@ -1106,7 +1106,7 @@ mod composition {
     struct Bump;
     impl crate::Action for Bump {}
 
-    fn bump_button() -> impl View<(), Bump, ServalCtx, Element = ServalElement> + use<> {
+    fn bump_button() -> impl View<(), Bump, GenetCtx, Element = GenetElement> + use<> {
         on_click(el::<_, (), Bump>("button", "+"), |_s: &mut (), _ev| Bump)
     }
 
@@ -1117,7 +1117,7 @@ mod composition {
 
     fn parent_view(
         _s: &Parent,
-    ) -> impl View<Parent, (), ServalCtx, Element = ServalElement> + use<> {
+    ) -> impl View<Parent, (), GenetCtx, Element = GenetElement> + use<> {
         let child = lens(|_u: &mut ()| bump_button(), |p: &mut Parent| &mut p.unit);
         el::<_, Parent, ()>(
             "div",
@@ -1132,7 +1132,7 @@ mod composition {
     #[test]
     fn map_action_applies_parent_effect() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             parent_view,
             Parent { count: 0, unit: () },
@@ -1156,7 +1156,7 @@ mod composition {
 //
 // The headless twin of `pelt-live`'s Stage 3b suite: focus routing, the
 // no-focus no-op, click-to-focus, and key bubbling — proven over the
-// `ScriptedDom` with no serval-layout/netrender, so a key-registry/focus
+// `ScriptedDom` with no genet-layout/netrender, so a key-registry/focus
 // regression is caught even with the engine stack absent.
 
 #[cfg(test)]
@@ -1165,11 +1165,11 @@ mod keyboard {
     use std::rc::Rc;
 
     use layout_dom_api::{LayoutDom, NodeKind};
-    use serval_scripted_dom::{NodeId, ScriptedDom};
+    use genet_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{
         DomHandle, El, Key, KeyEvent, Modifiers, NamedKey, OnClick, OnKey, PointerClick,
-        ServalAppRunner, ServalCtx, ServalElement, View, el, focusable, on_click, on_key,
+        GenetAppRunner, GenetCtx, GenetElement, View, el, focusable, on_click, on_key,
     };
 
     /// The app state: a text buffer a key handler edits.
@@ -1233,7 +1233,7 @@ mod keyboard {
     fn tab_traverses_focusables() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
         let noop: fn(&mut (), KeyEvent) = |_, _| {};
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             move |_: &()| {
                 el::<_, (), ()>(
@@ -1303,7 +1303,7 @@ mod keyboard {
     #[test]
     fn typed_keys_reach_focused_element() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             focus_view,
             Editor {
@@ -1337,7 +1337,7 @@ mod keyboard {
     #[test]
     fn no_focus_is_a_noop() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             focus_view,
             Editor {
@@ -1379,7 +1379,7 @@ mod keyboard {
     #[test]
     fn click_sets_and_clears_focus() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             click_focus_view,
             Editor {
@@ -1453,7 +1453,7 @@ mod keyboard {
     #[test]
     fn key_bubbles_from_focused_child_to_parent_handler() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             bubble_key_view,
             Editor {
@@ -1490,7 +1490,7 @@ mod keyboard {
     /// be tab-unreachable and un-activatable.
     fn focusable_button_view(
         _s: &Clicks,
-    ) -> impl View<Clicks, (), ServalCtx, Element = ServalElement> + use<> {
+    ) -> impl View<Clicks, (), GenetCtx, Element = GenetElement> + use<> {
         focusable(on_click(
             el::<_, Clicks, ()>("button", "+"),
             |s: &mut Clicks, _ev: PointerClick| s.count += 1,
@@ -1502,7 +1502,7 @@ mod keyboard {
     #[test]
     fn enter_and_space_activate_a_focusable_button() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             focusable_button_view,
             Clicks { count: 0 },
@@ -1547,7 +1547,7 @@ mod keyboard {
     #[test]
     fn clickable_is_focusable_and_activatable() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             |_s: &Clicks| {
                 crate::clickable(
@@ -1587,7 +1587,7 @@ mod keyboard {
             }
         };
         let plain: fn(&mut Editor, KeyEvent) = |_, _| {};
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             move |_: &Editor| {
                 el::<_, Editor, ()>(
@@ -1643,7 +1643,7 @@ mod keyboard {
 // The headless twin of `pelt-live`'s Stage 3 form-control coverage: a reusable
 // `text_field` whose state is its own `TextInput` (buffer + caret), edited through the focus + key
 // dispatch foundation, and composed under a larger struct via `lens` — proven
-// over the `ScriptedDom` with no serval-layout/netrender, so a regression in the
+// over the `ScriptedDom` with no genet-layout/netrender, so a regression in the
 // field's edit handler or its `lens` composition is caught with the engine stack
 // absent. (NB: per Stage 3b, space arrives as `Named(Space)`, not
 // `Character(" ")`, so the sequence below exercises that path explicitly.)
@@ -1654,11 +1654,11 @@ mod controls {
     use std::rc::Rc;
 
     use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
-    use serval_scripted_dom::{NodeId, ScriptedDom};
+    use genet_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{
         AnyView, DomHandle, Key, KeyEvent, Modifiers, NamedKey, PointerClick, PointerEvent,
-        PointerPhase, RadioGroup, SelectState, ServalAppRunner, ServalCtx, ServalElement, Slider,
+        PointerPhase, RadioGroup, SelectState, GenetAppRunner, GenetCtx, GenetElement, Slider,
         TextInput, View, WheelEvent, button, checkbox, el, lens, on_pointer, on_wheel, overlay_at,
         overlay_rect, radio_group, select, slider, text_field,
     };
@@ -1733,10 +1733,10 @@ mod controls {
 
     // --- bare String state ----------------------------------------------------
 
-    impl<Logic, V> FieldRunner for ServalAppRunner<TextInput, Logic, V, ()>
+    impl<Logic, V> FieldRunner for GenetAppRunner<TextInput, Logic, V, ()>
     where
         Logic: FnMut(&TextInput) -> V,
-        V: View<TextInput, (), ServalCtx, Element = ServalElement>,
+        V: View<TextInput, (), GenetCtx, Element = GenetElement>,
     {
         fn key(&mut self, ev: KeyEvent) {
             self.dispatch_key(ev);
@@ -1749,7 +1749,7 @@ mod controls {
     #[test]
     fn text_field_edits_its_own_buffer() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             // The field's state IS the whole app state here: a `TextInput`.
             |s: &TextInput| text_field(s),
@@ -1786,7 +1786,7 @@ mod controls {
     #[test]
     fn text_field_caret_moves_and_edits() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             |s: &TextInput| text_field(s),
             TextInput::default(),
@@ -1854,10 +1854,10 @@ mod controls {
         other: String,
     }
 
-    impl<Logic, V> FieldRunner for ServalAppRunner<Form, Logic, V, ()>
+    impl<Logic, V> FieldRunner for GenetAppRunner<Form, Logic, V, ()>
     where
         Logic: FnMut(&Form) -> V,
-        V: View<Form, (), ServalCtx, Element = ServalElement>,
+        V: View<Form, (), GenetCtx, Element = GenetElement>,
     {
         fn key(&mut self, ev: KeyEvent) {
             self.dispatch_key(ev);
@@ -1870,7 +1870,7 @@ mod controls {
     #[test]
     fn text_field_composes_under_lens() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             |_f: &Form| {
                 // `text_field` takes `&TextInput` (the field renders from a
@@ -1923,7 +1923,7 @@ mod controls {
     #[test]
     fn text_field_home_end_move_caret() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             |s: &TextInput| text_field(s),
             TextInput::default(),
@@ -1966,7 +1966,7 @@ mod controls {
     fn checkbox_toggles_and_reflects_state() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
         let mut runner =
-            ServalAppRunner::<_, _, _, ()>::new(dom.clone(), |c: &bool| checkbox(*c), false);
+            GenetAppRunner::<_, _, _, ()>::new(dom.clone(), |c: &bool| checkbox(*c), false);
         let cb = runner.root(); // the checkbox is the whole view → its root element
 
         assert_eq!(runner.state(), &false);
@@ -2002,7 +2002,7 @@ mod controls {
     fn button_runs_its_handler() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
         let inc: fn(&mut u32, PointerClick) = |n, _| *n += 1;
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             move |_: &u32| button("inc", inc),
             0u32,
@@ -2026,7 +2026,7 @@ mod controls {
     fn button_attr_stamps_class_and_keeps_handler() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
         let inc: fn(&mut u32, PointerClick) = |n, _| *n += 1;
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             move |_: &u32| button("inc", inc).attr("class", "primary"),
             0u32,
@@ -2048,11 +2048,11 @@ mod controls {
 
     /// `overlay_at(x, y, content)`: a `<div>` carrying its position in an inline
     /// `style` (`position: absolute` + the insets), wrapping the content. The
-    /// inline style is what serval's cascade reads to place the overlay.
+    /// inline style is what genet's cascade reads to place the overlay.
     #[test]
     fn overlay_at_carries_inline_position() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let runner = ServalAppRunner::<_, _, _, ()>::new(
+        let runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             |_: &()| overlay_at::<_, (), ()>(30.0, 15.0, "menu"),
             (),
@@ -2073,7 +2073,7 @@ mod controls {
     #[test]
     fn overlay_rect_carries_inline_geometry() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let runner = ServalAppRunner::<_, _, _, ()>::new(
+        let runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             |_: &()| overlay_rect::<_, (), ()>(30.0, 15.0, 200.0, 120.0, "card"),
             (),
@@ -2094,7 +2094,7 @@ mod controls {
     fn select_opens_picks_and_closes() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
         let opts = ["red", "green", "blue"];
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             move |s: &SelectState| select(s, &opts),
             SelectState::new(0),
@@ -2146,7 +2146,7 @@ mod controls {
     /// `Box<dyn AnyView>` whose inner view changes *type* across a rebuild
     /// (`<div>` → `<span>`): the element node is swapped in place via
     /// `AnyElement::replace_inner`, staying attached under the document. Proves
-    /// erased/dynamic views work on serval's uniform element type.
+    /// erased/dynamic views work on genet's uniform element type.
     #[test]
     fn any_view_swaps_node_on_type_change() {
         // The two branches are *different concrete View types* (their children
@@ -2154,7 +2154,7 @@ mod controls {
         // `El<(&str,&str),…>`), so `AnyView` sees a type change and must take the
         // `replace_inner` path — not a same-type rebuild (which wouldn't even
         // re-tag the element).
-        fn view(on: &bool) -> Box<dyn AnyView<bool, (), ServalCtx, ServalElement>> {
+        fn view(on: &bool) -> Box<dyn AnyView<bool, (), GenetCtx, GenetElement>> {
             if *on {
                 Box::new(el::<_, bool, ()>("span", ("on", "!")))
             } else {
@@ -2162,9 +2162,9 @@ mod controls {
             }
         }
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
-            view as fn(&bool) -> Box<dyn AnyView<bool, (), ServalCtx, ServalElement>>,
+            view as fn(&bool) -> Box<dyn AnyView<bool, (), GenetCtx, GenetElement>>,
             false,
         );
 
@@ -2206,7 +2206,7 @@ mod controls {
     fn radio_group_selects_one() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
         let opts = ["a", "b", "c"];
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             move |s: &RadioGroup| radio_group(s, &opts),
             RadioGroup::new(0),
@@ -2295,7 +2295,7 @@ mod controls {
             last_x: f32,
         }
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             |_: &Drag| {
                 on_pointer(
@@ -2350,7 +2350,7 @@ mod controls {
     #[test]
     fn each_pointer_event_records_its_own_default_prevented() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             |_: &()| {
                 on_pointer(
@@ -2400,7 +2400,7 @@ mod controls {
             notches: u32,
         }
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             |_: &Scroll| {
                 on_wheel(
@@ -2470,7 +2470,7 @@ mod controls {
             notches: u32,
         }
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             |_: &Scroll| {
                 on_wheel(
@@ -2516,7 +2516,7 @@ mod controls {
     #[test]
     fn slider_drag_sets_value() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             |s: &Slider| slider(s),
             Slider::default(),
@@ -2679,7 +2679,7 @@ mod controls {
     #[test]
     fn text_field_keyboard_selection_replaces() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             |s: &TextInput| text_field(s),
             TextInput::default(),
@@ -2715,7 +2715,7 @@ mod controls {
 // (`.capture(true)` vs the default bubble), and the dispatch order it produces
 // (capture → target → bubble). Each handler appends a label to a shared
 // `Vec<String>` log on the app state, so the assertions read the literal firing
-// order — proven over the `ScriptedDom` with no serval-layout/netrender.
+// order — proven over the `ScriptedDom` with no genet-layout/netrender.
 
 #[cfg(test)]
 mod capture {
@@ -2723,10 +2723,10 @@ mod capture {
     use std::rc::Rc;
 
     use layout_dom_api::{LayoutDom, NodeKind};
-    use serval_scripted_dom::{NodeId, ScriptedDom};
+    use genet_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{
-        DomHandle, Key, KeyEvent, PointerClick, ServalAppRunner, ServalCtx, ServalElement, View,
+        DomHandle, Key, KeyEvent, PointerClick, GenetAppRunner, GenetCtx, GenetElement, View,
         el, on_click, on_key,
     };
 
@@ -2760,7 +2760,7 @@ mod capture {
     /// *before* the bubble child.
     fn click_phase_view(
         _s: &Log,
-    ) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+    ) -> impl View<Log, (), GenetCtx, Element = GenetElement> + use<> {
         on_click(
             el::<_, Log, ()>(
                 "div",
@@ -2776,7 +2776,7 @@ mod capture {
     #[test]
     fn click_capture_parent_fires_before_bubble_child() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             click_phase_view,
             Log { events: Vec::new() },
@@ -2806,7 +2806,7 @@ mod capture {
     /// inner before the outer.
     fn stacked_click_view(
         _s: &Log,
-    ) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+    ) -> impl View<Log, (), GenetCtx, Element = GenetElement> + use<> {
         on_click(
             on_click(el::<_, Log, ()>("button", "+"), |s: &mut Log, _ev| {
                 s.events.push("inner".to_string());
@@ -2818,7 +2818,7 @@ mod capture {
     #[test]
     fn stacked_click_listeners_all_fire() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             stacked_click_view,
             Log { events: Vec::new() },
@@ -2842,7 +2842,7 @@ mod capture {
     /// `<div on_key(capture)><span on_key /></div>`: a capture-phase key handler
     /// on the div, a default (bubble) key handler on the span. Focus the span and
     /// dispatch a key — the capture div must fire before the bubble span.
-    fn key_phase_view(_s: &Log) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+    fn key_phase_view(_s: &Log) -> impl View<Log, (), GenetCtx, Element = GenetElement> + use<> {
         on_key(
             el::<_, Log, ()>(
                 "div",
@@ -2858,7 +2858,7 @@ mod capture {
     #[test]
     fn key_capture_parent_fires_before_bubble_child() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             key_phase_view,
             Log { events: Vec::new() },
@@ -2891,7 +2891,7 @@ mod capture {
     /// no-`.capture()` listener only runs in the bubble pass.
     fn default_is_bubble_view(
         _s: &Log,
-    ) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+    ) -> impl View<Log, (), GenetCtx, Element = GenetElement> + use<> {
         on_click(
             el::<_, Log, ()>(
                 "section",
@@ -2909,7 +2909,7 @@ mod capture {
     #[test]
     fn default_on_click_only_fires_in_bubble_pass() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             default_is_bubble_view,
             Log { events: Vec::new() },
@@ -2941,7 +2941,7 @@ mod capture {
     /// descendant) must still fire the capture ancestor.
     fn capture_only_ancestor_view(
         _s: &Log,
-    ) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+    ) -> impl View<Log, (), GenetCtx, Element = GenetElement> + use<> {
         on_click(
             el::<_, Log, ()>("div", el::<_, Log, ()>("button", "+")),
             |s: &mut Log, _ev| s.events.push("capture-ancestor".to_string()),
@@ -2952,7 +2952,7 @@ mod capture {
     #[test]
     fn capture_only_ancestor_fires_on_descendant_click() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             capture_only_ancestor_view,
             Log { events: Vec::new() },
@@ -2981,7 +2981,7 @@ mod capture {
     /// is in whichever single phase it registered.
     fn single_capture_target_view(
         _s: &Log,
-    ) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+    ) -> impl View<Log, (), GenetCtx, Element = GenetElement> + use<> {
         on_click(el::<_, Log, ()>("button", "+"), |s: &mut Log, _ev| {
             s.events.push("fired".to_string());
         })
@@ -2991,7 +2991,7 @@ mod capture {
     #[test]
     fn target_listener_fires_in_exactly_one_phase() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             single_capture_target_view,
             Log { events: Vec::new() },
@@ -3018,7 +3018,7 @@ mod capture {
     /// `<div on_click><button on_click(stops) /></div>`: the child (target,
     /// bubble) calls `stop_propagation`, so the parent's bubble handler must NOT
     /// fire — the native counterpart of the JS `stop` scenario.
-    fn click_stop_view(_s: &Log) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+    fn click_stop_view(_s: &Log) -> impl View<Log, (), GenetCtx, Element = GenetElement> + use<> {
         on_click(
             el::<_, Log, ()>(
                 "div",
@@ -3037,7 +3037,7 @@ mod capture {
     #[test]
     fn stop_propagation_halts_the_bubble_walk() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             click_stop_view,
             Log { events: Vec::new() },
@@ -3063,7 +3063,7 @@ mod capture {
     /// default action (form activation, drag start).
     fn click_prevent_view(
         _s: &Log,
-    ) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+    ) -> impl View<Log, (), GenetCtx, Element = GenetElement> + use<> {
         on_click(
             el::<_, Log, ()>("button", "+"),
             |s: &mut Log, ev: PointerClick| {
@@ -3076,7 +3076,7 @@ mod capture {
     #[test]
     fn prevent_default_is_visible_to_the_caller() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             click_prevent_view,
             Log { events: Vec::new() },
@@ -3102,7 +3102,7 @@ mod capture {
     /// A click handler that fires but does NOT prevent the default.
     fn click_plain_view(
         _s: &Log,
-    ) -> impl View<Log, (), ServalCtx, Element = ServalElement> + use<> {
+    ) -> impl View<Log, (), GenetCtx, Element = GenetElement> + use<> {
         on_click(
             el::<_, Log, ()>("button", "+"),
             |s: &mut Log, _ev: PointerClick| {
@@ -3117,7 +3117,7 @@ mod capture {
     #[test]
     fn runner_reports_default_prevented_after_dispatch() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             click_prevent_view,
             Log { events: Vec::new() },
@@ -3138,7 +3138,7 @@ mod capture {
     #[test]
     fn runner_default_prevented_is_false_without_prevent() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             click_plain_view,
             Log { events: Vec::new() },

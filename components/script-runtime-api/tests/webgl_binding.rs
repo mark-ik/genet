@@ -572,7 +572,7 @@ fn html_canvas_get_context_webgl_returns_a_rendering_context() {
           sameTwice: sameTwice,
           aliasMatches: aliasMatches,
           unknown: (unknown === null),
-          textureKey: c.getAttribute('data-serval-external-texture-key'),
+          textureKey: c.getAttribute('data-genet-external-texture-key'),
           r: px[0], g: px[1], b: px[2], a: px[3],
         };
     "#;

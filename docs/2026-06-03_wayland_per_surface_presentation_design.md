@@ -42,7 +42,7 @@ Recent landings the design relies on:
 - `ServoCompositor` "OR target-side (re)alloc into the dirty signal" (so a freshly-allocated dest doesn't present uninitialized on a clean frame).
 - `OsCompositorBackend` trait — backend owns destination allocation.
 
-The 2026-05-28 brief was authored *after* all of the above; nothing in the 84 commits between the user's previous serval state and now invalidates its scope. The macOS "sync upgrade flagged as upstream-blocked" entry (`a518ecaae85`) is **macOS-specific** (`metal::Queue::raw_queue()` not exposed); Vulkan's `hal_queue.as_raw()` is exposed and supports this work.
+The 2026-05-28 brief was authored *after* all of the above; nothing in the 84 commits between the user's previous genet state and now invalidates its scope. The macOS "sync upgrade flagged as upstream-blocked" entry (`a518ecaae85`) is **macOS-specific** (`metal::Queue::raw_queue()` not exposed); Vulkan's `hal_queue.as_raw()` is exposed and supports this work.
 
 ## 4. High-level architecture
 
@@ -555,7 +555,7 @@ A first-run modifier log message: `[WaylandSubsurfaceBackend] dmabuf modifier: D
 - `docs/2026-05-09_c4_landed_notes.md` — flip gap (4) to ✅ with the smoke commands + visual receipt; mirror the style used for items 0/1/2.
 - `docs/2026-05-09_interop_lineage.md` — flip the Linux slot from "Pending" to ✓; brief note on shape (`VulkanTimelineSemaphoreSynchronizer` exposing the semaphore handle + `next_value` + `signaled_value` via `vkGetSemaphoreCounterValue` + `wait_host` via `vkWaitSemaphores` + OPAQUE_FD export).
 - `docs/2026-05-28_wayland_per_surface_presentation_gap.md` — append "Done 2026-06-03" annotation linking the smoke commands + receipt.
-- `docs/archive/2026-05-05_serval_netrender_cut_plan.md` — Linux status snapshot moves from pending to landed; C4 universally ✅.
+- `docs/archive/2026-05-05_genet_netrender_cut_plan.md` — Linux status snapshot moves from pending to landed; C4 universally ✅.
 
 ## 12. Risks & open questions
 

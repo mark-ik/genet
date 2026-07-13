@@ -2,7 +2,7 @@
 
 A portable, pure-Rust, wasm-safe text lexer and syntax highlighter.
 
-> **Home:** [`mark-ik/serval`](https://github.com/mark-ik/serval), at
+> **Home:** [`mark-ik/genet`](https://github.com/mark-ik/genet), at
 > `components/illume` (adopted 2026-07). The former standalone repository is archived
 > and links here.
 

@@ -60,8 +60,8 @@ pub(crate) mod windowed {
 
     use netrender::external_texture::ExternalTexturePlacement;
     use netrender::{ColorLoad, NetrenderOptions};
-    use serval_layout::ScrollKey;
-    use serval_winit_host::{SurfaceHost, wheel_delta_from_winit};
+    use genet_layout::ScrollKey;
+    use genet_winit_host::{SurfaceHost, wheel_delta_from_winit};
     use winit::application::ApplicationHandler;
     use winit::dpi::PhysicalSize;
     use winit::event::{ElementState, MouseButton, WindowEvent};

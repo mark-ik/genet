@@ -7,9 +7,9 @@ $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 if (-not $NoBuild) {
-    cargo build --manifest-path (Join-Path $repo "Cargo.toml") --release -p serval-wpt --features netfetch
+    cargo build --manifest-path (Join-Path $repo "Cargo.toml") --release -p genet-wpt --features netfetch
     if ($LASTEXITCODE -ne 0) {
-        throw "cargo build -p serval-wpt --release --features netfetch failed with exit code $LASTEXITCODE"
+        throw "cargo build -p genet-wpt --release --features netfetch failed with exit code $LASTEXITCODE"
     }
 }
 
@@ -18,17 +18,17 @@ if ($LASTEXITCODE -ne 0) {
     throw "cargo metadata failed with exit code $LASTEXITCODE"
 }
 
-$exeName = if ($IsWindows -or $env:OS -eq "Windows_NT") { "serval-wpt.exe" } else { "serval-wpt" }
+$exeName = if ($IsWindows -or $env:OS -eq "Windows_NT") { "genet-wpt.exe" } else { "genet-wpt" }
 $runner = Join-Path $metadata.target_directory (Join-Path "release" $exeName)
 if (-not (Test-Path $runner)) {
-    throw "release serval-wpt binary not found at $runner; rerun without -NoBuild"
+    throw "release genet-wpt binary not found at $runner; rerun without -NoBuild"
 }
 
 $baselines = @(
     @{
         Subset = "fetch/api/basic"
         Engine = "boa"
-        Expectations = "ports/serval-wpt/expectations/testharness/fetch_api_basic_boa.json"
+        Expectations = "ports/genet-wpt/expectations/testharness/fetch_api_basic_boa.json"
     }
 )
 

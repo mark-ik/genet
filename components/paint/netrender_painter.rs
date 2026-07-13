@@ -500,7 +500,7 @@ impl Paint {
     }
 
     /// Register or replace a same-device producer texture referenced
-    /// by `ServalDisplayItem::ExternalTexture`.
+    /// by `GenetDisplayItem::ExternalTexture`.
     pub fn install_external_texture(&self, key: u64, texture: wgpu::Texture) {
         self.external_textures.borrow_mut().insert(key, texture);
     }

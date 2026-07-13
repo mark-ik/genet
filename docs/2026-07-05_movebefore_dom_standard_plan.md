@@ -22,7 +22,7 @@ the case the forest design creates.
 ## What exists (receipts)
 
 - **WPT is on disk and wired.** `tests/wpt/tests/dom/nodes/moveBefore/` (the
-  full upstream suite) with `ports/serval-wpt` expectations currently `"fail"`
+  full upstream suite) with `ports/genet-wpt` expectations currently `"fail"`
   in `dom_boa.json` / `dom_nodes_boa.json` (crash tests `"skip"`). The done
   condition per slice is flipping specific expectations, not writing tests.
 - **`ScriptedDom::insert_before` is already a move for in-tree nodes** (detach,
@@ -33,8 +33,8 @@ the case the forest design creates.
   is also wrong for the plain page case per spec (`insertBefore` of an in-tree
   node is remove + insert, both observable).
 - **`DomMutation` (components/shared/layout-dom/lib.rs) has no move variant.**
-  Consumers: serval-layout (`cascade.rs`, `incremental.rs`, `invalidate.rs`,
-  `snapshot.rs`), serval-scripted (`capture.rs`, `lib.rs`), xilem-serval
+  Consumers: genet-layout (`cascade.rs`, `incremental.rs`, `invalidate.rs`,
+  `snapshot.rs`), genet-scripted (`capture.rs`, `lib.rs`), xilem-serval
   (`runner.rs` tests), and meerkat (`pane_session.rs`, `render/cards.rs`,
   `window_view/gnode_pool.rs`).
 - **JS bindings**: `script-runtime-api/dom/bootstrap.js` defines
@@ -60,9 +60,9 @@ the case the forest design creates.
   inserted-under (invalidate both parents, route to both windows' sessions).
   Behavior identical to a remove + insert pair; no fast path yet.
 
-Done when: serval-scripted-dom unit tests cover move (cross-parent, same-parent
+Done when: genet-scripted-dom unit tests cover move (cross-parent, same-parent
 reorder, no-op position, mutation records), all consumers compile with explicit
-arms, serval-layout + xilem-serval tests pass, meerkat builds and its
+arms, genet-layout + xilem-serval tests pass, meerkat builds and its
 partition-routing tests pass.
 
 ### S2 — Layout fast path: Moved rides the splice
@@ -105,7 +105,7 @@ capture it yet). Covered by `dom::tests::dom_move_before_works` (cross-parent
 move, reorder, in-place no-op, all three throw classes, return value,
 detached-tree move) — green on boa alongside the full runtime-api suite.
 
-**WPT receipts (2026-07-05, `serval-wpt testharness dom/nodes/moveBefore`,
+**WPT receipts (2026-07-05, `genet-wpt testharness dom/nodes/moveBefore`,
 boa).** Subtests went 0 → 21/112 across the suite:
 
 - `Node-moveBefore.html` (the core semantics file): **19/32 subtests pass**.
@@ -142,7 +142,7 @@ Flip each tranche as its subsystem exists:
 - iframe document preservation when content iframes exist.
 
 Not scheduled here; each is listed so the expectation file stays an honest map
-of what serval can and cannot preserve.
+of what genet can and cannot preserve.
 
 ### S5 — xilem_serval keyed views ride it
 
@@ -152,7 +152,7 @@ children is now a real move:
 - Vendored `xilem_core::ElementSplice` grew a defaulted
   `hoist_pending(n) -> bool` (false by default, so every other impl and
   backend is untouched).
-- `ServalChildrenSplice` implements it: reorder the pending queue, then one
+- `GenetChildrenSplice` implements it: reorder the pending queue, then one
   `move_before` — the node never detaches.
 - `Keyed::seq_rebuild`, gated on `Seq::ELEMENTS_COUNT == Count::One`: a
   leading run of removals tears down first (so pure removals cost zero
@@ -188,7 +188,7 @@ children is now a real move:
   non-hoisting splices and other backends degrade to teardown + fresh build.
   This resolves the sharp edge named above: the source's cursor accounting
   treats the extracted child as consumed while its node stays put.
-- **`ServalCtx` nursery**: typed buckets per `(K, V)` instantiation, erased
+- **`GenetCtx` nursery**: typed buckets per `(K, V)` instantiation, erased
   behind a drain trait; a monomorphized teardown fn pointer is captured at
   park time so the drain needs no type knowledge. The runner drains at the
   end of every rebuild (looping, since a teardown can park nested children):
@@ -209,7 +209,7 @@ children is now a real move:
   the new parent, exactly one `Moved { from_parent, to_parent }`, zero
   builds/teardowns, and a dispatched click on the moved tile still routes,
   proving the path reconciliation); plus the target-first fallback and the
-  park-then-drain removal tests. Suites: xilem-serval 83, serval-layout 251,
+  park-then-drain removal tests. Suites: xilem-serval 83, genet-layout 251,
   xilem_core, meerkat check + gloss/pane/gnode tests all green.
 
 Remaining beyond S5: nothing engine-side. The consumer work (meerkat tiles as

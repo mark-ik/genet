@@ -4,7 +4,7 @@
 
 //! Reusable form controls built on the [`on_key`](crate::on_key) foundation.
 //!
-//! Stage 3 of `docs/2026-05-27_serval_as_host_xilem_serval_plan.md` (the
+//! Stage 3 of `docs/2026-05-27_genet_as_host_xilem_serval_plan.md` (the
 //! text-field slice, deepened with a caret): the first *control* on top of the
 //! keyboard/focus foundation. [`text_field`] is the editable-text analogue of
 //! the Stage 3a `counter_button` component — its state is a [`TextInput`]

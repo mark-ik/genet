@@ -3,18 +3,18 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 //! The native key event view: [`on_key`]`(child, handler)`, plus the
-//! serval-native [`KeyEvent`] it carries.
+//! genet-native [`KeyEvent`] it carries.
 //!
-//! Stage 3b of `docs/2026-05-27_serval_as_host_xilem_serval_plan.md`: the
+//! Stage 3b of `docs/2026-05-27_genet_as_host_xilem_serval_plan.md`: the
 //! keyboard/focus *foundation*. It mirrors [`OnClick`](crate::OnClick) (Stage
 //! 2b) exactly, swapping the click payload for a [`KeyEvent`] and the click
-//! registry for the parallel key registry on [`ServalCtx`]. A later slice maps
+//! registry for the parallel key registry on [`GenetCtx`]. A later slice maps
 //! winit key events to [`KeyEvent`] and adds form controls on top; this layer
 //! stays headless (no winit, no bin).
 //!
 //! As with [`on_click`](crate::on_click): there is no browser, so no
 //! `addEventListener`. On build, the view records its routing path in
-//! [`ServalCtx`]'s *key* registry, keyed by the DOM node it wraps. The runner
+//! [`GenetCtx`]'s *key* registry, keyed by the DOM node it wraps. The runner
 //! ([`dispatch_key`]) is the dispatch engine: it routes a [`KeyEvent`] from the
 //! currently *focused* node up its ancestor chain through the same
 //! `id_path`-routed `View::message` cycle the click path uses. A node is
@@ -27,17 +27,17 @@
 //! [`ON_KEY_ID`]), then — if the remaining path is empty — `take_message`s the
 //! [`KeyEvent`] and calls the handler; otherwise it forwards to the child.
 //!
-//! [`dispatch_key`]: crate::ServalAppRunner::dispatch_key
-//! [`dispatch_click`]: crate::ServalAppRunner::dispatch_click
+//! [`dispatch_key`]: crate::GenetAppRunner::dispatch_key
+//! [`dispatch_click`]: crate::GenetAppRunner::dispatch_click
 //! [`OnClick::message`]: crate::OnClick
 
 use core::marker::PhantomData;
 
-use serval_scripted_dom::NodeId;
+use genet_scripted_dom::NodeId;
 use xilem_core::{MessageCtx, MessageResult, Mut, View, ViewId, ViewMarker, ViewPathTracker};
 
-use crate::pod::ServalElement;
-use crate::{ElementView, OptionalAction, ServalCtx};
+use crate::pod::GenetElement;
+use crate::{ElementView, OptionalAction, GenetCtx};
 
 // A distinctive number, mirroring [`OnClick`](crate::OnClick)'s `ON_CLICK_ID`,
 // so a stray message routed here on a wrong path is caught rather than silently
@@ -165,7 +165,7 @@ impl KeyEvent {
 /// Wraps a [`View`] `V` and registers a native key handler on its element,
 /// marking the element focusable.
 ///
-/// Construct with [`on_key`]. The wrapped child must produce a [`ServalElement`]
+/// Construct with [`on_key`]. The wrapped child must produce a [`GenetElement`]
 /// (so the view has a DOM node to key the registry on). The handler return type
 /// is an [`OptionalAction`] (`OA`), exactly as [`OnClick`](crate::OnClick): a
 /// unit handler is a [`MessageResult::Nop`], an action handler bubbles a
@@ -202,7 +202,7 @@ impl<V, State, Action, F> OnKey<V, State, Action, F> {
 
 /// Attach a native key handler to `child`, making `child`'s element focusable.
 ///
-/// `handler` runs when [`dispatch_key`](crate::ServalAppRunner::dispatch_key)
+/// `handler` runs when [`dispatch_key`](crate::GenetAppRunner::dispatch_key)
 /// routes a [`KeyEvent`] to this view — i.e. when this view's node is the focus
 /// (or an ancestor of the focus, via the bubble walk). It mutates the app state
 /// and may return an action (anything implementing [`OptionalAction<Action>`] —
@@ -211,7 +211,7 @@ impl<V, State, Action, F> OnKey<V, State, Action, F> {
 /// any state change reaches the DOM.
 ///
 /// Registering a key handler is also what makes `child`'s node *focusable*
-/// (in either phase): [`ServalCtx::is_focusable`](crate::ServalCtx::is_focusable)
+/// (in either phase): [`GenetCtx::is_focusable`](crate::GenetCtx::is_focusable)
 /// returns `true` for it, and a click on it (or a descendant) focuses it.
 pub fn on_key<V, State, Action, OA, F>(child: V, handler: F) -> OnKey<V, State, Action, F>
 where
@@ -244,7 +244,7 @@ pub struct OnKeyState<S> {
 
 impl<V, State, Action, F> ViewMarker for OnKey<V, State, Action, F> {}
 
-impl<V, State, Action, OA, F> View<State, Action, ServalCtx> for OnKey<V, State, Action, F>
+impl<V, State, Action, OA, F> View<State, Action, GenetCtx> for OnKey<V, State, Action, F>
 where
     State: 'static,
     Action: 'static,
@@ -254,11 +254,11 @@ where
 {
     type ViewState = OnKeyState<V::ViewState>;
 
-    type Element = ServalElement;
+    type Element = GenetElement;
 
     fn build(
         &self,
-        ctx: &mut ServalCtx,
+        ctx: &mut GenetCtx,
         app_state: &mut State,
     ) -> (Self::Element, Self::ViewState) {
         // Push our own id so the captured `view_path()` (and the message path the
@@ -286,7 +286,7 @@ where
         &self,
         prev: &Self,
         view_state: &mut Self::ViewState,
-        ctx: &mut ServalCtx,
+        ctx: &mut GenetCtx,
         mut element: Mut<'_, Self::Element>,
         app_state: &mut State,
     ) {
@@ -316,7 +316,7 @@ where
     fn teardown(
         &self,
         view_state: &mut Self::ViewState,
-        ctx: &mut ServalCtx,
+        ctx: &mut GenetCtx,
         element: Mut<'_, Self::Element>,
     ) {
         ctx.with_id(ON_KEY_ID, |ctx| {

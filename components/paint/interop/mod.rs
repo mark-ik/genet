@@ -2,13 +2,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Direction-neutral wgpu/native interop primitives for serval's C4
+//! Direction-neutral wgpu/native interop primitives for genet's C4
 //! compositor adapter.
 //!
 //! ## Provenance
 //!
 //! These primitives are the slint-example → `wgpu-graft` →
-//! `scrying` → serval lineage; the direction-neutral pieces
+//! `scrying` → genet lineage; the direction-neutral pieces
 //! survived four iterations and an export/import direction
 //! reversal. See
 //! [`docs/2026-05-09_interop_lineage.md`](../../../docs/2026-05-09_interop_lineage.md)
@@ -114,7 +114,7 @@ impl HostWgpuContext {
 /// How the producer signals that a frame is ready and how the
 /// consumer signals that it has finished reading.
 ///
-/// In serval's C4 export direction, the **producer** is netrender's
+/// In genet's C4 export direction, the **producer** is netrender's
 /// wgpu queue (signalling at submit time) and the **consumer** is the
 /// OS compositor (waiting before sampling the surface).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -1,7 +1,7 @@
 # Shell Partition Runtime Findings
 
 **Date**: 2026-07-03  
-**Scope**: runtime review of the Meerkat host-side shell partition work that consumes the new `serval-layout` subtree/base paint-emission seam.
+**Scope**: runtime review of the Meerkat host-side shell partition work that consumes the new `genet-layout` subtree/base paint-emission seam.
 
 ## Setup
 
@@ -45,7 +45,7 @@ with representative costs:
 - `chrome_us=45062`, `chrome_raster_us=47154`
 
 That mutation is now explained and fixed. `position_chrome_overlays` in Meerkat was re-stamping the
-shellbar `style` attribute every frame, and `ScriptedDom::set_attribute` in Serval correctly
+shellbar `style` attribute every frame, and `ScriptedDom::set_attribute` in Genet correctly
 records same-value writes as `DomMutation::AttributeChanged`. The host was wasteful; the engine was
 standards-correct.
 
@@ -139,7 +139,7 @@ On the next headed pass:
 - the old `mut_count=20` shellbar batch collapsed to `mut_count=1`,
 - that remaining batch was just `text #text(NodeId(...))`.
 
-That leaves a much cleaner Serval-side motivator: a single shell text mutation in the loaded
+That leaves a much cleaner Genet-side motivator: a single shell text mutation in the loaded
 session still produced `chrome_us=128987` and `chrome_raster_us=60520`.
 
 ## Interpretation
@@ -150,20 +150,20 @@ The diagnosis is now tighter:
 - After the gnode pool work, that suspicion moved to a non-orrery shell mutation.
 - After the overlay suppression rerun, that steady-state mutation is gone and the split reaches the intended cache states.
 
-So the partition seam is validated. The remaining Serval-side work is about the cost of the frames
+So the partition seam is validated. The remaining Genet-side work is about the cost of the frames
 that are still legitimately dirty: base-scene emission, base-scene raster, and the structural shell
 batches that trigger both.
 
 ## Review Questions
 
-1. Is the steady `mut_count=1` / `base_dirty=true` loop still part of the Serval problem statement?
+1. Is the steady `mut_count=1` / `base_dirty=true` loop still part of the Genet problem statement?
    No. It was host-side overlay churn, and the rerun confirms the fix.
-2. What should motivate the Serval-side plan now?
+2. What should motivate the Genet-side plan now?
    A like-for-like loaded-session capture taken after this fix, with `shell_node_count` and session
    identity recorded alongside the frame numbers. The earlier near-empty gnode-plan captures are
    not enough, and this restored session (`shell_node_count=141-142`) is still not the same
    measurement as ui_polish finding 5's loaded roster/gloss case.
-3. Should emission and raster stay coupled in the next Serval-side write-up?
+3. Should emission and raster stay coupled in the next Genet-side write-up?
    No. This doc now shows both terms explicitly, and the next plan should keep them separate:
    `chrome_us` is the emission-side term, `chrome_raster_us` is the raster-side term.
 4. Is there still a Meerkat-side follow-up worth doing?
@@ -182,16 +182,16 @@ One comparison gap still matters, though. The earlier gnode-plan P5 capture that
 this rerun used a restored session at `shell_node_count=141-142`, `gnode_count=14`. And ui_polish
 finding 5's 100-145ms motivating number came from a loaded roster/gloss/full-orrery session that
 was larger again. So this doc now proves the seam and clears the host-churn confounder, but it does
-not yet replace the loaded-session Serval-side motivating measurement.
+not yet replace the loaded-session Genet-side motivating measurement.
 
 ## Recommended next step (revised 2026-07-03)
 
 1. Capture a truly loaded session after this fix, with `shell_node_count`, `gnode_count`, and
    session identity recorded alongside the frame numbers.
-2. Scope the Serval-side follow-on with emission and raster named separately from the start.
+2. Scope the Genet-side follow-on with emission and raster named separately from the start.
 3. Audit the remaining focused-card structural bursts the same way the overlay churn was audited;
    the loaded-session shell base now already has a clean tiny-dirty measurement (`mut_count=1`
-   text-only) suitable for the Serval-side plan.
+   text-only) suitable for the Genet-side plan.
 4. Batch-level mutation instrumentation still fits doctrine §6.3, but it is follow-up work, not
    the gate.
 
@@ -199,11 +199,11 @@ As of the post-fix follow-up, that audit seam is now partly in place on the Meer
 `PaneSession::refresh` logs structural-batch kind counts (`inserted`, `removed`, `attr_changed`,
 `text_changed`, `subtree_replaced`) plus a short sample trail of the affected nodes/parents. The
 next headed capture should use that output to pin the remaining `mut_count=8` / `3` bursts on
-concrete surfaces before changing Serval.
+concrete surfaces before changing Genet.
 
 Cross-reference: the mere-side history of this work lives in the
 [gnode_pool_plan](../../mere/design_docs/mere_docs/implementation_strategy/2026-07-02_gnode_pool_plan.md)
-(P0-P5 + the parked-cull follow-on + the partition pass); this doc is the serval-side receipt for
-the seam's first consumer. The Serval-side follow-on now lives in
+(P0-P5 + the parked-cull follow-on + the partition pass); this doc is the genet-side receipt for
+the seam's first consumer. The Genet-side follow-on now lives in
 [2026-07-03_shell_paint_emission_raster_plan.md](./2026-07-03_shell_paint_emission_raster_plan.md).
 Keep conclusions synced.

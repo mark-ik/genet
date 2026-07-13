@@ -17,8 +17,8 @@ selection. The native CSS engine therefore belongs on the Genet side of the
 boundary. It must not become a Cambium dependency that engine crates import.
 
 This choice replaces the old `xilem_serval`/host-chrome wording. The extracted
-toolkit is Cambium. The engine product is Genet; current `serval-*` packages,
-Rust types, repository paths, and the `serval-layout` crate are compatibility
+toolkit is Cambium. The engine product is Genet; current `genet-*` packages,
+Rust types, repository paths, and the `genet-layout` crate are compatibility
 identifiers until their source rename lands.
 
 The lane is deliberately narrower than a complete host theme. It covers:
@@ -71,7 +71,7 @@ Production evidence:
 
 - Cambium `crates/cambium/src/{arrangement,grid,highlight,overlay,select,slider,styled_field,tags}.rs`;
 - Sprigging `crates/sprigging/src/arrange.rs`;
-- current Genet path `components/serval-layout/ua_defaults.rs`.
+- current Genet path `components/genet-layout/ua_defaults.rs`.
 
 The clean-room database is
 [`second-css-engine/properties.toml`](./second-css-engine/properties.toml). Each
@@ -82,7 +82,7 @@ normative property shape it grows toward.
 
 ## Boundary consequence
 
-This is not a 22-accessor swap inside the current `serval-layout` crate. That
+This is not a 22-accessor swap inside the current `genet-layout` crate. That
 crate still has the 126-longhand Stylo contract and broad Stylo lifecycle types.
 The first integration must provide a separate concrete style/layout path for
 Cambium documents behind Genet's document-facing runtime boundary. Computed

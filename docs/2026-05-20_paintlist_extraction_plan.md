@@ -1,20 +1,20 @@
 # PaintList layer extraction — neutral shared crate (plan)
 
 **Status: DONE (2026-05-24).** Extraction committed (`15e9a0c`): `paint_list_api` + the
-`PaintCmd→Scene` translator now live in the netrender workspace, and serval consumes them
+`PaintCmd→Scene` translator now live in the netrender workspace, and genet consumes them
 (`paint_list_api`/`paint_list_render = { path = "../netrender/…" }`);
 `components/shared/paint-list-api` + `components/paint/translator.rs` are deleted. (Was
 "planned; no code moved yet", 2026-05-20.)
 Successor to [2026-05-17_paintlist_polyglot_renderer.md](./2026-05-17_paintlist_polyglot_renderer.md)
 (the PM-3 design + as-built receipts). That doc designed a polyglot
 renderer-input layer but, per the constraint below, the layer shipped
-**inside serval** rather than as shared infrastructure. This plan lifts it
-out so any engine — not just Serval — can feed paint output to the
+**inside genet** rather than as shared infrastructure. This plan lifts it
+out so any engine — not just Genet — can feed paint output to the
 netrender pipeline.
 
 ---
 
-## Why it's serval-side today (the constraint)
+## Why it's genet-side today (the constraint)
 
 The PM-3 dep graph placed PaintList consumption "in netrender"
 ([design doc §Crate dep graph](./2026-05-17_paintlist_polyglot_renderer.md)).
@@ -23,23 +23,23 @@ That couldn't ship as written:
 1. **netrender is a fork of `servo/webrender`.** Its remotes are
    `origin = mark-ik/netrender`, `upstream = servo/webrender`. It is
    kept rebaseable on upstream and engine-agnostic. Housing
-   `paint-list-api` inside the `netrender` crate would inject Mere/Serval
-   engine vocabulary (`EngineId::{SERVAL,NEMATIC,SCRYING}`, CSS display-list
+   `paint-list-api` inside the `netrender` crate would inject Mere/Genet
+   engine vocabulary (`EngineId::{GENET,NEMATIC,SCRYING}`, CSS display-list
    concepts) into a servo-lineage crate.
 2. **Dependency inversion.** `paint-list-api` depends on `paint_types`
-   (= `servo-paint-types`, a serval-workspace path crate). netrender is
-   pulled *into* serval (`../netrender/netrender`); the arrow is
-   serval → netrender. Putting `paint-list-api` in netrender would force
+   (= `servo-paint-types`, a genet-workspace path crate). netrender is
+   pulled *into* genet (`../netrender/netrender`); the arrow is
+   genet → netrender. Putting `paint-list-api` in netrender would force
    netrender → servo-paint-types.
 
 So the boundary landed one crate lower: `netrender` stays a pure
 `Scene`/`SceneOp` rasterizer, and the `PaintList → Scene` adapter lives in
-serval's `servo-paint` crate (`components/paint`). The design doc papered
+genet's `servo-paint` crate (`components/paint`). The design doc papered
 over this by *calling* `components/paint` "netrender" — but they are
 distinct crates.
 
 **Consequence the extraction fixes:** the polyglot consumption layer is
-trapped in serval. The second real renderer consumer, inker, proves it —
+trapped in genet. The second real renderer consumer, inker, proves it —
 [`document-canvas/src/netrender_backend.rs`](../../mere/crates/inker/document-canvas/src/netrender_backend.rs)
 re-rolls its own `DocumentRenderPacket → netrender::Scene` backend rather
 than reaching for `paint-list-api`. Two consumers, two doors, no shared
@@ -49,8 +49,8 @@ layer.
 
 ## Target architecture
 
-Both serval and mere already reach into the netrender repo by relative
-path (serval: `../netrender/netrender`; inker:
+Both genet and mere already reach into the netrender repo by relative
+path (genet: `../netrender/netrender`; inker:
 `../../../../netrender/netrender`). The netrender **workspace** is
 therefore already the neutral ground both consume — so the shared layer
 becomes new workspace members there, **as siblings to the `netrender`
@@ -67,14 +67,14 @@ repos/netrender/                 (workspace; servo/webrender lineage)
   paint_list_render/   ← NEW. the translator: paint_list_api → netrender::Scene.
                           deps: netrender, paint_list_api.
 
-repos/serval/components/paint/   (servo-paint) ← shrinks to GPU glue + message loop.
+repos/genet/components/paint/   (servo-paint) ← shrinks to GPU glue + message loop.
                                                   deps paint_list_render.
 repos/mere/crates/inker/document-canvas/  ← repoints through paint_list_api path.
 ```
 
 **Dependency rules:**
 
-- Engines (`serval-layout`, `nematic`, `inker`, future) depend only on
+- Engines (`genet-layout`, `nematic`, `inker`, future) depend only on
   `paint_list_api` — the CSS-ish engine-facing vocabulary. Never on
   netrender.
 - Only the painter/host depends on `paint_list_render` (which depends on
@@ -132,16 +132,16 @@ are the engine-facing contract, by design):**
 These are small: euclid type-aliases with unit markers + plain `enum`s.
 euclid and serde are crates.io deps; the fork is low-cost and does **not**
 re-create a "third vocabulary" problem — it relocates the one engine-facing
-vocabulary out of serval.
+vocabulary out of genet.
 
 ---
 
-## Translator cut — movable vs. stays-in-serval
+## Translator cut — movable vs. stays-in-genet
 
 `translator.rs` is ~930 lines; the pure `PaintCmd → Scene` walk + its
 helpers is ~550 lines (tests excluded). Its only imports are
 `netrender::{…}`, `paint_list_api::{…}`, `paint_types::ColorF`,
-`rustc_hash` — **zero serval-internal imports**. That core moves cleanly.
+`rustc_hash` — **zero genet-internal imports**. That core moves cleanly.
 
 | Concern | Verdict | Pinning dep |
 | --- | --- | --- |
@@ -158,7 +158,7 @@ helpers is ~550 lines (tests excluded). Its only imports are
 
 The translator already returns a `TranslatedDisplayList { scene,
 external_texture_draws, box_shadow_mask_requests }`. That struct is the
-clean handoff: `paint_list_render` produces it (pure); serval's `Paint`
+clean handoff: `paint_list_render` produces it (pure); genet's `Paint`
 consumes it and does the GPU glue. The cut is along an existing seam.
 
 ---
@@ -171,19 +171,19 @@ Each phase is independently landable and leaves the tree green.
 Copy `lib.rs`/`items.rs`/`specs.rs`, add a `primitives` module forked from
 the servo-paint-types subset above. Resolve the `malloc_size_of` question
 (Open items). New crate compiles + its own round-trip tests pass, in
-isolation. Serval not yet touched.
+isolation. Genet not yet touched.
 
 **P2 — scaffold `paint_list_render`.** Move the pure translator walk +
 helpers + `TranslatedDisplayList`/`ExternalTextureDraw`/`BoxShadowMaskRequest`.
 Depends on `netrender` + `paint_list_api`. Port the translator's own unit
 tests. Compiles + passes in isolation.
 
-**P3 — repoint serval onto the workspace crates.** serval's
+**P3 — repoint genet onto the workspace crates.** genet's
 `paint_list_api` path-dep → `../netrender/paint_list_api`; delete the
 in-tree `components/shared/paint-list-api/`. `components/paint` imports the
 translator from `paint_list_render`; delete the moved code, keep the GPU
-glue + message loop. `servo-paint-types` stays for serval-internal uses
-(it's still used elsewhere). Run serval paint tests
+glue + message loop. `servo-paint-types` stays for genet-internal uses
+(it's still used elsewhere). Run genet paint tests
 (`paint_list_render_e2e`, `html_to_pixels_e2e`, `webgl_canvas_texture_e2e`).
 
 **P4 — repoint inker (mere) through the PaintList path.** Make inker emit
@@ -203,7 +203,7 @@ entry when it starts.
    `malloc_size_of` comes via the stylo git pin — not available in the
    netrender workspace. Options: (a) pull `malloc_size_of` from the same
    stylo git rev as a shared pin; (b) **drop the `MallocSizeOf` bound** from
-   the neutral crate and have serval re-add memory reporting via a
+   the neutral crate and have genet re-add memory reporting via a
    newtype/wrapper if it's load-bearing; (c) vendor a trivial impl. Lean
    (b) — keep the neutral crate dep-light unless cross-workspace mem
    reporting is actually needed. Decide at P1.
@@ -212,9 +212,9 @@ entry when it starts.
    note it so it isn't mistaken for a regression introduced here.
 3. **`DrawPath` / `DrawStroke` gaps ride along** as warn!-and-skip stubs.
    Their eventual kurbo::BezPath wiring will be pure and lands in
-   `paint_list_render`, not serval — which is the right home post-move.
+   `paint_list_render`, not genet — which is the right home post-move.
 4. **euclid version unification.** `paint_list_api`'s euclid must match
-   whatever serval and inker already resolve, to avoid type-identity splits
+   whatever genet and inker already resolve, to avoid type-identity splits
    across the path-dep boundary. Pin via the netrender workspace's
    `[workspace.dependencies]`.
 5. **`PaintEnvelope` flat-struct shape is retained** (it already avoids the
@@ -240,9 +240,9 @@ entry when it starts.
     `IdNamespace`/`ImageKey`/`FontInstanceKey`). Deps reduced to
     **euclid + serde**. 7 round-trip tests pass in isolation.
   - **`malloc_size_of` decision: dropped** (Open item #1, option b).
-    Evidence: netrender uses no `malloc_size_of` in source, and serval's
+    Evidence: netrender uses no `malloc_size_of` in source, and genet's
     is the `servo-malloc-size-of` *path* crate — pulling it into the
-    netrender workspace would re-introduce the serval coupling being
+    netrender workspace would re-introduce the genet coupling being
     severed. The `MallocSizeOf` supertrait bound on `PaintList` and all
     derives are gone.
   - **P2** — `netrender/paint_list_render/` created: the translator moved
@@ -250,14 +250,14 @@ entry when it starts.
     std `HashMap`, dropping the rustc-hash dep; structs + entry points
     made `pub`). Deps: **netrender + paint_list_api**. 7 translator tests
     pass against netrender.
-  - **P3** — serval repointed: workspace `paint_list_api` →
+  - **P3** — genet repointed: workspace `paint_list_api` →
     `../netrender/paint_list_api`, added `paint_list_render`; `servo-paint`
     re-exports the translator from `paint_list_render` and dropped
     `mod translator;`; `netrender_painter.rs` imports the structs from
     `paint_list_render`. Deleted `components/paint/translator.rs` and the
     in-tree `components/shared/paint-list-api/` (+ its workspace member).
-    `serval-layout::ServalPaintList` dropped its `MallocSizeOf` derive.
-    `cargo check -p servo-paint -p serval-layout` green; all five paint
+    `genet-layout::GenetPaintList` dropped its `MallocSizeOf` derive.
+    `cargo check -p servo-paint -p genet-layout` green; all five paint
     test targets compile (`--no-run`).
   - **P3 GPU validation:** full `cargo test -p servo-paint`
     (`--test-threads=1`) green — **28 passed, 0 failed, 1 ignored** across
@@ -300,6 +300,6 @@ entry when it starts.
 
 **Extraction complete.** All four phases landed. The PaintList layer
 (`paint_list_api` + `paint_list_render`) lives neutrally in the netrender
-workspace; serval and inker are two producers of the same vocabulary, both
+workspace; genet and inker are two producers of the same vocabulary, both
 lowering through one shared translator; `netrender` stays a pure
 `Scene` rasterizer with its `servo/webrender` upstream remote intact.

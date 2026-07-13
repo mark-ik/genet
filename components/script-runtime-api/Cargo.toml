@@ -1,8 +1,8 @@
-# Browser host surface for serval's scripted tier (plan Layer 1). Built ON the
+# Browser host surface for genet's scripted tier (plan Layer 1). Built ON the
 # script-engine-api VM primitives (set_global / set_function / host data), generic
 # over the backend — no engine dependency in the non-dev graph. The "browser-ish"
 # concepts (global scope, console, event loop, EventTarget, document) live here, not
-# in script-engine-api. The DOM surface binds serval-scripted-dom (a LayoutDomMut
+# in script-engine-api. The DOM surface binds genet-scripted-dom (a LayoutDomMut
 # arena) — a DOM dep, still no engine dep.
 # See docs/2026-05-26_pluggable_engines_testharness_plan.md.
 [package]
@@ -19,8 +19,8 @@ path = "lib.rs"
 [dependencies]
 script-engine-api = { path = "../script-engine-api" }
 # The DOM the host surface scripts against: a NodeId arena implementing
-# LayoutDom + LayoutDomMut, recording DomMutations for serval-layout.
-serval-scripted-dom = { path = "../serval-scripted-dom" }
+# LayoutDom + LayoutDomMut, recording DomMutations for genet-layout.
+genet-scripted-dom = { path = "../genet-scripted-dom" }
 # QualName / Namespace / LocalName for create_element.
 layout-dom-api = { path = "../shared/layout-dom" }
 # Prefix (not re-exported by layout-dom-api) for createElementNS qualified names.
@@ -37,7 +37,7 @@ xpath = { workspace = true }
 # Nova is available to tests on every 64-bit target, including wasm64.
 script-engine-boa = { path = "../script-engine-boa" }
 # Parse HTML to a LayoutDom for the `load_dom` test (a real source document).
-serval-static-dom = { path = "../serval-static-dom" }
+genet-static-dom = { path = "../genet-static-dom" }
 # Backs the test-side WebGlHandler that proves the JS WebGLRenderingContext
 # surface reaches a real wgpu-backed context end-to-end.
 webgl_wgpu = { workspace = true }

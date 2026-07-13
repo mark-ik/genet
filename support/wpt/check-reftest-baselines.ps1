@@ -11,9 +11,9 @@ $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 if (-not $NoBuild) {
-    cargo build --manifest-path (Join-Path $repo "Cargo.toml") --release -p serval-wpt
+    cargo build --manifest-path (Join-Path $repo "Cargo.toml") --release -p genet-wpt
     if ($LASTEXITCODE -ne 0) {
-        throw "cargo build -p serval-wpt --release failed with exit code $LASTEXITCODE"
+        throw "cargo build -p genet-wpt --release failed with exit code $LASTEXITCODE"
     }
 }
 
@@ -22,22 +22,22 @@ if ($LASTEXITCODE -ne 0) {
     throw "cargo metadata failed with exit code $LASTEXITCODE"
 }
 
-$exeName = if ($IsWindows -or $env:OS -eq "Windows_NT") { "serval-wpt.exe" } else { "serval-wpt" }
+$exeName = if ($IsWindows -or $env:OS -eq "Windows_NT") { "genet-wpt.exe" } else { "genet-wpt" }
 $runner = Join-Path $metadata.target_directory (Join-Path "release" $exeName)
 if (-not (Test-Path $runner)) {
-    throw "release serval-wpt binary not found at $runner; rerun without -NoBuild"
+    throw "release genet-wpt binary not found at $runner; rerun without -NoBuild"
 }
 
 $baselines = @(
     @{
         Subset = "css/mediaqueries"
         Engine = "boa"
-        Expectations = "ports/serval-wpt/expectations/reftest/css_mediaqueries_boa.json"
+        Expectations = "ports/genet-wpt/expectations/reftest/css_mediaqueries_boa.json"
     },
     @{
         Subset = "css/css-position"
         Engine = "boa"
-        Expectations = "ports/serval-wpt/expectations/reftest/css_position_boa.json"
+        Expectations = "ports/genet-wpt/expectations/reftest/css_position_boa.json"
     }
 )
 

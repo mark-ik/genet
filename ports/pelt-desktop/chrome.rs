@@ -22,11 +22,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use netrender::Scene;
-use serval_layout::{IncrementalLayout, ScrollOffsets};
-use serval_render::scene_from_scripted_dom;
-use serval_scripted_dom::{NodeId, ScriptedDom};
+use genet_layout::{IncrementalLayout, ScrollOffsets};
+use genet_render::scene_from_scripted_dom;
+use genet_scripted_dom::{NodeId, ScriptedDom};
 use xilem_serval::{
-    AnyView, DomHandle, KeyEvent, PointerClick, ServalAppRunner, ServalCtx, ServalElement,
+    AnyView, DomHandle, KeyEvent, PointerClick, GenetAppRunner, GenetCtx, GenetElement,
     TextField, TextInput, el, lens, on_click, text_field_typed,
 };
 
@@ -151,7 +151,7 @@ impl ChromeState {
 
 /// The erased chrome view type, so the toolbar's concrete `El<…>` tuple need not be
 /// spelled (it grows as the chrome does). Mirrors meerkat's `ChromeView`.
-pub type ChromeView = Box<dyn AnyView<ChromeState, (), ServalCtx, ServalElement>>;
+pub type ChromeView = Box<dyn AnyView<ChromeState, (), GenetCtx, GenetElement>>;
 type ChromeLogic = fn(&ChromeState) -> ChromeView;
 
 fn go_back(c: &mut ChromeState, _: PointerClick) {
@@ -162,7 +162,7 @@ fn go_forward(c: &mut ChromeState, _: PointerClick) {
     c.queue(ChromeIntent::Forward);
 }
 
-/// The chrome toolbar as serval DOM: back / forward buttons and an editable omnibar
+/// The chrome toolbar as genet DOM: back / forward buttons and an editable omnibar
 /// (`text_field` lensed onto [`ChromeState::omnibar`]). A spent direction carries a
 /// `disabled` class the default sheet greys (the handler is already a no-op at the
 /// history edge).
@@ -201,10 +201,10 @@ const DEFAULT_CHROME_CSS: &str = "\
     button { padding: 4px 10px; margin-right: 6px; background: #444444; color: #eeeeee; } \
     button.disabled { color: #888888; }";
 
-/// A view-driven chrome strip: a [`ServalAppRunner`] over its own `ScriptedDom`, plus
+/// A view-driven chrome strip: a [`GenetAppRunner`] over its own `ScriptedDom`, plus
 /// the strip placement and the stylesheets it renders with.
 pub struct Chrome {
-    runner: ServalAppRunner<ChromeState, ChromeLogic, ChromeView, ()>,
+    runner: GenetAppRunner<ChromeState, ChromeLogic, ChromeView, ()>,
     side: StripSide,
     thickness: u32,
     sheets: Vec<String>,
@@ -215,7 +215,7 @@ impl Chrome {
     /// px (the strip's height for top/bottom, width for left/right).
     pub fn new(url: impl Into<String>, side: StripSide, thickness: u32) -> Self {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let runner = ServalAppRunner::new(dom, chrome_view as ChromeLogic, ChromeState::new(url));
+        let runner = GenetAppRunner::new(dom, chrome_view as ChromeLogic, ChromeState::new(url));
         Self {
             runner,
             side,

@@ -9,7 +9,7 @@ later drop-shadow) — distinct from `backdrop-filter` (which filters content
 3 (blur) shipped and verified (`html_to_pixels_e2e`: invert/grayscale/brightness,
 29 green); adversarially reviewed (backdrop+filter-on-one-layer fixed). Commits:
 netrender `fbe3dbf6a` (data path), `6051954c1` (GPU pass), `c5e6400c8` (review
-fixes); serval `76c20f9f4dc` (emission + e2e). Remaining: increment 4
+fixes); genet `76c20f9f4dc` (emission + e2e). Remaining: increment 4
 (`drop-shadow()`), nested element filters, non-square-viewport blur, and the
 tile-cache-aware texture-reuse scheme (the per-frame `register_texture` growth,
 load-bearing and shared with backdrop-filter). The plan below is the as-built
@@ -60,7 +60,7 @@ shape params:
 1. **Data-path foundation (this session).** `SceneFilter` gains the color
    variants; `SceneLayer` gains `filters: Vec<SceneFilter>` (hashed in
    `hash_push_layer`); the translator maps `LayerSpec.filters` → `SceneLayer
-   .filters` (beyond `Opacity`); serval `paint_emit` reads
+   .filters` (beyond `Opacity`); genet `paint_emit` reads
    `cv.get_effects().filter` and opens the stacking layer for a filter chain
    (alongside opacity / blend). The rasterizer ignores `SceneLayer.filters` for
    now, so render is unchanged (an alpha-1 normal layer is a visual no-op) — the
@@ -114,5 +114,5 @@ when present, else the union of the inner ops' bounds; pad by the blur radius fo
 - GPU sub-graph: `render_graph.rs` (`Task`/`EncodeCallback`/`execute`),
   `filter.rs` (`blur_pass_callback` 104, `clip_rectangle_callback` 42 as the
   single-pass shader template), `ImageCache::insert_gpu`.
-- serval emission: `serval-layout/paint_emit.rs` stacking-layer push/pop
+- genet emission: `genet-layout/paint_emit.rs` stacking-layer push/pop
   (the opacity + mix-blend-mode site), `cv.get_effects().filter`.

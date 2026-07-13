@@ -74,8 +74,8 @@ mod windowed {
     use netrender::external_texture::ExternalTexturePlacement;
     use netrender::{ColorLoad, NetrenderOptions};
     use pelt_core::tile::TileTree;
-    use serval_scripted_dom::NodeId;
-    use serval_winit_host::{AccessKitBridge, BridgeStatus, SurfaceHost, wheel_delta_from_winit};
+    use genet_scripted_dom::NodeId;
+    use genet_winit_host::{AccessKitBridge, BridgeStatus, SurfaceHost, wheel_delta_from_winit};
     use winit::application::ApplicationHandler;
     use winit::dpi::PhysicalSize;
     use winit::event::{ElementState, MouseButton, WindowEvent};

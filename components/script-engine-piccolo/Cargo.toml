@@ -24,6 +24,6 @@ script-engine-api = { path = "../script-engine-api" }
 piccolo = { git = "https://github.com/mark-ik/piccolo", branch = "master" }
 # gc-arena, pinned to the *same* rev piccolo uses (no skew), for the in-arena
 # weak reflector cache (`GcWeak`). This is the only direct gc-arena dep in
-# serval before G3, and it is local to the piccolo backend; the workspace-wide
+# genet before G3, and it is local to the piccolo backend; the workspace-wide
 # pin (rule 3) is still resolved at G3 against this same rev.
 gc-arena = { git = "https://github.com/kyren/gc-arena", rev = "5a7534b883b703f23cfb8c3cfdf033460aa77ea9" }

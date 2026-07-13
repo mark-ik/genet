@@ -33,7 +33,7 @@ The surrounding plumbing is platform-agnostic and already landed:
 ## What's left
 
 1. **Per-frame subsurface body.** Implement `wl_subsurface` placement + `wl_surface.commit` in the backend's per-frame path so each declared `SurfaceKey` lands as a subsurface of the embedder `wl_surface`, with transform / clip / opacity applied.
-2. **dmabuf import.** Bridge the netrender wgpu texture to a `wl_buffer` over the linux-dmabuf protocol. The producer is netrender's own wgpu queue, reached through wgpu-hal's Vulkan `as_hal` accessors (same shape as the Windows and macOS backends; no GL path — serval is wgpu-only post-C1).
+2. **dmabuf import.** Bridge the netrender wgpu texture to a `wl_buffer` over the linux-dmabuf protocol. The producer is netrender's own wgpu queue, reached through wgpu-hal's Vulkan `as_hal` accessors (same shape as the Windows and macOS backends; no GL path — genet is wgpu-only post-C1).
 3. **`VulkanTimelineSemaphoreSynchronizer`.** Add the Linux slot to `crate::interop` as direction-neutral inherent methods, driven by the backend the way `WindowsDxgiBackend` drives `Dx12FenceSynchronizer`. Vulkan timeline semaphores are the canonical cross-API fence on Linux; graft's `sync_vulkan.rs` is the structural reference.
 4. **Pelt smoke mode.** Add `--wayland-present-surfaces-smoke` to [ports/pelt/viewer.rs](../ports/pelt/viewer.rs), mirroring `--windows-present-surfaces-smoke` / `--macos-present-surfaces-smoke`. Run under Mutter or Sway.
 

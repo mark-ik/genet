@@ -1,0 +1,37 @@
+[package]
+name = "genet-winit-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+rust-version = "1.92.0"
+description = "Shared Genet-on-winit presentation plumbing: a wgpu surface, netrender Renderer, wheel translation, and AccessKit bridge."
+
+[lib]
+name = "genet_winit_host"
+path = "src/lib.rs"
+
+[dependencies]
+# The present stack: a netrender Renderer rasterizes genet scenes and composites
+# them onto the surface (workspace path dep on the sibling netrender checkout).
+netrender = { workspace = true }
+# Windowing + wgpu surface (workspace pins: winit 0.30 / wgpu 29).
+winit = { workspace = true }
+wgpu = { version = "29", default-features = false, features = ["std", "wgsl"] }
+# Host-neutral diagnostics facade (P3 raster spans); the app owns the subscriber.
+tracing = "0.1"
+# AccessKit bridge (src/a11y.rs): pushes a host's `TreeUpdate` to the OS a11y API
+# and drains screen-reader action requests. The core crate here; the platform
+# adapters are target-gated below so a wasm build never pulls them.
+accesskit = { workspace = true }
+raw-window-handle = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+accesskit_windows = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+accesskit_macos = { workspace = true }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+accesskit_unix = { workspace = true }

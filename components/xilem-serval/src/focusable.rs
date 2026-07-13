@@ -10,11 +10,11 @@
 //! control — a [`button`](crate::button) or [`checkbox`](crate::checkbox), which
 //! carry only an [`on_click`](crate::on_click) — keyboard-unreachable: it cannot be
 //! Tab-focused and a screen-reader / keyboard user cannot activate it. Wrapping it
-//! in [`focusable`] registers the node in [`ServalCtx`]'s explicit focusable set
+//! in [`focusable`] registers the node in [`GenetCtx`]'s explicit focusable set
 //! (the keyboard-model escape hatch, grab-bag G2.3), so it joins the Tab order and
 //! the runner activates it on Enter/Space by synthesizing a click (the keyboard
 //! equivalent of a pointer click — see
-//! [`dispatch_key`](crate::ServalAppRunner::dispatch_key)).
+//! [`dispatch_key`](crate::GenetAppRunner::dispatch_key)).
 //!
 //! The view is a transparent wrapper, structured like [`OnKey`](crate::OnKey) minus
 //! the handler: it pushes its own [`ON_FOCUSABLE_ID`] so its routing position is
@@ -26,11 +26,11 @@
 
 use core::marker::PhantomData;
 
-use serval_scripted_dom::NodeId;
+use genet_scripted_dom::NodeId;
 use xilem_core::{MessageCtx, MessageResult, Mut, View, ViewId, ViewMarker, ViewPathTracker};
 
-use crate::pod::ServalElement;
-use crate::{ElementView, ServalCtx};
+use crate::pod::GenetElement;
+use crate::{ElementView, GenetCtx};
 
 // A distinctive number, mirroring [`OnKey`](crate::OnKey)'s `ON_KEY_ID`, so a
 // stray message routed here on a wrong path is caught rather than silently
@@ -70,7 +70,7 @@ pub fn focusable<V>(child: V) -> Focusable<V> {
 
 impl<V> ViewMarker for Focusable<V> {}
 
-impl<V, State, Action> View<State, Action, ServalCtx> for Focusable<V>
+impl<V, State, Action> View<State, Action, GenetCtx> for Focusable<V>
 where
     State: 'static,
     Action: 'static,
@@ -78,11 +78,11 @@ where
 {
     type ViewState = FocusableState<V::ViewState>;
 
-    type Element = ServalElement;
+    type Element = GenetElement;
 
     fn build(
         &self,
-        ctx: &mut ServalCtx,
+        ctx: &mut GenetCtx,
         app_state: &mut State,
     ) -> (Self::Element, Self::ViewState) {
         // Push our own id so the captured routing position (and any descendant
@@ -106,7 +106,7 @@ where
         &self,
         prev: &Self,
         view_state: &mut Self::ViewState,
-        ctx: &mut ServalCtx,
+        ctx: &mut GenetCtx,
         mut element: Mut<'_, Self::Element>,
         app_state: &mut State,
     ) {
@@ -133,7 +133,7 @@ where
     fn teardown(
         &self,
         view_state: &mut Self::ViewState,
-        ctx: &mut ServalCtx,
+        ctx: &mut GenetCtx,
         element: Mut<'_, Self::Element>,
     ) {
         ctx.with_id(ON_FOCUSABLE_ID, |ctx| {

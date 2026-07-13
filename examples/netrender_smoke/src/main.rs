@@ -4,7 +4,7 @@
 
 //! Phase 1 second receipt — embedder hookup smoke.
 //!
-//! Standalone binary (NOT a serval workspace member; see Cargo.toml).
+//! Standalone binary (NOT a genet workspace member; see Cargo.toml).
 //! Proves the netrender API survives contact with a real embedder context
 //! without the Servo stack.
 //!
@@ -19,7 +19,7 @@
 //! - Call `Renderer::render` against the target view
 //! - Poll the device — completes without error
 //!
-//! The serval workspace Cargo.toml has a broken patch for `webrender`
+//! The genet workspace Cargo.toml has a broken patch for `webrender`
 //! (directory renamed to `netrender` in netrender commit c9481b04b,
 //! 2026-04-30). This standalone binary bypasses that workspace entirely
 //! so the embedder hookup receipt can be captured now.
@@ -102,12 +102,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let log = format!(
         "Phase 1 second receipt (embedder hookup): PASS\n\
          date: 2026-04-30\n\
-         binary: serval/examples/netrender_smoke\n\
+         binary: genet/examples/netrender_smoke\n\
          adapter: {} ({:?})\n\
          target: {}x{} {:?}\n\
          frame: 1x full-NDC red brush_solid via Renderer::render\n\
          result: Renderer::render completed without error\n\
-         note: standalone binary (not workspace member) — serval\n\
+         note: standalone binary (not workspace member) — genet\n\
                workspace blocked by broken webrender patch (renamed to\n\
                netrender in netrender c9481b04b, 2026-04-30)\n",
         final_info.name,

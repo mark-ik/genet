@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! The view context for the serval backend.
+//! The view context for the genet backend.
 //!
 //! Mirrors `xilem_web`'s `ViewCtx`, minus the browser-only state (document
 //! fragment, hydration node stack, modifier size hints). It holds the `id_path`
@@ -26,9 +26,9 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 use crate::DomHandle;
-use crate::pod::{ServalElement, ServalElementMut};
+use crate::pod::{GenetElement, GenetElementMut};
 use layout_dom_api::{LayoutDom, LayoutDomMut};
-use serval_scripted_dom::NodeId;
+use genet_scripted_dom::NodeId;
 use xilem_core::{Environment, View, ViewId, ViewPathTracker};
 
 /// A registered event handler: its routing view path plus the propagation phase
@@ -50,10 +50,10 @@ pub struct Handler {
     pub capture: bool,
 }
 
-/// The [`ViewPathTracker`] context for all serval views.
+/// The [`ViewPathTracker`] context for all genet views.
 ///
 /// Stage 1a carries no `AppRunner`/message-thunk wiring (that is Stage 1b's
-/// `ServalAppRunner`); the context exists so the `View` traits can be driven
+/// `GenetAppRunner`); the context exists so the `View` traits can be driven
 /// directly by a test.
 ///
 /// Stage 2b adds the [`click_handlers`](Self::click_handlers) registry: the
@@ -68,10 +68,10 @@ pub struct Handler {
 /// populated by [`OnKey`](crate::OnKey) the same way. It does double duty: it
 /// is both the key-event routing table *and* the focusability set — a node is
 /// focusable iff it carries a key handler (i.e. is present here). The runner's
-/// [`dispatch_click`](crate::ServalAppRunner::dispatch_click) consults it to
-/// move focus, and [`dispatch_key`](crate::ServalAppRunner::dispatch_key) walks
+/// [`dispatch_click`](crate::GenetAppRunner::dispatch_click) consults it to
+/// move focus, and [`dispatch_key`](crate::GenetAppRunner::dispatch_key) walks
 /// it from the focused node.
-pub struct ServalCtx {
+pub struct GenetCtx {
     id_path: Vec<ViewId>,
     environment: Environment,
     dom: DomHandle,
@@ -124,7 +124,7 @@ pub struct ServalCtx {
 struct ParkedChild<V, VS> {
     view: V,
     state: VS,
-    element: ServalElement,
+    element: GenetElement,
 }
 
 /// One nursery bucket per concrete `(K, V, V::ViewState)` instantiation. The
@@ -132,13 +132,13 @@ struct ParkedChild<V, VS> {
 /// itself needs no `View` bounds and the drain no type knowledge.
 struct Bucket<K, V, VS> {
     parked: HashMap<K, ParkedChild<V, VS>>,
-    teardown: fn(V, VS, ServalElement, &mut ServalCtx),
+    teardown: fn(V, VS, GenetElement, &mut GenetCtx),
 }
 
 /// Type-erased nursery bucket: `Any` for the typed claim, plus the drain hook.
 trait NurseryBucket {
     fn as_any_mut(&mut self) -> &mut dyn Any;
-    fn drain_teardowns(&mut self, ctx: &mut ServalCtx);
+    fn drain_teardowns(&mut self, ctx: &mut GenetCtx);
 }
 
 impl<K, V, VS> NurseryBucket for Bucket<K, V, VS>
@@ -151,7 +151,7 @@ where
         self
     }
 
-    fn drain_teardowns(&mut self, ctx: &mut ServalCtx) {
+    fn drain_teardowns(&mut self, ctx: &mut GenetCtx) {
         for (_key, parked) in self.parked.drain() {
             (self.teardown)(parked.view, parked.state, parked.element, ctx);
         }
@@ -164,16 +164,16 @@ where
 fn teardown_parked<State, Action, V>(
     view: V,
     mut state: V::ViewState,
-    mut element: ServalElement,
-    ctx: &mut ServalCtx,
+    mut element: GenetElement,
+    ctx: &mut GenetCtx,
 ) where
     State: 'static,
     Action: 'static,
-    V: View<State, Action, ServalCtx, Element = ServalElement>,
+    V: View<State, Action, GenetCtx, Element = GenetElement>,
 {
     let node = element.node;
     let parent = ctx.dom.borrow().parent(node);
-    let el = ServalElementMut {
+    let el = GenetElementMut {
         node: &mut element.node,
         dom: ctx.dom.clone(),
         parent,
@@ -182,7 +182,7 @@ fn teardown_parked<State, Action, V>(
     ctx.dom.borrow_mut().remove(node);
 }
 
-impl ServalCtx {
+impl GenetCtx {
     /// Create a context over an existing document handle.
     pub fn new(dom: DomHandle) -> Self {
         Self {
@@ -209,12 +209,12 @@ impl ServalCtx {
         key: K,
         view: V,
         state: V::ViewState,
-        element: ServalElement,
+        element: GenetElement,
     ) where
         State: 'static,
         Action: 'static,
         K: Eq + Hash + 'static,
-        V: View<State, Action, ServalCtx, Element = ServalElement> + 'static,
+        V: View<State, Action, GenetCtx, Element = GenetElement> + 'static,
         V::ViewState: 'static,
     {
         let bucket = self
@@ -247,12 +247,12 @@ impl ServalCtx {
     pub fn claim_portable<State, Action, K, V>(
         &mut self,
         key: &K,
-    ) -> Option<(V, V::ViewState, ServalElement)>
+    ) -> Option<(V, V::ViewState, GenetElement)>
     where
         State: 'static,
         Action: 'static,
         K: Eq + Hash + 'static,
-        V: View<State, Action, ServalCtx, Element = ServalElement> + 'static,
+        V: View<State, Action, GenetCtx, Element = GenetElement> + 'static,
         V::ViewState: 'static,
     {
         let bucket = self
@@ -367,10 +367,10 @@ impl ServalCtx {
     ///
     /// A non-empty result also means `node` is *focusable* via a handler —
     /// independent of phase: the runner's
-    /// [`dispatch_click`](crate::ServalAppRunner::dispatch_click) uses
+    /// [`dispatch_click`](crate::GenetAppRunner::dispatch_click) uses
     /// [`is_focusable`](Self::is_focusable) to find the focus target (nearest
     /// focusable ancestor of a click), and
-    /// [`dispatch_key`](crate::ServalAppRunner::dispatch_key) routes from the
+    /// [`dispatch_key`](crate::GenetAppRunner::dispatch_key) routes from the
     /// focused node up its ancestor chain through the per-phase passes.
     pub fn key_handlers_at(&self, node: NodeId) -> &[Handler] {
         self.key_handlers.get(&node).map_or(&[], Vec::as_slice)
@@ -441,7 +441,7 @@ impl ServalCtx {
     }
 }
 
-impl ViewPathTracker for ServalCtx {
+impl ViewPathTracker for GenetCtx {
     fn environment(&mut self) -> &mut Environment {
         &mut self.environment
     }

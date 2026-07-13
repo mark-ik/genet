@@ -4,7 +4,7 @@
 
 //! Host-agnostic text-editing helpers over [`TextInput`]: an undo/redo
 //! [`EditHistory`] and an auto-pair [`wrap_selection`]. These need nothing but the
-//! buffer, so any serval host gets undoable, bracket-wrapping fields for free — the
+//! buffer, so any genet host gets undoable, bracket-wrapping fields for free — the
 //! omnibar, a note editor, a chat compose box, a form field. Prose- or
 //! grammar-specific editing (list continuation, structural selection over a djot
 //! container tree) stays with the host that knows the grammar.

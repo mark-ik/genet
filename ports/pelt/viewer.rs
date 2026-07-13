@@ -221,7 +221,7 @@ pub(crate) fn main() {
         return;
     }
 
-    // `pelt --engine static|viewer <url>`: the serval-native on-screen document
+    // `pelt --engine static|viewer <url>`: the genet-native on-screen document
     // viewer (the orrery-host present shape over the pelt-core / pelt-desktop
     // contracts). Static and Viewer are the script-free document profiles.
     if matches!(
@@ -757,8 +757,8 @@ pelt {VERSION}
 
 Usage: pelt [--engine <profile>] [<url-or-file>] [options]
 
-Script-free Pelt: serval's reference browser. `--engine static <url-or-file>`
-opens the serval-native on-screen document viewer (file://, a bare path, and
+Script-free Pelt: genet's reference browser. `--engine static <url-or-file>`
+opens the genet-native on-screen document viewer (file://, a bare path, and
 data: URLs — percent-encoded or base64; http(s) needs --features netfetch);
 `--chrome` wraps it in an omnibar + back/forward strip, `--tiles` splits the
 window into per-document tiles. The

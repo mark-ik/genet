@@ -5,7 +5,7 @@
 //! Feed engine — RSS 2.0, Atom 1.0, and JSON Feed 1.x into a portable document.
 //!
 //! RSS / Atom (XML) parsing lives in [`errand::parse::feed`] (shared with the
-//! native serval feed view); JSON Feed is parsed here with serde, since errand (a
+//! native genet feed view); JSON Feed is parsed here with serde, since errand (a
 //! transport crate) should not carry a JSON dependency. Both flavours land in
 //! errand's [`Feed`] shape, so they share [`build_document_blocks`].
 //!

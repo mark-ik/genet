@@ -90,7 +90,7 @@ render faithfully: hostile JS, DRM media, enterprise apps that hard-require a re
 browser. A page-injected shim runs in that page's JS world. The page can spoof
 it, starve it, or block it via CSP, and isolated-world guarantees differ per
 platform. So a bridged Scrying observable is **real structure but
-page-attestable only** — strictly lower trust than Serval's authoritative DOM,
+page-attestable only** — strictly lower trust than Genet's authoritative DOM,
 which we produce ourselves.
 
 The matrix's honesty principle should extend to cover this. Rather than a binary

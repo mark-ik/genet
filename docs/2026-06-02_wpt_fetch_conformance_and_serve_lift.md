@@ -1,10 +1,10 @@
 # WPT fetch/ conformance: JS surface, netfetcher binding, serve lift
 
 Status: **2026-06-02.** Stood up the JS Fetch API surface, wired `fetch()` to a
-host seam, backed that seam with netfetcher in `serval-wpt`, and taught the
+host seam, backed that seam with netfetcher in `genet-wpt`, and taught the
 runner to wrap `.any.js` tests. The network-free `fetch/api/` subset runs and
 scores on both engines (was 0 before). Both gates are now cleared: the hosts file
-is set up (Gate A) and `serval-wpt` has a **server mode** (Gate B) that drives the
+is set up (Gate A) and `genet-wpt` has a **server mode** (Gate B) that drives the
 network-dependent `fetch/` corpus against a live `wpt serve`. Network fetch tests
 that were previously impossible now pass against the real server on both engines
 (e.g. `fetch/api/basic/http-response-code` 1/1, `mode-same-origin` 6/8).
@@ -52,12 +52,12 @@ Bootstrapped in JS over the single `__fetch` sink:
 The separator is a literal newline on both sides (JS `join("\n")`, Rust
 `split('\n')`).
 
-### 3. netfetcher-backed handler (`ports/serval-wpt`, `netfetch` feature)
+### 3. netfetcher-backed handler (`ports/genet-wpt`, `netfetch` feature)
 
 `NetFetchHandler` holds a current-thread tokio runtime and implements
 `FetchHandler` by `block_on`-ing `netfetcher::fetch`, mapping Method, response
 type, final URL (`url_list.last()`), and body bytes. Gated behind the optional
-`netfetch` feature so the default `serval-wpt` build stays free of the async net
+`netfetch` feature so the default `genet-wpt` build stays free of the async net
 stack (confirmed unaffected).
 
 ### 4. `.any.js` wrapping in the runner (`src/main.rs`)
@@ -67,7 +67,7 @@ parses `// META: script=` and `global=` directives and builds a wrapper HTML
 (testharness.js + meta scripts + the file). Worker-only globals are skipped. This
 is what makes the `fetch/api/` `.any.js` corpus runnable at all.
 
-## Network-free numbers (both engines, release `serval-wpt`)
+## Network-free numbers (both engines, release `genet-wpt`)
 
 | subset | boa subtests | nova subtests |
 |---|---|---|
@@ -157,7 +157,7 @@ one-time admin step, run once on this machine:
 # elevated PowerShell
 $hosts = "$env:windir\System32\drivers\etc\hosts"
 Copy-Item $hosts "$hosts.bak-$(Get-Date -Format yyyyMMdd)"
-cd C:\Users\mark_\Code\repos\serval\tests\wpt\tests
+cd C:\Users\mark_\Code\repos\genet\tests\wpt\tests
 python wpt make-hosts-file | Add-Content -Encoding ascii $hosts
 ```
 
@@ -167,9 +167,9 @@ the backup is a clean revert. After this, `python wpt serve --exit-after-start`
 binds every protocol (http/https/ws/wss/h2) and exits 0. Revert by restoring the
 `.bak-<date>` copy (elevated).
 
-**Gate B, server mode in `serval-wpt`. BUILT + PROVEN 2026-06-02.** Past the hosts
+**Gate B, server mode in `genet-wpt`. BUILT + PROVEN 2026-06-02.** Past the hosts
 file, running the network-dependent `fetch/` tests needed harness changes, all
-serval-side. They are done; see "Server mode" below for what shipped and the
+genet-side. They are done; see "Server mode" below for what shipped and the
 results. The rest of this section records the server-side proof and the design.
 
 ### Server side proven (2026-06-02)
@@ -190,7 +190,7 @@ So the WPT server is solid. The rest was harness wiring, now done.
 
 ## Server mode (Gate B, shipped)
 
-`serval-wpt testharness` gained a server mode behind the `netfetch` feature,
+`genet-wpt testharness` gained a server mode behind the `netfetch` feature,
 default off so disk-mode runs are byte-for-byte unchanged. Two ways in:
 
 - `--server-base http://web-platform.test:8000` — connect to a `wpt serve` you
@@ -232,7 +232,7 @@ against a live `wpt serve`:
 
 `http-response-code` is a full pass through the whole path: JS `fetch()` ->
 `__fetch` -> `NetFetchHandler` -> netfetcher -> live WPT handler -> a `Response`
-script asserts on. `accept-header`'s one failure is a real gap (serval sends no
+script asserts on. `accept-header`'s one failure is a real gap (genet sends no
 `accept-language`), not a plumbing bug — the three Accept-header subtests that *do*
 round-trip through `inspect-headers.py` pass.
 
@@ -241,21 +241,21 @@ round-trip through `inspect-headers.py` pass.
 ```bash
 # connect mode (start the server yourself)
 python wpt serve                                   # in tests/wpt/tests
-cargo run -p serval-wpt --features netfetch -- \
+cargo run -p genet-wpt --features netfetch -- \
   testharness fetch/api/basic --server-base http://web-platform.test:8000 --engine boa
 
 # spawn mode (runner owns the server)
-cargo run -p serval-wpt --features netfetch -- \
+cargo run -p genet-wpt --features netfetch -- \
   testharness fetch/api/basic --spawn-server --engine boa
 ```
 
 ## The deferred fetch seam (the async switch, 2026-06-03)
 
 The original seam was synchronous: `FetchHandler::fetch(req) -> FetchOutcome`, and
-`serval-wpt` answered with `block_on`. That parks the JS thread inside the native
+`genet-wpt` answered with `block_on`. That parks the JS thread inside the native
 call, which structurally rules out mid-flight abort (no window for `abort()` to
 run) and streaming bodies (no producer can deliver chunks while JS is blocked). It
-is also the one place `serval` violated the message-passing discipline Mere's actor
+is also the one place `genet` violated the message-passing discipline Mere's actor
 plan ("fetch replies delivered as actor input, not direct netfetcher calls").
 
 Inverted it to a **deferred push**, in three slices, all behind the existing
@@ -292,7 +292,7 @@ Inverted it to a **deferred push**, in three slices, all behind the existing
    `push_chunk` / `close_stream` feed it. Lifting the reader to a waiter model also
    closed part of the buffered-stream tail: network-free response 184 -> 196/290 on
    both engines.
-4. **Runner streaming (follow-up, 2026-06-04).** The `serval-wpt` worker now polls
+4. **Runner streaming (follow-up, 2026-06-04).** The `genet-wpt` worker now polls
    the netfetcher body (`ResponseBody::next_chunk`, a small added method) and
    emits `StartStream` (status + headers) -> `Chunk`* -> `Close` instead of
    buffering the whole body. So `await fetch()` resolves at the headers and a
@@ -303,7 +303,7 @@ Inverted it to a **deferred push**, in three slices, all behind the existing
 
 The seam is the actor-mailbox shape: a deferred handler owns a send into a worker
 (or, in Mere, the I/O fetch actor's inbox), and replies arrive as messages that
-drive `start_stream` / `push_chunk` / `close_stream` / `fail_fetch`. `serval-wpt`'s
+drive `start_stream` / `push_chunk` / `close_stream` / `fail_fetch`. `genet-wpt`'s
 handler is one consumer; Mere's content actor is the other, with no second refactor.
 
 ## HTTP cache (subsystem, 2026-06-04)
@@ -347,12 +347,12 @@ request-cache, server mode (was ~2): **default 8/8, force-cache 16/16, no-cache
 
 - Seam + surface: `components/script-runtime-api/fetch.rs`, `lib.rs`
   (`set_base_url`, `__resolve_url`); tests `tests/fetch_binding.rs` (7).
-- Server mode: `ports/serval-wpt/src/main.rs` `mod net` (`ServerCtx`,
+- Server mode: `ports/genet-wpt/src/main.rs` `mod net` (`ServerCtx`,
   `ServerLoader`, `NetFetchHandler`, `parse_http_port`) + `setup_server`; the
   `ScriptSrcLoader` / `DiskLoader` split is in `src/harness.rs`. Unit tests:
   `net::tests` (port parse, doc-url join). Off-server proof: `tests/fetch_netfetcher.rs`.
-- Runner wrapping: `ports/serval-wpt/src/main.rs` (`synthesize_any_js`).
+- Runner wrapping: `ports/genet-wpt/src/main.rs` (`synthesize_any_js`).
 - netfetcher refinements behind this (PSL same-site, h3-with-body, mixed-content
   split): netfetcher commit `8bde3c1`.
-- This work: serval `c98f551aeb7` (richer API + wrapping), `c1c9246beeb` (seam),
+- This work: genet `c98f551aeb7` (richer API + wrapping), `c1c9246beeb` (seam),
   plus the server-mode commit recorded alongside this doc.

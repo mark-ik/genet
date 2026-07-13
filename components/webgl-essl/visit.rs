@@ -10,7 +10,7 @@
 //! The walker stays stateless; path tracking, scope stacks, diagnostic
 //! collection all live on the visitor.
 //!
-//! Design rationale: [`serval/docs/2026-05-28_webgl_essl_typecheck_visitor_design.md`](../../docs/2026-05-28_webgl_essl_typecheck_visitor_design.md).
+//! Design rationale: [`genet/docs/2026-05-28_webgl_essl_typecheck_visitor_design.md`](../../docs/2026-05-28_webgl_essl_typecheck_visitor_design.md).
 
 use crate::ast::*;
 

@@ -35,13 +35,13 @@ files are script-gated runner coverage, not active object-fit reftest failures.
 Rust:
 
 ```powershell
-cargo test -p serval-layout --lib
+cargo test -p genet-layout --lib
 # 230 passed
 
 cargo test -p servo-paint
 # passed
 
-cargo build -p serval-wpt
+cargo build -p genet-wpt
 # passed
 ```
 

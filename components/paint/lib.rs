@@ -8,7 +8,7 @@
 //! lived here is gone; this crate now holds the C3 scaffold for the
 //! netrender-driven painter.
 //!
-//! See [`docs/2026-05-05_serval_netrender_cut_plan.md`](../../docs/2026-05-05_serval_netrender_cut_plan.md)
+//! See [`docs/2026-05-05_genet_netrender_cut_plan.md`](../../docs/2026-05-05_genet_netrender_cut_plan.md)
 //! for the cut-plan context. Real `netrender::Scene` translation +
 //! `Renderer::render_with_compositor` driving live in the proper C3
 //! follow-up; this scaffold is the compile-clean staging point.

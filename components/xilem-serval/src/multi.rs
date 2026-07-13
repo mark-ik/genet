@@ -2,13 +2,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! [`ServalMultiRunner`]: one app state, N windows, each a projection
+//! [`GenetMultiRunner`]: one app state, N windows, each a projection
 //! (one-state-N-windows design, step 2).
 //!
 //! One runner owns one `State`. Each **projection** is a
 //! [`RunnerTree`](crate::runner) — its own `ScriptedDom` target, retained view
 //! tree, focus, and pointer capture — plus its own view-producing logic (a lens
-//! over the shared state). One [`update`](ServalMultiRunner::update) mutates
+//! over the shared state). One [`update`](GenetMultiRunner::update) mutates
 //! the state once and rebuilds every projection; a dispatch into any window
 //! routes through that window's tree, then rebuilds every projection, so a
 //! click in window A updates what window B shows in the same pass. Multi-window
@@ -27,12 +27,12 @@
 //! step 3) makes every window a subtree of one document — at which point
 //! same-document `move_before` covers cross-window moves too.
 
-use serval_scripted_dom::NodeId;
+use genet_scripted_dom::NodeId;
 use xilem_core::View;
 
 use crate::runner::RunnerTree;
 use crate::{
-    DomHandle, KeyEvent, PointerClick, PointerEvent, ServalCtx, ServalElement, WheelEvent,
+    DomHandle, KeyEvent, PointerClick, PointerEvent, GenetCtx, GenetElement, WheelEvent,
 };
 
 /// A stable handle to one projection (one OS window's tree). Handles stay
@@ -46,7 +46,7 @@ use crate::{
 /// projections (`app.windows[id.0]`), which is exactly how the one-state-N-windows
 /// host routes per-window state.
 ///
-/// [`push_projection`]: ServalMultiRunner::push_projection
+/// [`push_projection`]: GenetMultiRunner::push_projection
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ProjectionId(pub usize);
 
@@ -55,7 +55,7 @@ where
     State: 'static,
     Action: 'static,
     Logic: FnMut(&State) -> V,
-    V: View<State, Action, ServalCtx, Element = ServalElement>,
+    V: View<State, Action, GenetCtx, Element = GenetElement>,
 {
     logic: Logic,
     tree: RunnerTree<State, V, Action>,
@@ -67,12 +67,12 @@ where
 /// shell view function over the shared state, parameterized by what it closes
 /// over — its window identity, its lens); heterogeneous window types would
 /// need boxing and have no consumer yet.
-pub struct ServalMultiRunner<State, Logic, V, Action = ()>
+pub struct GenetMultiRunner<State, Logic, V, Action = ()>
 where
     State: 'static,
     Action: 'static,
     Logic: FnMut(&State) -> V,
-    V: View<State, Action, ServalCtx, Element = ServalElement>,
+    V: View<State, Action, GenetCtx, Element = GenetElement>,
 {
     state: State,
     /// Slot-per-projection; `None` = removed (slots are never reused, keeping
@@ -80,12 +80,12 @@ where
     projections: Vec<Option<Projection<State, Logic, V, Action>>>,
 }
 
-impl<State, Logic, V, Action> ServalMultiRunner<State, Logic, V, Action>
+impl<State, Logic, V, Action> GenetMultiRunner<State, Logic, V, Action>
 where
     State: 'static,
     Action: 'static,
     Logic: FnMut(&State) -> V,
-    V: View<State, Action, ServalCtx, Element = ServalElement>,
+    V: View<State, Action, GenetCtx, Element = GenetElement>,
 {
     /// A runner over `state` with no projections yet.
     pub fn new(state: State) -> Self {

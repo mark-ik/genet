@@ -12,7 +12,7 @@
 //! document core lives in [`crate::scripted`].
 
 use script_engine_api::ScriptEngine;
-use serval_layout::ScrollKey;
+use genet_layout::ScrollKey;
 
 use crate::document::LocalFetcher;
 use crate::scripted::{ScriptedDocument, ScriptedEngine};

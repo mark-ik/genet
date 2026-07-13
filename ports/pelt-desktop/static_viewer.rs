@@ -5,7 +5,7 @@
 //! The on-screen static document viewer (`pelt --engine static <url>`).
 //!
 //! A thin winit shell over a [`LoadedDocument`](crate::document::LoadedDocument)
-//! presented through the shared [`SurfaceHost`](serval_winit_host::SurfaceHost):
+//! presented through the shared [`SurfaceHost`](genet_winit_host::SurfaceHost):
 //! the second instance of the orrery-host pattern (a window-agnostic content lib
 //! plus a thin shell that maps winit events onto the content's semantic input and
 //! rasterizes + composites its scene per frame). The document is the content;
@@ -104,8 +104,8 @@ pub(crate) mod windowed {
 
     use netrender::external_texture::ExternalTexturePlacement;
     use netrender::{ColorLoad, NetrenderOptions, Scene};
-    use serval_layout::ScrollKey;
-    use serval_winit_host::{SurfaceHost, wheel_delta_from_winit};
+    use genet_layout::ScrollKey;
+    use genet_winit_host::{SurfaceHost, wheel_delta_from_winit};
     use winit::application::ApplicationHandler;
     use winit::dpi::PhysicalSize;
     use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -175,7 +175,7 @@ pub(crate) mod windowed {
     /// Map a winit key (with the shift state) to a [`ScrollKey`] default action, or
     /// `None` for keys that do not scroll. `Space` / `Shift+Space` are
     /// `PageDown` / `PageUp` (scope doc rule 5's key list). Pelt-inline for now; this
-    /// lifts to `serval-winit-host` when meerkat shares the decode.
+    /// lifts to `genet-winit-host` when meerkat shares the decode.
     fn scroll_key_from_winit(key: &Key, shift: bool) -> Option<ScrollKey> {
         Some(match key {
             Key::Named(NamedKey::ArrowUp) => ScrollKey::Up,
@@ -243,7 +243,7 @@ pub(crate) mod windowed {
         }
 
         /// Render the document at the current size + scroll and present it. The
-        /// per-frame shape `serval-winit-host` documents: rasterize the scene into a
+        /// per-frame shape `genet-winit-host` documents: rasterize the scene into a
         /// texture, acquire the backbuffer, composite the texture onto it, present.
         fn render(&mut self, event_loop: &ActiveEventLoop) {
             // Advance script time-based work (timers + GC) against the frame clock

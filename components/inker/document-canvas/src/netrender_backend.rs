@@ -7,7 +7,7 @@
 //! Thin lowering shim: builds an [`crate::paint_list::InkerPaintList`]
 //! from a [`crate::DocumentRenderPacket`] (plus its font sidecar) and
 //! lowers it to a `netrender::Scene` via the shared `paint_list_render`
-//! translator — the same path serval and any other engine use. All the
+//! translator — the same path genet and any other engine use. All the
 //! document → paint-command logic lives in [`crate::paint_list`]; this
 //! module only exists to feed the result through the renderer-coupled
 //! translator (behind the `netrender` feature).

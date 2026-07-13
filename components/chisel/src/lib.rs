@@ -1,20 +1,20 @@
-//! chisel: custom-paint widget leaves for the serval host.
+//! chisel: custom-paint widget leaves for the genet host.
 //!
 //! A small, sharp contract that lets an imperative custom-paint widget (a knob,
-//! meter, waveform, graph canvas) live as one first-class serval element,
-//! plugging into serval's four existing passes rather than standing up a second
+//! meter, waveform, graph canvas) live as one first-class genet element,
+//! plugging into genet's four existing passes rather than standing up a second
 //! UI engine. Design and rationale:
 //! `docs/2026-07-07_chisel_widget_leaf_design.md`.
 //!
 //! This is the Path-A scaffold: a leaf paints by pushing common `PaintCmd`s
-//! (portable, tile-cached) which serval splices into its paint list at the
+//! (portable, tile-cached) which genet splices into its paint list at the
 //! leaf's box. Path B (a leaf renders its own `vello::Scene` which the host
 //! rasterizes to a texture and places via `DrawExternalTexture`) lands with the
 //! first imperative consumer (the meerkat orrery port).
 //!
 //! chisel is engine-neutral: it targets the paint seam (`paint_list_api`) and
-//! accesskit, not the serval engine concretely. The retained per-leaf state
-//! lives in a node-keyed [`LeafRegistry`], mirroring serval's external-texture /
+//! accesskit, not the genet engine concretely. The retained per-leaf state
+//! lives in a node-keyed [`LeafRegistry`], mirroring genet's external-texture /
 //! font / image registries, so the DOM stays uniform.
 
 use std::collections::HashMap;
@@ -56,7 +56,7 @@ pub struct Size {
 }
 
 /// Paint context handed to [`Leaf::paint`], covering both paint paths. Path A:
-/// the leaf pushes common [`PaintCmd`]s, spliced into serval's paint list at
+/// the leaf pushes common [`PaintCmd`]s, spliced into genet's paint list at
 /// the leaf's box. Path B: the leaf encodes a [`vello::Scene`]
 /// ([`scene`](Self::scene) / [`set_scene`](Self::set_scene)); the cache then
 /// splices a single `DrawExternalTexture` carrying the leaf's key, and the
@@ -101,7 +101,7 @@ impl<'a> PaintCx<'a> {
         self.cmds.push(cmd);
     }
 
-    /// Convenience: fill a local rect with a solid color. Mirrors serval-layout
+    /// Convenience: fill a local rect with a solid color. Mirrors genet-layout
     /// `paint_emit`'s own `DrawRect` construction so the produced command is
     /// byte-identical to a native background fill.
     pub fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: ColorF) {
@@ -162,7 +162,7 @@ pub fn round_stroke(color: ColorF, width: f32) -> StrokeStyle {
     }
 }
 
-/// An input event forwarded from serval's hit-test. Placeholder shape; the real
+/// An input event forwarded from genet's hit-test. Placeholder shape; the real
 /// pointer / key vocabulary wires to xilem-serval's `dispatch_click` /
 /// `dispatch_key` when the input seam is built out.
 #[derive(Clone, Copy, Debug)]
@@ -174,31 +174,31 @@ pub struct LeafEvent;
 #[derive(Clone, Copy, Debug)]
 pub struct LeafAction;
 
-/// A custom-paint widget that plugs into serval's four passes as one node.
+/// A custom-paint widget that plugs into genet's four passes as one node.
 ///
 /// The retention gates are two signals, because they gate different passes:
 /// [`paint_dirty`](Leaf::paint_dirty) gates repaint,
-/// [`layout_dirty`](Leaf::layout_dirty) gates serval's relayout.
+/// [`layout_dirty`](Leaf::layout_dirty) gates genet's relayout.
 ///
 /// `Any` supertrait: hosts push live values into registered leaves through
 /// [`LeafRegistry::get_mut_as`] (a meter fed each frame, a glyph fed on model
 /// change), so the registry can hand back the concrete type.
 pub trait Leaf: std::any::Any {
-    /// Intrinsic sizing. Feeds serval's replaced-element `replaced_intrinsic_size`
+    /// Intrinsic sizing. Feeds genet's replaced-element `replaced_intrinsic_size`
     /// (a chisel leaf is a replaced element, like `<img>` / `<external-texture>`).
     fn measure(&mut self, known: SizeHint, available: SizeHint) -> Size;
 
     /// Paint. Path A: push [`PaintCmd`]s via `cx`. (Path B lands later.)
     fn paint(&mut self, cx: &mut PaintCx<'_>);
 
-    /// serval hit-test forwards here. Internal interaction mutates `self` and
+    /// genet hit-test forwards here. Internal interaction mutates `self` and
     /// marks paint-dirty; a semantic change returns an action routed up the
     /// message cycle. Default: inert.
     fn event(&mut self, _ev: &LeafEvent) -> Option<LeafAction> {
         None
     }
 
-    /// Fill this node's accesskit node during serval-layout's `accesskit_tree`
+    /// Fill this node's accesskit node during genet-layout's `accesskit_tree`
     /// walk (a knob still announces as a slider). Default: no semantics.
     fn accessibility(&mut self, _node: &mut accesskit::Node) {}
 
@@ -212,7 +212,7 @@ pub trait Leaf: std::any::Any {
     }
 }
 
-/// Host-owned retained state, keyed by node. Mirrors serval's external-texture /
+/// Host-owned retained state, keyed by node. Mirrors genet's external-texture /
 /// font / image registries: the DOM stays uniform `NodeId`s, and each leaf's
 /// retained struct lives here rather than in the ephemeral view tree. Generic
 /// over the host's node key so chisel stays engine-neutral.
@@ -271,7 +271,7 @@ impl<K: Eq + Hash> LeafRegistry<K> {
 /// paint cache**: the third of the four retention gates (view `memoize`,
 /// `IncrementalLayout`, this, netrender tile cache). A leaf re-renders only when
 /// it reports `paint_dirty` or has no buffer yet; an unchanged leaf keeps its
-/// cached commands. Neutral: only `paint_list_api` types, so a serval-side
+/// cached commands. Neutral: only `paint_list_api` types, so a genet-side
 /// adapter can expose it through the layout engine's `LeafPaintSource`.
 /// One leaf's rendered output: the splice commands (Path A: the leaf's own
 /// stream; Path B: one `DrawExternalTexture` at the box), plus the scene and
@@ -299,7 +299,7 @@ impl RenderedLeaves {
 
     /// The cached splice commands for `key`, or `None` if the leaf has not been
     /// rendered (no size available, or never present). This is exactly the shape
-    /// a serval-side `LeafPaintSource` newtype forwards to.
+    /// a genet-side `LeafPaintSource` newtype forwards to.
     pub fn get(&self, key: u64) -> Option<&[PaintCmd]> {
         self.map.get(&key).map(|r| r.splice.as_slice())
     }

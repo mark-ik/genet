@@ -1,10 +1,10 @@
 # Nova RegExp on regress (replacing the `regex` crate)
 
-Status: **landed in the fork (`crates/nova`, branch `serval-embedder`),
+Status: **landed in the fork (`crates/nova`, branch `genet-embedder`),
 2026-06-02.** Nova's `RegExp` matcher now uses **`regress`** (the ECMAScript-spec
 backtracking engine, the one Boa uses) instead of the Rust **`regex`** crate.
 Upstream candidate. Verified by test262 `built-ins/RegExp` + `built-ins/String`
-(see numbers below), the serval regression test, nova_vm units, and the dom WPT
+(see numbers below), the genet regression test, nova_vm units, and the dom WPT
 sweep.
 
 ## Why
@@ -19,7 +19,7 @@ testharness.js regexes, but real JS hits this constantly. The premise behind
 there was no translation layer to patch — the whole approach was a wrong engine.
 
 `regress` is the right engine: it targets the ECMAScript spec, supports the
-backtracking features, and is already in the serval workspace at 0.11.1 (via
+backtracking features, and is already in the genet workspace at 0.11.1 (via
 Boa), so adopting it shares one regress across the ecosystem and aligns Nova's
 regex with the conformance oracle.
 

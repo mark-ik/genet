@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 //! A small reusable overlay menu: a positioned vertical list of labelled rows with one
-//! marked active and each clicking a host handler. It is the shape every serval host
+//! marked active and each clicking a host handler. It is the shape every genet host
 //! reaches for — a completion popup, a slash / command menu, a context menu, a picker —
 //! composed from the existing [`overlay_at`](crate::overlay_at) primitive so it is pure
 //! Tier-1 CSS/native views (no leaf). The host owns the state (which items, the query,
@@ -12,8 +12,8 @@
 //! Rows carry the classes `menu-row` and `menu-row-active`, and the container `menu`, so a
 //! host stylesheet themes them.
 
-use crate::pod::ServalElement;
-use crate::{PointerClick, ServalCtx, View, el, on_click, overlay_at};
+use crate::pod::GenetElement;
+use crate::{PointerClick, GenetCtx, View, el, on_click, overlay_at};
 
 /// The container class on the menu overlay.
 pub const MENU_CLASS: &str = "menu";
@@ -34,7 +34,7 @@ pub fn menu<State, F>(
     items: impl IntoIterator<Item = String>,
     selected: usize,
     on_pick: F,
-) -> impl View<State, (), ServalCtx, Element = ServalElement>
+) -> impl View<State, (), GenetCtx, Element = GenetElement>
 where
     State: 'static,
     F: Fn(&mut State, usize) + Clone + 'static,

@@ -69,7 +69,7 @@ pub trait FlexboxItemStyle: CoreStyle {
     /// ascending `order`, ties broken by document order ("order-modified
     /// document order"). Defaults to 0.
     ///
-    /// serval patch (flex `order`): this method does not exist upstream; the
+    /// genet patch (flex `order`): this method does not exist upstream; the
     /// flex algorithm stable-sorts items by it before line collection. Style
     /// adapters that do not override it keep the default 0 (document order).
     #[inline(always)]

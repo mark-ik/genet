@@ -8,14 +8,14 @@ sizing, positioned inline-block CBs, row-relative table offsets — landed
 content, its own project) plus the small named residuals in each round's
 record. Spun out of the layout roadmap's near-horizon entry (found
 2026-07-10 by the WPT input-path work, H9 in the harness-exactness plan).
-**Scope:** the *layout* half of out-of-flow positioning in `serval-layout`. The
+**Scope:** the *layout* half of out-of-flow positioning in `genet-layout`. The
 paint half (deferred stacking layers, fixed layers countering document scroll)
 already exists (`is_out_of_flow` / `is_fixed` feeding `paint_stacking`, per the
 zindex scope doc's rule 3) and is not reopened here.
 
 ## The gap, precisely
 
-serval-layout has no containing-block concept. Every box's Taffy node parents
+genet-layout has no containing-block concept. Every box's Taffy node parents
 under its DOM parent's node, and Taffy's absolute positioning is
 parent-relative by construction, so `position: fixed` and `position: absolute`
 both resolve insets and percentages against the **Taffy parent** instead of the
@@ -47,7 +47,7 @@ containing block.
 Reference implementation for shape (donor rule: cite, don't copy): Servo's
 `PositioningContext` + `HoistedAbsolutelyPositionedBox` — out-of-flow boxes
 register with a context during construction and lay out once their containing
-block has a final size. serval's Taffy translation is cheaper: reparent the
+block has a final size. genet's Taffy translation is cheaper: reparent the
 box's Taffy node so ordinary parent-relative resolution does the rest.
 
 ## Mechanism (grounded in the actual construction walk)
@@ -96,13 +96,13 @@ their `.stage` is transformed).
   `dom/events/non-cancelable-when-passive` go green (cluster 42/42); every
   other checked baseline stays `unexpected=0` or is deliberately rebased with
   the delta named; meerkat/orrery suites stay green (mere consumes local
-  serval — meerkat chrome is real exposure).
+  genet — meerkat chrome is real exposure).
 
 **Landed 2026-07-11, all conditions met.**
 `dom/events/non-cancelable-when-passive` is **42/42 all-pass (53/53 subtests)**;
 `dom` overall gained +4 (`fail -> pass`, the wheel quartet), rebased to
-148 all-pass with `unexpected=0`; all other baselines unchanged; serval-layout
-298, xilem-serval 101, serval-scripted 79 (both engines), meerkat 247, all
+148 all-pass with `unexpected=0`; all other baselines unchanged; genet-layout
+298, xilem-serval 101, genet-scripted 79 (both engines), meerkat 247, all
 green. Guards: `fixed_inset_box_resolves_against_the_viewport`,
 `a_fixed_box_under_a_transformed_ancestor_is_not_hoisted`,
 `toggling_position_to_fixed_rehosts_to_the_viewport`.
@@ -110,7 +110,7 @@ green. Guards: `fixed_inset_box_resolves_against_the_viewport`,
 **What the slice actually took, beyond the box-tree hoist** (the plan's
 "paint/hit parity" hazard was real, in the *hit* lane):
 
-- The hit walk (`serval_lane::walk_for_hit`) is **DOM-driven**, while the hoist
+- The hit walk (`genet_lane::walk_for_hit`) is **DOM-driven**, while the hoist
   is a *box-tree* fact, and this diverged twice:
   1. **The overflow clip-prune swallowed escaped fixed boxes.** `body` at
      `overflow: hidden` with auto height 0 pruned its whole DOM subtree from
@@ -182,8 +182,8 @@ behavior change), `percentage_geometry_resolves_against_the_positioned_ancestor`
 `toggling_position_to_absolute_rehosts_to_the_positioned_ancestor` (the
 incremental-splice hazard, F2 lane).
 
-Results: serval-layout 304, paint html→pixels 30, xilem-serval 101,
-serval-scripted 45, meerkat 247, all green. WPT: all seven baselines hold at
+Results: genet-layout 304, paint html→pixels 30, xilem-serval 101,
+genet-scripted 45, meerkat 247, all green. WPT: all seven baselines hold at
 `unexpected=0` except `fetch_api_basic`, whose 2–4 fluctuating deltas
 reproduce **without** F2 (control rebuild) — environmental, left unrebased.
 `css/css-position` reftests **60 → 62** passed (control-measured), testharness
@@ -236,8 +236,8 @@ path and was re-aimed inside the scroller's window):
 `will_change_transform_guards_fixed_descendants`,
 `contain_paint_guards_fixed_descendants`.
 
-Results: serval-layout 309, paint html→pixels 30, xilem-serval 101,
-serval-scripted 45, meerkat 247, all green; all nine WPT baselines
+Results: genet-layout 309, paint html→pixels 30, xilem-serval 101,
+genet-scripted 45, meerkat 247, all green; all nine WPT baselines
 (testharness ×7 + reftest ×2, css_position pair included) hold at
 `unexpected=0` (`fetch_api_basic` still excluded as the known environmental
 flake).
@@ -297,8 +297,8 @@ hit-testing. Landed as the **out-of-flow islands** lane:
 Guards (falsified against the pre-island code — both returned `None`, no box
 at all): `an_absolute_box_nested_in_an_inline_run_hoists_as_an_island`
 (rect + hit), `a_fixed_box_nested_in_an_inline_run_hoists_to_the_viewport`.
-Results: serval-layout 312, paint html→pixels 30, xilem-serval 101,
-serval-scripted 45, meerkat 247, all green; all nine WPT baselines hold at
+Results: genet-layout 312, paint html→pixels 30, xilem-serval 101,
+genet-scripted 45, meerkat 247, all green; all nine WPT baselines hold at
 `unexpected=0` (the six table reftests recovered by the `island_worthy` cut).
 
 Named residuals of the islands lane: an inline/inline-block CB keeps the
@@ -367,8 +367,8 @@ offsets and resolve each box's nearest scrollport); percentage insets
 resolve against the viewport; nested sticky composes against the ancestor's
 unshifted position; `calc()` insets resolve to 0.
 
-Results: serval-layout 316, paint html→pixels 30, xilem-serval 101,
-serval-scripted 45, meerkat 247, all green; all nine WPT baselines hold at
+Results: genet-layout 316, paint html→pixels 30, xilem-serval 101,
+genet-scripted 45, meerkat 247, all green; all nine WPT baselines hold at
 `unexpected=0`.
 
 ### F3 final round — the two assessed items, landed 2026-07-12
@@ -378,7 +378,7 @@ assessment, cheaper than predicted: `LayoutPartialTree`'s
 `CoreContainerStyle` GAT became `CssStyle`, and `get_core_container_style`
 forces `100% x 100%` (plus `is_block` — the synthetic root's initial style
 computes `display: inline`, which would skip `compute_root_layout`'s
-size-resolution branch entirely; serval dispatches the box as a block either
+size-resolution branch entirely; genet dispatches the box as a block either
 way) on the synthetic root — exactly the sizing the UA sheet's
 `html { width/height: 100% }` gives a real parsed root. The block/flex/grid
 *container*-style accessors construct their `NodeStyle` directly instead of
@@ -421,8 +421,8 @@ location after every compute. Guard:
 `a_relative_table_row_offsets_its_cells` (including the incremental flip,
 proving the shift survives recomputes over the retained tree).
 
-Results: serval-layout 320, paint html→pixels 30, xilem-serval 101,
-serval-scripted 45, meerkat 247, all green; all nine WPT baselines hold at
+Results: genet-layout 320, paint html→pixels 30, xilem-serval 101,
+genet-scripted 45, meerkat 247, all green; all nine WPT baselines hold at
 `unexpected=0`.
 
 ### The remaining big rock
@@ -447,5 +447,5 @@ composes with it when it lands.
   deferred layers, so tree order matters less than it looks, but the suites are
   the check, not the argument.
 - **Consumer exposure.** meerkat's chrome sheets may use `position: fixed`;
-  mere builds against local serval. Run its suite before calling the slice
+  mere builds against local genet. Run its suite before calling the slice
   done.

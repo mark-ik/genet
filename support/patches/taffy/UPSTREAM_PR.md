@@ -2,11 +2,11 @@
 
 Target: `DioxusLabs/taffy`, branch `main`, against the **released 0.12.1**
 shape (`float_layout` graduated from experimental to stable in this release —
-serval's fork re-vendored onto it 2026-07-12, ending the need to ride the
+genet's fork re-vendored onto it 2026-07-12, ending the need to ride the
 `-experimental-cache-fix` line; see
 `docs/2026-07-12_ring3_fork_rename_publish_plan.md`, T0). All three patches
 below are verified: applied against 0.12.1's actual source, compiled, and run
-through serval-layout's full suite (320 tests) + the html-to-pixels paint
+through genet-layout's full suite (320 tests) + the html-to-pixels paint
 corpus + all nine WPT baselines with zero regressions. `main` may have moved
 further since 0.12.1's cut; line offsets in the `.patch` files will need
 rebasing, but each fix's substance is unchanged.
@@ -100,7 +100,7 @@ Purely additive, no existing behavior touched:
 
 ### PR 2 consumer
 
-serval-layout's parley-measured inline-formatting-context leaf reads
+genet-layout's parley-measured inline-formatting-context leaf reads
 `inline_exclusion_bands` to narrow each line's available width by the active
 float insets at that line's y — the wrap-around-a-float behavior a plain
 `find_content_slot` (one slot per block child) can't provide for inline
@@ -141,7 +141,7 @@ does not change; only the *layout* (and therefore visual) order does.
 
 ### PR 3 consumer
 
-serval-layout's `CssStyle` flex-item wrapper overrides `order()` to read the
+genet-layout's `CssStyle` flex-item wrapper overrides `order()` to read the
 cascaded `order` property (`get_position().order`) off stylo's
 `ComputedValues` — the same wrap-and-override pattern it already uses for
 grid placement (`GridItemStyle::grid_row`/`grid_column`). Verified against a

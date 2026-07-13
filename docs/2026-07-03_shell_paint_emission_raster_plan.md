@@ -4,7 +4,7 @@
 **Status**: planning, scoped from the post-fix shell-partition runtime receipts.  
 **Related**: [2026-07-03_shell_partition_runtime_findings.md](./2026-07-03_shell_partition_runtime_findings.md), [2026-05-17_paintlist_polyglot_renderer.md](./2026-05-17_paintlist_polyglot_renderer.md), [2026-05-20_paintlist_extraction_plan.md](./2026-05-20_paintlist_extraction_plan.md), [2026-07-01_ui_polish_plan](../../mere/design_docs/mere_docs/implementation_strategy/2026-07-01_ui_polish_plan.md) finding 5.
 
-The Meerkat-side confounders are now stripped away far enough to justify a real Serval follow-on.
+The Meerkat-side confounders are now stripped away far enough to justify a real Genet follow-on.
 In the post-fix restored-session capture (`shell_node_count=141-142`, `gnode_count=14`), a single
 shell text mutation still produced `chrome_us=128987` and `chrome_raster_us=60520`. That frame is
 the new motivator. It is small-dirty and loaded enough to be worth optimizing, without the old
@@ -12,7 +12,7 @@ per-frame host churn polluting the result.
 
 This plan splits the remaining work into the two terms the runtime findings now separate:
 
-1. `chrome_us`: the Serval-side scene-production lane, with `serval-layout` paint emission as the
+1. `chrome_us`: the Genet-side scene-production lane, with `genet-layout` paint emission as the
    main suspected cost center.
 2. `chrome_raster_us`: the netrender raster lane, where tile invalidation, dirty-tile rebuild, and
    master composition decide what the GPU-side frame actually costs.
@@ -35,7 +35,7 @@ This plan splits the remaining work into the two terms the runtime findings now 
   documents that would be standards-wrong. Host seams should avoid wasteful writes before they hit
   the engine.
 - Do not move invalidation ownership onto `LayoutDomMut` or script-engine traits. Keep it in
-  `serval-layout` and the renderer/scheduler layers.
+  `genet-layout` and the renderer/scheduler layers.
 - Do not fold the raster half into vague "layout is slow" prose. The runtime receipts already show
   that `chrome_us` and `chrome_raster_us` must be discussed separately.
 
@@ -46,7 +46,7 @@ Before changing the hot path, make the loaded-session evidence directly actionab
 - Thread a finer split through the shell profile path so one loaded-session frame reports:
   - mutation batch summary,
   - layout/paint-session state (`rebuild`, `structural`, `base_dirty`, `orrery_dirty`),
-  - Serval-side scene-production spans, especially paint emission,
+  - Genet-side scene-production spans, especially paint emission,
   - netrender frame timings (`tile_invalidate`, `dirty_tile_rebuild`, `master_compose`,
     `vello_render`),
   - dirty-tile count.
@@ -57,10 +57,10 @@ Before changing the hot path, make the loaded-session evidence directly actionab
 Done when one headed loaded-session capture can point to a single tiny-dirty frame and say exactly
 how much time was spent in scene production versus raster.
 
-## P1: Retained paint emission inside `serval-layout`
+## P1: Retained paint emission inside `genet-layout`
 
 The current subtree/base split still pays for a full base-shell paint walk whenever the base is
-legitimately dirty. That is the first Serval-side cost shape to attack.
+legitimately dirty. That is the first Genet-side cost shape to attack.
 
 - Add explicit paint-emission timing around the retained `IncrementalLayout` emit path so the plan
   stops inferring from the larger `chrome_us` bucket.
@@ -73,7 +73,7 @@ legitimately dirty. That is the first Serval-side cost shape to attack.
   boundaries are actually invalidated. Keep the current correctness rule that stale paint-side
   tables require relayout first.
 - Preserve the existing shell-partition API shape. Meerkat should keep calling the same coarse
-  base/subtree seam while Serval gets cheaper under it.
+  base/subtree seam while Genet gets cheaper under it.
 
 Done when instrumentation shows that a `mut_count=1` text-only shell frame reuses unaffected base
 segments, and the number of walked/emitted nodes tracks the dirty surface rather than total shell
@@ -83,7 +83,7 @@ document size.
 
 The new cache cannot become another silent side-table that only works on the happy path.
 
-- Add focused tests in `serval-layout` for:
+- Add focused tests in `genet-layout` for:
   - attribute-only mutation reusing unaffected paint segments,
   - text-only mutation localizing invalidation,
   - structural splice invalidating the right retained paint state,
@@ -129,7 +129,7 @@ same loaded-session harness.
 ## Review questions
 
 1. Is this still one plan?
-   Yes, but only because P0 is shared. After that, the work naturally splits into a `serval-layout`
+   Yes, but only because P0 is shared. After that, the work naturally splits into a `genet-layout`
    emission lane and a netrender raster lane.
 2. Is the Meerkat host still the likely source of the loaded-session tiny-dirty frame cost?
    Not as the primary explanation. The host-side steady churn and shellbar structural confounders
@@ -144,7 +144,7 @@ Spans landed host-side, all under `meerkat::profile` at debug level:
 
 - `PaneSession::refresh` logs `rebuild_us` (stylist + full cascade + layout) or `apply_us` +
   the `Applied` kind.
-- `serval_render` logs `emit_us` and `lower_us` per lane (`full` / `base` / `orrery`) with the
+- `genet_render` logs `emit_us` and `lower_us` per lane (`full` / `base` / `orrery`) with the
   command count, splitting `chrome_us` into scene production vs paint-list-to-Scene lowering.
 
 First capture (restored session, `shell_node_count=108`, `gnode_count=9`, debug build) attributed
@@ -158,7 +158,7 @@ minting a fresh vello dedup id per frame so no downstream font/glyph cache could
 Fix, landed across three seams:
 
 - `paint_list_api::FontResource.data` is now `Arc<Vec<u8>>` (serde `rc`, same wire shape).
-- `serval-layout` holds a process-global font registry keyed by content identity (length + TTC
+- `genet-layout` holds a process-global font registry keyed by content identity (length + TTC
   index + three-window fxhash; a full-file hash measured ~0.6s per rebuild frame in debug and blob
   ids do not survive session rebuilds, so content keying is load-bearing). Each face is copied out
   of parley once per process; keys come from a global counter, stable for the process lifetime.
@@ -168,7 +168,7 @@ Fix, landed across three seams:
 
 Same-session receipts after the fix: base emit 52ms -> 4.0ms, base lower 18ms -> 0.12ms, orrery
 emit (steady) 2.6ms -> 0.4ms, steady `chrome_us` 9.6ms -> 4.3ms, rebuild-frame `chrome_us`
-129ms -> 46ms. Verified: serval-layout 233/233, paint_list_render 11/11, servo-paint
+129ms -> 46ms. Verified: genet-layout 233/233, paint_list_render 11/11, servo-paint
 html-to-pixels e2e 30/30 (glyphs rasterize through the registry + blob cache), headed run clean.
 `inker/document-canvas` still copies faces per emitter build (small lane, `.into()` shim only).
 
@@ -183,7 +183,7 @@ html-to-pixels e2e 30/30 (glyphs rasterize through the registry + blob cache), h
 - **Emission lane, real remaining cost**: the session rebuild itself, 34ms per structural frame.
   `PaneSession` rebuilds the whole `IncrementalLayout` on ANY structural batch (a single text
   mutation included) because a `Spliced` apply invalidates the box-tree side-table and the session
-  stops being emittable. The fix is inside serval-layout: keep `built`/`text_ctx` valid through a
+  stops being emittable. The fix is inside genet-layout: keep `built`/`text_ctx` valid through a
   text-only / subtree splice so the session survives and `apply_us`-scale costs replace
   `rebuild_us`-scale ones. Second order: steady `apply_us` ~2.7ms (restyle) now dominates the
   cheap path.
@@ -198,7 +198,7 @@ html-to-pixels e2e 30/30 (glyphs rasterize through the registry + blob cache), h
 ## P3/P4 receipts and fix (2026-07-04)
 
 P3 spans landed with zero new netrender instrumentation needed: `RenderCore::rasterize*` now logs
-`Renderer::last_frame_timings()` per render call under `serval_winit_host::raster` (debug), and
+`Renderer::last_frame_timings()` per render call under `genet_winit_host::raster` (debug), and
 netrender's existing per-render `elapsed_us`/`op_count` line decomposes `chrome_raster_us` per
 surface.
 
@@ -212,7 +212,7 @@ against foreign tile state.
 Fix (P4, landed): per-surface tile state. netrender `Renderer` holds an LRU-capped map of
 `SurfaceTileState` (own `TileCache` + own per-tile scene store) keyed by a host-chosen surface id;
 `render_vello_scaled_for(surface, ...)` renders against it (the rasterizer's tile-scene store
-became a parameter; unkeyed entries keep the legacy shared pair). `serval-winit-host` exposes
+became a parameter; unkeyed entries keep the legacy shared pair). `genet-winit-host` exposes
 `rasterize_for` / `rasterize_scaled_for`; meerkat keys every rasterize site
 (`render/surface_keys.rs`: fixed ids for shell surfaces, hashed ids per content card).
 
@@ -233,7 +233,7 @@ bound invalidate for op-dense scenes.
 ## Focused-card churn: identified (2026-07-05)
 
 The settled-session card re-raster source is pinned. The focused card is the Wikipedia page
-(HTML/serval scripted lane). Instrumented receipts: the host's scroll-band dedupe HOLDS (exactly
+(HTML/genet scripted lane). Instrumented receipts: the host's scroll-band dedupe HOLDS (exactly
 two band re-commands per run, both initial), yet the content actor ships a fresh band scene every
 ~7s cycle unprompted — `scene_version` climbs 1 per delivery forever, each costing a 90-260ms
 re-raster of the op-dense 378x1012 band. Mark's read matches: the page visibly reformats (basic
@@ -258,7 +258,7 @@ the standard mechanism is Page Visibility (`visibilityState: "hidden"` for unfoc
 cards -> rAF stops per spec, HTML spec permits timer throttling) plus WICG Page Lifecycle
 `freeze` for a full pause; Permissions API covers capabilities, not scheduling, so "site
 permissions" is the Mere policy overlay (per-site never-throttle/throttle/freeze) driving those
-standard signals into serval-scripted.
+standard signals into genet-scripted.
 
 Next probe if 1 does not silence it: log actor-side WHAT triggered each re-render (script timer
 vs hydration pass vs host command) in the scripted-lane pump.
@@ -270,11 +270,11 @@ the "no packet" outcome instead of re-deriving per frame.
 ## Progress
 
 - **2026-07-03**: plan written after the post-fix shell-partition runtime pass closed the biggest
-  host-side confounders. Scoped against the live `serval-layout` seam
+  host-side confounders. Scoped against the live `genet-layout` seam
   (`emit_paint_list_excluding_subtrees`, `emit_subtree_paint_list`) and netrender's existing frame
   timing surface (`tile_invalidate`, `dirty_tile_rebuild`, `master_compose`, `vello_render`).
 - **2026-07-04**: P0 spans landed (meerkat side); receipts captured pre/post; per-frame font-bytes
-  copy + unstable font keys found and fixed across paint_list_api / serval-layout /
+  copy + unstable font keys found and fixed across paint_list_api / genet-layout /
   paint_list_render (details above); lane priorities revised from the receipts. Harness note: the
   `MEERKAT_CAPTURE_DIR` chrome self-capture only fires on the unpartitioned chrome texture, so it
   is dead in partitioned mode; repair when next needed headed.
@@ -289,7 +289,7 @@ the "no packet" outcome instead of re-deriving per frame.
   lift to the nearest element ancestor (they rooted at the TEXT node, which owns no fragment, so
   every text edit full-relaid-out); the scoped pass lays out at the root's prior border-box size
   instead of the viewport (non-full-width subtrees used to trip the outer-size guard by
-  construction); splice fallbacks log their reason under `serval_layout::splice`. Tried and
+  construction); splice fallbacks log their reason under `genet_layout::splice`. Tried and
   REVERTED: ancestor-escalation retries on splice bail (a ladder of scoped layouts up a
   shrink-to-fit chain measured 90ms where the direct full-relayout fallback cost 20ms).
   Receipts (same restored session, debug): the interaction structural frame went
@@ -297,7 +297,7 @@ the "no packet" outcome instead of re-deriving per frame.
   `apply_us=19.6ms` (`chrome_us` 24.3ms) — the remaining cost is the in-session full relayout the
   batch legitimately needs (its dirty root is shrink-to-fit, `dw=-9`, so the size guard is right
   to fall back; fixed-size roots splice at low ms). Steady frames 4.2-4.6ms, settled ~0.5ms, zero
-  heals. Verified: serval-layout 236/236 (three new splice-parity tests: retained emit ==
+  heals. Verified: genet-layout 236/236 (three new splice-parity tests: retained emit ==
   fresh-session emit command-for-command after text / insert / removal splices, hit-test through
   the graft), pixels e2e 30/30, meerkat bin 216 passing with only the three pre-existing
   unrelated failures. Next per revised lanes: the raster term (`chrome_raster_us` ~22ms steady,

@@ -1,8 +1,8 @@
 # Real-web layout fidelity plan
 
-**Date:** 2026-06-16. **Parent:** `2026-06-16_serval_layout_roadmap.md` (Thread
-1). **Scope:** the gap between "serval-layout lays out correctly for the
-constructs it models" and "serval-layout renders a typical real page
+**Date:** 2026-06-16. **Parent:** `2026-06-16_genet_layout_roadmap.md` (Thread
+1). **Scope:** the gap between "genet-layout lays out correctly for the
+constructs it models" and "genet-layout renders a typical real page
 faithfully." Each item below is verified against file:line, ranked by how much
 a real page improves per unit of work. This is a secondary plan so the roadmap
 need not carry it.
@@ -77,7 +77,7 @@ How it works (grounded in code):
 - **Prerequisite:** CSS grid was non-functional (grid track properties gated
   behind servo's `layout.grid.enabled`, unset, so authored templates dropped to
   `None` and grids collapsed to one column). Enabled in `cascade.rs`
-  `enable_serval_properties`; verified by `grid_template_lays_out_cells_in_a_grid`.
+  `enable_genet_properties`; verified by `grid_template_lays_out_cells_in_a_grid`.
 - **UA sheet:** replaced the forced `display:block` on table elements with their
   real display (`table` / `table-row-group` / `table-row` / `table-cell` /
   `table-caption`; `th` bold).
@@ -181,10 +181,10 @@ container-style forwarding. No new dispatch, mostly correctness hardening.
 5-reader audit (flex/grid forwarding through `stylo_taffy`, pref-gating against
 Stylo 0.18 `longhands.toml`, harness, test matrix) found:
 
-- **Pref-gating is clean.** No flex/grid property is gated behind a pref serval
+- **Pref-gating is clean.** No flex/grid property is gated behind a pref genet
   leaves off (the silent-breakage hunt that motivated this item came up empty);
   every gated grid property sits behind `layout.grid.enabled`, which
-  `enable_serval_properties` sets. All flex/gap/alignment longhands are ungated.
+  `enable_genet_properties` sets. All flex/gap/alignment longhands are ungated.
 - **Forwarding through `TaffyStyloStyle` is genuine, not stubbed** — every flex
   and grid container/item property is read live off `ComputedValues` and mapped
   by real `convert.rs` functions.
@@ -200,12 +200,12 @@ Stylo 0.18 `longhands.toml`, harness, test matrix) found:
   not model it (items laid out in document order regardless of `order:N`). Fixed
   as **taffy patch 0003**: a `FlexboxItemStyle::order()` trait method + a stable
   sort of the flex items by the cascaded `order` before line collection, with a
-  serval `CssStyle` flex-item wrapper reading `get_position().order` off the
+  genet `CssStyle` flex-item wrapper reading `get_position().order` off the
   cascade (the `CssStyle`-wraps-`TaffyStyloStyle` precedent grid placement uses,
   so no `stylo_taffy` patch). Verified by `flex_order_reorders_items` (orders
   3/1/2 → visual 1/2/3) and `flex_order_is_stable_and_handles_negative` (stable
   ties + negative). First-cut limit: paint order stays document order (CSS
-  `order` also re-orders painting, but serval paints in document order and flex
+  `order` also re-orders painting, but genet paints in document order and flex
   items rarely overlap). Lower-risk gaps (subgrid, masonry, `flex-basis:content`,
   content-distribution fallback keyword) are taffy/upstream and recorded in the
   audit, not yet tested.
@@ -221,7 +221,7 @@ and independent.
 
 - **CSS `clip-path` — DONE (2026-06-17).** The renderer already had the path
   clip (`SceneClip::Path` + vello lowering, Phase 9b'); the gaps were the
-  translator (`ClipKind::Path` fell back to unclipped) and serval emission.
+  translator (`ClipKind::Path` fell back to unclipped) and genet emission.
   `paint_emit` reads `cv.get_svg().clip_path` and emits `PushClip` around the
   element for `polygon()` / `circle()` / `ellipse()` (Bezier paths) and
   `inset()` (rect). Deferred: rounded-`inset`, `path()`/`shape()`, `url(#ref)`,
@@ -238,14 +238,14 @@ and independent.
 - **`mix-blend-mode` — DONE (2026-06-17).** The paint-list `LayerSpec` already
   carries `mix_blend_mode` and the translator + vello rasterizer apply it (the
   canonical 6: Normal/Multiply/Screen/Overlay/Darken/Lighten; richer modes fall
-  back to Normal until netrender's `SceneBlendMode` grows). serval just wasn't
+  back to Normal until netrender's `SceneBlendMode` grows). genet just wasn't
   emitting it — `paint_emit` now reads `cv.get_effects().mix_blend_mode` and
   opens the element's stacking layer for a non-normal mode (alongside opacity).
   Verified by an e2e test (red child `multiply` over a blue parent → black).
 
 - **`border-image` (image source) — confirmed already DONE.** `DrawBorder`
   routes `NinePatch` details to `emit_nine_patch` (corners/edges/`fill`);
-  serval's `emit_border_image` emits them. Only a *gradient* source is deferred
+  genet's `emit_border_image` emits them. Only a *gradient* source is deferred
   (`paint_list_render` ~918) — niche.
 
 **Slice — `filter` is DONE (below); `::first-line` remains (verified heavy, low
@@ -258,7 +258,7 @@ priority, blocks nothing):**
   chain (blur via the blur cascade, the color ops via the color-matrix shader:
   unpremultiply → 4x5 matrix → clamp → re-premultiply, in sRGB space), and
   splices the result back so the layer wrapper keeps alpha/blend/clip. Shared
-  `preprocess_filters` runs on both `render_vello` and the compositor path. serval
+  `preprocess_filters` runs on both `render_vello` and the compositor path. genet
   emits `cv.get_effects().filter`. Matrices follow CSS Filter Effects L1
   (grayscale BT.709, saturate/hue-rotate 0.213, sepia/brightness/contrast/invert),
   research-vetted. Verified: e2e invert→cyan, grayscale→sRGB-luminance gray,
@@ -268,7 +268,7 @@ priority, blocks nothing):**
   textures, the per-frame texture growth (load-bearing for tile reuse, shared
   with backdrop-filter). See `2026-06-17_element_filter_plan.md`.
 
-- **`::first-line`.** Blocked below serval: the **servo** `PseudoElement` enum
+- **`::first-line`.** Blocked below genet: the **servo** `PseudoElement` enum
   (`style/servo/selector_parser.rs:50`) has no `FirstLine` variant ("If/when
   :first-line is added…"), so it is never parsed or cascaded — unlike the
   working `::first-letter`. Support means a **vendored-Stylo** addition (enum

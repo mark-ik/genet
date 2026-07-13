@@ -1,13 +1,13 @@
-# Engine-neutral scripting backend contract for serval's scripted tier.
+# Engine-neutral scripting backend contract for genet's scripted tier.
 # Lifted from the validated Track A/B probes (see
-# docs/2026-05-20_serval_script_engine_plan.md). No engine dependency: this crate
+# docs/2026-05-20_genet_script_engine_plan.md). No engine dependency: this crate
 # names only capabilities; engine-native types stay inside the backend crates.
 [package]
 name = "script-engine-api"
 version = "0.1.0"
-repository = "https://github.com/mark-ik/serval"
+repository = "https://github.com/mark-ik/genet"
 publish = true
-description = "Engine-neutral scripting contract for the serval engine family: the ScriptEngine trait, native-callback surface, and host-data plumbing a JS engine implements (Boa, Nova) and a scripted document drives."
+description = "Engine-neutral scripting contract for the genet engine family: the ScriptEngine trait, native-callback surface, and host-data plumbing a JS engine implements (Boa, Nova) and a scripted document drives."
 edition = "2021"
 license = "MPL-2.0"
 

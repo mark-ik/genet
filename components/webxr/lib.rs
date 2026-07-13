@@ -4,7 +4,7 @@
 
 //! Stub WebXR integration surface.
 //!
-//! The old implementation was built around GL/surfman. Serval keeps the
+//! The old implementation was built around GL/surfman. Genet keeps the
 //! registry and discovery types available while WebXR is rebuilt on the future
 //! wgpu/netrender path.
 

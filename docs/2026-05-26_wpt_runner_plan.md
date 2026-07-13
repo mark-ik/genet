@@ -1,4 +1,4 @@
-# serval-native WPT runner
+# genet-native WPT runner
 
 Status: **superseded/in progress.** Original status was 2026-05-28. Phase 1 (crash-smoke), phase 2
 (reftest pixel compare, with linked-resource loading + fuzzy + ref
@@ -12,9 +12,9 @@ full `dom`, focused `dom/abort`, focused `dom/nodes`, and
 ## Goal
 
 Run [web-platform-tests](https://github.com/web-platform-tests/wpt)
-(the corpus under `tests/wpt`) against serval, **selecting individual
+(the corpus under `tests/wpt`) against genet, **selecting individual
 subsets** so a single subsystem can be checked without running the whole
-suite. serval-native (cargo + the engine crates), not Servo's removed
+suite. genet-native (cargo + the engine crates), not Servo's removed
 mach/python `wptrunner`.
 
 ## Subset selection (first-class)
@@ -22,16 +22,16 @@ mach/python `wptrunner`.
 The runner takes a path under the tests root:
 
 ```shell
-serval-wpt list css/CSS2/floats          # enumerate + classify
-serval-wpt run  css/CSS2/floats          # run that subset
-serval-wpt run  dom/nodes/Element-classlist.html   # a single file
-serval-wpt run css --tests-root tests/wpt          # explicit root
+genet-wpt list css/CSS2/floats          # enumerate + classify
+genet-wpt run  css/CSS2/floats          # run that subset
+genet-wpt run  dom/nodes/Element-classlist.html   # a single file
+genet-wpt run css --tests-root tests/wpt          # explicit root
 ```
 
 Default tests root is `tests/wpt`. A subset is any directory or file
 beneath it; the runner walks only that path.
 
-## WPT test types and how serval verifies each
+## WPT test types and how genet verifies each
 
 - **crashtest** / load smoke: pass if loading (parse + cascade + layout)
   does not panic. No GPU, no JS. **Phase 1.**
@@ -66,8 +66,8 @@ ref chains, generated variants, and timeout metadata.
 ## Phases
 
 1. **Crash-smoke + subset selection (this).** `list` + `run`; `run`
-   loads each runnable test through `serval_static_dom::parse` +
-   `serval_layout::render` (with inline `<style>` extracted), wrapped in
+   loads each runnable test through `genet_static_dom::parse` +
+   `genet_layout::render` (with inline `<style>` extracted), wrapped in
    `catch_unwind`. Reports per-test survival + a summary. Finds layout
    panics across real pages, which is the highest-leverage early signal.
    No GPU.
@@ -96,7 +96,7 @@ ref chains, generated variants, and timeout metadata.
    ref. Passing those waits on the systematic reftest diff — see the
    [CSS rendering conformance plan](./2026-05-31_css_rendering_conformance_plan.md).
    (testharness `.xhtml` stays skipped — those are XML **+ JS**, a separate axis.)
-3. **testharness.js (done 2026-05-28).** `serval-wpt testharness <subset>`
+3. **testharness.js (done 2026-05-28).** `genet-wpt testharness <subset>`
    runs each testharness test on the host surface and collects per-subtest
    results. For each test it extracts the test's own scripts (inline
    `<script>` + local `<script src>`, skipping `testharness.js` / the
@@ -155,8 +155,8 @@ ref chains, generated variants, and timeout metadata.
    isn't a child — so `assert_throws_dom` starts passing), and the
    `ChildNode` mixin (`remove` / `before` / `after` / `replaceWith`). Plus
    two correctness fixes: the runner now **skips `.xhtml`** (XML parse mode
-   serval's HTML parser doesn't handle — was ~14 spurious syntax errors),
-   and `serval-scripted-dom` gained `remove_child` (DOM `removeChild`
+   genet's HTML parser doesn't handle — was ~14 spurious syntax errors),
+   and `genet-scripted-dom` gained `remove_child` (DOM `removeChild`
    *orphans* a node, keeping it alive + re-insertable, vs `LayoutDomMut::
    remove` which drops the subtree — script holds references to removed
    nodes).
@@ -243,7 +243,7 @@ ref chains, generated variants, and timeout metadata.
    `cloneNode`, `DOMParser`, URL reflected kind, per-tag HTML interfaces.
 4. **Expectations.** Checked-in expected-results files so known
    failures are tolerated and regressions surface (the WPT metadata
-   model, serval-shaped). The default disk-mode guard now checks release-mode
+   model, genet-shaped). The default disk-mode guard now checks release-mode
    Boa baselines for full `dom`, focused `dom/abort`, focused `dom/nodes`,
    and `html/webappapis/timers` through
    `support/wpt/check-testharness-baselines.ps1`, and CI runs the same lane.
@@ -261,7 +261,7 @@ ref chains, generated variants, and timeout metadata.
 
 ## Crate
 
-`ports/serval-wpt` (bin). Phase 1 deps: `serval-static-dom`,
-`serval-layout`, `layout_dom_api`. Normal discovery consumes
+`ports/genet-wpt` (bin). Phase 1 deps: `genet-static-dom`,
+`genet-layout`, `layout_dom_api`. Normal discovery consumes
 `tests/wpt/meta/MANIFEST.json`; the hand-rolled `std::fs` walk remains as the
 `--walk-discovery` diagnostic fallback. Phase 2 adds the paint/netrender deps.

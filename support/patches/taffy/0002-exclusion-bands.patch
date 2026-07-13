@@ -21,7 +21,7 @@ index 40274edaf4e..bef6f479a10 100644
 +    /// inward from the content-box edges. Empty when no floats are active at or
 +    /// below `min_y` (block-local).
 +    ///
-+    /// serval patch (float wrap-around): the per-line widths that let a
++    /// genet patch (float wrap-around): the per-line widths that let a
 +    /// paragraph's lines wrap to the side of a float and reclaim the full
 +    /// column below it. Mirrors the coordinate handling of
 +    /// [`Self::find_content_slot`] (subtract `y_offset` to reach block-local y;
@@ -65,7 +65,7 @@ index cc3d2533b9e..43f99fd6b71 100644
 +/// breaking to give each line box its own (narrowed) width, so text wraps to
 +/// the side of a float and reclaims the full column below it.
 +///
-+/// serval patch (float wrap-around): produced by
++/// genet patch (float wrap-around): produced by
 +/// [`FloatContext::exclusion_bands`] + `BlockContext::inline_exclusion_bands`.
 +#[derive(Debug, Clone, Copy, PartialEq)]
 +pub struct InlineFloatBand {
@@ -94,7 +94,7 @@ index cc3d2533b9e..43f99fd6b71 100644
 +    /// omitted, since they exclude nothing from inline content. An empty result
 +    /// means no active floats below `min_y`.
 +    ///
-+    /// serval patch (float wrap-around): a thin read over the existing
++    /// genet patch (float wrap-around): a thin read over the existing
 +    /// `segments` walk, the raw material for `BlockContext::inline_exclusion_bands`,
 +    /// which converts each segment into a content-box-local [`InlineFloatBand`]
 +    /// for parley line breaking.

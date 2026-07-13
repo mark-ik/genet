@@ -1,0 +1,58 @@
+# Scripted tier: binds JS engines to genet-scripted-dom — JS
+# mutates the DOM through NodeId reflectors. The reflector/host-callback binding is
+# engine-specific (per Appendix A). Nova is available on 64-bit targets (including
+# wasm64); Boa supplies the wasm32 compatibility lane.
+[package]
+name = "genet-scripted"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Host-neutral scripted document tier over interchangeable JavaScript engines."
+
+[lib]
+name = "genet_scripted"
+path = "lib.rs"
+
+[features]
+default = ["render"]
+# Scene production is a host extension. The worker artifact disables this feature
+# and carries only DOM, runtime, layout-state, and extraction dependencies.
+render = ["dep:netrender", "dep:genet-layout", "dep:genet-render"]
+# Optional local conformance fixtures that exercise the same document tests on
+# Nova. The default suite keeps Boa as the baseline worker-compatible backend.
+# Gates the `dep:script-engine-nova` below too, so a Boa-only consumer never
+# compiles nova_vm at all (it was previously always-on on 64-bit targets
+# regardless of this feature -- an unconditional dependency the `#[cfg(feature =
+# "scripted-nova")]` test gate never actually covered).
+scripted-nova = ["dep:script-engine-nova"]
+
+[dependencies]
+genet-scripted-dom = { path = "../genet-scripted-dom" }
+layout-dom-api = { path = "../shared/layout-dom", features = ["capture"] }
+genet-layout = { path = "../genet-layout", optional = true }
+genet-render = { path = "../genet-render", optional = true }
+genet-static-dom = { path = "../genet-static-dom" }
+genet-extract = { path = "../genet-extract" }
+script-runtime-api = { path = "../script-runtime-api" }
+netrender = { workspace = true, optional = true }
+encoding_rs = { workspace = true }
+postcard = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+url = { workspace = true }
+engine_observables_api = { workspace = true }
+# Engine-neutral scripting contract (the native-callback + host-data surface).
+script-engine-api = { path = "../script-engine-api" }
+
+[dev-dependencies]
+script-engine-boa = { path = "../script-engine-boa" }
+
+[target.'cfg(target_pointer_width = "64")'.dependencies]
+# Nova backend on all 64-bit targets, including wasm64. Optional, gated by
+# `scripted-nova` (see [features]).
+script-engine-nova = { path = "../script-engine-nova", optional = true }

@@ -297,7 +297,7 @@ fn document_dedups_shared_face() {
 
 #[test]
 fn text_populates_font_sidecar() {
-    // Mirrors serval's `emit_with_layouts_populates_font_table`: real
+    // Mirrors genet's `emit_with_layouts_populates_font_table`: real
     // text yields a non-empty sidecar, every run's face resolves in
     // it, and the resolved face carries real bytes.
     let laid = layout_document(

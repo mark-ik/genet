@@ -32,10 +32,10 @@
 //! [`SyncMechanism`], the platform fence wrappers) live in
 //! [`crate::interop`] — see
 //! [`docs/2026-05-09_interop_lineage.md`](../../docs/2026-05-09_interop_lineage.md)
-//! for the slint → graft → scrying → serval provenance and the
+//! for the slint → graft → scrying → genet provenance and the
 //! export-direction trait-shape reasoning.
 //!
-//! See [`docs/2026-05-05_serval_netrender_cut_plan.md`](../../docs/2026-05-05_serval_netrender_cut_plan.md)
+//! See [`docs/2026-05-05_genet_netrender_cut_plan.md`](../../docs/2026-05-05_genet_netrender_cut_plan.md)
 //! § C4 for the cut design.
 
 use std::collections::HashMap;
@@ -54,9 +54,9 @@ use crate::interop::{HostWgpuContext, InteropBackend, SyncMechanism};
 /// holds the same wgpu device as netrender, so the master texture it
 /// reads here is directly samplable in its own render pass (zero
 /// copy). It's the right backend when the embedder wants to integrate
-/// the serval composite into its own render pipeline (e.g. for a
+/// the genet composite into its own render pipeline (e.g. for a
 /// custom UI shell that draws on top), and the wrong one when the
-/// embedder wants serval to present pixels directly to the OS — for
+/// embedder wants genet to present pixels directly to the OS — for
 /// that, install a per-platform backend ([`crate::compositor_dxgi::WindowsDxgiBackend`]
 /// on Windows; `MacosCALayerBackend` on macOS;
 /// `WaylandSubsurfaceBackend` on Linux).

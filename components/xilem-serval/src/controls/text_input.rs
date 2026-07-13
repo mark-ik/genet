@@ -13,7 +13,7 @@
 //! the handler inserts at the caret, deletes before/after it (Backspace/Delete),
 //! and moves it (←/→ and Home/End). The field renders the **clean** buffer; the
 //! host paints the caret as a thin bar at the cursor via
-//! `serval_layout::caret_rect` overlaid on the scene (see `pelt-live`'s render
+//! `genet_layout::caret_rect` overlaid on the scene (see `pelt-live`'s render
 //! path). [`TextInput::display`] — the buffer with a `|` at the caret — is a
 //! *textual* representation for headless tests / debug, not what the field
 //! renders on screen.

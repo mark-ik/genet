@@ -23,11 +23,11 @@
 //!    [`A11yCapability::Opaque`]). It must never present as [`A11yCapability::Full`]
 //!    while silently dropping semantics. Degradation is *declared*, never silent —
 //!    so the host can surface "you can't inspect inside this" honestly (cf. the
-//!    [scrying DOM-bridge brief](../../../../serval/docs/2026-05-26_scrying_dom_bridge.md),
+//!    [scrying DOM-bridge brief](../../../../genet/docs/2026-05-26_scrying_dom_bridge.md),
 //!    which lifts a WebView tile from `Opaque` toward `Partial`).
 //! 3. **Cross-surface-parity** — every engine speaks this *one* vocabulary, so
 //!    the host treats accessibility uniformly regardless of which engine backs a
-//!    tile (a nematic document, a Serval page, a scrying WebView).
+//!    tile (a nematic document, a Genet page, a scrying WebView).
 
 use serde::{Deserialize, Serialize};
 

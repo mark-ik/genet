@@ -1,0 +1,60 @@
+[package]
+name = "genet-documents"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository = "https://github.com/mark-ik/genet"
+description = "Genet's retained document sessions — the static, scripted, and smolweb content lanes as inker session engines (2026-07-10 session-engines plan). Formerly pelt's convenience lanes; pelt is now one consumer among hosts."
+readme = "README.md"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+# Remote http(s) loading for LocalFetcher via the netfetcher engine.
+netfetch = ["dep:netfetcher", "dep:tokio", "dep:bytes", "dep:url"]
+# The smolweb native lane: errand transport/parse + nematic::views rendering.
+smolweb = [
+    "dep:errand", "dep:nematic", "nematic/views", "dep:tokio", "dep:url",
+    "dep:genet-scripted-dom", "dep:xilem-serval",
+]
+# The scripted lane: a live ScriptedDocument on Boa.
+scripted = [
+    "dep:genet-scripted", "dep:script-engine-api", "dep:script-engine-boa", "dep:url",
+]
+# Add the Nova engine as a second scripted rung (64-bit targets).
+scripted-nova = ["scripted", "dep:script-engine-nova"]
+
+[dependencies]
+# The engine contracts this component implements (SessionEngine<Scene>).
+inker = { workspace = true }
+# The host-shell fetch seam (pelt-core is a light contracts crate; the dep
+# direction is by weight — promoting it to components/shared is a noted wart).
+pelt-core = { workspace = true }
+netrender = { workspace = true }
+genet-layout = { path = "../genet-layout" }
+genet-render = { path = "../genet-render" }
+genet-static-dom = { path = "../genet-static-dom" }
+data-url = { workspace = true }
+
+genet-scripted-dom = { path = "../genet-scripted-dom", optional = true }
+genet-scripted = { path = "../genet-scripted", features = ["render"], optional = true }
+script-engine-api = { path = "../script-engine-api", optional = true }
+script-engine-boa = { path = "../script-engine-boa", optional = true }
+script-engine-nova = { path = "../script-engine-nova", optional = true }
+nematic = { workspace = true, optional = true }
+xilem-serval = { package = "serval-xilem", version = "0.1.0", path = "../xilem-serval", optional = true }
+errand = { workspace = true, optional = true }
+# Same git source pelt uses; not a root workspace entry (sibling repo).
+netfetcher = { git = "https://github.com/mark-ik/netfetcher.git", branch = "main", optional = true }
+tokio = { workspace = true, features = ["rt"], optional = true }
+bytes = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Offline mock HTTP server for the netfetch integration test (moved with
+# net_fetch.rs from pelt); runs without a live network.
+mockito = "1"
+# The smolweb tests walk the built ScriptedDom through the LayoutDom trait.
+layout_dom_api = { package = "layout-dom-api", path = "../shared/layout-dom" }

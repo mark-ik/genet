@@ -12,7 +12,7 @@
 //!
 //! A view emits semantic elements with classes; [`stylesheet`] produces the CSS
 //! for those classes under a theme. The host applies it the way it applies any
-//! document stylesheet (serval-layout's `inline_stylesheets`).
+//! document stylesheet (genet-layout's `inline_stylesheets`).
 
 /// How a smolweb document is colored.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -21,11 +21,11 @@
 
 use chisel::{GridSpec, Placement};
 
-use crate::pod::ServalElement;
-use crate::{AnyView, PointerClick, ServalCtx, arrangement::placed_with, el, on_click};
+use crate::pod::GenetElement;
+use crate::{AnyView, PointerClick, GenetCtx, arrangement::placed_with, el, on_click};
 
 /// The erased view type grid cells (and the grid itself) use.
-pub type GridView<State, Action> = Box<dyn AnyView<State, Action, ServalCtx, ServalElement>>;
+pub type GridView<State, Action> = Box<dyn AnyView<State, Action, GenetCtx, GenetElement>>;
 
 /// Build a data grid. `cell(row, col)` supplies each materialized cell's view;
 /// `scroll` is the caller's scroll offset into the body (device px);
@@ -128,10 +128,10 @@ where
 mod tests {
     use super::*;
     use crate::tags::custom_leaf;
-    use crate::{DomHandle, ServalAppRunner};
+    use crate::{DomHandle, GenetAppRunner};
     use chisel::GridColumn;
     use layout_dom_api::{LayoutDom, LocalName, Namespace};
-    use serval_scripted_dom::{NodeId, ScriptedDom};
+    use genet_scripted_dom::{NodeId, ScriptedDom};
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn grid_virtualizes_rows_under_a_sticky_header() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             view,
             GridState { scroll: 0.0, descending: false, rows: 10_000 },
@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn header_click_flips_the_sort() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             view,
             GridState { scroll: 0.0, descending: false, rows: 100 },

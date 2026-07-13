@@ -15,8 +15,8 @@
 
 use accesskit::{NodeId as AccessNodeId, TreeUpdate};
 use pelt_core::tile::{DropTarget, Edge, TileEvent, TileId, TilePath, TileTree};
-use serval_render::ContentReport;
-use serval_scripted_dom::NodeId;
+use genet_render::ContentReport;
+use genet_scripted_dom::NodeId;
 use xilem_serval::{PointerClick, Propagation};
 
 use crate::tile_surface::{GhostLayer, TileFrame, TileSurface};

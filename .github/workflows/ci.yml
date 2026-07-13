@@ -34,4 +34,4 @@ jobs:
       - name: Workspace tests
         run: cargo test --workspace --all-targets
       - name: Layout wasm witness
-        run: cargo check -p serval-layout --target wasm32-unknown-unknown
+        run: cargo check -p genet-layout --target wasm32-unknown-unknown

@@ -4,7 +4,7 @@ version = "0.1.2"
 edition = "2024"
 description = "Perceptual (OKLCH) seed-to-palette derivation, plus a contrast-gated syntax-highlight palette, for the Merely family (Woodshed, Strophe, Mere). A theme is a few seed colours; the full palette is derived."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/mark-ik/serval"
+repository = "https://github.com/mark-ik/genet"
 keywords = ["color", "theme", "palette", "oklch", "design-tokens"]
 categories = ["gui", "graphics"]
 

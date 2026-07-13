@@ -2,12 +2,12 @@
 name = "errand"
 version = "0.1.3"
 edition = "2024"
-# Own license line, not workspace: errand predates the serval adoption and is
-# published MIT/Apache (founding convention); serval's workspace default is MPL.
+# Own license line, not workspace: errand predates the genet adoption and is
+# published MIT/Apache (founding convention); genet's workspace default is MPL.
 license = "MIT OR Apache-2.0"
 description = "Async small-web (smolweb) transport: gemini, gopher, finger, spartan, nex, guppy, and titan in one scheme-routed fetch, plus titan-upload and misfin-send write companions. Bytes in, bytes out, no HTTP, host-agnostic."
-repository = "https://github.com/mark-ik/serval"
-# Override serval's workspace-wide publish = false: errand is a published crate.
+repository = "https://github.com/mark-ik/genet"
+# Override genet's workspace-wide publish = false: errand is a published crate.
 publish = true
 keywords = ["gemini", "gopher", "smolweb", "nex", "guppy"]
 categories = ["network-programming"]

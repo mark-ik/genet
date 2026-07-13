@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Browser host surface for serval's scripted tier (the plan's Layer 1).
+//! Browser host surface for genet's scripted tier (the plan's Layer 1).
 //!
 //! Built ON the engine-neutral [`script_engine_api`] VM primitives
 //! (`set_global` / `set_function` / host data), generic over the backend. The
@@ -18,7 +18,7 @@
 //! `removeEventListener` / `dispatchEvent`); and the **`document` / `Node`
 //! construction surface** (the `dom` module) — `createElement`, `createTextNode`,
 //! `appendChild`, `setAttribute`, `textContent` (setter), `getElementById` —
-//! bound to a [`serval_scripted_dom::ScriptedDom`] in host state. The event loop,
+//! bound to a [`genet_scripted_dom::ScriptedDom`] in host state. The event loop,
 //! EventTarget, and DOM wrappers are JS bootstraps composed on the engine
 //! primitives (the rakers lesson); the DOM mutators are native sinks reached the
 //! same way as `console`. The only VM-trait growth needed was
@@ -37,7 +37,7 @@ use std::rc::Rc;
 
 use layout_dom_api::LayoutDom;
 use script_engine_api::{CallCx, NativeFn, ScriptEngine, ScriptEngineSnapshot};
-use serval_scripted_dom::{NodeId, ScriptedDom};
+use genet_scripted_dom::{NodeId, ScriptedDom};
 
 mod dom;
 mod fetch;
@@ -92,7 +92,7 @@ pub struct HostState {
     /// retires the ids the engine reports dead and passes the survivors to
     /// [`ScriptedDom::collect`] as extra roots, so an orphan script can no longer
     /// reach is reaped.
-    pub pins: serval_scripted_dom::Pins,
+    pub pins: genet_scripted_dom::Pins,
     /// Per-subtest results collected from `testharness.js` via the completion
     /// callback (the results bridge). Populated by [`Runtime::run_testharness`].
     pub results: Vec<TestResult>,
@@ -296,7 +296,7 @@ impl<E: ScriptEngine> Runtime<E> {
     /// The **input → event bridge**: dispatch a synthetic DOM event of `event_type`
     /// (`"click"`, `"keydown"`, …) at the node with raw id `raw_node_id`, running its
     /// registered listeners with full capture→target→bubble propagation. The host
-    /// supplies the target (e.g. from `serval-layout`'s `hit_test`); the runtime owns
+    /// supplies the target (e.g. from `genet-layout`'s `hit_test`); the runtime owns
     /// no layout, so it cannot hit-test itself.
     ///
     /// Returns `true` if the default action should proceed, `false` if a listener
@@ -502,7 +502,7 @@ impl<E: ScriptEngine> Runtime<E> {
         let mut fired_total = 0;
         for _ in 0..budget {
             // Step 2.6: "Perform oldestTask's steps."
-            // Serval currently has one runnable task source here: timers.
+            // Genet currently has one runnable task source here: timers.
             let fired = match self.run_one_timer_task(None) {
                 Ok(fired) => fired,
                 Err(error) => {
@@ -1746,7 +1746,7 @@ const SHELL_GLOBALS_BOOTSTRAP: &str = r#"
   globalThis.opener = null;
   // `globalThis.location` is installed by the `platform` surface (a live view of
   // the document URL, defaulting to about:blank); not snapshotted here.
-  globalThis.navigator = { userAgent: 'serval', platform: '', language: 'en-US' };
+  globalThis.navigator = { userAgent: 'genet', platform: '', language: 'en-US' };
 
   // AnimationFrameProvider (window). The window's associated document is this
   // runtime's one document, so window-global state realizes the document's
@@ -2221,7 +2221,7 @@ mod tests {
     /// wins, and an absolute `scrollTo` supersedes a pending one.
     fn scroll_into_view_works<E: ScriptEngine>() {
         let mut rt = Runtime::<E>::new().expect("runtime");
-        let src = serval_static_dom::StaticDocument::parse(
+        let src = genet_static_dom::StaticDocument::parse(
             "<html><body><div id=\"a\"></div><div id=\"b\"></div></body></html>",
         );
         rt.load_dom(&src);

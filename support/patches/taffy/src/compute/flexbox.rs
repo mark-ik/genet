@@ -30,7 +30,7 @@ struct FlexItem {
     /// The CSS `order` value, used to stable-sort items into order-modified
     /// document order before line collection. Distinct from `order` above,
     /// which stays the document index used for paint/output ordering.
-    /// (serval patch: flex `order` support.)
+    /// (genet patch: flex `order` support.)
     css_order: i32,
 
     /// The base size of this item
@@ -260,7 +260,7 @@ fn compute_preliminary(tree: &mut impl LayoutFlexboxContainer, node: NodeId, inp
     debug_log!("generate_anonymous_flex_items");
     let mut flex_items = generate_anonymous_flex_items(tree, node, &constants);
 
-    // serval patch (flex `order`): CSS `order` lays items out (and paints them)
+    // genet patch (flex `order`): CSS `order` lays items out (and paints them)
     // in order-modified document order — items sort by ascending `order`, ties
     // broken by document order. A *stable* sort keeps equal-`order` items (the
     // common case, 0) in document order.

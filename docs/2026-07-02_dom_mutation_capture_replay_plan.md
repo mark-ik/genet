@@ -1,10 +1,10 @@
 # DomMutation Capture/Replay + Arena Stats Plan
 
-**Status:** Capture/replay and serval-side arena stats closed 2026-07-02.
+**Status:** Capture/replay and genet-side arena stats closed 2026-07-02.
 Mere-side apparatus surfacing remains tracked in the broader graph-delta plan.
 **Date:** 2026-07-02.
 **Scope:** make the `DomMutation` stream recordable and replayable (the DOM-layer
-equivalent of netrender's postcard capture/replay), and give serval's arenas a
+equivalent of netrender's postcard capture/replay), and give genet's arenas a
 uniform stats surface. Motivated by the data-oriented doctrine brief in the mere
 repo (`design_docs/2026-07-02_data_oriented_doctrine_brief.md`, §6 items 2-3):
 every delta stream in the tower should be captureable at its boundary and
@@ -13,7 +13,7 @@ replayable against a fresh fold. Today `DomMutation<Id>` derives only
 in the stack cannot be recorded.
 
 **Out of scope:** paint-emit incrementality (paint cost scaling with document
-size on the RepaintOnly path). That is a separate, larger serval-layout project
+size on the RepaintOnly path). That is a separate, larger genet-layout project
 and needs its own plan.
 
 ---
@@ -29,15 +29,15 @@ and needs its own plan.
   (`remove_child`, node still live) and dropping it (`remove`, node dead). The
   recorder therefore has to enrich each drained mutation from the current DOM
   before it is replay-ready.
-- **The snapshot half already exists.** `serval-scripted-dom/serialize.rs`
+- **The snapshot half already exists.** `genet-scripted-dom/serialize.rs`
   serializes the DOM via html5ever (powers `outerHTML` and the verso flip's
   DOM-snapshot layer). Capture = initial serialized document + per-batch
   mutation log.
 - **Current drain reality is higher than the intended final tap.**
   `IncrementalLayout::apply` is the right eventual one-place tap, but in the
-  current checkout it is only exercised in `serval-layout` tests. The live
+  current checkout it is only exercised in `genet-layout` tests. The live
   scripted host still rebuilds a fresh `IncrementalLayout` in
-  `serval-scripted::ScriptedDocument::frame` and otherwise leaves the mutation
+  `genet-scripted::ScriptedDocument::frame` and otherwise leaves the mutation
   queue undrained. The first recorder therefore has to live at the scripted
   document's public mutation boundaries (`build`/`evaluate`/`dispatch_event`/
   `pump`) and later move down to `IncrementalLayout::apply` once a persistent
@@ -74,7 +74,7 @@ and needs its own plan.
 
 ### Phase 2 — the recorder
 
-- First landing: env-gated `MutationRecorder` in `serval-scripted`, on session
+- First landing: env-gated `MutationRecorder` in `genet-scripted`, on session
   start writing the serialized initial document and then appending postcard-
   framed **replay-oriented** batches at the scripted document's public mutation
   boundaries. Each recorded mutation is enriched from the post-mutation DOM:
@@ -85,7 +85,7 @@ and needs its own plan.
 - Follow-on once a persistent incremental session is live: move the tap down to
   `IncrementalLayout::apply` and record the `Applied` outcome + viewport there,
   with an equivalent full-cascade hook for rebuild-only hosts.
-- Done: browsing a page with `SERVAL_DOM_CAPTURE_DIR` set produces a capture
+- Done: browsing a page with `GENET_DOM_CAPTURE_DIR` set produces a capture
   file; nothing changes without it.
 
 ### Phase 3 — the replay harness
@@ -102,7 +102,7 @@ and needs its own plan.
     set and viewport size, runs a shadow `IncrementalLayout` session batch by
     batch, and compares recorded-vs-replayed `Applied`, fragment digest, and
     viewport scroll/size bits.
-- Lives beside serval-layout's tests as a headless utility (also callable from
+- Lives beside genet-layout's tests as a headless utility (also callable from
   a small `nova_cli`-style bin if useful for triage).
 - Done: a failing mutation/layout batch can be reduced to a capture file that
   replays headlessly off the live host, and in-tree regression tests now cover
@@ -110,7 +110,7 @@ and needs its own plan.
 
 ### Phase 4 — arena stats
 
-- Serval-side stats landed here; mere-side apparatus surfacing stays in the
+- Genet-side stats landed here; mere-side apparatus surfacing stays in the
   broader graph-delta plan
   (`repos/mere/design_docs/mere_docs/implementation_strategy/2026-07-02_graph_delta_capture_apparatus_stats_plan.md`).
 - A plain stats struct per arena, one method each, no framework:
@@ -119,7 +119,7 @@ and needs its own plan.
   damage class, elements restyled, boxes rebuilt), box-tree node count.
 - Exposed through the existing observables seam (`engine-observables-api`) so
   hosts (apparatus panel in mere, pelt debug overlay) render real numbers.
-- Landed on the serval side: `engine-observables-api` now defines shared DOM
+- Landed on the genet side: `engine-observables-api` now defines shared DOM
   and layout-batch stats shapes; `ScriptedDom::stats()` reports live node-kind
   counts, attribute counts, and a rough byte estimate; and
   `IncrementalLayout::last_batch_stats()` reports apply path, coalesced
@@ -137,12 +137,12 @@ and needs its own plan.
   current-vs-intended drain sites, id-fence normalization requirement).
 - 2026-07-02: **Phase 1 landed.** `layout-dom-api` now carries a `capture`
   feature with `CapturedMutation` / `CapturedQualName`, and
-  `serval-scripted-dom` exposes `capture_node_id` / `remint_node_id` so capture
+  `genet-scripted-dom` exposes `capture_node_id` / `remint_node_id` so capture
   strips the debug doc-tag fence and replay re-tags ids against the replay
   document. Added a real postcard round-trip test over drained
   `DomMutation<NodeId>` batches.
-- 2026-07-02: **Phase 2 partial landing.** `serval-scripted` now supports
-  env-gated capture via `SERVAL_DOM_CAPTURE_DIR`: it writes the initial DOM
+- 2026-07-02: **Phase 2 partial landing.** `genet-scripted` now supports
+  env-gated capture via `GENET_DOM_CAPTURE_DIR`: it writes the initial DOM
   snapshot and postcard-framed mutation batches at `ScriptedDocument`'s public
   mutation boundaries (`build`, `evaluate`, `dispatch_event`, `pump`).
 - 2026-07-02: **Phase 2 recorder schema corrected.** The first generic
@@ -151,8 +151,8 @@ and needs its own plan.
   inserted subtree serialization, new values/text, subtree replacement HTML,
   and remove-vs-orphan liveness. The lower `IncrementalLayout::apply` tap,
   `Applied`/viewport parity, replay harness, and arena stats are still open.
-- 2026-07-02: **Phase 3 partial landing.** `serval-scripted-dom` now exposes
-  snapshot/subtree import helpers, and `serval-scripted` now has a headless
+- 2026-07-02: **Phase 3 partial landing.** `genet-scripted-dom` now exposes
+  snapshot/subtree import helpers, and `genet-scripted` now has a headless
   `replay_capture(path)` path that rebuilds DOM state from a capture file and
   checks final document HTML plus live-node count in a regression test. The
   `IncrementalLayout::apply` parity layer, `Applied` capture, viewport parity,
@@ -164,13 +164,13 @@ and needs its own plan.
   fresh shadow `IncrementalLayout` session and fails on any DOM/layout parity
   mismatch. Added regression tests for replayable mutation batches, orphan
   liveness, and attribute-vs-structural layout parity.
-- 2026-07-02: **Phase 4 serval-side landing.** `engine-observables-api` now
-  carries shared DOM/layout batch stats structs; `serval-scripted-dom` reports
-  live arena counts and rough bytes; `serval-layout` reports retained batch
+- 2026-07-02: **Phase 4 genet-side landing.** `engine-observables-api` now
+  carries shared DOM/layout batch stats structs; `genet-scripted-dom` reports
+  live arena counts and rough bytes; `genet-layout` reports retained batch
   counters for repaint-only, splice, and full-fallback paths; and
-  `serval-scripted` exposes both through the scripted host surface. Added
+  `genet-scripted` exposes both through the scripted host surface. Added
   focused tests for DOM stats, retained layout stats, and structural-vs-attribute
   batch accounting.
-- 2026-07-02: **Doc closed.** Capture/replay and the serval arena-stats half
+- 2026-07-02: **Doc closed.** Capture/replay and the genet arena-stats half
   are landed; mere-side apparatus surfacing remains tracked with the broader
   graph-delta/apparatus work.

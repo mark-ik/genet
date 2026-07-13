@@ -43,7 +43,7 @@
 //!
 //! Pre-1.0. All seven smolweb / file / text protocol lanes shipped. Reader-
 //! mode HTML simplification (a separate concern from full-web rendering,
-//! which Serval owns) is the only major lane still pending.
+//! which Genet owns) is the only major lane still pending.
 
 #![doc(html_root_url = "https://docs.rs/nematic/0.0.1")]
 

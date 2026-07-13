@@ -6,7 +6,7 @@
 //! runs the page's real JS) and carries the cheap layers across:
 //!
 //! * SESSION — cookies set on the WebView store *before* navigation, so the page
-//!   loads already-authenticated (a login made in serval comes across).
+//!   loads already-authenticated (a login made in genet comes across).
 //! * NAV — the scroll offset, restored by script once the load completes.
 //! * FORM — field values, refilled by script, best-effort.
 //!

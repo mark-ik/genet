@@ -17,7 +17,7 @@ helpers for agent-heavy development:
   entities, not full program semantics or project invariants.
 
 > **Update 2026-05-24:** superseded on the repo-wide point. `weave` is now
-> enabled across the workspace — every repo (mere, serval, netrender, strophe,
+> enabled across the workspace — every repo (mere, genet, netrender, strophe,
 > woodshed, graphshell, wgpu-graft/scry/weld) carries a committed
 > `.gitattributes` mapping ~50 file types to `merge=weave`, and the driver is
 > wired in each clone's local `.git/config`
@@ -29,7 +29,7 @@ helpers for agent-heavy development:
 
 Do not enable repo-wide setup by default yet. Prefer explicit commands,
 temporary tests, and local-only configuration until the tools have been used on
-real Serval conflicts.
+real Genet conflicts.
 
 ## What was tested
 
@@ -181,7 +181,7 @@ it on important branches.
 
 ## Adoption posture
 
-For Serval and sibling repos, the useful near-term workflow is:
+For Genet and sibling repos, the useful near-term workflow is:
 
 1. Use `sem diff` and `sem context` to brief agents and reviewers on what
    changed at entity granularity.

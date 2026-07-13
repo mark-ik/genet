@@ -1,5 +1,5 @@
 /.servo
-# `.cargo/config.toml` is now local-dev-only (gitignored): serval needs no
+# `.cargo/config.toml` is now local-dev-only (gitignored): genet needs no
 # committed build settings (the inherited servo target linkers / RUSTC_BOOTSTRAP
 # were verified unused), so the file holds only local path overrides, like
 # `repos/mere/.cargo/config.toml`.
@@ -25,7 +25,7 @@ Cargo.lock
 /android-toolchains
 /target
 # Generated wasm-bindgen browser worker artifacts. Source lives in
-# components/serval-scripted-worker and support/build-scripted-workers.ps1.
+# components/genet-scripted-worker and support/build-scripted-workers.ps1.
 /dist/scripted-workers/
 # Sub-workspace build outputs. Each of these crates has its own
 # [workspace], so the root `/target` (anchored) doesn't cover them.

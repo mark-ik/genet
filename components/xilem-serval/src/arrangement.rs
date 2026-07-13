@@ -3,24 +3,24 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 //! Arrangement views (chisel catalog tier 3): a container that owns its
-//! children's x/y/z while the children stay real serval nodes.
+//! children's x/y/z while the children stay real genet nodes.
 //!
 //! [`arrangement`] is a `position: relative` container claiming an explicit
 //! content extent; [`placed`] wraps one child absolutely at a
-//! [`Placement`] (position + `z-index` — serval's `paint_stacking` orders the
+//! [`Placement`] (position + `z-index` — genet's `paint_stacking` orders the
 //! stack natively). Because placements are plain attribute mutations, a
 //! re-placement (drag, raise, virtualization window shift) is an attribute
 //! diff on a retained element, not a rebuild: hit-test, focus, and a11y state
 //! ride through. Fixed-height virtualization pairs this with
 //! [`chisel::VirtualWindow`]: the container takes `total_height()` so the
 //! scroll range stays honest while only `range()` rows exist as DOM.
-//! Design: serval `docs/2026-07-08_chisel_widget_catalog.md`.
+//! Design: genet `docs/2026-07-08_chisel_widget_catalog.md`.
 
 use chisel::Placement;
 use xilem_core::ViewSequence;
 
-use crate::pod::ServalElement;
-use crate::{El, ServalCtx, el};
+use crate::pod::GenetElement;
+use crate::{El, GenetCtx, el};
 
 /// Wrap `child` absolutely at `placement` (the arranged-child primitive).
 /// The child sizes itself; the wrapper owns position + stacking only.
@@ -28,7 +28,7 @@ pub fn placed<State, Action, Seq>(placement: Placement, child: Seq) -> El<Seq, S
 where
     State: 'static,
     Action: 'static,
-    Seq: ViewSequence<State, Action, ServalCtx, ServalElement>,
+    Seq: ViewSequence<State, Action, GenetCtx, GenetElement>,
 {
     el("div", child)
         .attr("class", "arranged")
@@ -46,7 +46,7 @@ pub fn placed_with<State, Action, Seq>(
 where
     State: 'static,
     Action: 'static,
-    Seq: ViewSequence<State, Action, ServalCtx, ServalElement>,
+    Seq: ViewSequence<State, Action, GenetCtx, GenetElement>,
 {
     el("div", child)
         .attr("class", "arranged")
@@ -66,7 +66,7 @@ pub fn arrangement<State, Action, Seq>(
 where
     State: 'static,
     Action: 'static,
-    Seq: ViewSequence<State, Action, ServalCtx, ServalElement>,
+    Seq: ViewSequence<State, Action, GenetCtx, GenetElement>,
 {
     el("div", children).attr("class", "arrangement").attr(
         "style",
@@ -77,14 +77,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ServalAppRunner;
+    use crate::GenetAppRunner;
     use chisel::VirtualWindow;
     use layout_dom_api::{LayoutDom, LocalName, Namespace};
-    use serval_scripted_dom::ScriptedDom;
+    use genet_scripted_dom::ScriptedDom;
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    fn style_of(dom: &ScriptedDom, node: serval_scripted_dom::NodeId) -> String {
+    fn style_of(dom: &ScriptedDom, node: genet_scripted_dom::NodeId) -> String {
         dom.attribute(node, &Namespace::from(""), &LocalName::from("style"))
             .unwrap_or_default()
             .to_string()
@@ -116,7 +116,7 @@ mod tests {
     fn ten_thousand_rows_materialize_only_the_window() {
         let dom = Rc::new(RefCell::new(ScriptedDom::new()));
         let mut runner =
-            ServalAppRunner::<_, _, _, ()>::new(dom.clone(), list_view, ListState { scroll: 0.0 });
+            GenetAppRunner::<_, _, _, ()>::new(dom.clone(), list_view, ListState { scroll: 0.0 });
         let root = runner.root();
         {
             let d = dom.borrow();
@@ -161,7 +161,7 @@ mod tests {
     #[test]
     fn dragging_a_card_moves_and_raises_the_same_retained_node() {
         let dom = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             cards_view,
             Cards {

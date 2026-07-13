@@ -1,14 +1,14 @@
 # Study: how blitz-dom wraps text around floats
 
 Read-only study (2026-05-20) of `blitz-dom 0.3.0-alpha.2`, to learn the
-technique serval needs to turn block-level floats (shipped) into real
+technique genet needs to turn block-level floats (shipped) into real
 text-wrapping-around-floats. Companion to
 `docs/2026-05-20_stylo_taffy_adoption_plan.md`, which documented the
 "parley-leaf seam" limit.
 
 ## The seam, restated
 
-serval lays out an inline formatting context as an **opaque Taffy leaf**:
+genet lays out an inline formatting context as an **opaque Taffy leaf**:
 `InlineContent` is measured by `measure_inline_content`, which calls
 `parley::Layout::break_all_lines(Some(width))` with a *single fixed*
 width. Taffy sees the leaf as a black box. A float (a sibling box) can't
@@ -70,9 +70,9 @@ Three moves, all in `blitz-dom/src/layout/`:
    float-reduced slot and sets parley's `line_max_advance` / `line_x` —
    **that per-line width variation is the text wrap.**
 
-## Feasibility for serval
+## Feasibility for genet
 
-- **The parley API is already present.** serval's pinned **parley 0.9.0**
+- **The parley API is already present.** genet's pinned **parley 0.9.0**
   exposes `Layout::break_lines()`, `BreakLines::break_next() ->
   Option<YieldData>` (incl. `YieldData::InlineBoxBreak`), and the state
   setters `set_layout_max_advance` / `set_line_max_advance` /
@@ -84,7 +84,7 @@ Three moves, all in `blitz-dom/src/layout/`:
   `TaffyTree<InlineContent>` with a measure closure. A leaf measure
   cannot see sibling-float state, so text-wrap-around-float is impossible
   *as long as inline content is a Taffy leaf*. To adopt the technique
-  serval must move inline layout into a float-aware break loop with BFC
+  genet must move inline layout into a float-aware break loop with BFC
   access. Two shapes:
   - **(a) Own the tree (blitz shape).** Implement `LayoutPartialTree`
     over the planes (StylePlane/FragmentPlane/…), call taffy's
@@ -98,12 +98,12 @@ Three moves, all in `blitz-dom/src/layout/`:
 ## Strategic read
 
 This is the Blitz-convergence fork made concrete. Adopting the
-*technique* pulls serval's layout toward blitz-dom's exact shape
+*technique* pulls genet's layout toward blitz-dom's exact shape
 (own-tree `LayoutPartialTree` + BFC + parley-yield). The **planes
 architecture** (NodeId-keyed StylePlane/FragmentPlane/ImagePlane + query
 traits) is the main thing that still differs — blitz-dom is a Node-tree.
 So the honest question once this lands on the roadmap: do we reimplement
-blitz's inline/float layout *over the planes*, or has serval's layout
+blitz's inline/float layout *over the planes*, or has genet's layout
 converged enough that consuming blitz-dom (and keeping planes as a
 query/view layer on top) is the lower-maintenance path? Decide that
 before building the own-tree pivot, not after.
@@ -116,5 +116,5 @@ before building the own-tree pivot, not after.
   `break_next()` / `YieldData` loop, float placement (≈ lines 440–525).
 - `parley/src/layout/line_break.rs` — `YieldData`, `BreakLines`, state
   setters.
-- serval today: `serval-layout/text_measure.rs`
+- genet today: `genet-layout/text_measure.rs`
   (`measure_inline_content` → `break_all_lines`) is the seam to replace.

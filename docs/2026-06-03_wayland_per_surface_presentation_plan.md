@@ -43,7 +43,7 @@ wayland-protocols = { version = "0.32", features = ["client", "unstable", "stagi
 Insert under `[features]` after the `macos-present` block (preserving alphabetical/declared order):
 
 ```toml
-# Headed presentation through serval's `WaylandSubsurfaceBackend`. Drives
+# Headed presentation through genet's `WaylandSubsurfaceBackend`. Drives
 # the netrender renderer through a winit Wayland window with per-`SurfaceKey`
 # subsurfaces. Linux-only at runtime; the feature gate is platform-agnostic so
 # `cargo check --features linux-present` works on non-Linux hosts (the inner
@@ -3979,7 +3979,7 @@ Update the Linux bullet from pending to landed:
 
 **Files:**
 - Modify: `docs/2026-05-28_wayland_per_surface_presentation_gap.md`
-- Modify: `docs/archive/2026-05-05_serval_netrender_cut_plan.md`
+- Modify: `docs/archive/2026-05-05_genet_netrender_cut_plan.md`
 
 - [ ] **Step 1:** Append a "Done" section to the wayland brief:
 
@@ -4006,7 +4006,7 @@ for the `VulkanTimelineSemaphoreSynchronizer` slot fill.
 - [ ] **Step 1:** Stage all four edited docs.
 
 ```bash
-git add docs/2026-05-09_c4_landed_notes.md docs/2026-05-09_interop_lineage.md docs/2026-05-28_wayland_per_surface_presentation_gap.md docs/archive/2026-05-05_serval_netrender_cut_plan.md
+git add docs/2026-05-09_c4_landed_notes.md docs/2026-05-09_interop_lineage.md docs/2026-05-28_wayland_per_surface_presentation_gap.md docs/archive/2026-05-05_genet_netrender_cut_plan.md
 git commit -m "$(cat <<'EOF'
 docs: c4 — flip Linux smoke receipt to ✅; interop lineage Linux slot ✓
 
@@ -4023,7 +4023,7 @@ C4 is now universally green. Updates:
 - 2026-05-28_wayland_per_surface_presentation_gap.md: append a
   Done-2026-06-03 section linking the implementation design spec,
   C4 notes, and lineage slot.
-- archive/2026-05-05_serval_netrender_cut_plan.md C4 row updated.
+- archive/2026-05-05_genet_netrender_cut_plan.md C4 row updated.
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 EOF

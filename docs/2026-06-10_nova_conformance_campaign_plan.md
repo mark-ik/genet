@@ -1,7 +1,7 @@
 # Nova conformance campaign
 
 Status: **plan (2026-06-10).** A category-driven program to raise Nova's ECMAScript
-conformance, scoped to serval's actual position (the `serval-embedder` fork, not
+conformance, scoped to genet's actual position (the `genet-embedder` fork, not
 upstream trynova) and to the two-engine split (Nova native, Boa wasm + oracle). No
 code yet; this sets the steering wheel and the order of work.
 
@@ -10,8 +10,8 @@ code yet; this sets the steering wheel and the order of work.
 Conformance is a dashboard-driven campaign by spec category, not a bug-by-bug crawl.
 Two facts shape the whole program before any test runs:
 
-1. **serval runs a fork that is already ahead of upstream on RegExp.** Every public
-   number (test262.fyi, the trynova README) describes upstream Nova. serval's fork
+1. **genet runs a fork that is already ahead of upstream on RegExp.** Every public
+   number (test262.fyi, the trynova README) describes upstream Nova. genet's fork
    swapped the regex engine and closed a string-indexing panic family, so the
    campaign must baseline against the fork's own `expectations.json`, not the
    dashboard.
@@ -27,7 +27,7 @@ language**, with the holes at **Intl/402 ~0.78%**, **built-ins ~71.26%**, **Anne
 ~52.12%**. Test262 covers ECMA-262, ECMA-402, and JSON, and is broad but not complete,
 so a high pass rate is necessary, not sufficient, for real-world JS compatibility.
 
-These are **upstream** numbers and understate serval on the regex-touched categories.
+These are **upstream** numbers and understate genet on the regex-touched categories.
 The fork already landed (both 2026-06-02):
 
 - **RegExp moved off the `regex` crate onto `regress`** (the ECMAScript backtracking
@@ -45,7 +45,7 @@ trynova** (the doc flags it an upstream candidate). Do not open a RegExp workstr
 close the tail and upstream the swap.
 
 **Step 0 of the campaign is therefore a fresh fork test262 run** to replace the
-upstream `built-ins` / Annex-B numbers with serval's real ones before prioritizing.
+upstream `built-ins` / Annex-B numbers with genet's real ones before prioritizing.
 The mechanism already exists: Nova's contributing guide tests PRs against
 `expectations.json` and gives the commands to regenerate `expectations.json` /
 `metrics.json`. The fork's committed `expectations.json` is the steering wheel.
@@ -127,7 +127,7 @@ snapshot-clone-preserving.** Before opening any Temporal or built-ins cluster,
 re-measure the rebase delta (the "no windfall" reading is a month stale, above)
 and harvest upstream's accrued `temporal_rs` + built-in bindings rather than
 hand-binding in-fork. The rebase is **gated on preserving the fork-local
-patches**, which are serval's fork identity, and one of which is load-bearing for
+patches**, which are genet's fork identity, and one of which is load-bearing for
 another lane:
 
 - `GcAgent::snapshot_clone` + the actual-stack-use guard
@@ -165,7 +165,7 @@ into this so the fork stops re-carrying the swap across future rebases.
    trynova — track, do not duplicate; see the Step 0 result.)
 4. **Realms and host hooks.** The contributing doc calls realm-specific heap work an
    active design area. For content actors, cross-realm objects, modules, jobs/microtasks,
-   and host hooks are what turn "looks like JS" into "acts like JS." serval already
+   and host hooks are what turn "looks like JS" into "acts like JS." genet already
    exercises this seam (the `HostHooks` job queue + the host-promise primitive), so it
    is partly load-bearing already.
 5. **Close the RegExp tail and upstream the swap.** Sticky-`y` native support,
@@ -181,9 +181,9 @@ see Scope below.
 
 ## Scope: profile tier and sequencing
 
-Fullweb is the destination, not an optional far-tier: serval is a selective
+Fullweb is the destination, not an optional far-tier: genet is a selective
 (static-to-fullweb), vello/wgpu, wasm-safe web rendering engine, and **total conformance
-including ECMA-402 is the goal**, on the same serval / xilem-serval spine as meerkat
+including ECMA-402 is the goal**, on the same genet / xilem-serval spine as meerkat
 chrome. So 402 is required, not deferrable-forever — the question is sequencing, not
 whether.
 
@@ -203,7 +203,7 @@ conformance is **parallel required infrastructure** on the same substrate:
 
 ## Relationship to existing docs
 
-- [Script engine plan](./2026-05-20_serval_script_engine_plan.md) owns the
+- [Script engine plan](./2026-05-20_genet_script_engine_plan.md) owns the
   `ScriptEngine` trait and the engine ladder; this doc is the conformance program that
   rides on top.
 - [Pluggable engines / testharness plan](./2026-05-26_pluggable_engines_testharness_plan.md)
@@ -223,5 +223,5 @@ conformance is **parallel required infrastructure** on the same substrate:
 - Nova upstream: [CONTRIBUTING](https://github.com/trynova/nova/blob/main/CONTRIBUTING.md)
   (expectations.json / metrics.json workflow), [README](https://github.com/trynova/nova)
   (named gaps: sparse arrays, RegExp, Promise subclassing, Wasm).
-- serval fork state: the regress and WTF-8 docs above; Boa's ICU4X/Temporal stack
+- genet fork state: the regress and WTF-8 docs above; Boa's ICU4X/Temporal stack
   observed in the `script-engine-boa` build graph.

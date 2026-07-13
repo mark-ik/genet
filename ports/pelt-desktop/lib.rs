@@ -11,25 +11,25 @@
 mod profile;
 mod static_viewer;
 
-// The content lanes moved to `serval-documents` (2026-07-10 session-engines
+// The content lanes moved to `genet-documents` (2026-07-10 session-engines
 // plan): pelt is now one consumer among hosts. These shim modules keep the
 // crate-internal paths (`crate::document::…`, `crate::href::…`) and the
 // public re-export surface stable while the shell code consumes the
 // component.
 #[cfg(feature = "tile-surface")]
 pub(crate) mod document {
-    pub use serval_documents::{ClickOutcome, LoadedDocument, LocalFetcher};
+    pub use genet_documents::{ClickOutcome, LoadedDocument, LocalFetcher};
 }
 
 #[cfg(any(feature = "tile-surface", feature = "scripted"))]
 pub(crate) mod href {
-    pub use serval_documents::resolve_href;
+    pub use genet_documents::resolve_href;
 }
 
 #[cfg(feature = "smolweb")]
 mod smolweb_glue;
 #[cfg(feature = "smolweb")]
-pub use serval_documents::SmolwebDocument;
+pub use genet_documents::SmolwebDocument;
 // Re-exported so a host that builds a `SmolwebDocument` can name its theme (and, for
 // the App theme, supply a palette) without depending on `nematic::views` directly.
 #[cfg(all(feature = "smolweb", feature = "viewer", feature = "chrome"))]
@@ -37,7 +37,7 @@ pub use chrome_viewer::run_smolweb_browser;
 #[cfg(all(feature = "smolweb", feature = "viewer"))]
 pub use smolweb_glue::run_smolweb_viewer;
 #[cfg(feature = "smolweb")]
-pub use serval_documents::{SmolwebPalette, SmolwebTheme};
+pub use genet_documents::{SmolwebPalette, SmolwebTheme};
 
 #[cfg(feature = "viewer")]
 mod headless;
@@ -63,7 +63,7 @@ mod tile_shell;
 #[cfg(feature = "tiles")]
 mod tile_viewer;
 
-// (STRUCTURAL_SHEET moved to serval-documents with the lanes; serval-scripted
+// (STRUCTURAL_SHEET moved to genet-documents with the lanes; genet-scripted
 // keeps its own copy, as before.)
 
 #[cfg(feature = "png-reftest")]
@@ -110,10 +110,10 @@ pub use smoke_windows::{
     WindowsDxgiPresentSmokeConfig, WindowsDxgiPresentSmokeOutcome, run_windows_dxgi_present_smoke,
 };
 pub use static_viewer::{StaticViewerConfig, StaticViewerOutcome, run_static_viewer};
-// `ScriptResourceFetcher` is `serval_scripted::ResourceFetcher` (the external-script
+// `ScriptResourceFetcher` is `genet_scripted::ResourceFetcher` (the external-script
 // byte seam `ScriptedDocument::from_body` takes), distinct from `pelt_core::
 // ResourceFetcher` (the shell-level fetch contract); re-exported so a host can impl
-// it without a direct `serval-scripted` dep.
+// it without a direct `genet-scripted` dep.
 #[cfg(feature = "scripted")]
 pub use scripted::{ScriptResourceFetcher, ScriptedDocument, ScriptedEngine};
 // The host installs a cookie store on a scripted document (e.g. meerkat's session jar)
@@ -122,7 +122,7 @@ pub use scripted::{ScriptResourceFetcher, ScriptedDocument, ScriptedEngine};
 #[cfg(feature = "scripted")]
 pub use script_runtime_api::CookieProvider;
 // The headless-scripted-DOM scrape (`ScriptedDocument::extract`) returns these; re-export
-// so the host names the post-JS extract without a direct `serval-extract` dep. (Phase 4.)
+// so the host names the post-JS extract without a direct `genet-extract` dep. (Phase 4.)
 #[cfg(feature = "chrome")]
 pub use chrome::{Chrome, ChromeIntent, ChromeState, StripSide};
 #[cfg(all(feature = "viewer", feature = "chrome"))]
@@ -130,7 +130,7 @@ pub use chrome_viewer::run_chrome_viewer;
 #[cfg(all(feature = "viewer", feature = "scripted"))]
 pub use scripted_viewer::run_scripted_viewer;
 #[cfg(feature = "scripted")]
-pub use serval_extract::{Heading, Link, Metadata, PageExtract};
+pub use genet_extract::{Heading, Link, Metadata, PageExtract};
 #[cfg(feature = "tile-surface")]
 pub use tile_shell::TileShell;
 #[cfg(feature = "tile-surface")]

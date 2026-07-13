@@ -31,8 +31,8 @@ name = "struct_ipc"
 harness = false
 
 [features]
-# Fork (mark-ik): default to the in-process backend. Mere/serval run
-# single-process (serval is a library, not servo's multiprocess constellation),
+# Fork (mark-ik): default to the in-process backend. Mere/genet run
+# single-process (genet is a library, not servo's multiprocess constellation),
 # so the OS IPC transport (named pipes / unix sockets / mach ports) never fires.
 # force-inprocess drops every OS dependency, including the windows 0.61 pin whose
 # range otherwise collides with wgpu-hal's windows 0.62 in the GPU stack

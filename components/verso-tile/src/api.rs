@@ -5,7 +5,7 @@
 //! `verso_docs/technical_architecture/2026-06-10_compatibility_view_charter.md`).
 //! This module is the engine-agnostic contract: the portable view-state moved across
 //! a flip, plus the donor / back / receiver traits. It depends on no engine and no
-//! GPU layer. Per-engine adapters ([`crate::scry`], [`crate::serval`], ...) bridge concrete
+//! GPU layer. Per-engine adapters ([`crate::scry`], [`crate::genet`], ...) bridge concrete
 //! engines to these traits; the [`crate::flip`] orchestrator pairs a donor with a
 //! receiver and runs the flip choreography.
 
@@ -96,7 +96,7 @@ pub struct FormValues(pub Vec<(String, String)>);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameHandle(pub u64);
 
-/// The rich state a glass-box primary (serval, nematic) can export. Layered so it
+/// The rich state a glass-box primary (genet, nematic) can export. Layered so it
 /// degrades gracefully (charter §3.1): a receiver takes the layers it supports and
 /// ignores the rest.
 #[derive(Clone, Debug, Default)]
@@ -135,7 +135,7 @@ pub enum Carry {
 }
 
 /// A glass-box primary engine that can export its full live state. Implemented by
-/// serval and nematic through their `verso-*` adapters.
+/// genet and nematic through their `verso-*` adapters.
 pub trait FlipDonor {
     /// The layers this donor can export.
     fn donates(&self) -> LayerSet;

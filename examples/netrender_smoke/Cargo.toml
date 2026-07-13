@@ -4,15 +4,15 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Standalone project — intentionally NOT a serval workspace member.
-# The serval workspace Cargo.toml patches webrender from a path that no
+# Standalone project — intentionally NOT a genet workspace member.
+# The genet workspace Cargo.toml patches webrender from a path that no
 # longer exists (the directory was renamed to netrender in netrender commit
 # c9481b04b); that patch failure blocks the full workspace. This example proves
 # the netrender embedder hookup independently, without Servo.
 #
 # Build:
 #   cargo run --manifest-path examples/netrender_smoke/Cargo.toml
-# from serval/ root.
+# from genet/ root.
 
 [[bin]]
 name = "netrender-smoke"

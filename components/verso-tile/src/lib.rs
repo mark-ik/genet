@@ -13,7 +13,7 @@
 //! a black-box receiver and back.
 //!
 //! One crate, four modules — consolidated from the mere workspace's four-crate
-//! family (2026-07-09, inker-serval adoption plan):
+//! family (2026-07-09, inker-genet adoption plan):
 //!
 //! * [`api`] (was `verso-api`) — the engine-agnostic contract: [`api::PortableViewState`],
 //!   the layer lattice, and the donor / back / receiver traits. Dependency-free
@@ -26,12 +26,12 @@
 //!   forward-inject state machine (cookies + navigate, then restore on load)
 //!   over the thin [`scry::ScrySurface`] seam a host implements on its
 //!   concrete WebView producer.
-//! * [`serval`] (was `verso-serval`; behind the `serval-donor` feature) — the
-//!   glass-box donor over serval's scripted DOM plus host-fed runtime and
+//! * [`genet`] (was `verso-genet`; behind the `genet-donor` feature) — the
+//!   glass-box donor over genet's scripted DOM plus host-fed runtime and
 //!   session state.
 
 pub mod api;
 pub mod flip;
 pub mod scry;
-#[cfg(feature = "serval-donor")]
-pub mod serval;
+#[cfg(feature = "genet-donor")]
+pub mod genet;

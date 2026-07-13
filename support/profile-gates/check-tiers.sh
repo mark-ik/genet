@@ -3,7 +3,7 @@
 # Profile-ladder tier gate (cross-platform; runs locally and in CI).
 #
 # The JS-engine-free tiers of the profile ladder
-# (docs/2026-05-12_serval_profile_ladder_plan.md) must not pull a script engine,
+# (docs/2026-05-12_genet_profile_ladder_plan.md) must not pull a script engine,
 # a heavy servo render/host subsystem, or the WebGL shader compiler. This is the
 # package-witness check the ladder rests on: a low tier that accidentally depends
 # on `script-engine-*` / `mozjs` / `servo-media` / etc. has silently broken the
@@ -18,7 +18,7 @@ set -euo pipefail
 BLOCKED='^(boa|boa_engine|nova|nova_vm|script-engine-api|script-engine-boa|script-engine-nova|script-runtime-api|mozjs|mozjs-sys|servo-script|servo-script-bindings|servo-media|servo-media-thread|servo-storage|servo-storage-traits|regress|webgl-essl|servo-webgl-essl)$'
 
 # Tiers that must stay clean (the static, no-JS lanes).
-TIERS=(serval-static-dom serval-static-html)
+TIERS=(genet-static-dom genet-static-html)
 
 fail=0
 for tier in "${TIERS[@]}"; do

@@ -94,7 +94,7 @@ path = "examples/serde.rs"
 name = "value"
 path = "examples/value.rs"
 
-# Serval edit (upstream sonic-rs uses ahash default features). ahash's default
+# Genet edit (upstream sonic-rs uses ahash default features). ahash's default
 # `runtime-rng` pulls getrandom 0.3 (hard-codes wasm32); via feature unification
 # that re-enabled it on the shared ahash and defeated nova_vm's "no runtime-rng on
 # wasm" gating. Use `compile-time-rng` instead as the baseline: it seeds ahash at

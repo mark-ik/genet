@@ -12,8 +12,8 @@
 //! [`lens`](crate::lens), like [`checkbox`](crate::checkbox) /
 //! [`select`](crate::select).
 
-use crate::pod::ServalElement;
-use crate::{ServalCtx, View, el, on_click};
+use crate::pod::GenetElement;
+use crate::{GenetCtx, View, el, on_click};
 
 /// The state of a radio group: the index of the selected option in the
 /// `options` slice passed to [`radio_group`]. Composable via [`lens`](crate::lens).
@@ -41,7 +41,7 @@ impl RadioGroup {
 pub fn radio_group(
     state: &RadioGroup,
     options: &[&str],
-) -> impl View<RadioGroup, (), ServalCtx, Element = ServalElement> + use<> {
+) -> impl View<RadioGroup, (), GenetCtx, Element = GenetElement> + use<> {
     // One clickable row per option. The per-option closures share one type (one
     // closure definition capturing a `usize`), so the `Vec` is homogeneous.
     let items: Vec<_> = options

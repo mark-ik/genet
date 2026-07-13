@@ -10,10 +10,10 @@ re-architecture landed and retired the file — see
 
 ## Decision
 
-1. **Adopt `stylo_taffy`** (crates.io `0.3.0-alpha.2`) as serval-layout's
+1. **Adopt `stylo_taffy`** (crates.io `0.3.0-alpha.2`) as genet-layout's
    `ComputedValues → taffy::Style` mapping, replacing the hand-written
    `cv_to_taffy.rs`.
-2. **Isolate serval-layout on Stylo 0.16.0** (crates.io). Servo's
+2. **Isolate genet-layout on Stylo 0.16.0** (crates.io). Servo's
    `script` / `layout` (and the rest of the Servo-derived stack) stay on
    the `servo/stylo` git pin at `0.12.0`. Two Stylo copies coexist in the
    build until the old layout path is cut.
@@ -23,25 +23,25 @@ re-architecture landed and retired the file — see
 
 ## Why this shape
 
-- **Same crate, different version.** serval pins `servo/stylo`
+- **Same crate, different version.** genet pins `servo/stylo`
   git rev `572ecba` which declares version **0.12.0**; stylo_taffy/blitz
   want **0.16.0**. Same lineage (crates.io `stylo` is published from
   `servo/stylo`), but four minor versions apart — the
   `ComputedValues` / `TElement` surface moved, so it's a port, not a
   `[patch]`.
-- **serval-layout is a clean isolation boundary.** servo-paint is
-  Stylo-free (it consumes only `ServalPaintList` — verified). The e2e
-  path (serval-layout → ServalPaintList → paint → netrender) crosses
-  Stylo types *only inside serval-layout*. So serval-layout can move to
+- **genet-layout is a clean isolation boundary.** servo-paint is
+  Stylo-free (it consumes only `GenetPaintList` — verified). The e2e
+  path (genet-layout → GenetPaintList → paint → netrender) crosses
+  Stylo types *only inside genet-layout*. So genet-layout can move to
   0.16 without dragging Servo's script/layout along.
 - **taffy version already matches.** stylo_taffy `0.3.0-alpha.2` wants
-  `taffy 0.10.1` — exactly serval's pin. Zero taffy skew.
+  `taffy 0.10.1` — exactly genet's pin. Zero taffy skew.
 - **Floats algorithm is upstream.** `taffy/float_layout` ships in the
-  0.10.1 serval already has; stylo_taffy maps `float`/`clear` into it.
+  0.10.1 genet already has; stylo_taffy maps `float`/`clear` into it.
 
 ## Known limit (floats)
 
-serval's inline formatting context is a **parley-measured opaque leaf**
+genet's inline formatting context is a **parley-measured opaque leaf**
 to Taffy. Taffy's float layout can shift sibling *blocks* around a
 float, but cannot reach into a parley leaf to shorten line boxes — so
 *text-wrapping-around-a-float* will not work without integration at that
@@ -54,28 +54,28 @@ the reference for how to reconcile parley line boxes with taffy floats.
 
 The investigation overturned two assumptions:
 
-- **serval is already on Stylo 0.17.0** (git rev `572ecba` = the
+- **genet is already on Stylo 0.17.0** (git rev `572ecba` = the
   published 0.17.0; the `0.12.0` I first read was a *different* stale
   checkout's workspace version). So there is **no Stylo API port** — the
   whole workspace already runs current Stylo. The earlier
-  "isolate serval-layout on 0.16" framing is moot.
+  "isolate genet-layout on 0.16" framing is moot.
 - **`stylo` declares `links = "servo_style_crate"`**, so cargo permits
   exactly one Stylo in the graph — isolation was never possible. It's
   one Stylo, workspace-wide.
 
 Therefore the adoption is: keep the single git Stylo 0.17, add a
 `[patch.crates-io]` so `stylo_taffy`'s crates.io `stylo`/`stylo_atoms`
-deps resolve to serval's git rev (unifying past `links`), and take the
+deps resolve to genet's git rev (unifying past `links`), and take the
 Taffy version `stylo_taffy` pins.
 
 That Taffy version is **`=0.11.0-experimental-cache-fix.3`** — a
 blitz-aligned pre-release (the only 0.11.x). Chosen deliberately
 (2026-05-20) over hand-porting on stable 0.10.1: accept the pre-release
 pin to get the maintained mapping + blitz alignment. Reach of the bump:
-**serval-layout** + **paint's dev-dependency** (its tests call
-`serval-layout::layout` with `taffy::Size` args, so they must match).
+**genet-layout** + **paint's dev-dependency** (its tests call
+`genet-layout::layout` with `taffy::Size` args, so they must match).
 Servo's `components/layout` and `malloc_size_of` stay on Taffy 0.10.1 —
-no shared taffy-typed boundary with serval-layout, so the two versions
+no shared taffy-typed boundary with genet-layout, so the two versions
 coexist (taffy has no `links`).
 
 `stylo_taffy`'s `floats` feature = `["taffy/float_layout"]`, so floats
@@ -83,7 +83,7 @@ come from the crate's mapping, not hand-written.
 
 ## Migration steps
 
-1. **Deps.** In `components/serval-layout/Cargo.toml`, switch the
+1. **Deps.** In `components/genet-layout/Cargo.toml`, switch the
    stylo-family deps from `workspace` (git 0.12) to explicit crates.io
    `0.16.0`: `stylo` (pkg, imported as `style`), `selectors`,
    `servo_arc`, `stylo_atoms`, `stylo_dom`, `stylo_traits`. Add
@@ -104,7 +104,7 @@ come from the crate's mapping, not hand-written.
    displacement at 0.10.1 (not a stub); add a block-level float e2e test
    (`float: left` shrinks/sits beside a sibling block). Document the
    text-wrap limit in the test.
-5. **Verify.** serval-layout lib tests + the html_to_pixels_e2e suite
+5. **Verify.** genet-layout lib tests + the html_to_pixels_e2e suite
    green. Watch for a second Stylo copy bloating build — acceptable for
    now, noted as the reconciliation debt.
 
@@ -114,9 +114,9 @@ come from the crate's mapping, not hand-written.
 |---|---|---|
 | `stylo_taffy` | **adopt crate** | Pure `ComputedValues→Style`; no architectural opinion; exact taffy match. |
 | `stylo_to_kurbo` (in blitz-dom) | **adopt crate, later** | `resolve_2d_transform`: CSS transform → kurbo matrix, for the existing `transform_id` path. Small, clean. |
-| `blitz-traits` | **adopt ideas** | Host seams only (events/net/navigation/shell). serval's host story is the Hekate lanes / Mere ecosystem; borrow shapes, not the crate. |
-| `blitz-dom` | **adopt ideas, not the crate** | Reference for the hard problems (parley-line-boxes-in-taffy-with-floats, replaced/inline boxes, restyle/invalidation). But it is a **Node-tree** DOM; serval's **planes** model (StylePlane/FragmentPlane/ImagePlane keyed by NodeId + query traits) is a different, deliberate design. Steal techniques; keep planes. |
-| `blitz-html` | **adopt ideas / skip** | markup5ever HTML parsing; serval has `serval_static_dom`. |
+| `blitz-traits` | **adopt ideas** | Host seams only (events/net/navigation/shell). genet's host story is the Hekate lanes / Mere ecosystem; borrow shapes, not the crate. |
+| `blitz-dom` | **adopt ideas, not the crate** | Reference for the hard problems (parley-line-boxes-in-taffy-with-floats, replaced/inline boxes, restyle/invalidation). But it is a **Node-tree** DOM; genet's **planes** model (StylePlane/FragmentPlane/ImagePlane keyed by NodeId + query traits) is a different, deliberate design. Steal techniques; keep planes. |
+| `blitz-html` | **adopt ideas / skip** | markup5ever HTML parsing; genet has `genet_static_dom`. |
 
 Principle (the user's framing): adopt the crate when it *agrees* with the
 planes architecture (stylo_taffy is a pure function — yes); adopt only
@@ -124,10 +124,10 @@ the *ideas* when the crate embeds a conflicting model (blitz-dom's tree).
 
 ## Done conditions
 
-- serval-layout compiles against crates.io Stylo 0.16 + stylo_taffy;
+- genet-layout compiles against crates.io Stylo 0.16 + stylo_taffy;
   Servo script/layout untouched on git 0.12.
 - `cv_to_taffy.rs` deleted; layout driven by `stylo_taffy::to_taffy_style`.
-- All serval-layout lib tests + html_to_pixels_e2e green.
+- All genet-layout lib tests + html_to_pixels_e2e green.
 - A block-level float renders correctly in an e2e pixel test; the
   text-wrap-around-float limit is documented, not silently broken.
 
@@ -135,7 +135,7 @@ the *ideas* when the crate embeds a conflicting model (blitz-dom's tree).
 
 Adopted and verified. Status of each done-condition against the tree:
 
-- ✅ **serval-layout compiles against stylo_taffy.** `Cargo.toml`:
+- ✅ **genet-layout compiles against stylo_taffy.** `Cargo.toml`:
   `stylo_taffy = { version = "0.3.0-alpha.4", features = ["floats"] }`,
   `taffy = "=0.11.0-experimental-cache-fix.3"` with `float_layout`
   enabled. (The "Stylo 0.16 isolation" framing was already overtaken by
@@ -145,7 +145,7 @@ Adopted and verified. Status of each done-condition against the tree:
   position/inset, overflow, float/clear, sizing (incl. min/max +
   aspect-ratio), margin/padding/border, gap, flexbox — to
   `stylo_taffy::convert::*`. This is the substance the plan set out to
-  achieve: serval no longer carries its own `ComputedValues → Style`
+  achieve: genet no longer carries its own `ComputedValues → Style`
   logic.
 - ✅ **`cv_to_taffy.rs` deleted (2026-05-25, via the box tree).** This
   bullet was first written as ⚠️ "reframed, not deletable" — the
@@ -156,7 +156,7 @@ Adopted and verified. Status of each done-condition against the tree:
   taffy-API reason, not laziness:
   - `stylo_taffy::to_taffy_style` returns `taffy::Style<Atom>` (the
     `Atom` carries CSS-grid *template line-names*).
-  - serval stores nodes in `TaffyTree<InlineContent<NodeId>>`, and
+  - genet stores nodes in `TaffyTree<InlineContent<NodeId>>`, and
     `TaffyTree<NodeContext = ()>` is **not generic over the ident
     type** — its stored `style` field and `new_leaf`/`set_style` all
     take `Style` (= `Style<DefaultCheapStr>`, the hardcoded default).
@@ -167,7 +167,7 @@ Adopted and verified. Status of each done-condition against the tree:
     hand-written.
   - The only way to *literally* retire the file is to abandon the
     owned-`Style` `TaffyTree` for taffy's **trait-impl tree** — make
-    serval's planes implement `LayoutPartialTree`/`*ContainerStyle` and
+    genet's planes implement `LayoutPartialTree`/`*ContainerStyle` and
     feed `TaffyStyloStyle` (zero-copy over `ComputedValues`) directly.
     That's how blitz-dom does it. It's a tree re-architecture, not a
     converter swap — so it was split into its own plan
@@ -180,7 +180,7 @@ Adopted and verified. Status of each done-condition against the tree:
   — two `float: left` divs sit side-by-side (where plain blocks stack),
   verified at the pixel level on real GPU. The text-wrap-around-float
   limit is documented in the test body, not silently broken.
-- ✅ **Tests green.** `serval-layout --lib`: 34 passed. The float e2e
+- ✅ **Tests green.** `genet-layout --lib`: 34 passed. The float e2e
   test passes through the full HTML → cascade → layout → emit → render
   → readback path.
 

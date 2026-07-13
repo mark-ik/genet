@@ -3,9 +3,9 @@ name = "verso-tile"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-repository = "https://github.com/mark-ik/serval"
+repository = "https://github.com/mark-ik/genet"
 publish = true
-description = "The engine-flip tile: re-present the same page through a different engine with the user's place and session carried across. Portable view-state + donor/back/receiver contracts (api), the one-hop degrade-never-block orchestrator (flip), the black-box system-WebView receiver (scry), and, behind the serval-donor feature, the glass-box serval donor. Consolidated 2026-07-09 from the mere workspace's verso / verso-api / verso-scry / verso-serval per the inker-serval adoption plan; the flip is the dynamic counterpart of inker's per-address multiplexer."
+description = "The engine-flip tile: re-present the same page through a different engine with the user's place and session carried across. Portable view-state + donor/back/receiver contracts (api), the one-hop degrade-never-block orchestrator (flip), the black-box system-WebView receiver (scry), and, behind the genet-donor feature, the glass-box genet donor. Consolidated 2026-07-09 from the mere workspace's verso / verso-api / verso-scry / verso-genet per the inker-genet adoption plan; the flip is the dynamic counterpart of inker's per-address multiplexer."
 readme = "README.md"
 keywords = ["browser", "engine", "webview", "flip", "compatibility"]
 categories = ["gui", "web-programming"]
@@ -18,13 +18,13 @@ path = "src/lib.rs"
 # dependency-free on purpose, so an external black-box implementor reaches the
 # contracts without engine deps (verso-api's charter, preserved).
 default = []
-# The glass-box serval donor (`src/serval.rs`): bridges serval's scripted DOM
+# The glass-box genet donor (`src/genet.rs`): bridges genet's scripted DOM
 # (DOM + form layers) plus host-fed runtime/session state to PortableViewState.
-serval-donor = ["dep:serval-scripted-dom", "dep:layout-dom-api"]
+genet-donor = ["dep:genet-scripted-dom", "dep:layout-dom-api"]
 
 [dependencies]
 # Version reqs so the crate can publish: locally the paths satisfy them; on
-# the registry the name-claim stubs do (the serval-donor feature needs the
-# real components — the serval git dep — until the view/DOM stack publishes).
-serval-scripted-dom = { version = ">=0.0.1", path = "../serval-scripted-dom", optional = true }
+# the registry the name-claim stubs do (the genet-donor feature needs the
+# real components — the genet git dep — until the view/DOM stack publishes).
+genet-scripted-dom = { version = ">=0.0.1", path = "../genet-scripted-dom", optional = true }
 layout-dom-api = { version = ">=0.0.1", path = "../shared/layout-dom", optional = true }

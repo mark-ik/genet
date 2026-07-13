@@ -36,7 +36,7 @@ fn placement_at(bounds: LayoutRect) -> CommonPlacement {
 /// Synthesize a single-rect paint envelope (the `<div>` analog).
 fn one_rect_envelope() -> PaintEnvelope {
     PaintEnvelope {
-        engine: EngineId::SERVAL,
+        engine: EngineId::GENET,
         viewport: DeviceIntSize::new(VIEWPORT as i32, VIEWPORT as i32),
         generation: 0,
         commands: vec![PaintCmd::DrawRect(RectItem {
@@ -127,7 +127,7 @@ fn c4_smoke_probe_empty_scene_still_produces_master() {
     .expect("create_netrender_instance");
 
     let envelope = PaintEnvelope {
-        engine: EngineId::SERVAL,
+        engine: EngineId::GENET,
         viewport: DeviceIntSize::new(VIEWPORT as i32, VIEWPORT as i32),
         generation: 0,
         commands: Vec::new(),

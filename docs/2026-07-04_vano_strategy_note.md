@@ -3,7 +3,7 @@
 **Date**: 2026-07-04.
 **Scope**: the strategic frame for **vano**, Mark's fork of trynova/nova (the
 data-oriented JS engine), consumed by `script-engine-nova` as
-`nova_vm = { git = "mark-ik/nova", branch = "serval-embedder" }` (the repo now
+`nova_vm = { git = "mark-ik/nova", branch = "genet-embedder" }` (the repo now
 answers as `mark-ik/vano`; local override at `Code/crates/nova`). Until now
 this lived only in Cargo.toml comments and conversation.
 
@@ -20,10 +20,10 @@ are deliberate. Consequences:
   stack-pointer recursion guard) are upstreamable diff hygiene, Mark's call
   whether to PR them; embedder work (snapshot clone, waitAsync timeouts, wasm
   enablement) is the fork identity.
-- Fork-boundary discipline mirrors the wgpu sibling repos: serval-specific
+- Fork-boundary discipline mirrors the wgpu sibling repos: genet-specific
   behavior lives in `script-engine-nova` (the adapter), never in vano; vano's
   embedder API stays generic.
-- Cheap insurance to add: a test262 subset run against the serval-embedder
+- Cheap insurance to add: a test262 subset run against the genet-embedder
   branch on some cadence, so a rebase that regresses spec semantics is caught
   by the suite rather than by a hung page. (The Promise.race fix was an
   infinite-loop hang; that class of bug wants conformance coverage.)
@@ -47,7 +47,7 @@ Browser reality for the wasm64 lane (checked 2026-07-04): Chrome 133 and
 Firefox 134 shipped Memory64 in early 2025. **Safari/WebKit has not**, through
 at least the Safari 27 beta (WWDC26), with nothing announced. Since every iOS
 browser is WebKit, boa is the durable primary engine for the whole WebKit
-family, not a fallback. The serval-embedder wasm commit's substance is wasm64
+family, not a fallback. The genet-embedder wasm commit's substance is wasm64
 support plus wasm-family platform glue (probe gating, RNG backends,
 single-threaded atomics, Temporal/SAB feature gates).
 
@@ -111,7 +111,7 @@ move. Two graded uses, in order of reach:
   icu 1.5 unifies a currently-duplicated icu tree; see the mere
   dependency-footprint brief 2026-07-04).
 - mere `2026-07-04_dependency_footprint_brief.md` (fork/gate rationales).
-- serval `2026-07-02_dom_mutation_capture_replay_plan.md` (the DOM mirror
+- genet `2026-07-02_dom_mutation_capture_replay_plan.md` (the DOM mirror
   half of tier 3).
 - mere memory/plan trail: gnode-pool and native-surface-compositing own the
   visual-snapshot half of tier 3.

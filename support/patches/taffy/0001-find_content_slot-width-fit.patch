@@ -15,7 +15,7 @@
 +    /// which reflows to whatever the slot offers) matches the first vertically
 +    /// eligible band, preserving the prior behaviour.
 +    ///
-+    /// serval patch: upstream `find_content_slot` took no `min_width` and
++    /// genet patch: upstream `find_content_slot` took no `min_width` and
 +    /// returned the first vertically eligible band regardless of its width, so a
 +    /// full-width float yielded a zero-width slot at its right edge and a
 +    /// fixed-width BFC child was placed there (overflowing) instead of dropping
@@ -113,7 +113,7 @@
                      #[cfg(feature = "float_layout")]
                      if has_active_floats {
 -                        let slot = block_ctx.find_content_slot(min_y, item.clear, None);
-+                        // serval patch: a fixed-width BFC child must clear a
++                        // genet patch: a fixed-width BFC child must clear a
 +                        // float it cannot fit beside, so pass its outer width as
 +                        // the slot's minimum. Auto-width children pass 0.0 and
 +                        // keep stretch-to-slot behaviour.

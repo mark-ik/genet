@@ -7,7 +7,7 @@
 //! Nova is pointer-width-bound (its data-oriented `Value` is `usize`-sized), so
 //! this crate is gated to 64-bit targets and compiles to an empty shell on 32-bit
 //! targets. That includes Nova on wasm64 and Boa on wasm32. The
-//! native-data reflector rides on the patched `EmbedderObject` (serval-embedder
+//! native-data reflector rides on the patched `EmbedderObject` (genet-embedder
 //! branch of the fork). Engine-native types stay confined here.
 
 #[cfg(target_pointer_width = "64")]
@@ -39,7 +39,7 @@ mod native {
     /// hooks (which take only `&self`), so the queue lives here and is shared with
     /// the engine by `Rc`. Jobs are `'static` (they own rooted handles), so queuing
     /// them across GC is safe.
-    struct ServalHostHooks {
+    struct GenetHostHooks {
         jobs: Rc<RefCell<VecDeque<Job>>>,
         /// Raw pointer to the active module resolver, set for one `eval_module` call
         /// (`None` otherwise). The pointee outlives the call (an `eval_module` arg),
@@ -52,15 +52,15 @@ mod native {
     }
 
     // `HostHooks: Debug`, but `Job` is not `Debug`, so report the queue length only.
-    impl std::fmt::Debug for ServalHostHooks {
+    impl std::fmt::Debug for GenetHostHooks {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("ServalHostHooks")
+            f.debug_struct("GenetHostHooks")
                 .field("queued", &self.jobs.borrow().len())
                 .finish()
         }
     }
 
-    impl ServalHostHooks {
+    impl GenetHostHooks {
         /// Install `resolver` for the duration of `f`, then clear it and the module
         /// cache (dropping the `Global` roots so they do not leak across calls). The
         /// lifetime is erased to `'static` for storage in the leaked (`'static`)
@@ -77,7 +77,7 @@ mod native {
         }
     }
 
-    impl HostHooks for ServalHostHooks {
+    impl HostHooks for GenetHostHooks {
         fn enqueue_generic_job(&self, job: Job) {
             self.jobs.borrow_mut().push_back(job);
         }
@@ -88,7 +88,7 @@ mod native {
             self.jobs.borrow_mut().push_back(job);
         }
         fn get_host_data(&self) -> &dyn Any {
-            // Unused: serval reaches host state through the realm `[[HostDefined]]`
+            // Unused: genet reaches host state through the realm `[[HostDefined]]`
             // slot, not this hook.
             &()
         }
@@ -164,8 +164,8 @@ mod native {
         }
     }
 
-    fn leak_host_hooks(jobs: Rc<RefCell<VecDeque<Job>>>) -> &'static ServalHostHooks {
-        Box::leak(Box::new(ServalHostHooks {
+    fn leak_host_hooks(jobs: Rc<RefCell<VecDeque<Job>>>) -> &'static GenetHostHooks {
+        Box::leak(Box::new(GenetHostHooks {
             jobs,
             module_resolver: Cell::new(None),
             module_cache: RefCell::new(HashMap::new()),
@@ -497,7 +497,7 @@ mod native {
         jobs: Rc<RefCell<VecDeque<Job>>>,
         /// The leaked (`'static`) host hooks installed on `agent`; `eval_module` sets
         /// their module resolver per call.
-        hooks: &'static ServalHostHooks,
+        hooks: &'static GenetHostHooks,
         /// Release queue for dropped [`NovaValue`]s (shared with the realm host slot).
         /// Drained at each native call (in the trampoline) and at each GC tick.
         release: ReleaseQueue,

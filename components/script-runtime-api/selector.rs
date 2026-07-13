@@ -16,7 +16,7 @@
 //!
 //! This is a pragmatic subset, not `selectors`-crate-grade matching; the
 //! eventual `web-api` layer can swap in full selector matching (the crate
-//! serval-layout already uses) behind the same sink surface.
+//! genet-layout already uses) behind the same sink surface.
 
 use layout_dom_api::{LayoutDom, LocalName, Namespace};
 
@@ -389,7 +389,7 @@ fn read_ident(chars: &[char], start: usize) -> (String, usize) {
 mod tests {
     use super::*;
     use layout_dom_api::{LayoutDom, LayoutDomMut, QualName};
-    use serval_scripted_dom::ScriptedDom;
+    use genet_scripted_dom::ScriptedDom;
 
     // Build `<body><div id=a class="x y"><p class=x></p><span></span></div></body>`.
     // The `<body>` is created explicitly because fragment-parsing `<body>` under the

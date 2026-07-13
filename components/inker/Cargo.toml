@@ -5,14 +5,14 @@ name = "inker"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-# Not workspace: serval's workspace repository still points at upstream servo.
-repository = "https://github.com/mark-ik/serval"
-description = "Modular engine/renderer controller — selects and orchestrates content engines (serval HTML lanes, nematic smolweb, scrying/graft/weld surface engines)."
+# Not workspace: genet's workspace repository still points at upstream servo.
+repository = "https://github.com/mark-ik/genet"
+description = "Modular engine/renderer controller — selects and orchestrates content engines (genet HTML lanes, nematic smolweb, scrying/graft/weld surface engines)."
 documentation = "https://docs.rs/inker"
 readme = "README.md"
 keywords = ["engine", "renderer", "controller", "browser", "modular"]
 categories = ["web-programming"]
-# Override serval's workspace-wide publish = false: inker is a published crate.
+# Override genet's workspace-wide publish = false: inker is a published crate.
 publish = true
 
 [lib]

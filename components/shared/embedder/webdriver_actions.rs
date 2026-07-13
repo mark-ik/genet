@@ -7,7 +7,7 @@
 //!
 //! This is the *one* interpreter the native-automation plan puts beneath both
 //! consumers: the classic-protocol adapter (phase 4) hands it the Actions JSON a
-//! remote client sent, and `serval-wpt`'s `test_driver_internal.action_sequence`
+//! remote client sent, and `genet-wpt`'s `test_driver_internal.action_sequence`
 //! hands it the same JSON from inside a test page. It lives beside
 //! `webdriver.rs` because its input types are the pinned `webdriver` crate's
 //! (already a dependency here) and its output is this crate's [`InputEvent`]

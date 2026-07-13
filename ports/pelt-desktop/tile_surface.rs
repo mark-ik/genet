@@ -30,11 +30,11 @@ use pelt_core::tile::{
 };
 use accesskit::{NodeId as AccessNodeId, Tree, TreeId, TreeUpdate};
 use chisel::{ColorF, GraphGlyph, GraphGlyphNode, LeafRegistry, Meter, RenderedLeaves, Size};
-use serval_layout::{IncrementalLayout, LeafPaintSource, ScrollOffsets};
-use serval_render::{ContentReport, scene_from_session_dom};
-use serval_scripted_dom::{NodeId, ScriptedDom};
+use genet_layout::{IncrementalLayout, LeafPaintSource, ScrollOffsets};
+use genet_render::{ContentReport, scene_from_session_dom};
+use genet_scripted_dom::{NodeId, ScriptedDom};
 use xilem_serval::{
-    AnyView, DomHandle, PointerClick, ServalAppRunner, ServalCtx, ServalElement, custom_leaf, el,
+    AnyView, DomHandle, PointerClick, GenetAppRunner, GenetCtx, GenetElement, custom_leaf, el,
     on_click,
 };
 
@@ -79,7 +79,7 @@ pub(crate) fn scene_from_session_dom_with_leaves(
 }
 
 /// The erased tile-frame view type.
-pub type TileView = Box<dyn AnyView<TileState, (), ServalCtx, ServalElement>>;
+pub type TileView = Box<dyn AnyView<TileState, (), GenetCtx, GenetElement>>;
 type TileLogic = fn(&TileState) -> TileView;
 
 /// The surface's app state: the authoritative tile tree and the queue of tile events
@@ -385,12 +385,12 @@ const DEFAULT_TILE_CSS: &str = "\
 /// content-area rects of the active *external-texture* tiles (the host composites the
 /// producer's texture into each), and an optional drag ghost (the dragged tab's
 /// preview) the host composites on top.
-/// Bridges chisel's `Leaf::accessibility` into serval-layout's a11y walk, which
+/// Bridges chisel's `Leaf::accessibility` into genet-layout's a11y walk, which
 /// knows `<custom-leaf>` as an element but not Sprigging's types. A newtype because
 /// both traits are foreign here (orphan rule), the same shape every host uses.
 struct LeafA11y<'a>(&'a mut LeafRegistry<u64>);
 
-impl serval_layout::LeafA11ySource for LeafA11y<'_> {
+impl genet_layout::LeafA11ySource for LeafA11y<'_> {
     fn describe_leaf(&mut self, key: u64, node: &mut accesskit::Node) {
         if let Some(leaf) = self.0.get_mut(&key) {
             leaf.accessibility(node);
@@ -428,10 +428,10 @@ pub struct GhostLayer {
     pub scene: Scene,
 }
 
-/// A tile-tree surface: a [`ServalAppRunner`] over the frame view + the authoritative
+/// A tile-tree surface: a [`GenetAppRunner`] over the frame view + the authoritative
 /// tree, plus a live [`LoadedDocument`] per document-lane tile.
 pub struct TileSurface {
-    runner: ServalAppRunner<TileState, TileLogic, TileView, ()>,
+    runner: GenetAppRunner<TileState, TileLogic, TileView, ()>,
     docs: HashMap<TileId, LoadedDocument>,
     sheets: Vec<String>,
     /// The status bar's chisel widget leaves (frame meter, tree glyph), keyed by
@@ -451,7 +451,7 @@ impl TileSurface {
     /// Build the surface for `tree`, loading a document for each document-lane tile.
     pub fn new(tree: TileTree) -> Self {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let runner = ServalAppRunner::new(
+        let runner = GenetAppRunner::new(
             dom,
             tile_view as TileLogic,
             TileState {
@@ -683,7 +683,7 @@ impl TileSurface {
             .nodes
             .iter()
             .filter(|projected| {
-                serval_layout::ROUTABLE_ACTIONS
+                genet_layout::ROUTABLE_ACTIONS
                     .iter()
                     .any(|action| projected.node.supports_action(*action))
             })
@@ -705,17 +705,17 @@ impl TileSurface {
 
     /// The frame's semantic projection at `width`×`height` — the observe
     /// primitive [`a11y_tree`](Self::a11y_tree) seals for the OS, and the one
-    /// element queries run against (`serval_layout::ElementQuery`), so a test or
+    /// element queries run against (`genet_layout::ElementQuery`), so a test or
     /// driver finds a tab the way a screen reader does and acts on the DOM node
     /// it carries. Rebuilds layout like the hit-test entries do; the surface
     /// retains no session between calls.
-    pub fn projection(&mut self, width: u32, height: u32) -> serval_layout::Projection<NodeId> {
+    pub fn projection(&mut self, width: u32, height: u32) -> genet_layout::Projection<NodeId> {
         let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
         let dom_handle = self.runner.dom();
         let dom = dom_handle.borrow();
         let session =
             IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32);
-        serval_layout::project(
+        genet_layout::project(
             &*dom,
             session.fragments(),
             dom.document(),
@@ -745,7 +745,7 @@ impl TileSurface {
         let dom = dom.borrow();
         let session =
             IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32);
-        session.hit_test(&*dom, x, y, &serval_layout::ScrollOffsets::default())
+        session.hit_test(&*dom, x, y, &genet_layout::ScrollOffsets::default())
     }
 
     /// Scroll the document in tile `id` by a device-px wheel delta; returns whether it
@@ -815,7 +815,7 @@ impl TileSurface {
         let dom = dom.borrow();
         let session =
             IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32);
-        let mut node = session.hit_test(&*dom, x, y, &serval_layout::ScrollOffsets::default())?;
+        let mut node = session.hit_test(&*dom, x, y, &genet_layout::ScrollOffsets::default())?;
         let ns = Namespace::default();
         loop {
             if let Some(path_str) = dom.attribute(node, &ns, &LocalName::from("data-divider")) {
@@ -857,7 +857,7 @@ impl TileSurface {
         let dom = dom.borrow();
         let session =
             IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32);
-        let mut node = session.hit_test(&*dom, x, y, &serval_layout::ScrollOffsets::default())?;
+        let mut node = session.hit_test(&*dom, x, y, &genet_layout::ScrollOffsets::default())?;
         let ns = Namespace::default();
         let class = LocalName::from("class");
         // A press on the close × is a close, not a drag.
@@ -889,7 +889,7 @@ impl TileSurface {
         let dom = dom.borrow();
         let session =
             IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32);
-        let mut node = session.hit_test(&*dom, x, y, &serval_layout::ScrollOffsets::default())?;
+        let mut node = session.hit_test(&*dom, x, y, &genet_layout::ScrollOffsets::default())?;
         let ns = Namespace::default();
         let stack_attr = LocalName::from("data-stack");
         // Walk up to the tab bar carrying its stack path.
@@ -1244,7 +1244,7 @@ mod tests {
     #[test]
     fn semantic_query_drives_a_tab_switch() {
         use accesskit::Role;
-        use serval_layout::{ElementQuery, NameMatch, Resolution};
+        use genet_layout::{ElementQuery, NameMatch, Resolution};
 
         let stack = TileTree::stack(
             vec![doc_tile(1, "<p>one</p>"), doc_tile(2, "<p>two</p>")],

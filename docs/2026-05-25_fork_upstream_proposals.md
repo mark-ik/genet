@@ -1,29 +1,29 @@
-# Proposed-upstream notes — serval's two load-bearing fork patches
+# Proposed-upstream notes — genet's two load-bearing fork patches
 
-Status: **drafts, ready to offer — not pushed.** serval depends on two
+Status: **drafts, ready to offer — not pushed.** genet depends on two
 patched forks (see the [2026-05-24 audit addendum](./2026-05-24_workspace_audit_snapshot.md#addendum--2026-05-25-review-post-snapshot-developments--the-rendering-pipeline)).
 Policy is **offer-don't-push**: keep a clean pitch on hand so that *if* a
 maintainer ever shows interest there's something ready to hand over — but
 don't open unsolicited PRs. Each patch below is additive and (we argue)
-generally useful beyond serval, so neither is a "please carry my weird
+generally useful beyond genet, so neither is a "please carry my weird
 hack" ask.
 
 ---
 
 ## 1. Nova — an embedder native-data slot (`EmbedderObject`)
 
-- **Fork:** `github.com/mark-ik/nova`, branch `serval-embedder`, commit `fbca54b`
+- **Fork:** `github.com/mark-ik/nova`, branch `genet-embedder`, commit `fbca54b`
   (local clone at `crates/nova`, pinned via root `[patch.crates-io]`).
 - **Upstream:** `github.com/trynova/nova`.
 
 **What the patch adds.** A way to associate **opaque host (embedder) data**
-with a JS object — serval attaches a DOM `NodeId` reflector, so script that
-holds a JS node object mutates the *real* serval DOM through it. The
+with a JS object — genet attaches a DOM `NodeId` reflector, so script that
+holds a JS node object mutates the *real* genet DOM through it. The
 round-trip is GC-safe (verified: a reflector survives garbage collection and
 still resolves to its `NodeId`).
 
-**Why serval needs it.** The scripting tier (`serval-scripted`) bridges JS ↔
-the `serval-scripted-dom` arena through `NodeId` reflectors. Without a native
+**Why genet needs it.** The scripting tier (`genet-scripted`) bridges JS ↔
+the `genet-scripted-dom` arena through `NodeId` reflectors. Without a native
 slot on JS objects there's nowhere to hang the `NodeId`, so JS can't reach the
 DOM at all.
 
@@ -32,7 +32,7 @@ needs to associate host objects with JS objects — DOM nodes, file handles, GPU
 resources, FFI handles. It's a standard embedding primitive: V8 has internal
 fields / `External`, SpiderMonkey has reserved slots / private data, JSC has
 private data. Nova currently has no equivalent, which forces any embedder to
-fork exactly as serval did. A first-class embedder-data slot unblocks the whole
+fork exactly as genet did. A first-class embedder-data slot unblocks the whole
 class of "use Nova to script my app" use cases — which is squarely Nova's
 stated "small, embeddable, data-oriented JS engine" goal.
 
@@ -65,8 +65,8 @@ the concept was inert. The patch:
 Paired with the existing `AppDriver::on_wgpu_ready` (shared device), this is a
 **zero-copy** embedding path: no GPU→CPU readback.
 
-**Why serval needs it.** `pelt-viewer` reserves the web-content area as an
-`External` layer and composites serval's netrender output into it via
+**Why genet needs it.** `pelt-viewer` reserves the web-content area as an
+`External` layer and composites genet's netrender output into it via
 `copy_texture_to_texture` on Masonry's shared device. Without the realization
 hook the layer is a no-op hole and nothing renders.
 

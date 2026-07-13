@@ -410,7 +410,7 @@
     }
     __moveBefore(this.__ref, node.__ref, ref ? ref.__ref : undefined);
     // Custom elements: the spec fires connectedMoveCallback when defined, else
-    // the disconnected + connected fallback pair. serval's registry does not
+    // the disconnected + connected fallback pair. genet's registry does not
     // capture connectedMoveCallback yet (plan S4), so a connected-tree move
     // fires the fallback pair; a detached-tree move fires nothing.
     if (thisTop.nodeType === 9) {
@@ -1496,14 +1496,14 @@
       var h = parseInt(this.getAttribute('height'), 10); if (!(h > 0)) h = 150;
       this.__webglContext = new Ctor(w, h);
       if (this.__webglContext._externalTextureKey) {
-        this.setAttribute('data-serval-external-texture-key', this.__webglContext._externalTextureKey);
+        this.setAttribute('data-genet-external-texture-key', this.__webglContext._externalTextureKey);
       }
       return this.__webglContext;
     };
   }
 
   function installHtmlInterfaceTable() {
-    var table = globalThis.__servalHtmlInterfaceTable || [];
+    var table = globalThis.__genetHtmlInterfaceTable || [];
     for (var i = 0; i < table.length; i++) {
       var def = table[i];
       htmlInterfaceDefinitions[def.name] = def;
@@ -1528,7 +1528,7 @@
         elementSubclassProto[String(tags[j]).toUpperCase()] = Ctor.prototype;
       }
     }
-    try { delete globalThis.__servalHtmlInterfaceTable; } catch (_) {}
+    try { delete globalThis.__genetHtmlInterfaceTable; } catch (_) {}
   }
   // (Text / Comment / CharacterData exposed above, with their prototype chain.)
 
@@ -2386,7 +2386,7 @@
       'keydown', 'keyup', 'keypress',
       // NB: on* touch handlers (ontouchstart, …) are deliberately omitted. Per
       // Touch Events, those IDL attributes exist only when "expose legacy touch
-      // event APIs" is true (a touch-capable device); serval is not one, and
+      // event APIs" is true (a touch-capable device); genet is not one, and
       // `'ontouchstart' in document` gates real WPT branches
       // (Document-createEvent-touchevent). Touch listeners still work via
       // addEventListener; only the on* reflection is gated. The TouchEvent

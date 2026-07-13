@@ -8,7 +8,7 @@
 //! Same shape as the rest of the host surface: native sinks (here, mutators of the
 //! [`ScriptedDom`] in host state) plus a JS bootstrap that assembles the ergonomic
 //! `document` object and wraps node handles. The JS→DOM bridge is the **reflector**
-//! — a JS-opaque value carrying a `NodeId` (proven by `serval-scripted`'s `setText`,
+//! — a JS-opaque value carrying a `NodeId` (proven by `genet-scripted`'s `setText`,
 //! generalized here and made engine-neutral). Incoming nodes are recovered with
 //! `CallCx::reflector_data`; outgoing nodes (`createElement`, `getElementById`) are
 //! returned via `CallCx::reflector_for`, which mints **canonical** reflectors (one
@@ -55,7 +55,7 @@ use std::rc::Rc;
 use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, NodeKind, QualName};
 use markup5ever::Prefix;
 use script_engine_api::{CallCx, NativeFn, ScriptEngine};
-use serval_scripted_dom::{NodeId, ScriptedDom};
+use genet_scripted_dom::{NodeId, ScriptedDom};
 
 use crate::HostState;
 
@@ -158,7 +158,7 @@ pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(),
     Ok(())
 }
 
-/// An HTML-namespaced element name (matches serval-layout's cascade keying).
+/// An HTML-namespaced element name (matches genet-layout's cascade keying).
 fn html_qual(local: &str) -> QualName {
     QualName::new(
         None,

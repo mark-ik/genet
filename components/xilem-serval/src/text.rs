@@ -10,8 +10,8 @@
 //! `text.rs`: a string view creates a `ScriptedDom` text node and, on rebuild,
 //! resets its character data when the value changes.
 
-use crate::pod::{ServalElement, ServalElementMut};
-use crate::{DomHandle, ServalCtx};
+use crate::pod::{GenetElement, GenetElementMut};
+use crate::{DomHandle, GenetCtx};
 use layout_dom_api::LayoutDomMut;
 use xilem_core::{MessageCtx, MessageResult, Mut, OrphanView};
 
@@ -26,14 +26,14 @@ pub fn text(s: impl Into<String>) -> String {
     s.into()
 }
 
-/// Create a text node holding `data` and wrap it as a [`ServalElement`].
-fn build_text(dom: &DomHandle, data: &str) -> ServalElement {
+/// Create a text node holding `data` and wrap it as a [`GenetElement`].
+fn build_text(dom: &DomHandle, data: &str) -> GenetElement {
     let node = dom.borrow_mut().create_text(data);
-    ServalElement::new(node, dom.clone())
+    GenetElement::new(node, dom.clone())
 }
 
 /// Reset a text node's character data if it changed.
-fn rebuild_text(element: &ServalElementMut<'_>, prev: &str, next: &str) {
+fn rebuild_text(element: &GenetElementMut<'_>, prev: &str, next: &str) {
     if prev != next {
         element.dom.borrow_mut().set_text(*element.node, next);
     }
@@ -41,13 +41,13 @@ fn rebuild_text(element: &ServalElementMut<'_>, prev: &str, next: &str) {
 
 macro_rules! impl_string_view {
     ($ty:ty) => {
-        impl<State: 'static, Action> OrphanView<$ty, State, Action> for ServalCtx {
-            type OrphanElement = ServalElement;
+        impl<State: 'static, Action> OrphanView<$ty, State, Action> for GenetCtx {
+            type OrphanElement = GenetElement;
             type OrphanViewState = ();
 
             fn orphan_build(
                 view: &$ty,
-                ctx: &mut ServalCtx,
+                ctx: &mut GenetCtx,
                 _: &mut State,
             ) -> (Self::OrphanElement, Self::OrphanViewState) {
                 (build_text(&ctx.dom(), view), ())
@@ -57,7 +57,7 @@ macro_rules! impl_string_view {
                 new: &$ty,
                 prev: &$ty,
                 (): &mut Self::OrphanViewState,
-                _ctx: &mut ServalCtx,
+                _ctx: &mut GenetCtx,
                 element: Mut<'_, Self::OrphanElement>,
                 _: &mut State,
             ) {
@@ -67,7 +67,7 @@ macro_rules! impl_string_view {
             fn orphan_teardown(
                 _view: &$ty,
                 _view_state: &mut Self::OrphanViewState,
-                _ctx: &mut ServalCtx,
+                _ctx: &mut GenetCtx,
                 _element: Mut<'_, Self::OrphanElement>,
             ) {
             }
@@ -91,13 +91,13 @@ impl_string_view!(std::borrow::Cow<'static, str>);
 
 macro_rules! impl_to_string_view {
     ($ty:ty) => {
-        impl<State: 'static, Action> OrphanView<$ty, State, Action> for ServalCtx {
-            type OrphanElement = ServalElement;
+        impl<State: 'static, Action> OrphanView<$ty, State, Action> for GenetCtx {
+            type OrphanElement = GenetElement;
             type OrphanViewState = ();
 
             fn orphan_build(
                 view: &$ty,
-                ctx: &mut ServalCtx,
+                ctx: &mut GenetCtx,
                 _: &mut State,
             ) -> (Self::OrphanElement, Self::OrphanViewState) {
                 (build_text(&ctx.dom(), &view.to_string()), ())
@@ -107,7 +107,7 @@ macro_rules! impl_to_string_view {
                 new: &$ty,
                 prev: &$ty,
                 (): &mut Self::OrphanViewState,
-                _ctx: &mut ServalCtx,
+                _ctx: &mut GenetCtx,
                 element: Mut<'_, Self::OrphanElement>,
                 _: &mut State,
             ) {
@@ -122,7 +122,7 @@ macro_rules! impl_to_string_view {
             fn orphan_teardown(
                 _view: &$ty,
                 _view_state: &mut Self::OrphanViewState,
-                _ctx: &mut ServalCtx,
+                _ctx: &mut GenetCtx,
                 _element: Mut<'_, Self::OrphanElement>,
             ) {
             }

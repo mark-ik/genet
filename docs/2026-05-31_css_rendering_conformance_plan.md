@@ -1,13 +1,13 @@
 # CSS rendering conformance plan (Lane C, reftest axis)
 
-Status: **plan (2026-05-31).** Spun out of the [two-lanes doc](./2026-05-29_serval_two_lanes.md)'s
+Status: **plan (2026-05-31).** Spun out of the [two-lanes doc](./2026-05-29_genet_two_lanes.md)'s
 Lane C completeness axes (Layout / Paint / Text / Parsing). The DOM-API axis is
 mature (html/dom 39k+ testharness subtests); this plan targets the axis with hard
 evidence of being far behind: **CSS rendering, measured by reftest pass rate.**
 
 ## The signal that justifies this plan
 
-Reftest pass rates measured 2026-05-31 (`serval-wpt reftest <subset>`, GPU):
+Reftest pass rates measured 2026-05-31 (`genet-wpt reftest <subset>`, GPU):
 
 | subset | pass / total | note |
 | --- | --- | --- |
@@ -24,7 +24,7 @@ corpus." That gap-shape is the highest-leverage kind — one systematic fix can 
 thousands of tests, the same pattern the reflected-attribute lever followed on the
 DOM side (4936 → 35k html/dom subtests from one layer).
 
-**Correction this plan records:** the [holistic audit](./2026-05-29_serval_holistic_audit.md)
+**Correction this plan records:** the [holistic audit](./2026-05-29_genet_holistic_audit.md)
 named "text-to-pixels" as the headline rendering gap. That was stale — text
 rasterizes and passes `html_to_pixels_text_rasterizes_glyphs`. The real headline
 gap is the reftest pass rate. The two-lanes Paint axis is corrected to match.
@@ -34,7 +34,7 @@ gap is the reftest pass rate. The two-lanes Paint axis is corrected to match.
 The near-uniform failure splits into two distinct, findable causes — confirmed by
 breaking the subsets down by file type:
 
-1. **XHTML (`.xht`) is unparsed.** `normal-flow` is 961/1045 `.xht`; serval's
+1. **XHTML (`.xht`) is unparsed.** `normal-flow` is 961/1045 `.xht`; genet's
    parser is HTML-only, so those documents never build a correct tree and the
    render is garbage. This inflates the apparent rendering gap — most of
    normal-flow's 1/1045 is a *parsing* miss, not a render bug. **Lever 1 below.**
@@ -55,7 +55,7 @@ Mark's steer (2026-05-31): XHTML is in scope. The research says it is mostly
 - It is a sibling of `html5ever` over **one `markup5ever` interface** — verified:
   xml5ever has no own interface module; its `TreeSink` resolves (via
   `pub use markup5ever::*`) to the **same `markup5ever::TreeSink`** that
-  `html5ever` and serval-static-dom's `StaticTreeSink` use.
+  `html5ever` and genet-static-dom's `StaticTreeSink` use.
 - So `StaticTreeSink` is **reusable as-is**. The HTML path is
   `html5ever::parse_document(StaticTreeSink::new(), Default::default()).one(input)`;
   the XHTML path is
@@ -64,10 +64,10 @@ Mark's steer (2026-05-31): XHTML is in scope. The research says it is mostly
 
 Work:
 
-- Add `xml5ever` to serval-static-dom's deps; add `StaticDocument::parse_xml(input)`
+- Add `xml5ever` to genet-static-dom's deps; add `StaticDocument::parse_xml(input)`
   (or a `parse_with(format)` that branches). The `TendrilSink::one` driver shape
   is identical to the HTML path.
-- Route by file type / content type in the consumers: `serval-wpt` chooses
+- Route by file type / content type in the consumers: `genet-wpt` chooses
   `parse_xml` for `.xht`/`.xhtml`; the live host would branch on
   `application/xhtml+xml`. Un-skip `.xhtml`/`.xht` in the runner (currently a
   deliberate skip).
@@ -127,7 +127,7 @@ buckets:
   sub-pixel rounding fails exact compare → the fix is fuzzy-match plumbing in the
   runner (WPT `<meta name=fuzzy>` already parsed for some; widen).
 - **UA stylesheet** — default margins / `font-size` / block defaults differ, so
-  every box is shifted → the fix is completing serval's UA default stylesheet.
+  every box is shifted → the fix is completing genet's UA default stylesheet.
 - **specific feature** — body-background propagation, a missing property → a
   real engine feature, scheduled per-feature.
 - **font metrics** — glyph advances/baseline differ from the reference renderer
@@ -174,7 +174,7 @@ tiles or single-paints per axis, clipped to the border box; mirrors Servo's
 confirms `50%` of a 100px box emits a 50×50 tile.
 
 But re-measuring showed **zero lift** — byte-identical to baseline. Runtime pixel
-dumps (a new `serval-wpt dump <subset>` subcommand writing test/ref PNGs to
+dumps (a new `genet-wpt dump <subset>` subcommand writing test/ref PNGs to
 `.cargo-check-logs/dump/`) revealed why: background-size was never the blocker.
 Three systematic bugs were, found only by *looking at the pixels* (the
 diff-bucket statistics alone pointed at the wrong cause):
@@ -220,7 +220,7 @@ fragment's `l.border` / `l.padding` insets. `background-clip` subdir 0 → 13;
 `background-origin` renders correctly (a content-box unit test
 `background_origin_content_box_insets_tile` locks the inset math at (20,20) for a
 10px-border + 10px-padding box) but most of its WPT refs are hand-built fixed
-swatches that demand pixel-exact layout serval doesn't reproduce yet, so they
+swatches that demand pixel-exact layout genet doesn't reproduce yet, so they
 stay red. `background-clip: text` is **not** modeled (falls back to border-box) —
 it's text-shaped clipping, deferred.
 
@@ -249,7 +249,7 @@ floor stopped penalizing correct-but-AA-jittered renders:
 | css/CSS2/normal-flow | 8 | **174** |
 | css/CSS2/floats | 7 | **15** |
 
-normal-flow 8 → 174 is the tell: that subset is layout-geometry tests serval was
+normal-flow 8 → 174 is the tell: that subset is layout-geometry tests genet was
 positioning correctly all along, failing only on exact-match AA. The floor is the
 spec-faithful behavior — real WPT harnesses tolerate GPU fuzz for this exact
 reason. (Separately noted: `diff_stats` under-reports tiny diffs as `diff=0%` on
@@ -263,7 +263,7 @@ vello rasterizer), not the rasterizer itself (vello already fills Bézier paths)
 A separate capability, not a background-size gap; set aside as its own axis.
 
 **Status: gradient-series regression found + root/canvas propagation landed
-(2026-06-09).** A re-measure after the 2026-06-07 serval-layout paint series (the
+(2026-06-09).** A re-measure after the 2026-06-07 genet-layout paint series (the
 linear/radial/conic gradient emitters, list markers, the text-decoration trio,
 letter/word-spacing) showed css-backgrounds had *regressed*. On this machine the
 pre-series baseline is **147** (the doc's earlier `152` was a different GPU; the
@@ -368,11 +368,11 @@ are provably unaffected and were not re-run.
 first vertical band below its `min_y` without checking the band was wide enough,
 so a full-width float yielded a zero-width slot at its right edge and the child
 overflowed there instead of dropping below the float. The bug is on taffy `main`
-too and there is no released fix (serval is already on the newest publish), so we
+too and there is no released fix (genet is already on the newest publish), so we
 now carry a vendored fork at `support/patches/taffy/` (wired via
 `[patch.crates-io]`) as the home for the layout patches we will accumulate as
 float / table / BFC conformance climbs; each is `git apply`-able and upstreamed
-(see `support/patches/taffy/SERVAL_PATCHES.md` + `UPSTREAM_PR.md`). This first
+(see `support/patches/taffy/GENET_PATCHES.md` + `UPSTREAM_PR.md`). This first
 patch threads the content's outer width through `find_content_slot`; auto-width /
 shrink-to-fit children pass `0.0` and keep prior behaviour. It lands
 `floats-wrap-bfc-008`. The honest scope: the broader `floats-wrap-bfc-*` cluster
@@ -468,7 +468,7 @@ is its own axis.
 block path and **stacked** the imgs vertically. The "lone img stays block"
 simplification over-applied to *two or more* imgs. This was the second systematic
 cause behind the `min`/`max-height` tail: those references compare against two
-side-by-side `black96x96.png` imgs, which serval was stacking — ~25 of the
+side-by-side `black96x96.png` imgs, which genet was stacking — ~25 of the
 remaining fails sat at an identical `diff=3%`, the tell of one shared cause. Fix:
 establish an inline context when two or more replaced boxes are present (a single
 lone img still stays block for intrinsic sizing); also stop whitespace-only text
@@ -488,12 +488,12 @@ regressions); css-backgrounds / css-images / floats unchanged.
 
 **Ahem test font registered (2026-06-10).** ~59 of the normal-flow fails declare
 `font-family: Ahem` — the CSS test font that renders every glyph as a solid em
-square, used pervasively to assert exact box geometry. serval registered only
+square, used pervasively to assert exact box geometry. genet registered only
 system fonts, so those tests fell back to a proportional font and mis-measured.
 `TextMeasureCtx::new` now registers a bundled `Ahem.ttf` (the face self-names
 "Ahem"). Immediate lift is modest — **normal-flow 451 → 454, css-backgrounds 299 →
 303** — because most Ahem tests have a *second* blocker (e.g. inline-block
-`width: auto` shrink-to-fit, which serval stretches to the container when the
+`width: auto` shrink-to-fit, which genet stretches to the container when the
 inline-block sits among block siblings — an anonymous-block-box gap). But it is
 foundational: the corpus now renders against the correct font, so every later
 sizing fix lands against true geometry. The 3 normal-flow regressions all use Ahem
@@ -503,7 +503,7 @@ boxes), then `vertical-align` and margins.
 
 The css-images `7 errored` were `tools/*-template.html` files the runner was
 collecting as reftests (their `rel=match` points at a non-existent ref). Fixed
-in `serval-wpt collect` by excluding `tools/` and `support/` directories (WPT
+in `genet-wpt collect` by excluding `tools/` and `support/` directories (WPT
 does not treat them as tests); 7 errored → 0, file count 727 → 713, pass count
 unchanged.
 
@@ -516,9 +516,9 @@ gradient gaps; in css-backgrounds the grep also catches `background-repeat: roun
 / `space` tests, a *separate* unimplemented feature. The bulk of the 62 gradient
 fails are gradient **color interpolation** (`gradient-*-hsl`/`lch`/`oklch`,
 `analogous-missing-components`, decreasing-hue) — CSS Color 4 interpolation, a
-deeper and higher-count lever than sizing. Pixel-confirmed shape: serval stretches
+deeper and higher-count lever than sizing. Pixel-confirmed shape: genet stretches
 one gradient ramp over the box where the reference *tiles* it
-(`tiled-radial-gradients` shows two ellipses vs serval's one). Honoring
+(`tiled-radial-gradients` shows two ellipses vs genet's one). Honoring
 `background-size` therefore needs gradient **tiling**: the renderer fills one
 `placement` per gradient ramp, so a tiled layer emits N gradients (the image tile
 path is single-emit).
@@ -553,7 +553,7 @@ were:
 
 Two originally-named targets stay red for reasons *outside* the tiling, now
 understood: `tiled-radial-gradients` renders correctly under tiling but its
-reference is mis-rendered by serval — and the cause is **not** the abs-pos
+reference is mis-rendered by genet — and the cause is **not** the abs-pos
 static-position bug guessed earlier (a unit test confirms two abs-pos siblings
 share static `y=0`); it is a discrepancy between the unit layout path and the
 full render pipeline (the rendered box lands at `y=74` and the blobs stack),
@@ -613,7 +613,7 @@ the css-backgrounds `local` fails by test stem after the §5 re-baseline: the ra
 top was `background-size` (118) but **110 of those are SVG** (the separate
 decode axis — and note SVG *does* now raster-decode via a resvg fallback, so that
 axis is partly unblocked; revisit), leaving `border-image` as the true #1 raster
-paint lever at **55 fails**. Implemented it serval-side (no netrender vocabulary
+paint lever at **55 fails**. Implemented it genet-side (no netrender vocabulary
 change): `BackgroundImagePlane` decodes `border-image-source`,
 `DecodedImage::crop` carves the source, and `emit_border_image` draws the
 4-corner / 4-edge / fill-center 9-slice — honoring `border-image-slice`
@@ -633,7 +633,7 @@ AA-only). The flip is blocked on the **vocabulary, not the tiling**: CSS `repeat
 *centers* the tiling (partial tiles clipped equally at both ends), but
 `DrawRepeatingImage` uses one rect as both tile origin and clip, so centered
 tiling needs a separate clip = a **netrender `paint_list_api` change**, out of
-serval's scope (and a shared repo). So border-image is at its serval-side ceiling;
+genet's scope (and a shared repo). So border-image is at its genet-side ceiling;
 the remaining exactness waits on that vocabulary, or the runner's GPU-jitter floor
 covering small-count maxδ-255 seams. **Next css-backgrounds tail:**
 `background-clip` (`clip-border-area-*`, ~42) and box-shadow `inset`. *(Product
@@ -645,7 +645,7 @@ for product value over more conformance-tail paint.)*
 `border-image-repeat` near-misses by adding a `tile_origin` to netrender's
 `RepeatingImageItem` (tiles start at the origin, `placement` becomes the clip via
 the rasterizer's existing `ScenePattern.clip_rect`) and centering the lattice in
-serval. It **regressed css-backgrounds −6** (334 → 328) across two formula
+genet. It **regressed css-backgrounds −6** (334 → 328) across two formula
 attempts, so it was reverted in both repos (no commit). Empirically the WPT refs
 do **not** center the way modeled — tile-from-start (BI-3) scores better — and/or
 the clip layer adds edge AA that flips borderline passes. **Lesson: don't retry
@@ -656,7 +656,7 @@ primitive (`NinePatchBorder` = source / slice / width / `repeat_horizontal` /
 `repeat_vertical` / fill), but the `paint_list_render` rasterizer **warn-skips**
 it. Implementing nine-patch rasterization there (vello) is the real border-image
 home — it would do slice + repeat modes correctly in one primitive, replacing
-serval's BI-2/BI-3 pre-sliced `DrawImage` workaround — but it is a meatier
+genet's BI-2/BI-3 pre-sliced `DrawImage` workaround — but it is a meatier
 netrender task than the tweak tried here. border-image stays at **+24** (BI-1/2/3)
 until that lands.
 
@@ -669,13 +669,13 @@ stretched / tiled per `repeat_*` (including the `space` gaps the old
 has (bilinear reading the neighbour's source pixel — it cost −2 on a first cut)
 is fixed by a new **clamp-to-uv** sampling primitive (`Scene::push_image_clamped`
 → `SceneImage.clamp_to_uv` → `crop_to_uv` crops the source to the sub-rect and
-pads at its edges), which is reusable by any sub-rect / sprite-sheet draw. serval
+pads at its edges), which is reusable by any sub-rect / sprite-sheet draw. genet
 now emits **one** `BorderItem{NinePatch}` (`01f0ca59658`), dropping the nine
 pre-sliced `DrawImage` commands and `DecodedImage::crop`. **css-backgrounds stays
 334** — a *behaviour-identical* swap (diffed: 0 regressions, 0 wins, the exact
 same pass set as the pre-slice) but via the correct architecture: the shared
 rasterizer owns slicing, it is bleed-free, and the slicing benefits every
-producer on the `paint_list_api` boundary, not just serval. The remaining
+producer on the `paint_list_api` boundary, not just genet. The remaining
 `border-image-repeat` near-misses stay AA-bound (tile-seam exactness, the same
 ceiling the centered-repeat attempt hit) — a runner GPU-fuzz-floor question, not a
 slicing one.
@@ -697,7 +697,7 @@ correctness spills well beyond css-images. It surfaces in this plan today only a
 a *regression* footnote (the 2026-06-09 scoreboard entry: an `<img>` change
 "regressed the object-fit / object-position corpus by 60"); it is in fact the top
 engine lever for css-images. It is unimplemented in layout
-(`components/serval-layout/construct.rs:113` is the only mention, a comment); no
+(`components/genet-layout/construct.rs:113` is the only mention, a comment); no
 `ObjectFit` handling exists. Effort medium (replaced-box intrinsic-ratio fit +
 position offset; no new layout mode). Expected ~100 css-images reftests plus
 spillover. This is now the recommended next engine lever on the CSS axis.
@@ -706,11 +706,11 @@ spillover. This is now the recommended next engine lever on the CSS axis.
 (`oklch`/`lch`/`hsl`/hue) is only ~20 of the 226 css-images fails (this plan's
 2026-06-09 note already hedged "smaller than the fail count suggests"), and it is
 **also partly GPU-blocked**: the netrender R9 canary is RED, vello's GPU path
-ignores `interpolation_cs`, so threading the color space serval-side would not
+ignores `interpolation_cs`, so threading the color space genet-side would not
 flip GPU-rendered tests until vello honors it. CPU-side stop pre-conversion could
 land a few; it is not a top lever.
 
-**Cross-repo fidelity tail (netrender lowering).** serval already maps the full
+**Cross-repo fidelity tail (netrender lowering).** genet already maps the full
 border/stroke/blend vocabulary in `paint_emit.rs`, but `paint_list_render`
 under-delivers it: `ScenePathStroke` is `{color,width}` only (cap/join/dash
 dropped), double/groove/ridge/inset/outset borders fall to the square-solid
@@ -732,7 +732,7 @@ floats 7 / normal-flow 1 / css-backgrounds 15 figures as current.
   and promoted object-fit to the top CSS engine lever (§2, lever 2).
 - [WPT harness exactness plan](./2026-06-24_wpt_harness_exactness_plan.md): the
   re-score + expectations guard (H3) that keeps this plan's scoreboard honest.
-- [two-lanes](./2026-05-29_serval_two_lanes.md): this is the Lane C Parsing +
+- [two-lanes](./2026-05-29_genet_two_lanes.md): this is the Lane C Parsing +
   Paint + Layout axes, spun out.
 - [blitz float/linebox study](./2026-05-20_blitz_float_linebox_study.md): the
   `inline-block` / anonymous-box approach for the Layout tail.

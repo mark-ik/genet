@@ -6,16 +6,16 @@
 //! element over a [`TextInput`], plus the [`edit`] / [`edit_multiline`] handlers
 //! that apply a [`KeyEvent`] to it.
 //!
-//! There is no browser `<input>` machinery here: serval lays out a plain
+//! There is no browser `<input>` machinery here: genet lays out a plain
 //! element whose text content is the buffer, and [`on_key`](crate::on_key)
 //! makes that element focusable and routes typed keys to an edit handler that
 //! mutates the [`TextInput`]. The host (`pelt-live`) maps winit key events to
 //! the native [`KeyEvent`]; the runner's focus + dispatch
-//! ([`dispatch_key`](crate::ServalAppRunner::dispatch_key)) deliver them here.
+//! ([`dispatch_key`](crate::GenetAppRunner::dispatch_key)) deliver them here.
 
 use super::text_input::TextInput;
-use crate::pod::ServalElement;
-use crate::{El, Key, KeyEvent, NamedKey, OnKey, ServalCtx, View, el, on_key};
+use crate::pod::GenetElement;
+use crate::{El, Key, KeyEvent, NamedKey, OnKey, GenetCtx, View, el, on_key};
 
 /// The edit handler for [`text_field`]: apply one [`KeyEvent`] to the
 /// [`TextInput`].
@@ -157,13 +157,13 @@ fn build_text_field(input: &TextInput) -> TextField {
 /// [`text_field_typed`] instead.
 ///
 /// The element is an `<input>` so author CSS can target the field (e.g. a
-/// border/background) and so it reads as a control; serval lays it out as
+/// border/background) and so it reads as a control; genet lays it out as
 /// whatever the cascade resolves. It carries no browser `<input>` value
 /// semantics — its text is just its content, diffed like any other text on
 /// rebuild.
 pub fn text_field(
     input: &TextInput,
-) -> impl View<TextInput, (), ServalCtx, Element = ServalElement> + use<> {
+) -> impl View<TextInput, (), GenetCtx, Element = GenetElement> + use<> {
     build_text_field(input)
 }
 
@@ -181,7 +181,7 @@ pub fn text_field_typed(input: &TextInput) -> TextField {
 /// Build the concrete view for a multi-line [`textarea`]. Structurally identical
 /// to a [`TextField`] (an `on_key`-wrapped element over a [`TextInput`]); the
 /// difference is the [`edit_multiline`] handler and a `<textarea>` tag. With
-/// `\n`s in the buffer, serval/parley break it into lines (serval feeds raw text
+/// `\n`s in the buffer, genet/parley break it into lines (genet feeds raw text
 /// to parley, which honors `\n`).
 fn build_textarea(input: &TextInput) -> TextField {
     let handler: fn(&mut TextInput, KeyEvent) = edit_multiline;
@@ -195,10 +195,10 @@ fn build_textarea(input: &TextInput) -> TextField {
 ///
 /// Lines are `\n`-delimited in the buffer; up/down navigate those hard lines with a
 /// sticky goal column. (Soft-wrap visual-line navigation needs the layout — the
-/// separate `serval_layout::caret_byte_vertical` path a host can wire instead.)
+/// separate `genet_layout::caret_byte_vertical` path a host can wire instead.)
 pub fn textarea(
     input: &TextInput,
-) -> impl View<TextInput, (), ServalCtx, Element = ServalElement> + use<> {
+) -> impl View<TextInput, (), GenetCtx, Element = GenetElement> + use<> {
     build_textarea(input)
 }
 

@@ -1,0 +1,490 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+// `UnsafeCell` access for the Stylo `ElementData` slot matches Stylo's
+// cascade exclusive-access invariant. Documented per-method.
+#![allow(unsafe_code)]
+
+//! Style plane.
+//!
+//! Per the planes architecture, computed style lives in a `genet-layout`-owned
+//! side table keyed by `D::NodeId`. `run_cascade` (`cascade.rs`) populates it by
+//! running Stylo's cascade over `StyleNodeRef` (the Stylo trait impls in
+//! `adapter_stylo.rs`). Tests may also populate a `StylePlane` by hand to
+//! exercise construct + layout without a stylesheet.
+//!
+//! Cf. `docs/2026-05-17_genet_layout_planes_architecture.md`.
+
+use std::cell::{Cell, UnsafeCell};
+use std::hash::Hash;
+
+use rustc_hash::{FxHashMap, FxHashSet};
+use selectors::matching::ElementSelectorFlags;
+use servo_arc::Arc;
+use style::animation::DocumentAnimationSet;
+use style::data::{ElementDataMut, ElementDataRef, ElementDataWrapper};
+use style::properties::{ComputedValues, PropertyDeclarationBlock};
+use style::selector_parser::RestyleDamage;
+use style::shared_lock::{Locked, SharedRwLock};
+use stylo_dom::ElementState;
+
+/// Supplemental computed values for longhands that this Servo-profile Stylo
+/// build parses only behind Gecko features. Kept narrow: concrete px intrinsic
+/// sizes for `contain: size` replaced-element sizing.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ContainIntrinsicOverride {
+    pub width: Option<f32>,
+    pub height: Option<f32>,
+}
+
+/// Per-node style entry.
+///
+/// Holds the cascade's per-element state. Layout reads the computed style
+/// straight off `stylo_data` (via the box tree's `TaffyStyloStyle`), so
+/// there is no separate owned `taffy::Style` cache — the cascade is the
+/// single source of truth. Hand-built fixtures leave the fields at default.
+pub struct StyleEntry {
+    /// Stylo's `ElementData` storage. Empty until the cascade allocates +
+    /// populates. Uses `UnsafeCell` matching Stylo's expectation that the
+    /// cascade has exclusive access per node during traversal (the same
+    /// pattern Blitz uses in `blitz-dom/src/node/stylo_data.rs`).
+    ///
+    /// # Safety
+    ///
+    /// Mutation through this field must happen during Stylo's cascade
+    /// traversal, which guarantees one-thread-at-a-time access per node.
+    /// Outside the cascade, only immutable borrow access is safe.
+    pub stylo_data: UnsafeCell<Option<ElementDataWrapper>>,
+
+    /// DOM element state (`:hover`, `:focus`, etc.). Static profile: empty.
+    pub state: ElementState,
+
+    /// Selector flags accumulated during selector matching.
+    pub selector_flags: Cell<ElementSelectorFlags>,
+
+    /// Atom-interned `id` attribute, if the element has one. Populated by
+    /// `StylePlane::populate_for_elements` (which walks the DOM up-front
+    /// and atom-interns once per element). Needed because Stylo's
+    /// `TElement::id() -> Option<&style::Atom>` returns a borrowed atom
+    /// reference — we can't return a freshly-interned atom from inside
+    /// the method without a stable storage to anchor the borrow.
+    pub id_atom: Option<style::Atom>,
+
+    /// Parsed inline `style="…"` declarations (Author origin), if the element
+    /// carries a non-empty `style` attribute. Populated before the cascade by
+    /// [`crate::cascade`]'s inline-style pass (which has the `SharedRwLock` to
+    /// wrap the block); the stylo adapter's `TElement::style_attribute` returns
+    /// a borrow of it, so the cascade applies it at the inline-style level
+    /// (above author stylesheet rules). `None` when there is no inline style.
+    pub inline_style: Option<Arc<Locked<PropertyDeclarationBlock>>>,
+
+    /// Stylo's "dirty descendants" bit — set during incremental
+    /// invalidation to mark that a descendant needs restyle, consulted by
+    /// the traversal to decide whether to descend. No-op'd in the full
+    /// cascade (nothing sets it; every element is styled because it has no
+    /// `ElementData` yet). Backs `TElement::{set,unset,has}_dirty_descendants`.
+    pub dirty_descendants: Cell<bool>,
+
+    /// Whether the invalidator has processed this element's snapshot
+    /// (Stylo's `handled_snapshot` bit). Set during incremental restyle so
+    /// a snapshot is consumed once. Backs `TElement::{handled_snapshot,
+    /// set_handled_snapshot}`.
+    pub handled_snapshot: Cell<bool>,
+}
+
+// SAFETY: per the cascade's exclusive-access invariant during traversal,
+// and immutable-only access outside it. Matches Blitz's same claim on its
+// `StyloData` wrapper.
+unsafe impl Send for StyleEntry {}
+unsafe impl Sync for StyleEntry {}
+
+impl StyleEntry {
+    /// Whether Stylo's `ElementData` has been allocated for this entry.
+    pub fn has_data(&self) -> bool {
+        // SAFETY: read-only access; no aliasing.
+        unsafe { (*self.stylo_data.get()).is_some() }
+    }
+
+    /// Immutable borrow of the `ElementData`, if present.
+    pub fn borrow_data(&self) -> Option<ElementDataRef<'_>> {
+        // SAFETY: read-only access. The cascade's exclusive-access invariant
+        // ensures no concurrent writer during traversal; outside the cascade
+        // we only ever borrow immutably.
+        unsafe { (*self.stylo_data.get()).as_ref().map(|w| w.borrow()) }
+    }
+
+    /// Mutable borrow of the `ElementData`. Cascade-time only.
+    ///
+    /// # Safety
+    ///
+    /// Caller must guarantee no other borrow exists. The Stylo cascade
+    /// enforces this via its single-threaded-per-node invariant.
+    pub unsafe fn mutate_data(&self) -> Option<ElementDataMut<'_>> {
+        // SAFETY: caller's responsibility per the # Safety doc above.
+        unsafe { (*self.stylo_data.get()).as_mut().map(|w| w.borrow_mut()) }
+    }
+
+    /// Initialize the `ElementData` slot if empty, returning a mutable borrow.
+    ///
+    /// # Safety
+    ///
+    /// Same as `mutate_data`: caller must guarantee no other borrow exists.
+    pub unsafe fn ensure_data(&self) -> ElementDataMut<'_> {
+        // SAFETY: caller's responsibility per the # Safety doc above.
+        unsafe {
+            let slot = &mut *self.stylo_data.get();
+            if slot.is_none() {
+                *slot = Some(ElementDataWrapper::default());
+            }
+            slot.as_mut().unwrap().borrow_mut()
+        }
+    }
+
+    /// Clear the `ElementData` slot.
+    ///
+    /// # Safety
+    ///
+    /// Same as `mutate_data`.
+    pub unsafe fn clear_data(&self) {
+        // SAFETY: caller's responsibility.
+        unsafe {
+            *self.stylo_data.get() = None;
+        }
+    }
+}
+
+impl Clone for StyleEntry {
+    fn clone(&self) -> Self {
+        // ElementDataWrapper is not Clone in general; provide a default
+        // (empty) to satisfy the `Clone` bound. Nothing in the pipeline clones
+        // a live style entry (the cascade mutates in place, and `StylePlane`
+        // is not `Clone`), so this empty clone is not exercised in practice.
+        Self {
+            stylo_data: UnsafeCell::new(None),
+            state: self.state,
+            selector_flags: Cell::new(self.selector_flags.get()),
+            id_atom: self.id_atom.clone(),
+            inline_style: self.inline_style.clone(),
+            dirty_descendants: Cell::new(self.dirty_descendants.get()),
+            handled_snapshot: Cell::new(self.handled_snapshot.get()),
+        }
+    }
+}
+
+impl Default for StyleEntry {
+    fn default() -> Self {
+        Self {
+            stylo_data: UnsafeCell::new(None),
+            state: ElementState::empty(),
+            selector_flags: Cell::new(ElementSelectorFlags::empty()),
+            id_atom: None,
+            inline_style: None,
+            dirty_descendants: Cell::new(false),
+            handled_snapshot: Cell::new(false),
+        }
+    }
+}
+
+impl std::fmt::Debug for StyleEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StyleEntry")
+            .field("state", &self.state)
+            .finish_non_exhaustive()
+    }
+}
+
+/// DOM-derived `:checked`: a checked checkbox/radio `<input>` or a selected
+/// `<option>`. Reflects the *content* attribute (static); the live IDL
+/// `checked` property after user toggles is the host's to supply.
+fn dom_checked<D>(dom: &D, id: D::NodeId) -> bool
+where
+    D: layout_dom_api::LayoutDom,
+{
+    use html5ever::{LocalName, ns};
+    let no_ns = ns!();
+    let Some(name) = dom.element_name(id) else {
+        return false;
+    };
+    let has = |a: &str| dom.attribute(id, &no_ns, &LocalName::from(a)).is_some();
+    match name.local.as_ref() {
+        "input" => {
+            let ty = dom
+                .attribute(id, &no_ns, &LocalName::from("type"))
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            matches!(ty.as_str(), "checkbox" | "radio") && has("checked")
+        },
+        "option" => has("selected"),
+        _ => false,
+    }
+}
+
+/// Sparse storage of computed style keyed by `D::NodeId`. A dense `IndexVec`
+/// backing (when `D::NodeId` is dense, per `NodeIdSpace` in the planes doc) is
+/// a possible future optimization.
+pub struct StylePlane<NodeId: Copy + Eq + Hash> {
+    entries: FxHashMap<NodeId, StyleEntry>,
+    /// Nodes carrying host interaction bits (`:hover` / `:active` / `:focus` /
+    /// `:focus-within`) as of the last [`apply_interaction_bits`](StylePlane::apply_interaction_bits),
+    /// so the next apply can clear those bits from nodes that have left the
+    /// hover / focus / active chains.
+    interaction_nodes: Vec<NodeId>,
+    /// Lazily-cascaded `::marker` pseudo styles, keyed by the list item's id.
+    /// `::marker` is a *lazy* pseudo (not in `ElementData`'s eager pseudo map),
+    /// so the cascade resolves it on demand against the item's primary style and
+    /// stashes it here; the marker-construction path reads it back to style the
+    /// marker run. Empty when no element has a matching `::marker` rule.
+    marker_styles: FxHashMap<NodeId, Arc<ComputedValues>>,
+    /// Supplemental `contain-intrinsic-*` longhand values keyed by element.
+    /// Stylo's Servo feature set does not expose these on `ComputedValues`, but
+    /// the object-fit tentative tests need them for size-contained replaced
+    /// elements.
+    contain_intrinsic_overrides: FxHashMap<NodeId, ContainIntrinsicOverride>,
+    /// One `SharedRwLock` for the lifetime of this plane. Stylesheet contents and
+    /// inline-`style` blocks are wrapped under it, and the cascade reads them
+    /// under guards from it. It MUST be stable across cascade passes: incremental
+    /// restyle reuses persistent `ElementData` rule nodes whose declarations are
+    /// locked under it, so a fresh lock per pass fails Stylo's `same_lock_as` guard
+    /// on the `RESTYLE_STYLE_ATTRIBUTE` (CascadeWithReplacements) path.
+    lock: SharedRwLock,
+    /// The document's running CSS transitions/animations (Stylo's Servo-mode
+    /// animation backend). Shared (`Arc` inside) with every cascade pass's
+    /// `SharedStyleContext`, so transitions started in one pass are visible to
+    /// the next. Like the lock, it must be stable across passes: `Transition`
+    /// state (start time, from/to values) lives here between ticks.
+    animations: DocumentAnimationSet,
+    /// The clock the animation backend reads, in seconds (Stylo transition
+    /// durations/delays are seconds). The session sets it before a pass; a
+    /// tick is "advance the clock, restyle the animating elements".
+    animation_clock: f64,
+}
+
+impl<NodeId: Copy + Eq + Hash> Default for StylePlane<NodeId> {
+    fn default() -> Self {
+        Self {
+            entries: FxHashMap::default(),
+            interaction_nodes: Vec::new(),
+            marker_styles: FxHashMap::default(),
+            contain_intrinsic_overrides: FxHashMap::default(),
+            lock: SharedRwLock::new(),
+            animations: DocumentAnimationSet::default(),
+            animation_clock: 0.0,
+        }
+    }
+}
+
+impl<NodeId: Copy + Eq + Hash> StylePlane<NodeId> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The plane's stable `SharedRwLock` (see the field doc). The cascade clones
+    /// it each pass; the clone shares the same underlying lock.
+    pub fn shared_lock(&self) -> &SharedRwLock {
+        &self.lock
+    }
+
+    /// The document's animation set (see the field doc). Cloning shares the
+    /// same underlying `Arc<RwLock<..>>`; the cascade clones it into each
+    /// pass's `SharedStyleContext`.
+    pub fn animations(&self) -> &DocumentAnimationSet {
+        &self.animations
+    }
+
+    /// The animation clock the next cascade pass will read, in seconds.
+    pub fn animation_clock(&self) -> f64 {
+        self.animation_clock
+    }
+
+    /// Set the animation clock (seconds) for subsequent cascade passes. The
+    /// clock is monotonic per session; rewinding it mid-transition is
+    /// unsupported (Stylo compares it against recorded start times).
+    pub fn set_animation_clock(&mut self, now_s: f64) {
+        self.animation_clock = now_s;
+    }
+
+    pub fn insert(&mut self, id: NodeId, entry: StyleEntry) {
+        self.entries.insert(id, entry);
+    }
+
+    pub fn get(&self, id: NodeId) -> Option<&StyleEntry> {
+        self.entries.get(&id)
+    }
+
+    /// Ensure a style entry exists for `id`, creating a default one if not.
+    /// Returns a mutable reference. The Stylo cascade uses this to allocate
+    /// `ElementData` storage before populating it.
+    pub fn ensure_entry(&mut self, id: NodeId) -> &mut StyleEntry {
+        self.entries.entry(id).or_default()
+    }
+
+    /// Populate empty StyleEntry slots for every element in the given DOM.
+    /// The cascade calls `ensure_data` on each element it visits — that
+    /// requires a StyleEntry to exist first (cascade orchestration's job,
+    /// not the cascade's). This walks the DOM up-front and pre-allocates.
+    ///
+    /// Also atom-interns each element's `id` attribute into
+    /// `StyleEntry::id_atom` — Stylo's rule indexer queries
+    /// `TElement::id()` to prune `#foo` rules per element, and that
+    /// method returns `&Atom`, so the atom needs a stable home (this
+    /// pre-pass establishes it).
+    pub fn populate_for_elements<D>(&mut self, dom: &D)
+    where
+        D: layout_dom_api::LayoutDom<NodeId = NodeId>,
+    {
+        use html5ever::{LocalName, Namespace, namespace_url, ns};
+        let no_ns: Namespace = ns!();
+        let id_local = LocalName::from("id");
+
+        let mut queue = vec![dom.document()];
+        while let Some(id) = queue.pop() {
+            if matches!(dom.kind(id), layout_dom_api::NodeKind::Element) {
+                let id_atom = dom.attribute(id, &no_ns, &id_local).map(style::Atom::from);
+                let checked = dom_checked(dom, id);
+                let entry = self.ensure_entry(id);
+                entry.id_atom = id_atom;
+                // DOM-derived `:checked`: a checked checkbox/radio `<input>` or a
+                // selected `<option>`. Static reflection of the content
+                // attribute (the live IDL `checked` property is the host's).
+                // `set` preserves interaction bits (HOVER/FOCUS/…) and re-syncs
+                // both directions across populate passes.
+                entry.state.set(ElementState::CHECKED, checked);
+            }
+            queue.extend(dom.dom_children(id));
+        }
+    }
+
+    /// Clear the per-element `RestyleDamage` across all entries. Called
+    /// before an incremental restyle so that, afterward, only the elements
+    /// Stylo actually restyled carry damage (the cascade leaves clean
+    /// elements untouched). `RestyleDamage` is a per-restyle output, not
+    /// persistent state, so clearing it is safe.
+    ///
+    /// Must be called outside a cascade (single-threaded, no live borrow).
+    pub fn reset_damage(&self) {
+        for entry in self.entries.values() {
+            // SAFETY: not inside a cascade traversal — single-threaded
+            // access, no other borrow of this entry's `ElementData`.
+            if let Some(mut data) = unsafe { entry.mutate_data() } {
+                data.damage = RestyleDamage::empty();
+            }
+        }
+    }
+
+    /// Set an element's interaction [`ElementState`] (`:hover`, `:focus`,
+    /// `:active`, …), creating the entry if needed. The cascade reads this
+    /// via `TElement::state`, so state-backed pseudo-class selectors match
+    /// once a host interaction layer sets it. (Scaffold: genet has no
+    /// input pipeline yet; incremental state-change restyle — snapshot the
+    /// old state + invalidate — is the follow-on, parallel to the
+    /// attribute path.)
+    pub fn set_element_state(&mut self, id: NodeId, state: ElementState) {
+        self.ensure_entry(id).state = state;
+    }
+
+    /// Stash a lazily-resolved `::marker` pseudo style for a list item (see the
+    /// `marker_styles` field). Replaces any prior entry for `id`.
+    pub fn set_marker_style(&mut self, id: NodeId, style: Arc<ComputedValues>) {
+        self.marker_styles.insert(id, style);
+    }
+
+    /// The lazily-resolved `::marker` style for a list item, if the cascade
+    /// matched a `::marker` rule against it.
+    pub fn marker_style(&self, id: NodeId) -> Option<&Arc<ComputedValues>> {
+        self.marker_styles.get(&id)
+    }
+
+    pub fn set_contain_intrinsic_override(&mut self, id: NodeId, value: ContainIntrinsicOverride) {
+        if value.width.is_some() || value.height.is_some() {
+            self.contain_intrinsic_overrides.insert(id, value);
+        } else {
+            self.contain_intrinsic_overrides.remove(&id);
+        }
+    }
+
+    pub fn contain_intrinsic_override(&self, id: NodeId) -> Option<ContainIntrinsicOverride> {
+        self.contain_intrinsic_overrides.get(&id).copied()
+    }
+
+    pub fn clear_contain_intrinsic_overrides(&mut self) {
+        self.contain_intrinsic_overrides.clear();
+    }
+
+    /// Drop all stashed `::marker` styles, so a re-resolve does not leave a
+    /// stale entry behind for an item whose `::marker` rule was removed.
+    pub fn clear_marker_styles(&mut self) {
+        self.marker_styles.clear();
+    }
+
+    /// An element's current [`ElementState`], or empty if it has no entry yet.
+    pub fn element_state(&self, id: NodeId) -> ElementState {
+        self.get(id)
+            .map(|e| e.state)
+            .unwrap_or_else(ElementState::empty)
+    }
+
+    /// Apply a resolved interaction-bit map (`node -> the HOVER / ACTIVE /
+    /// FOCUS / FOCUS_WITHIN bits it should now carry`) to the plane.
+    ///
+    /// Clears those four bits from nodes that carried them last apply but are
+    /// absent from `desired` (they left the hover / focus / active chains), and
+    /// preserves every non-interaction state bit (e.g. a future DOM-derived
+    /// `CHECKED`). Returns `(node, old_state)` for each node whose state
+    /// actually changed, so the caller can snapshot the old state and drive a
+    /// minimal state-change restyle. See [`crate::cascade::restyle_for_interaction`].
+    pub fn apply_interaction_bits(
+        &mut self,
+        desired: &FxHashMap<NodeId, ElementState>,
+    ) -> Vec<(NodeId, ElementState)> {
+        let mask = ElementState::HOVER
+            | ElementState::ACTIVE
+            | ElementState::FOCUS
+            | ElementState::FOCUS_WITHIN;
+
+        // Every node touched last time or this time may need a state change.
+        let mut touched: FxHashSet<NodeId> = self.interaction_nodes.iter().copied().collect();
+        touched.extend(desired.keys().copied());
+
+        let mut changed = Vec::new();
+        for node in touched {
+            let cur = self.element_state(node);
+            let want = desired
+                .get(&node)
+                .copied()
+                .unwrap_or_else(ElementState::empty);
+            let new = (cur & !mask) | (want & mask);
+            if new != cur {
+                changed.push((node, cur));
+                self.ensure_entry(node).state = new;
+            }
+        }
+        self.interaction_nodes = desired.keys().copied().collect();
+        changed
+    }
+
+    /// The union of `RestyleDamage` across all entries. After
+    /// [`reset_damage`](Self::reset_damage) + an incremental restyle, this
+    /// is exactly the damage of the elements that were restyled this pass.
+    pub fn aggregate_damage(&self) -> RestyleDamage {
+        let mut acc = RestyleDamage::empty();
+        for entry in self.entries.values() {
+            if let Some(data) = entry.borrow_data() {
+                acc |= data.damage;
+            }
+        }
+        acc
+    }
+
+    /// How many entries carry non-empty `RestyleDamage` after a restyle pass.
+    pub fn damaged_entry_count(&self) -> usize {
+        self.entries
+            .values()
+            .filter(|entry| {
+                entry
+                    .borrow_data()
+                    .is_some_and(|data| !data.damage.is_empty())
+            })
+            .count()
+    }
+}

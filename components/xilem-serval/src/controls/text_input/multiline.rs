@@ -5,11 +5,11 @@
 //! Multi-line (`textarea`) navigation: hard `\n`-delimited lines, with a sticky
 //! goal column across a run of vertical moves.
 //!
-//! Lines are `\n`-delimited in the buffer (serval feeds the raw text to
+//! Lines are `\n`-delimited in the buffer (genet feeds the raw text to
 //! parley, which breaks at `\n`); a column is the char offset within a line.
 //! Up/down keep a sticky goal column ([`TextInput::goal_col`](super::core::TextInput))
 //! across a run (Tier 2). These walk hard `\n` lines, not parley's soft-wrap visual
-//! rows — the soft-wrap caret (`serval_layout::caret_byte_vertical`) is a separate,
+//! rows — the soft-wrap caret (`genet_layout::caret_byte_vertical`) is a separate,
 //! layout-aware path a host can wire instead, where the goal would be an x-position
 //! not a column.
 

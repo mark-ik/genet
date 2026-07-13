@@ -12,7 +12,7 @@ bearing architectural question directly:
 > to the edges of our specific implementation?*
 
 **Answer: a shared middle.** The API *behavior* is implemented **once, in pure
-Rust, against serval's engine-neutral DOM** (`layout-dom-api`'s
+Rust, against genet's engine-neutral DOM** (`layout-dom-api`'s
 `LayoutDom`/`LayoutDomMut`); only a thin **binding edge** is per-JS-engine. We
 keep WebIDL — but as a **neutral schema** that generates *both* the neutral
 surface *and* each engine's edge, not as Servo's codegen that targets one
@@ -20,7 +20,7 @@ engine's JSAPI. That inversion is the whole plan.
 
 ## Relationship to the other scripting docs (read first)
 
-- [2026-05-20 script-engine plan](./2026-05-20_serval_script_engine_plan.md) —
+- [2026-05-20 script-engine plan](./2026-05-20_genet_script_engine_plan.md) —
   owns the **engine axis** (which JS VM: Nova primary native, Boa oracle/wasm)
   and the **reflector mechanism** (`ScriptEngine` / `ScriptEngineLive`,
   `make_reflector` / `reflector_data`, the GC marriage). It explicitly names a
@@ -38,12 +38,12 @@ engine's JSAPI. That inversion is the whole plan.
 ## Where it stands today
 
 The scripted tier has **one** web-API binding: `setText(reflector, text)` in
-[serval-scripted/lib.rs](../components/serval-scripted/lib.rs), probe-grade
+[genet-scripted/lib.rs](../components/genet-scripted/lib.rs), probe-grade
 (thread-local host DOM, single hand-written native fn). That is the seed crystal,
 not the structure. The entire catalogue — `document`, `Element`, `Node`,
 `querySelector`, `classList`, `addEventListener`, CSSOM, `URL`, `TextEncoder` —
 is unbuilt. Building it the way Servo did (772 files, WebIDL→SpiderMonkey
-codegen) would re-marry serval to one engine and re-incur the cost the
+codegen) would re-marry genet to one engine and re-incur the cost the
 2026-05-15 SpiderMonkey excision just paid down. This plan builds it so it stays
 engine-neutral *by construction*.
 
@@ -91,7 +91,7 @@ fusion is the 772-file tax and the reason the DOM *was* the bindings. Our move:
   *third* render engine wanting these APIs reuses `web-api` wholesale if it
   speaks `LayoutDomMut`. That is the "shared middle different engines could use."
 
-This is the [script-engine plan's house pattern](./2026-05-20_serval_script_engine_plan.md#part-5--the-modular-pattern-generalized-to-servals-other-big-parts)
+This is the [script-engine plan's house pattern](./2026-05-20_genet_script_engine_plan.md#part-5--the-modular-pattern-generalized-to-genets-other-big-parts)
 applied to the API-surface boundary: `*-api`/behavior crate + per-impl edge
 crates + witness-by-package.
 
@@ -157,7 +157,7 @@ is codegen that bakes one engine into the output.
 - It does not generate behavior. Behavior is hand-written Rust in `web-api`,
   reviewed, tested, and the same across engines.
 - It does not own the event loop, timers, or the host frame integration — those
-  are `script-runtime-api`/`serval-scripted` (the host layer), per the
+  are `script-runtime-api`/`genet-scripted` (the host layer), per the
   script-engine plan §OQ2.
 - It does not generate the marshaling primitives — those are the hand-written
   per-engine seam (small, already proven by `ScriptEngine`).
@@ -180,10 +180,10 @@ web-api-nova             # reflector classes + marshaling primitives over nova_v
 web-api-boa              # ditto over boa (oracle/wasm) — NOT a workspace member (icu pin, per script-engine plan)
 
 # Host layer (the script-engine plan's script-runtime-api interior consumes this)
-#   document/window globals, event loop, timers — assembled in serval-scripted from web-api + an engine edge.
+#   document/window globals, event loop, timers — assembled in genet-scripted from web-api + an engine edge.
 ```
 
-Witness gates extend the script-engine plan's: `serval-static-html` /
+Witness gates extend the script-engine plan's: `genet-static-html` /
 `-interactive-html` pull **no** `web-api*` crate; a build that links `web-api`
 but no `web-api-<engine>` is a valid **headless DOM-ops** target (the
 DOM-as-a-library case — `querySelector`/serialize without any JS engine). That
@@ -196,7 +196,7 @@ can call `Element::get_attribute` directly.
 ## 4. Reuse the lake's existing tributaries (don't reimplement algorithms)
 
 The "directly reusable dependencies" — many web-API behaviors are *already*
-crates, and serval already pins most of them. The shared middle **wraps**, it
+crates, and genet already pins most of them. The shared middle **wraps**, it
 doesn't reimplement:
 
 | Web API | Reuse | Already pinned? |
@@ -205,8 +205,8 @@ doesn't reimplement:
 | `TextEncoder` / `TextDecoder` | `encoding_rs` | ✓ |
 | `fetch` / `XMLHttpRequest` (loading) | **netfetcher** (via host) | netfetcher (planned) |
 | CSSOM (`getComputedStyle`, `style`) | **Stylo** `ComputedValues` (read) + cssparser (parse) | ✓ (StylePlane) |
-| Selectors (`querySelector(All)`, `matches`) | `selectors` crate (serval-layout already uses it) | ✓ |
-| `DOMParser` / `innerHTML` | `html5ever` (serval-static-dom's sink) | ✓ |
+| Selectors (`querySelector(All)`, `matches`) | `selectors` crate (genet-layout already uses it) | ✓ |
+| `DOMParser` / `innerHTML` | `html5ever` (genet-static-dom's sink) | ✓ |
 | `structuredClone` / JSON | engine-native + `serde_json` where neutral | partial |
 | `Blob` / `File` / `FileReader` | `mime` + bytes; minimal | partial |
 | `crypto.subtle` (subset) | `aes` / `sha2` / ring (already in net stack) | partial |
@@ -214,7 +214,7 @@ doesn't reimplement:
 
 This is why the lake is *deep* but not *bottomless*: the hard algorithm work
 (URL parsing, encoding, selector matching, HTML parsing, CSS cascade) is done by
-crates serval already depends on. The web-API layer is mostly **interface
+crates genet already depends on. The web-API layer is mostly **interface
 shape + glue to existing behavior**, plus genuinely-new behavior for the
 tree-mutation and event-dispatch interfaces.
 
@@ -257,8 +257,8 @@ Maps to WPT `url/`, `encoding/`, `fetch/`, `webstorage/`.
 WebRTC (→ net-media), Service Workers. Each gated behind a real consumer per the
 "don't pre-build contract crates" discipline.
 
-The tiers map onto the [profile ladder](./2026-05-12_serval_profile_ladder_plan.md):
-W0 makes prerender/scripted-core real; W1–W2 are `serval-scripted` breadth;
+The tiers map onto the [profile ladder](./2026-05-12_genet_profile_ladder_plan.md):
+W0 makes prerender/scripted-core real; W1–W2 are `genet-scripted` breadth;
 W3 straddles scripted/fullweb; W4 is fullweb.
 
 ---
@@ -333,7 +333,7 @@ trait" rule from layout_dom_api.)
 5. **Live binding vs prerender host surface — one catalogue or two.** Prerender
    needs a *faked* DOM host surface (script-engine plan Part 2); live scripting
    needs the *real* one. Are they the same `web-api` behavior over different DOM
-   providers (`serval-static-dom`-backed faux vs `serval-scripted-dom`), or two
+   providers (`genet-static-dom`-backed faux vs `genet-scripted-dom`), or two
    surfaces? Lean: one catalogue, two providers — that's the whole point of
    `LayoutDom`/`LayoutDomMut` neutrality.
 6. **Attribute reflection generation.** Reflected IDL attributes (`a.href`,
@@ -359,7 +359,7 @@ trait" rule from layout_dom_api.)
   selector matching — wrap `url` / `encoding_rs` / `selectors`. New behavior is
   only the tree-mutation + event-dispatch + reflection glue.
 - **Letting the event loop leak into `web-api`.** Timers, microtask pumping, rAF,
-  and frame integration are the host layer's (`serval-scripted` /
+  and frame integration are the host layer's (`genet-scripted` /
   `script-runtime-api`), built on the engine's `pump_microtasks`. `web-api`
   behavior is synchronous tree/style ops; it must not own the loop.
 - **Forgetting the no-engine consumer.** `web-api` algorithms must stay callable
@@ -373,7 +373,7 @@ trait" rule from layout_dom_api.)
 - The scripted tier today is a single `setText` probe; the catalogue is
   greenfield — so the shared-middle architecture can be adopted from the first
   real interface, with no monolith to dismantle.
-- Most hard web-API *algorithms* are already crates serval pins (`url`,
+- Most hard web-API *algorithms* are already crates genet pins (`url`,
   `encoding_rs`, `selectors`, `html5ever`, Stylo) — the lake is deep but its
   hardest currents are already bridged; the layer is mostly interface-shape +
   glue.

@@ -10,7 +10,7 @@
 //! [`TypeDiagnostic`]s for unresolved identifiers; binary-op result
 //! types, l-value rules, constructor signatures, and the built-in
 //! function registry are Step 4b work (per the design sketch
-//! `serval/docs/2026-05-28_webgl_essl_typecheck_visitor_design.md`).
+//! `genet/docs/2026-05-28_webgl_essl_typecheck_visitor_design.md`).
 //!
 //! ANGLE-shaped `getError()` diagnostics arrive at Step 5 (the WebGL
 //! validator layer above this pass); the diagnostics this module emits

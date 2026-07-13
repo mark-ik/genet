@@ -1,13 +1,13 @@
 [package]
-name = "serval-paint-types"
+name = "genet-paint-types"
 version = "0.1.0"
-repository = "https://github.com/mark-ik/serval"
+repository = "https://github.com/mark-ik/genet"
 publish = true
 authors.workspace = true
 license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Shared paint-tier types for the serval engine family: the vocabulary the paint and observables layers exchange (rects, colors, image keys) without a renderer dependency."
+description = "Shared paint-tier types for the genet engine family: the vocabulary the paint and observables layers exchange (rects, colors, image keys) without a renderer dependency."
 
 [lib]
 name = "paint_types"

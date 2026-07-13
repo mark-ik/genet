@@ -3,16 +3,16 @@
 **Date:** 2026-06-18. **Parent:** `2026-06-16_real_web_layout_fidelity_plan.md`
 item 4. **Scope:** narrow inline line boxes around a float's exclusion region (a
 paragraph wrapping to the right of a `float:left`, reclaiming full width below
-it). Grounded by a four-part study (parley capability, serval float state, the
+it). Grounded by a four-part study (parley capability, genet float state, the
 engine model, the `break_all_lines` seam).
 
 **Status (2026-06-18): first cut landed.** Implemented exactly as designed
 below — taffy gains `FloatContext::exclusion_bands` + `InlineFloatBand` +
-`BlockContext::inline_exclusion_bands` (patch 0002, see `SERVAL_PATCHES.md`);
+`BlockContext::inline_exclusion_bands` (patch 0002, see `GENET_PATCHES.md`);
 the box tree snapshots bands per inline-context leaf into `TextMeasureCtx`;
 `text_measure`'s `break_and_align_floats` drives `Layout::break_lines()` with
 per-line `set_line_x` / `set_line_max_advance`. Proven by
-`serval-layout`'s `inline_text_wraps_around_left_float` (200px column, 60×40
+`genet-layout`'s `inline_text_wraps_around_left_float` (200px column, 60×40
 `float:left`: lines above the float's 40px bottom start at x=60, lines below
 reclaim x=0, all ending at the 200px edge). Full lib suite green (192). The
 "Deferred" list below is the remaining backlog.
@@ -39,7 +39,7 @@ below all floats when none fits — which *is* line-level downward clearance
 
 ## The real work: thread float bands into the inline measure
 
-Floats are placed by **patched Taffy** (the `float_layout` feature); serval only
+Floats are placed by **patched Taffy** (the `float_layout` feature); genet only
 forwards `float`/`clear` (`box_tree.rs:699-712`). A block establishing an inline
 context is a childless Taffy leaf laid out via `compute_leaf_layout`
 (`box_tree.rs:828`); its measure closure (`~832-839`) captures only
@@ -71,7 +71,7 @@ right; text reclaiming full container width below the float's bottom.
 **Touch:**
 - `support/patches/taffy/src/compute/float.rs` — a thin accessor returning the
   active exclusion bands (or per-line `find_content_slot`) in child space; wrapper
-  over the existing `segments` walk. Note in `SERVAL_PATCHES.md`.
+  over the existing `segments` walk. Note in `GENET_PATCHES.md`.
 - `box_tree.rs` `compute_child_layout_inner` (~790) — snapshot bands + leaf
   content-box top into `TextMeasureCtx` before the leaf measure (828).
 - `text_measure.rs` — `TextMeasureCtx` gains a `taffy_id → (leaf_top, bands)`

@@ -4,8 +4,8 @@
 
 //! [`checkbox`] / [`toggle`]: a `bool`-backed control flipped on click.
 
-use crate::pod::ServalElement;
-use crate::{El, OnClick, PointerClick, ServalCtx, View, el, on_click};
+use crate::pod::GenetElement;
+use crate::{El, OnClick, PointerClick, GenetCtx, View, el, on_click};
 
 /// The toggle handler for [`checkbox`] / [`toggle`]: flip the bool on click.
 fn flip(checked: &mut bool, _: PointerClick) {
@@ -50,7 +50,7 @@ fn kind_checked(kind: &'static str) -> &'static str {
 /// ASCII `[x]` / `[ ]` fallback indicator. Composes onto an app's bool field via
 /// [`lens`](crate::lens), like [`text_field`](crate::text_field) onto a
 /// [`TextInput`](crate::TextInput).
-pub fn checkbox(checked: bool) -> impl View<bool, (), ServalCtx, Element = ServalElement> + use<> {
+pub fn checkbox(checked: bool) -> impl View<bool, (), GenetCtx, Element = GenetElement> + use<> {
     build_check("checkbox", checked)
 }
 
@@ -63,6 +63,6 @@ pub fn checkbox_typed(checked: bool) -> Checkbox {
 
 /// A toggle switch — behaviourally a [`checkbox`] (a `bool`, flipped on click),
 /// distinguished only by a `toggle` class so the host styles it as a switch.
-pub fn toggle(checked: bool) -> impl View<bool, (), ServalCtx, Element = ServalElement> + use<> {
+pub fn toggle(checked: bool) -> impl View<bool, (), GenetCtx, Element = GenetElement> + use<> {
     build_check("toggle", checked)
 }

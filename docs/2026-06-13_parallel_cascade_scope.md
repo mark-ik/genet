@@ -9,7 +9,7 @@ This captures the analysis so the Fedora session executes without re-deriving it
 
 ## Why (and why bounded)
 
-Stylo is a parallel-by-design cascade engine; serval currently drives it
+Stylo is a parallel-by-design cascade engine; genet currently drives it
 single-threaded. Parallel cascade speeds up style resolution on large content
 pages. The payoff is bounded: a size threshold keeps small DOMs (chrome UI)
 serial, and inline-text shaping — the larger text-side win — is already
@@ -20,7 +20,7 @@ necessity.
 ## What's already easy
 
 - `style::driver::traverse_dom(&traversal, token, pool)` takes the rayon pool as
-  its third arg. Today serval passes `None` (`cascade.rs`, the
+  its third arg. Today genet passes `None` (`cascade.rs`, the
   `RecalcStyle::new(context)` / `traverse_dom(..., None)` call). Passing
   `Some(&pool)` is the switch.
 - The per-worker TLS problem (`CASCADE_CTX` in `adapter_stylo.rs` is set only on
@@ -34,7 +34,7 @@ necessity.
 
 ## The real blocker: data races on `StyleEntry` cells
 
-Stylo's parallel traversal touches per-element state across threads. serval used
+Stylo's parallel traversal touches per-element state across threads. genet used
 `Cell` / `UnsafeCell` as a single-threaded shortcut where Servo's real DOM uses
 atomics. The contended fields (`style.rs`):
 

@@ -9,7 +9,7 @@
 //! produces a portable [`crate::EngineDocument`] that downstream consumers
 //! (document-canvas, platen, the host) can present. Concrete engines live
 //! outside this crate (`nematic` for smolweb / markdown / file lanes;
-//! `serval` for full web; etc).
+//! `genet` for full web; etc).
 //!
 //! Network and disk I/O are deliberately the host's job, not the engine's:
 //! engines stay portable to wasm32 / browser / PWA targets where network

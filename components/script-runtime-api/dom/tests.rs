@@ -52,7 +52,7 @@ fn dom_construction_works<E: ScriptEngine>() {
     }
 
     // The structural + attribute + character-data changes were recorded for
-    // serval-layout: setAttribute, two appendChilds, textContent → 4 mutations.
+    // genet-layout: setAttribute, two appendChilds, textContent → 4 mutations.
     // (createElement / createTextNode record nothing until parented.)
     let mut muts = Vec::new();
     rt.host().borrow_mut().dom.drain_mutations(&mut muts);
@@ -139,7 +139,7 @@ fn dom_prototype_dispatch_works<E: ScriptEngine>() {
 /// DOM, so script sees `document.body`, `getElementById`, and tag queries over
 /// the pre-existing tree.
 fn load_dom_works<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     let src = StaticDocument::parse(
         "<html><head></head><body><div id='main'><p>hi</p></div></body></html>",
@@ -164,7 +164,7 @@ fn load_dom_works<E: ScriptEngine>() {
 /// `Event-defaultPrevented-after-dispatch`, which failed with "cannot convert
 /// null to object" when the input wasn't found).
 fn load_dom_finds_self_closing_input<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     let src = StaticDocument::parse(
         "<html><body><div id=log></div><input id=\"target\" type=\"hidden\" value=\"\"/></body></html>",
@@ -195,7 +195,7 @@ fn load_dom_finds_self_closing_input<E: ScriptEngine>() {
 /// if any is null. Pins which of window / documentElement / body / a
 /// table-descendant is missing.
 fn event_target_chain_resolves<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse(
         "<html><body><table id=t style=\"display:none\"><tbody id=tb>\
@@ -236,7 +236,7 @@ fn event_target_chain_resolves_on_boa() {
 /// dispatch, and confirm propagation is halted (window's listener does not
 /// fire) without throwing.
 fn cancel_bubble_before_dispatch<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse(
         "<html><body><div id=d>x</div></body></html>",
@@ -290,7 +290,7 @@ fn cancel_bubble_before_dispatch_on_nova() {
 /// / `toggleAttribute`), reflection (`id` / `className`), `classList`, and
 /// `querySelector` / `querySelectorAll` / `matches` over a loaded tree.
 fn dom_element_surface_works<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse(
         "<html><body><div id='a' class='x y'><p class='x'>hi</p><span></span></div></body></html>",
@@ -339,7 +339,7 @@ fn dom_construction_on_boa() {
 /// navigation (incl. element-filtered), `nodeName`/`nodeValue`, `childNodes`,
 /// `removeChild` / `insertBefore` / `replaceChild`, and the ChildNode mixin.
 fn dom_traversal_works<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse(
         "<html><body><div id='p'>text<span id='a'></span><span id='b'></span></div></body></html>",
@@ -392,7 +392,7 @@ fn dom_element_surface_on_boa() {
 /// Reflected IDL attributes + namespace getters + createElementNS + tree
 /// walker + document.title, against any backend.
 fn dom_reflection_ns_works<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse(
         "<html><head><title>  Hi   there </title></head><body><a id='x'></a></body></html>",
@@ -444,7 +444,7 @@ fn dom_traversal_on_boa() {
 /// HierarchyRequestError), the node return value, and a move inside a detached
 /// tree (same root, so allowed — moveBefore never adopts, it never crosses).
 fn dom_move_before_works<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse(
         "<html><body><div id='a'><p id='p'></p></div>\
@@ -511,7 +511,7 @@ fn dom_reflection_ns_on_nova() {
 /// HTML interface table: per-tag constructors/prototypes and reflected IDL attrs
 /// come from the declarative table, not hand-written element cases.
 fn html_interface_table_works<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.set_base_url("http://example.test/base/index.html")
         .expect("base url");
@@ -581,7 +581,7 @@ fn html_interface_table_on_nova() {
 /// and match the constructor/prototype property access order expected by the
 /// WPT registry surface.
 fn custom_elements_registry_contract_works<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse("<html><body></body></html>"));
 
@@ -663,7 +663,7 @@ fn custom_elements_registry_contract_on_nova() {
 /// only the upgrade-time construction stack, while still preserving the WPT
 /// sanity-check ordering around `NewTarget.prototype`.
 fn custom_elements_html_constructor_works<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse("<html><body></body></html>"));
 
@@ -736,7 +736,7 @@ fn custom_elements_html_constructor_on_nova() {
 /// creation, explicit upgrade of detached subtrees, and Promise-microtask-timed
 /// connected / disconnected / attribute reactions.
 fn custom_elements_customized_builtins_work<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse(
         "<html><body><button id='old' is='x-fancy' data-state='seed'></button><button id='plain'></button><x-card id='card'></x-card></body></html>",
@@ -829,7 +829,7 @@ fn custom_elements_customized_builtins_on_nova() {
 /// cross-document moves/adoptNode, and keep the callback ordering aligned with
 /// the existing connected/disconnected microtask queue.
 fn custom_elements_adoption_works<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse("<html><body></body></html>"));
 
@@ -964,7 +964,7 @@ fn proxy_capability<E: ScriptEngine>() {
 /// HTMLCollection-lacks-forEach / NodeList-has-forEach distinction, and
 /// getOwnPropertyNames order (indices then deduped non-empty id/name).
 fn dom_collections_works<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse(
         "<html><body><span id='x'></span><span name='y'></span></body></html>",
@@ -1012,7 +1012,7 @@ fn proxy_capability_on_boa() {
 /// the iterable surface + brand + value + indexed access + replace, and
 /// dataset camelCase<->kebab get/set/has/keys.
 fn dom_tokenlist_dataset_works<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse(
         "<html><body><a id='a' class='x y'></a></body></html>",
@@ -1057,7 +1057,7 @@ fn dom_tokenlist_dataset_works<E: ScriptEngine>() {
 /// content attribute against the document base URL, the setter stores the raw
 /// string, and an absent attribute reflects as the empty string.
 fn dom_url_reflection_works<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.set_base_url("http://example.com/dir/page.html")
         .expect("base url");
@@ -1096,7 +1096,7 @@ fn dom_url_reflection_on_boa() {
 /// createHTMLDocument (with title + body), createDocument with a root element,
 /// and queries scoping to the created document, not the primary one.
 fn dom_implementation_works<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse(
         "<html><body><p id='main'></p></body></html>",
@@ -1132,7 +1132,7 @@ fn dom_implementation_works<E: ScriptEngine>() {
 /// getPropertyValue / camelCase get + set / setProperty / removeProperty /
 /// length / item / cssText / `in`, all writing back to the attribute.
 fn element_style_inline_cssom<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse(
         "<html><body><div id='d' style='color: red; font-size: 12px'></div></body></html>",
@@ -1174,7 +1174,7 @@ fn element_style_inline_cssom_on_nova() {
 /// supported longhands resolve (camelCase + getPropertyValue), unsupported
 /// ones yield "", and the declaration is read-only.
 fn get_computed_style_reads_handler<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     struct Stub;
     impl crate::ComputedStyleHandler for Stub {
         fn computed_value(&self, _node: u64, property: &str) -> Option<String> {
@@ -1221,7 +1221,7 @@ fn get_computed_style_reads_handler_on_nova() {
 /// `document.cookie` reads the host `CookieProvider` (get) and forwards an
 /// assignment (set), the cookie convergence seam (native session store).
 fn document_cookie_reads_and_writes_provider<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -1278,7 +1278,7 @@ fn dom_tokenlist_dataset_on_boa() {
 /// This path regressed reflection-* files to ERROR; the assertion diff pinpoints
 /// what is non-callable / wrong on the created document.
 fn dom_created_doc_queryable<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse("<html><body></body></html>"));
 
@@ -1304,7 +1304,7 @@ fn dom_created_doc_queryable<E: ScriptEngine>() {
 /// mutators with IndexSizeError, constructors, splitText, isEqualNode,
 /// compareDocumentPosition, isConnected, ownerDocument.
 fn dom_characterdata_identity_works<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse(
         "<html><body><div id='p'></div></body></html>",
@@ -1376,7 +1376,7 @@ fn dom_characterdata_identity_on_nova() {
 /// and an `instanceof DocumentFragment`; it holds children and is queryable;
 /// shallow vs deep cloneNode copy element attributes and (deep) the subtree.
 fn dom_fragment_clone_works<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse("<html><body></body></html>"));
 
@@ -1490,7 +1490,7 @@ fn load_dom_on_nova() {
 ///
 /// This is the **JS column** of the event-dispatch conformance table shared
 /// with the native dispatcher. Its twin — the same scenarios over
-/// `ServalAppRunner::dispatch_click` — is `xilem-serval`'s
+/// `GenetAppRunner::dispatch_click` — is `xilem-serval`'s
 /// `stop_propagation_halts_the_bubble_walk` / `prevent_default_is_visible_to_the_caller`.
 /// Both must satisfy one contract; see
 /// `docs/2026-06-01_event_model_convergence_plan.md`. Change one, mirror the other.
@@ -1557,7 +1557,7 @@ fn dom_node_events_work<E: ScriptEngine>() {
 }
 
 fn document_evaluate_xpath_works<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
 
     let mut rt = Runtime::<E>::new().expect("runtime");
     let src = StaticDocument::parse(
@@ -1702,7 +1702,7 @@ fn dom_read_surface_on_nova() {
 /// validation → NamespaceError, hierarchy cycles → HierarchyRequestError, and
 /// createElement lowercases in an HTML document.
 fn dom_throwing_works<E: ScriptEngine>() {
-    use serval_static_dom::StaticDocument;
+    use genet_static_dom::StaticDocument;
     let mut rt = Runtime::<E>::new().expect("runtime");
     rt.load_dom(&StaticDocument::parse(
         "<html><body><div id='p'></div></body></html>",

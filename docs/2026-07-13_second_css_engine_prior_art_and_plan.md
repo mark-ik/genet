@@ -12,7 +12,7 @@ css engines. seems like that's what we do around here."
 [2026-07-13_stylo_fork_decomposition_and_divergence_plan.md](./2026-07-13_stylo_fork_decomposition_and_divergence_plan.md)
 (the fork stays the full-fat engine; the two plans share their first
 deliverable, the consumed-property audit),
-[2026-07-13_serval_consumed_css_property_audit.md](./2026-07-13_serval_consumed_css_property_audit.md)
+[2026-07-13_genet_consumed_css_property_audit.md](./2026-07-13_genet_consumed_css_property_audit.md)
 (the landed census and seam correction),
 [2026-07-13_cambium_css_lane_audit.md](./2026-07-13_cambium_css_lane_audit.md)
 (the first-lane decision and 22-property seed),
@@ -74,14 +74,14 @@ closest philosophical match to the knockout doctrine: it generates from
 property-by-property with WPT as the ratchet, favoring spec-literal
 readability first and optimizing later. That is exactly the growth
 model here — and Genet already owns the ratchet (the WPT baselines +
-reftest harness the current `serval-layout` runs today).
+reftest harness the current `genet-layout` runs today).
 
 **Gosub** — the warning label, already harvested in the gosub lessons
 doc: its parsers "exist to be independent, not better." Independence is
 not a reason. The lean engine is justified by *fit* (lean property set,
 Genet-shaped Device/media integration, owned growth curve), or not at
 all. Gosub's transferable piece (gosub_lattice table layout) belongs to
-the current `serval-layout` regardless of engine.
+the current `genet-layout` regardless of engine.
 
 **Blitz** — not an alternative engine; the other Rust *consumer* of
 stylo (with taffy/parley/vello, the same decomposition mere uses). Its
@@ -122,9 +122,9 @@ lines, not hundreds. The win is not avoiding CSS — it is avoiding the
 ## The seam: how Genet hosts two engines
 
 The landed audit found 126 consumed longhands across 16 Stylo style structs:
-59 through `stylo_taffy`, 73 through direct Serval reads, 30 through
+59 through `stylo_taffy`, 73 through direct Genet reads, 30 through
 `getComputedStyle`, and 13 animation/transition controls, with overlaps.
-`serval-layout` also has 257 `style::` references across 24 source files.
+`genet-layout` also has 257 `style::` references across 24 source files.
 The proposed `ComputedValues` clone with 33 accessors therefore cannot swap
 the full crate.
 
@@ -158,13 +158,13 @@ practical reason the engine is a new codebase rather than a stripped
 fork: a stripped stylo is forever MPL and forever merge-taxed;
 the lean engine is neither.
 
-**Home:** start as a Genet component in the repository currently named `serval`
+**Home:** start as a Genet component in the repository currently named `genet`
 (`components/`, publish = the usual rings posture) for the tight edit loop with
-the current `serval-layout`, with
+the current `genet-layout`, with
 the extraction-to-sibling-repo option held open once it stabilizes —
 both patterns are established. The crates.io names `genet` and `genet-stylo`
 were claimed by this project on 2026-07-13. Genet is the engine formerly called
-Serval, and `genet-stylo` supersedes the `serval-stylo` package family. The lean
+Genet, and `genet-stylo` supersedes the `genet-stylo` package family. The lean
 engine itself remains unnamed, so this doc continues to use "the lean engine"
 for it.
 

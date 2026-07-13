@@ -1,8 +1,8 @@
 # Viewport & root special rules: the standards scope
 
 **Status (2026-06-12):** scouting scope, for the pelt V1+ work and
-serval-layout. Prompted by the document-scroll gap (a page taller than the
-window scrolls with zero CSS; serval only scrolls element overflow
+genet-layout. Prompted by the document-scroll gap (a page taller than the
+window scrolls with zero CSS; genet only scrolls element overflow
 containers). That gap has a *shape*, and this doc maps the rest of the
 family so the engine grows standards-compliant mechanisms instead of
 per-host hacks.
@@ -14,7 +14,7 @@ and UA default *actions* (wheel and keys scroll the document). An engine
 built element-first misses them in a correlated way, and hosts are then
 tempted to fake each one with element machinery ("make the root an overflow
 container and key it"), which inverts the model and fights pages that set
-their own overflow. serval already proves the right shape once:
+their own overflow. genet already proves the right shape once:
 **canvas-background propagation is fully implemented, both halves** (root →
 canvas, with the HTML body fallback and display-contents/none negative
 tests; `paint_emit.rs:1325-1362`). Every fix below is "do for X what was
@@ -110,7 +110,7 @@ doc's prior snapshot):
   miss; verify with a fixture rather than assuming taffy's root sizing does
   it.
 - **Viewport units** (`vw`/`vh`/`vmin`/`vmax`): stylo resolves via `Device`
-  (which serval already sizes); verify resize re-resolves (a resized window
+  (which genet already sizes); verify resize re-resolves (a resized window
   re-cascades or at least re-resolves lengths). The `sv*`/`lv*`/`dv*`
   variants are a named deferral, not a v1 need.
 - **`background-attachment: fixed`**: same family (paints
@@ -165,5 +165,5 @@ Pelt's role is to surface exactly these gaps (a reference shell can't hide
 engine holes behind product machinery, which is how the scroll gap stayed
 invisible until the counter demo "never scrolled the page"). The rule of
 engagement it enforces: **when pelt hits a rendering gap, the fix lands in
-serval-layout as the spec's mechanism, and the host change is limited to
+genet-layout as the spec's mechanism, and the host change is limited to
 feeding inputs to it.** If a fix only works for pelt, it isn't the fix.

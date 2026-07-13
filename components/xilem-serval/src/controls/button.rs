@@ -5,7 +5,7 @@
 //! [`button`]: a `<button>` view with a click handler, and [`button_with`], the
 //! same over an arbitrary child view (a chisel leaf, an icon, a row).
 
-use crate::{El, OnClick, OptionalAction, PointerClick, ServalCtx, ServalElement, el, on_click};
+use crate::{El, OnClick, OptionalAction, PointerClick, GenetCtx, GenetElement, el, on_click};
 use xilem_core::ViewSequence;
 
 /// A `<button>` view: `label` text plus an `on_click` handler — the ergonomic
@@ -37,9 +37,9 @@ where
 ///
 /// The child leaf reaches paint at any button `display`. It takes the block
 /// replaced-leaf path inside a block button, and rides as an `InlineBoxItem`
-/// inside the `inline-block` button serval's UA sheet gives `<button>`. Pinned by
+/// inside the `inline-block` button genet's UA sheet gives `<button>`. Pinned by
 /// `a_chisel_leaf_inside_a_button_is_reported_at_every_button_display` in
-/// serval-layout.
+/// genet-layout.
 pub fn button_with<Seq, State, Action, OA, F>(
     child: Seq,
     handler: F,
@@ -49,7 +49,7 @@ where
     Action: 'static,
     OA: OptionalAction<Action>,
     F: Fn(&mut State, PointerClick) -> OA + 'static,
-    Seq: ViewSequence<State, Action, ServalCtx, ServalElement>,
+    Seq: ViewSequence<State, Action, GenetCtx, GenetElement>,
 {
     on_click(el::<_, State, Action>("button", child), handler)
 }
@@ -58,15 +58,15 @@ where
 mod tests {
     use super::*;
     use crate::tags::custom_leaf;
-    use crate::{AnyView, DomHandle, ServalAppRunner};
+    use crate::{AnyView, DomHandle, GenetAppRunner};
     use layout_dom_api::{LayoutDom, LocalName, Namespace};
-    use serval_scripted_dom::{NodeId, ScriptedDom};
+    use genet_scripted_dom::{NodeId, ScriptedDom};
     use std::cell::RefCell;
     use std::rc::Rc;
 
     const GLYPH_KEY: u64 = 7;
 
-    type BtnView = Box<dyn AnyView<u32, (), ServalCtx, ServalElement>>;
+    type BtnView = Box<dyn AnyView<u32, (), GenetCtx, GenetElement>>;
 
     /// The catalog's tier-1 + tier-2 composition: a native `<button>` whose only
     /// content is a `GraphGlyph` chisel leaf. The leaf paints; the button owns the
@@ -89,7 +89,7 @@ mod tests {
     #[test]
     fn graph_glyph_leaf_draws_inside_a_native_button_and_the_button_owns_the_click() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(dom.clone(), glyph_button, 0u32);
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(dom.clone(), glyph_button, 0u32);
         let root = runner.root();
 
         {

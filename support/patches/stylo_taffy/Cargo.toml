@@ -23,8 +23,8 @@ path = "src/lib.rs"
 # entries). Branch `main`; see
 # docs/2026-07-12_ring3_fork_rename_publish_plan.md (T1/T2) and this crate's
 # own README.
-style = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "serval-stylo" }
-style_atoms = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "serval-stylo-atoms" }
+style = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "genet-stylo" }
+style_atoms = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "genet-stylo-atoms" }
 # Redirected by the workspace root's `[patch.crates-io]` to
 # `support/patches/taffy` (re-vendored 0.12.1, see its own README) — `taffy`
 # is not renamed, so the patch mechanism applies cleanly here.

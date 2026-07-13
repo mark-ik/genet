@@ -1,6 +1,6 @@
 # layout_dom_api — crate location & trait shape (design)
 
-**Status (2026-05-16, revised):** decision adopted following a review pass. Resolves the first two open decisions in [2026-05-16_serval_layout_lift_plan.md](./2026-05-16_serval_layout_lift_plan.md) (path C, P2.2): where `LayoutDom` lives, and what shape its trait takes.
+**Status (2026-05-16, revised):** decision adopted following a review pass. Resolves the first two open decisions in [2026-05-16_genet_layout_lift_plan.md](./2026-05-16_genet_layout_lift_plan.md) (path C, P2.2): where `LayoutDom` lives, and what shape its trait takes.
 
 Supersedes [archive/2026-05-13_p2_layout_dom_provider_design.md](./archive/2026-05-13_p2_layout_dom_provider_design.md), which described the equivalent seam inside the now-dead `components/layout/` crate (archived 2026-05-17).
 
@@ -8,7 +8,7 @@ Supersedes [archive/2026-05-13_p2_layout_dom_provider_design.md](./archive/2026-
 
 - 2026-05-16 (initial): proposed; for review.
 - 2026-05-16 (revised, post-review): incorporates codex review. Changes: hot primitives (`element_name` / `attribute` / `text`) added as first-class trait methods, not only `NodeKind` + attrs-slice; `children` split into `dom_children` and `flat_children` to disambiguate DOM-vs-flat-tree traversal Servo distinguishes today; visitor methods use `ControlFlow` so `Stop` actually propagates (the original `Walk::Stop` sketch had a real bug — child returning Stop only returned from its own walk call, parent loop continued); new "foreign trait adapters" section explicitly designs in a `StyleElement<'a, D>` escape hatch for Stylo / `selectors::Element`; "wider applicability" reframed from mandate to candidate house pattern; `StaticDocument` Sync caveat corrected (it's Vec-backed; the `Rc<RefCell<…>>` is only in the parser sink). The framing is now **ID-first core API + traversal helpers**, not "universal visitor religion."
-- 2026-05-16 (post-probe): paper probe against `selectors::Element` and `style::dom::TElement` at servo/stylo rev `572ecba2d160`. Confirmed adapter pattern holds. Two trait-shape changes: (1) `prev_sibling` / `next_sibling` added as direct primitives on `LayoutDom` (selector matching can't pay O(siblings) per access); (2) `StyleElement` adapter shape is `(dom, id, style_storage_ref, atom_storage_ref)`, not just `(dom, id)` — the extra state lives in `serval-layout`, not `layout_dom_api`. Computed-style-access open question resolved by the probe.
+- 2026-05-16 (post-probe): paper probe against `selectors::Element` and `style::dom::TElement` at servo/stylo rev `572ecba2d160`. Confirmed adapter pattern holds. Two trait-shape changes: (1) `prev_sibling` / `next_sibling` added as direct primitives on `LayoutDom` (selector matching can't pay O(siblings) per access); (2) `StyleElement` adapter shape is `(dom, id, style_storage_ref, atom_storage_ref)`, not just `(dom, id)` — the extra state lives in `genet-layout`, not `layout_dom_api`. Computed-style-access open question resolved by the probe.
 
 ---
 
@@ -16,7 +16,7 @@ Supersedes [archive/2026-05-13_p2_layout_dom_provider_design.md](./archive/2026-
 
 `LayoutDom` lives in a new `components/shared/layout-dom/` crate, package name `layout-dom-api`. Not in `layout_api`.
 
-### Plausible consumers beyond `serval-layout`
+### Plausible consumers beyond `genet-layout`
 
 The decision rule from the lift plan is "separate crate iff there's a plausible additional consumer." At least three are real, not speculative:
 
@@ -69,7 +69,7 @@ To get a feel for this pattern, the closest existing reads are:
 - **`petgraph::visit`** ([docs.rs/petgraph/latest/petgraph/visit/](https://docs.rs/petgraph/latest/petgraph/visit/)). `GraphBase` has `NodeId` / `EdgeId` associated types. `IntoNeighbors`, `IntoNodeIdentifiers` give iteration. `Dfs`, `Bfs`, `DfsPostOrder` are reified cursor types. `Visitable` plus `depth_first_search()` lets you supply per-event callbacks. **Closest "feel" match to what we're proposing.** Read this one first.
 - **`rustc_hir::intravisit::Visitor`** (in [rust-lang/rust](https://github.com/rust-lang/rust)). `HirId` is opaque identity; `Visitor` has `visit_expr`, `visit_stmt`, etc., each defaulting to `walk_expr`, `walk_stmt`. Override visits to do work, fall through walks for plain descent. `HirMap` gives ID-based lookups. **Production-grade, large codebase, exactly this pattern.** Search `intravisit.rs` and `walk_*` to see the default-walks idiom.
 - **`tree-sitter`** ([tree-sitter.github.io](https://tree-sitter.github.io/tree-sitter/)). C library, but the API design is identical philosophy: opaque `Node` handles (effectively IDs) + `TreeCursor` for streamed walking + S-expression queries for pattern matching. No per-node-kind handle types in the public API.
-- **`html5ever::tokenizer::TreeSink`** ([docs.rs/html5ever](https://docs.rs/html5ever)). Already in our dep graph; `serval-static-dom`'s `StaticTreeSink` implements it. Inverted form (parser drives sink), but sink uses opaque `Handle` type, no per-kind handles. The pattern is already familiar to anyone reading serval-static-dom.
+- **`html5ever::tokenizer::TreeSink`** ([docs.rs/html5ever](https://docs.rs/html5ever)). Already in our dep graph; `genet-static-dom`'s `StaticTreeSink` implements it. Inverted form (parser drives sink), but sink uses opaque `Handle` type, no per-kind handles. The pattern is already familiar to anyone reading genet-static-dom.
 - **`swc_visit`** ([github.com/swc-project/swc](https://github.com/swc-project/swc)). Less pure (typed node structs, not opaque IDs) but the default-walks-via-derive-macro idiom is the same. Worth a glance for "how does the visitor surface scale as the node taxonomy grows."
 
 Of these, **petgraph is the easiest read** and **rustc HIR is the closest production analog**. If we're picking one to mimic, mimic the HIR pattern.
@@ -197,7 +197,7 @@ Stylo's `style::dom::TElement` and `selectors::Element` traits both want **typed
 The design **expects** this and provides an adapter pattern. The actual adapter shape (informed by the paper probe — see appendix) carries more state than just `(dom, id)`:
 
 ```rust
-// In serval-layout (not in layout_dom_api).
+// In genet-layout (not in layout_dom_api).
 pub struct StyleElement<'a, D: LayoutDom> {
     dom: &'a D,
     id: D::NodeId,
@@ -210,7 +210,7 @@ pub struct StyleElement<'a, D: LayoutDom> {
 }
 
 impl<'a, D: LayoutDom> selectors::Element for StyleElement<'a, D> {
-    type Impl = ServalSelectorImpl;
+    type Impl = GenetSelectorImpl;
 
     fn opaque(&self) -> selectors::OpaqueElement {
         selectors::OpaqueElement::new(&self.id)
@@ -233,8 +233,8 @@ Same pattern for `style::dom::TElement` and the rest of the Stylo trait family. 
 
 - The public `layout_dom_api` surface stays ID-first.
 - Stylo / selectors get handle-shaped types they already know how to consume.
-- The handle types live in `serval-layout` (or wherever Stylo is consumed), not in `layout_dom_api` — so the DOM crate stays usable by reader-mode, serialization, etc., that don't need Stylo.
-- If Stylo's trait shape changes upstream, only `serval-layout`'s adapter changes; the DOM crate doesn't move.
+- The handle types live in `genet-layout` (or wherever Stylo is consumed), not in `layout_dom_api` — so the DOM crate stays usable by reader-mode, serialization, etc., that don't need Stylo.
+- If Stylo's trait shape changes upstream, only `genet-layout`'s adapter changes; the DOM crate doesn't move.
 
 The same escape hatch is available for any other foreign trait that wants typed handles (devtools' inspector protocol, an a11y tree API that demands `aria_*` typed accessors, etc.). The rule: foreign trait wants pattern A → write an adapter struct over `(dom, id, [per-consumer state])`, don't reshape `LayoutDom`.
 
@@ -246,20 +246,20 @@ A paper probe against `selectors::Element` and `style::dom::TElement` at servo/s
 
 **Finding 2: the adapter carries non-trivial side state.** Beyond `(dom, id)`, the Stylo adapter needs:
 
-- A **style storage side-table** keyed by `NodeId`, owned by `serval-layout`. `TElement::borrow_data() -> Option<AtomicRefCell<ElementData>>` reads from here; the cascade writes to it. This stays out of `layout_dom_api` by design — DOM doesn't carry cascade output.
+- A **style storage side-table** keyed by `NodeId`, owned by `genet-layout`. `TElement::borrow_data() -> Option<AtomicRefCell<ElementData>>` reads from here; the cascade writes to it. This stays out of `layout_dom_api` by design — DOM doesn't carry cascade output.
 - **Atom-interned id/class storage**, also keyed by `NodeId`. Stylo's `id() -> Option<&WeakAtom>` and `each_class<F>` require atoms, not strings. Interning happens at parse time (eager) or first lookup (lazy); decided at P2.2 implementation time. Also stays out of `layout_dom_api` — the bare DOM stores strings; atom views are a Stylo-consumer concern.
 
-This means the adapter struct is meatier than the original "just `(dom, id)`" framing suggested — it's `StyleElement<'a, D> { dom, id, style: &'a StyleStorage, atoms: &'a AtomStorage }` — but all of the extra state still lives in `serval-layout`, not in `layout_dom_api`. The architectural separation holds.
+This means the adapter struct is meatier than the original "just `(dom, id)`" framing suggested — it's `StyleElement<'a, D> { dom, id, style: &'a StyleStorage, atoms: &'a AtomStorage }` — but all of the extra state still lives in `genet-layout`, not in `layout_dom_api`. The architectural separation holds.
 
 **Finding 3: stateful trait methods are mostly no-op-friendly for the static profile.** Stylo's incremental restyle protocol (`has_dirty_descendants`, `set_dirty_descendants`, `has_snapshot`, `handled_snapshot`, `apply_selector_flags`) all mutate per-element bits during restyle. Static profile doesn't restyle — it computes style once per layout pass. These methods can no-op (returning `false` for queries, doing nothing for mutators). Trait shape is satisfied; behavior is correct for the static profile. Scripted profile, when it lands, needs real implementations; that's a P4 problem.
 
 **Methods that need real shape decisions before P2.3, not just no-ops:**
 
-- `style_attribute() -> Option<ArcBorrow<Locked<PropertyDeclarationBlock>>>` — element's parsed inline `style="..."`. Static profile parses lazily on first access; needs an LRU or per-element cache. Lives in `serval-layout`, not `layout_dom_api`.
-- `each_attr_name<F>` — iterates attribute names as `&LocalName`. The DOM's `attributes(id)` iterator yields `AttributeView<'_>`; the adapter projects this into `LocalName`-shaped callbacks. Mechanical, but needs the `LocalName` type to be reachable from the adapter, which means `serval-layout` depends on `stylo_atoms` (already in workspace deps).
+- `style_attribute() -> Option<ArcBorrow<Locked<PropertyDeclarationBlock>>>` — element's parsed inline `style="..."`. Static profile parses lazily on first access; needs an LRU or per-element cache. Lives in `genet-layout`, not `layout_dom_api`.
+- `each_attr_name<F>` — iterates attribute names as `&LocalName`. The DOM's `attributes(id)` iterator yields `AttributeView<'_>`; the adapter projects this into `LocalName`-shaped callbacks. Mechanical, but needs the `LocalName` type to be reachable from the adapter, which means `genet-layout` depends on `stylo_atoms` (already in workspace deps).
 - `state() -> ElementState` — DOM element state bits (hover, focus, disabled, etc.). Static profile: all zero. No interaction means no state.
 
-**Probe verdict:** the adapter pattern is viable. The DOM crate stays Stylo-free; the consumer-side adapter is real implementation work but it's where the work belongs. No architectural retreat. Real prototype (compiling adapter against the actual Stylo trait surface) is deferred to P2.3 when serval-layout actually consumes Stylo — at this stage, the paper probe is enough to confirm we're not designing around an impossible shape.
+**Probe verdict:** the adapter pattern is viable. The DOM crate stays Stylo-free; the consumer-side adapter is real implementation work but it's where the work belongs. No architectural retreat. Real prototype (compiling adapter against the actual Stylo trait surface) is deferred to P2.3 when genet-layout actually consumes Stylo — at this stage, the paper probe is enough to confirm we're not designing around an impossible shape.
 
 ### Caveats and cost
 
@@ -267,7 +267,7 @@ This means the adapter struct is meatier than the original "just `(dom, id)`" fr
 2. **Lift cost from pattern-A code is higher than a pattern-A trait would impose.** Estimate: P2.3 takes 10–20% more time than a straight port. Mitigation: the port is batch-by-batch anyway; each batch absorbs the shape change in isolation.
 3. **Pattern-A's "this handle is definitely an Element" type safety is lost.** Mitigation: `kind()` returns an enum; `Walk::Skip` lets visitors bail early on non-matching nodes. The matches in traversal code are unavoidable anyway (you're checking node type before doing per-kind work in either pattern).
 4. **Random access patterns work fine** because IDs are first-class. `querySelector` returns an `Option<NodeId>`; hit testing returns a `NodeId`; caller does `dom.kind(id)` to dispatch.
-5. **`Send + Sync` decisions are pushed down to the impl.** `LayoutDom` doesn't require either; per-backend choice. `StaticDocument` (in `serval-static-dom`) is `Vec<StaticNode>`-backed; the `Rc<RefCell<…>>` in the parser code lives in `StaticTreeSink` and is gone by the time `TreeSink::finish` returns the document. The finished document is `Send + Sync` (all field types are). A future scripted DOM will need to be `Sync` if `LayoutHostServices` keeps its Sync bound, and that's the load-bearing case — the P1 fallout addendum in the strategy doc captures the historical version of that Sync conversation. Deferred to P4.
+5. **`Send + Sync` decisions are pushed down to the impl.** `LayoutDom` doesn't require either; per-backend choice. `StaticDocument` (in `genet-static-dom`) is `Vec<StaticNode>`-backed; the `Rc<RefCell<…>>` in the parser code lives in `StaticTreeSink` and is gone by the time `TreeSink::finish` returns the document. The finished document is `Send + Sync` (all field types are). A future scripted DOM will need to be `Sync` if `LayoutHostServices` keeps its Sync bound, and that's the load-bearing case — the P1 fallout addendum in the strategy doc captures the historical version of that Sync conversation. Deferred to P4.
 
 ### Exit criteria — when we'd abandon this and switch to pattern A
 
@@ -278,7 +278,7 @@ If any of these turn out true during P2.3, the pattern isn't paying its costs an
 - Stylo's integration points genuinely can't bridge to opaque IDs without a typed-handle adapter shim that's bigger than the trait itself.
 - A scripted-DOM provider arrives and its Sync requirements push us into a corner the pattern can't accommodate.
 
-Reversal is straightforward — `layout_dom_api` is a young crate, callers are few, the trait surface is small. The cost is rewriting `serval-static-dom`'s impl and any `serval-layout` callsites that consumed the trait. Bisect-friendly history means we can identify and back out cleanly.
+Reversal is straightforward — `layout_dom_api` is a young crate, callers are few, the trait surface is small. The cost is rewriting `genet-static-dom`'s impl and any `genet-layout` callsites that consumed the trait. Bisect-friendly history means we can identify and back out cleanly.
 
 ---
 
@@ -286,7 +286,7 @@ Reversal is straightforward — `layout_dom_api` is a young crate, callers are f
 
 If this pattern carries its weight in `layout_dom_api`, it becomes a **candidate** house pattern for owned tree/graph APIs in the ecosystem. **Not a mandate.** Each candidate site has its own shape, and the fit varies:
 
-- *serval-layout's fragment tree* — strong fit. IDs for hit-testing, visitor for paint emission. Same identity-vs-walk split as DOM.
+- *genet-layout's fragment tree* — strong fit. IDs for hit-testing, visitor for paint emission. Same identity-vs-walk split as DOM.
 - *mere/graphshell graph crate* — strong fit. Already ID-keyed in spirit (NodeIndex/EdgeIndex). Visitor pattern matches petgraph's prior art, which the graph crate effectively already follows.
 - *eidetic's content store* — strong fit. Content addressable by hash/ID already; a visitor for "walk all stored content of kind X" would be streamable, paged, async-friendly.
 - *mere's panel registry* — moderate fit. Already ID-based for identity (panel summons by `PanelId`). Whether a visitor adds value depends on whether "walk all panels" is a real operation; if the registry is mostly point-lookups, just stay ID-keyed without a visitor.
@@ -312,14 +312,14 @@ Resolved in the revision pass:
 - ~~Where the default `walk` impl lives.~~ Resolved: default trait method, with `walk_subtree` exposed as `pub fn` for callers that want explicit subtree walking.
 - ~~Traversal flavor (single `children` vs. `dom_children` + `flat_children`).~~ Resolved: split, with `flat_children` defaulting to `dom_children` so backends without shadow trees pay nothing.
 - ~~Visitor early-termination shape.~~ Resolved: `ControlFlow<Self::Stop, Descent>`. Carries typed bail values; fixes the `Walk::Stop` propagation bug.
-- ~~Foreign trait integration (Stylo, selectors).~~ Resolved: adapter struct `StyleElement<'a, D> { dom, id }` in `serval-layout`, implementing `selectors::Element` / `TElement` over the ID-keyed core API. Pattern A as escape hatch, not architecture.
+- ~~Foreign trait integration (Stylo, selectors).~~ Resolved: adapter struct `StyleElement<'a, D> { dom, id }` in `genet-layout`, implementing `selectors::Element` / `TElement` over the ID-keyed core API. Pattern A as escape hatch, not architecture.
 
 Still open:
 
 1. **Mutation surface.** This sketch is read-only. Scripted DOM needs mutation (innerHTML, appendChild, etc.). Decide later whether mutation goes in a `LayoutDomMut: LayoutDom` extension trait or in a separate trait. Static profile doesn't care; defer to when scripted lands.
 2. **Crate name spelling.** `layout-dom-api` is the working choice (matches `layout_api`, `paint_api`, `script_traits` precedent — package name hyphenated, Rust import underscored). Confirm at scaffold time.
 3. **Pseudo-elements / shadow / template traversal.** Beyond `dom_children` and `flat_children`, fullweb layout cares about `::before` / `::after` synthetics, shadow trees, template contents. Add these as named flavors (`pseudo_children`, `shadow_children`) when the first non-static profile needs them, not now. Static profile doesn't have any of these.
-4. ~~Computed-style access.~~ Resolved by the 2026-05-16 Stylo probe (see appendix): side-table in `serval-layout`, keyed by `NodeId`, not a `LayoutDom` primitive. `StyleElement` adapter carries `&'a StyleStorage<NodeId>` reference. Same pattern for atom-interned id/class storage. Keeps `layout_dom_api` Stylo-free; consumers that don't care about style (reader-mode, serialization) don't pay for it.
+4. ~~Computed-style access.~~ Resolved by the 2026-05-16 Stylo probe (see appendix): side-table in `genet-layout`, keyed by `NodeId`, not a `LayoutDom` primitive. `StyleElement` adapter carries `&'a StyleStorage<NodeId>` reference. Same pattern for atom-interned id/class storage. Keeps `layout_dom_api` Stylo-free; consumers that don't care about style (reader-mode, serialization) don't pay for it.
 
 ---
 
@@ -327,8 +327,8 @@ Still open:
 
 Codex review (2026-05-16) addressed; the revisions above incorporate every actionable point. Items still in this checklist are for any further reviewer:
 
-- [x] Is the foreign-trait-adapter escape hatch genuinely sufficient for Stylo's `TElement`, or are there Stylo trait methods (e.g., `pseudo_element_originating_element`) that demand state the `(dom, id)` adapter can't carry? **Answered by the 2026-05-16 paper probe** (see appendix). Adapter holds; carries more state than the original sketch implied (style storage + atom storage references), all in `serval-layout`. Real compiling prototype deferred to P2.3 when Stylo is actually consumed.
+- [x] Is the foreign-trait-adapter escape hatch genuinely sufficient for Stylo's `TElement`, or are there Stylo trait methods (e.g., `pseudo_element_originating_element`) that demand state the `(dom, id)` adapter can't carry? **Answered by the 2026-05-16 paper probe** (see appendix). Adapter holds; carries more state than the original sketch implied (style storage + atom storage references), all in `genet-layout`. Real compiling prototype deferred to P2.3 when Stylo is actually consumed.
 - [ ] Is the recursion-bound walk default acceptable, or should we ship the explicit-stack version from day one? Pathological deeply-nested HTML can blow stack; mitigation is feasible later, but easier now if the visitor surface stays simple.
 - [ ] Are the exit criteria (when we'd revert to pattern A) tight enough that we'd actually notice and act? Currently: NodeKind match becomes measured hot path, lift cost >30% over pattern-A baseline, Stylo can't bridge, or scripted-DOM Sync pushes us into a corner. Add more if there are blind spots.
 - [ ] Is netrender's display list shape known well enough today to predict whether the candidate pattern applies there? If not, hold off on declaring fit; revisit when the netrender internal rewrite stabilizes.
-- [ ] Should `layout_dom_api` ship with a minimal `serval-static-dom` impl alongside (to validate the trait against a real backing store) or land empty and have `serval-static-dom`'s impl follow in the next commit? Lean toward "ship impl together" — an unvalidated trait is a guess.
+- [ ] Should `layout_dom_api` ship with a minimal `genet-static-dom` impl alongside (to validate the trait against a real backing store) or land empty and have `genet-static-dom`'s impl follow in the next commit? Lean toward "ship impl together" — an unvalidated trait is a guess.

@@ -88,10 +88,10 @@ pub struct TabAccent {
 
 /// Where a tile's content comes from — the two lanes the surface composites. The
 /// contract names the lane only; the host resolves the actual content. This is the
-/// `serval content-root subtree` vs `external_texture(key)` distinction V6 routes on.
+/// `genet content-root subtree` vs `external_texture(key)` distinction V6 routes on.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ContentSource {
-    /// A serval document. Standalone pelt carries the document URL here; mere carries
+    /// A genet document. Standalone pelt carries the document URL here; mere carries
     /// an (opaque) handle to a content-root subtree it renders into the tile.
     Document(DocumentRef),
     /// An externally-composited texture, addressed by key (V6: constellation actor

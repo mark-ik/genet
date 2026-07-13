@@ -2,7 +2,7 @@
 //!
 //! Modular engine/renderer controller for the
 //! [`mere`](https://crates.io/crates/mere) browser — selects and orchestrates
-//! content engines (Wry system webview, Serval,
+//! content engines (Wry system webview, Genet,
 //! [`nematic`](https://crates.io/crates/nematic) smolweb, file/media viewers).
 //!
 //! In the printing-press metaphor that organizes Mere's architecture, the
@@ -34,7 +34,7 @@ pub mod document;
 pub mod engine;
 
 /// Session-engine traits and registry — the third engine kind: retained
-/// document sessions producing paint frames (the serval HTML lanes, smolweb
+/// document sessions producing paint frames (the genet HTML lanes, smolweb
 /// native). Frame-type generic; this crate stays paint-free.
 pub mod session_engine;
 

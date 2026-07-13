@@ -19,21 +19,21 @@ default = ["viewer"]
 # The GPU-free surface lib: the `LoadedDocument` loader/scene-producer and the
 # tile-tree surface (`TileSurface` / `TileShell`) — everything a host needs to load
 # documents and render a tile frame, WITHOUT the windowed present stack (no
-# `serval-winit-host`, no `wgpu`). This is the seam meerkat consumes
+# `genet-winit-host`, no `wgpu`). This is the seam meerkat consumes
 # (`default-features = false, features = ["tile-surface"]`) to host the pelt tile
 # surface as its workbench pane (V6) without dragging in pelt's reference-shell
 # windowing. The windowed viewers (`viewer`, `tiles`) build the present stack on top.
 tile-surface = [
-    "dep:serval-documents",
-    "dep:netrender", "dep:serval-render", "dep:serval-static-dom", "dep:serval-layout",
-    "dep:serval-scripted-dom", "dep:layout-dom-api", "dep:xilem-serval",
+    "dep:genet-documents",
+    "dep:netrender", "dep:genet-render", "dep:genet-static-dom", "dep:genet-layout",
+    "dep:genet-scripted-dom", "dep:layout-dom-api", "dep:xilem-serval",
     "dep:chisel", "dep:accesskit", "dep:paint_list_api", "dep:paint_list_render",
 ]
 # The on-screen static-document viewer (V1): the GPU-free `tile-surface` lib plus the
-# windowed present stack (`serval-winit-host` + `wgpu`). Default-on so `pelt --engine
+# windowed present stack (`genet-winit-host` + `wgpu`). Default-on so `pelt --engine
 # static <file>` works out of the box; `--no-default-features` keeps the light
 # contracts + smoke build.
-viewer = ["tile-surface", "dep:serval-winit-host", "dep:wgpu"]
+viewer = ["tile-surface", "dep:genet-winit-host", "dep:wgpu"]
 # The scripted profile (V4): a live `ScriptedDom` document whose inline `<script>`
 # runs through `script-runtime-api` on a JS engine, mutating the DOM, rendered each
 # frame. GPU-free at the core (scene production only); the headed run reuses the
@@ -41,12 +41,12 @@ viewer = ["tile-surface", "dep:serval-winit-host", "dep:wgpu"]
 # targets); Nova is gated behind `scripted-nova` so the default build links a single
 # engine (Boa+Nova+wgpu together exceed the Windows image-size link limit).
 scripted = [
-    "serval-documents/scripted",
-    "dep:serval-scripted",
-    "dep:netrender", "dep:serval-render", "dep:serval-static-dom", "dep:serval-layout",
+    "genet-documents/scripted",
+    "dep:genet-scripted",
+    "dep:netrender", "dep:genet-render", "dep:genet-static-dom", "dep:genet-layout",
     "dep:script-runtime-api", "dep:script-engine-api",
-    "dep:serval-scripted-dom", "dep:script-engine-boa", "dep:layout-dom-api",
-    "dep:serval-extract",
+    "dep:genet-scripted-dom", "dep:script-engine-boa", "dep:layout-dom-api",
+    "dep:genet-extract",
     "dep:encoding_rs", "dep:sha2", "dep:base64", "dep:url",
 ]
 # Add the Nova engine to the scripted profile (64-bit targets, including wasm64).
@@ -56,11 +56,11 @@ scripted = [
 scripted-nova = ["scripted", "dep:script-engine-nova"]
 # The chrome profile (V2): browser chrome (omnibar + back/forward) built as
 # xilem-serval views over a second `ScriptedDom`, rendered GPU-free through
-# serval-render. No JS engine — the chrome is view-driven, not script-driven (a
+# genet-render. No JS engine — the chrome is view-driven, not script-driven (a
 # sanctioned mod tier is a later lane). The windowed two-root shell additionally
 # needs `viewer` for the present stack + the content document.
 chrome = [
-    "dep:netrender", "dep:serval-render", "dep:serval-layout", "dep:serval-scripted-dom",
+    "dep:netrender", "dep:genet-render", "dep:genet-layout", "dep:genet-scripted-dom",
     "dep:layout-dom-api", "dep:xilem-serval", "dep:arboard",
 ]
 # The windowed tile-tree demo (V5): the GPU-free `tile-surface` lib plus the windowed
@@ -70,20 +70,20 @@ chrome = [
 tiles = ["tile-surface", "chrome", "viewer"]
 # Remote document loading (V1's http(s) half): the `LocalFetcher` gains an http(s)
 # branch backed by the netfetcher engine (the sibling Fetch network engine; the same
-# wiring serval-wpt's `fetch()` uses). Off by default so the default build stays free
+# wiring genet-wpt's `fetch()` uses). Off by default so the default build stays free
 # of the async network stack -- `pelt --engine static https://…` needs this. The host
 # owns networking here (pelt is the reference shell), matching meerkat driving
-# netfetcher in the product; serval's engine components stay byte-consuming.
-netfetch = ["tile-surface", "serval-documents/netfetch"]
+# netfetcher in the product; genet's engine components stay byte-consuming.
+netfetch = ["tile-surface", "genet-documents/netfetch"]
 # Smolweb document loading (the `smolweb` feature): the `LocalFetcher` gains a
 # gemini/gopher/nex/finger/spartan/guppy branch backed by the errand transport (the
 # sibling smolweb engine), bridged onto the sync `ResourceFetcher` through the same
 # tokio runtime the netfetch branch uses. Off by default so the default build stays
 # free of the async network stack -- `pelt --features smolweb gemini://…` needs this.
 # The host owns networking (pelt is the reference shell), matching meerkat driving
-# errand in the product; serval's engine components stay byte-consuming. errand pulls
+# errand in the product; genet's engine components stay byte-consuming. errand pulls
 # its own tokio net/time/io-util features, which unify with the `rt` runtime here.
-smolweb = ["tile-surface", "serval-documents/smolweb"]
+smolweb = ["tile-surface", "genet-documents/smolweb"]
 netrender = ["dep:netrender", "dep:webgl_wgpu", "dep:wgpu"]
 # The rasterized-PNG reftest lane (V3 follow-up): renders the headless `Scene`
 # through netrender's offscreen wgpu readback to a PNG — the "for human eyes"
@@ -92,14 +92,14 @@ netrender = ["dep:netrender", "dep:webgl_wgpu", "dep:wgpu"]
 # GPU-free. `viewer` already brings the netrender + wgpu crates (via
 # `tile-surface`); this just adds the PNG encoder.
 png-reftest = ["viewer", "dep:image", "dep:chisel"]
-# Headed presentation through serval's `WindowsDxgiBackend`. Drives
+# Headed presentation through genet's `WindowsDxgiBackend`. Drives
 # the netrender renderer through the C4 DCOMP composition swapchain
 # attached to a winit window's HWND. Windows-only at runtime; the
 # feature gate is platform-agnostic so `cargo check --features
 # windows-present` works on non-Windows hosts (the inner code is
 # `cfg(target_os = "windows")` gated).
 windows-present = ["netrender", "dep:paint", "dep:raw-window-handle", "dep:windows", "dep:pollster"]
-# Headed presentation through serval's `MacosCALayerBackend`. Drives
+# Headed presentation through genet's `MacosCALayerBackend`. Drives
 # the netrender renderer through the C4 CAMetalLayer attached to a
 # winit window's NSView. macOS/iOS-only at runtime; the feature gate
 # is platform-agnostic so `cargo check --features macos-present`
@@ -114,7 +114,7 @@ macos-present = [
     "dep:raw-window-handle",
     "dep:pollster",
 ]
-# Headed presentation through serval's `WaylandSubsurfaceBackend`. Drives
+# Headed presentation through genet's `WaylandSubsurfaceBackend`. Drives
 # the netrender renderer through a winit Wayland window with per-`SurfaceKey`
 # subsurfaces. Linux-only at runtime; the feature gate is platform-agnostic so
 # `cargo check --features linux-present` works on non-Linux hosts (the inner
@@ -133,28 +133,28 @@ netrender = { workspace = true, optional = true }
 image = { workspace = true, optional = true }
 paint = { workspace = true, optional = true }
 pelt-core = { workspace = true }
-serval-documents = { workspace = true, optional = true }
+genet-documents = { workspace = true, optional = true }
 pollster = { version = "0.4", optional = true }
 raw-window-handle = { workspace = true, optional = true }
 webgl_wgpu = { workspace = true, optional = true }
 wgpu = { version = "29", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"], optional = true }
 winit = { workspace = true }
 
-# V1 viewer (behind the `viewer` feature): the serval render-driver + present
-# core, the static-document parser, and serval-layout's convenience entries.
-serval-render = { path = "../../components/serval-render", optional = true }
-serval-static-dom = { path = "../../components/serval-static-dom", optional = true }
-serval-layout = { path = "../../components/serval-layout", optional = true }
+# V1 viewer (behind the `viewer` feature): the genet render-driver + present
+# core, the static-document parser, and genet-layout's convenience entries.
+genet-render = { path = "../../components/genet-render", optional = true }
+genet-static-dom = { path = "../../components/genet-static-dom", optional = true }
+genet-layout = { path = "../../components/genet-layout", optional = true }
 # The render-free extraction lane: extract a PageExtract from the live post-JS DOM
 # (the headless-scripted-DOM scrape path for SPAs). Depends only on layout-dom-api.
-serval-extract = { path = "../../components/serval-extract", optional = true }
-serval-winit-host = { path = "../../components/serval-winit-host", optional = true }
+genet-extract = { path = "../../components/genet-extract", optional = true }
+genet-winit-host = { path = "../../components/genet-winit-host", optional = true }
 # Chisel widget leaves (png-reftest feature): the first-pixels smoke renders
 # Knob/Meter/GraphGlyph leaves through the session leaf path to an offscreen PNG.
 chisel = { package = "serval-chisel", version = "0.1.0", path = "../../components/chisel", optional = true }
 # The tile surface projects its laid-out frame DOM (chisel leaf interiors
 # included) into an AccessKit tree; the windowed viewer pushes it to the OS
-# through `serval_winit_host::AccessKitBridge`.
+# through `genet_winit_host::AccessKitBridge`.
 accesskit = { workspace = true, optional = true }
 paint_list_api = { workspace = true, optional = true }
 paint_list_render = { workspace = true, optional = true }
@@ -162,7 +162,7 @@ paint_list_render = { workspace = true, optional = true }
 
 # Remote document loading (behind the `netfetch` feature): the netfetcher engine
 # (sibling repo) for http(s), bridged onto the sync `ResourceFetcher` through a tokio
-# runtime. The same dep set serval-wpt's `fetch()` uses.
+# runtime. The same dep set genet-wpt's `fetch()` uses.
 url = { workspace = true, optional = true }
 
 # Smolweb document loading (behind the `smolweb` feature): the errand transport
@@ -177,8 +177,8 @@ url = { workspace = true, optional = true }
 # against; Boa is the default backend, Nova the gated one (`scripted-nova`).
 script-runtime-api = { path = "../../components/script-runtime-api", optional = true }
 script-engine-api = { path = "../../components/script-engine-api", optional = true }
-serval-scripted-dom = { path = "../../components/serval-scripted-dom", optional = true }
-serval-scripted = { path = "../../components/serval-scripted", optional = true }
+genet-scripted-dom = { path = "../../components/genet-scripted-dom", optional = true }
+genet-scripted = { path = "../../components/genet-scripted", optional = true }
 script-engine-boa = { path = "../../components/script-engine-boa", optional = true }
 script-engine-nova = { path = "../../components/script-engine-nova", optional = true }
 # The `LayoutDom` trait (for the inline-`<script>` DOM walk) + QualName parts.
@@ -214,7 +214,7 @@ ash = "0.38"
 
 [dev-dependencies]
 # Offline mock HTTP server for the netfetch (http(s)) integration test, so it runs
-# without a live network. Mirrors serval-wpt's fetch()->netfetcher test harness.
+# without a live network. Mirrors genet-wpt's fetch()->netfetcher test harness.
 mockito = "1"
 
 [lints.rust]

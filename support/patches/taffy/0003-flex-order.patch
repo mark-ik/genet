@@ -9,7 +9,7 @@ index eb56619a96e..ace52217395 100644
 +    /// The CSS `order` value, used to stable-sort items into order-modified
 +    /// document order before line collection. Distinct from `order` above,
 +    /// which stays the document index used for paint/output ordering.
-+    /// (serval patch: flex `order` support.)
++    /// (genet patch: flex `order` support.)
 +    css_order: i32,
 +
      /// The base size of this item
@@ -43,7 +43,7 @@ index eb56619a96e..ace52217395 100644
 +    // CSS `order`: lay items out in order-modified document order. `sort_by_key`
 +    // is stable, so items with equal `order` (the common case, order 0) keep
 +    // their document order. The `order` field retains the document index for
-+    // paint/output ordering. (serval patch: flex `order` support.)
++    // paint/output ordering. (genet patch: flex `order` support.)
 +    items.sort_by_key(|item| item.css_order);
 +    items
  }
@@ -62,7 +62,7 @@ index e4c7654ad54..4562685ddaa 100644
 +    /// ascending `order`, ties broken by document order ("order-modified
 +    /// document order"). Defaults to 0.
 +    ///
-+    /// serval patch (flex `order`): this method does not exist upstream; the
++    /// genet patch (flex `order`): this method does not exist upstream; the
 +    /// flex algorithm stable-sorts items by it before line collection. Style
 +    /// adapters that do not override it keep the default 0 (document order).
 +    #[inline(always)]

@@ -11,7 +11,7 @@
 //! external producers. Session engines sit between: **retained document
 //! sessions** that lay content out once and then produce paint frames on
 //! demand, with scroll, activation, and (for scripted lanes) a tick +
-//! quiescence seam. The serval HTML lanes and the smolweb native lane are
+//! quiescence seam. The genet HTML lanes and the smolweb native lane are
 //! session engines.
 //!
 //! The frame type is generic (`F`) so this crate keeps zero paint
@@ -120,7 +120,7 @@ pub enum SessionClick {
 }
 
 /// Keyboard scroll intents, host-neutral. Adapters map these onto their
-/// layout engine's own key vocabulary (serval-layout's `ScrollKey` today);
+/// layout engine's own key vocabulary (genet-layout's `ScrollKey` today);
 /// defined here so the contract does not drag a layout dependency in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionScrollKey {

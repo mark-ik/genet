@@ -4,7 +4,7 @@ Status: **DONE (2026-05-25)**. Follow-on to
 [2026-05-20_stylo_taffy_adoption_plan.md](./2026-05-20_stylo_taffy_adoption_plan.md),
 which closed the converter side but left `cv_to_taffy.rs` undeletable
 under the owned-`Style` `TaffyTree` model. This plan removed that model —
-the box tree is now serval's layout engine and `cv_to_taffy.rs` is
+the box tree is now genet's layout engine and `cv_to_taffy.rs` is
 deleted. See [Outcome](#outcome-2026-05-25).
 
 ## Goal (what "done" buys us)
@@ -12,12 +12,12 @@ deleted. See [Outcome](#outcome-2026-05-25).
 The stylo_taffy adoption left one done-condition unmet for a real reason:
 `TaffyTree<NodeContext = ()>` is **not generic over the custom-ident
 type**, so it can only store `Style<DefaultCheapStr>`. To put a node's
-style in the tree, serval must *build* a `taffy::Style` from
+style in the tree, genet must *build* a `taffy::Style` from
 `ComputedValues` — which is exactly what `cv_to_taffy::to_taffy_style`
 is. The file can't be deleted while `TaffyTree` is the arena.
 
 taffy's **trait-impl tree** is the way out: instead of storing `Style`
-in taffy's arena, serval owns its own box-tree arena and implements
+in taffy's arena, genet owns its own box-tree arena and implements
 taffy's traversal + style-access traits. The style accessor returns
 `stylo_taffy::TaffyStyloStyle` — a **zero-copy** wrapper that reads
 layout properties straight off `ComputedValues`. taffy's layout
@@ -119,7 +119,7 @@ threads it via the caller).
    images, viewport) -> (FragmentPlane, …)`. Keep the existing
    `TaffyTree`-based `layout()` as the **oracle**.
 2. **Diff-test** `layout_via_box_tree` against `layout()` across the
-   serval-layout lib fixtures + the `html_to_pixels_e2e` HTML corpus
+   genet-layout lib fixtures + the `html_to_pixels_e2e` HTML corpus
    (same FragmentPlane rects within an epsilon). This is the receipt,
    mirroring the incremental-relayout diff-tests.
 3. **Swap.** Point `layout()` (and `render`, `subtree`, the scripted
@@ -146,7 +146,7 @@ diff-test green) so the work lands in reviewable batches.
   its own leaf; full CSS would wrap contiguous inline runs in an
   anonymous block. Out of scope; preserve today's behavior exactly
   (the diff-test enforces parity).
-- **OQ3 — `detailed_layout_info`.** Keep the feature on (serval's taffy
+- **OQ3 — `detailed_layout_info`.** Keep the feature on (genet's taffy
   features include it) but no grid consumer yet; implement the no-op
   default.
 
@@ -155,7 +155,7 @@ diff-test green) so the work lands in reviewable batches.
 - `box_tree.rs` drives `layout()`; `cv_to_taffy.rs` and the
   `TaffyTree`-based `construct` are gone.
 - `StyleEntry` no longer carries an owned `taffy::Style`.
-- All serval-layout lib tests + `html_to_pixels_e2e` green (the
+- All genet-layout lib tests + `html_to_pixels_e2e` green (the
   box-tree produces pixel-identical results to the retired oracle).
 - The stylo_taffy plan's reframed done-condition is closed (file
   deleted, for real this time); snapshot updated.
@@ -190,14 +190,14 @@ All done-conditions met. Landed in three commits:
   `document()`) as the root directly. The lib parity tests became
   absolute-geometry assertions (oracle retired).
 
-Receipts: `serval-layout --lib` 38, `serval-scripted --lib` 4, GPU
+Receipts: `genet-layout --lib` 38, `genet-scripted --lib` 4, GPU
 `html_to_pixels_e2e` 19 — all green; the full
 HTML→cascade→box-tree→emit→render→readback path is pixel-correct.
 
 **Deferred (out of scope, tracked):** mutate-in-place for incremental
 relayout (OQ1 — `relayout_incremental` still rebuilds from the DOM);
 anonymous block boxes (OQ2); the `size_override` rides only the block
-path (no flex/grid replaced content in the corpus + no such serval
+path (no flex/grid replaced content in the corpus + no such genet
 feature yet); named grid lines (the `Atom` ident now *can* flow, but
 nothing consumes it). The upstream `stylo_taffy` `BlockItemStyle`
 float/clear gap is a fix-candidate to offer.

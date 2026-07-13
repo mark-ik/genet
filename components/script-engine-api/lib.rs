@@ -2,10 +2,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! Engine-neutral scripting backend contract for serval's scripted tier.
+//! Engine-neutral scripting backend contract for genet's scripted tier.
 //!
 //! Lifted from the Track A (Boa) and Track B (Nova) validation probes — see
-//! `docs/2026-05-20_serval_script_engine_plan.md`. The two findings the probes
+//! `docs/2026-05-20_genet_script_engine_plan.md`. The two findings the probes
 //! proved are baked into the shape here:
 //!
 //! - The value surface (`eval`, value→string) and a native-data reflector are
@@ -17,13 +17,13 @@
 //!
 //! Backend selection is per-target: **Nova** native (primary), **Boa** on wasm32
 //! (Nova is 64-bit-bound, Appendix B). Engines implement these traits; consumers
-//! (`serval-scripted-dom`) drive them.
+//! (`genet-scripted-dom`) drive them.
 
 use std::any::Any;
 use std::rc::Rc;
 
 /// JS-opaque native data a reflector carries, bridging a JS object back to the host
-/// DOM. Packs a serval `NodeId` (the DOM crate owns the `NodeId` ↔ `u64` mapping;
+/// DOM. Packs a genet `NodeId` (the DOM crate owns the `NodeId` ↔ `u64` mapping;
 /// this crate stays DOM-neutral).
 pub type ReflectorData = u64;
 

@@ -3,9 +3,9 @@
 Status: **landed for Boa + Nova (2026-06-02); QuickJS/SpiderMonkey deferred.**
 The WPT testharness runner takes `--engine boa|nova` and produces real WPT
 numbers on both in one binary (see Sequencing 4). Originally scoped to run
-`testharness.js` against serval with the JS engine selectable (Boa, Nova,
+`testharness.js` against genet with the JS engine selectable (Boa, Nova,
 QuickJS, optionally SpiderMonkey). Child of the
-[script engine plan](./2026-05-20_serval_script_engine_plan.md): that
+[script engine plan](./2026-05-20_genet_script_engine_plan.md): that
 doc owns the `ScriptEngine` trait, the crate ladder, and the reflector
 findings (Appendix A/C). This doc answers one focused question the
 parent leaves implicit: *what has to exist for each engine to reach
@@ -16,10 +16,10 @@ testharness*, and in what order.
 The engine is the cheap part (parent plan, "the engine is the cheap
 part"). Two facts set the whole shape:
 
-1. **The dominant blocker is shared and engine-independent.** serval's
+1. **The dominant blocker is shared and engine-independent.** genet's
    live JS today exposes one builtin (`setText`) and one reflector
    (`node`), wired through `thread_local`s
-   ([serval-scripted/lib.rs](../components/serval-scripted/lib.rs)).
+   ([genet-scripted/lib.rs](../components/genet-scripted/lib.rs)).
    `testharness.js` (5,207 lines) needs, at load, a global scope
    (`self`/`globalThis`), `addEventListener`, `postMessage`, and
    `document` for window-scope tests, with defensive fallbacks for
@@ -73,7 +73,7 @@ reflectors:
   This is the testharness-specific piece the reftest path has no analog
   for.
 
-The DOM side of this binds against `LayoutDomMut` on `serval-scripted-dom`
+The DOM side of this binds against `LayoutDomMut` on `genet-scripted-dom`
 (the JS→DOM direction already proven by the `setText` reflector), with
 relayout driven by the existing `IncrementalLayout` engine.
 
@@ -116,13 +116,13 @@ reflector arguments. Nova's two-lifetime `GcScope` collapses onto the
 one-lifetime `CallCx` GAT using `GcScope`'s covariance in its second
 lifetime.
 
-1. **Rewire `serval-scripted` onto `script-engine-nova`. (done
+1. **Rewire `genet-scripted` onto `script-engine-nova`. (done
    2026-05-26.)** Its inline Nova code (the `setText` builtin + `node`
    reflector + the `thread_local` host-DOM) is replaced by `NovaEngine`
    with `set_function::<SetText>`, `set_global`, and `set_host_data`; the
    host DOM (`Rc<RefCell<ScriptedDom>>`) is the `HostData`. The existing
    `js_mutates_dom_through_reflector` test stays green, so the primitives
-   are proven driving real DOM mutation. `serval-scripted` no longer
+   are proven driving real DOM mutation. `genet-scripted` no longer
    names `nova_vm` directly (it is transitive via `script-engine-nova`),
    and the duplicate Nova path is retired.
 2. **Build the host surface against the trait** (in progress,
@@ -288,7 +288,7 @@ not behavioral). Findings, in order of value:
 
 - **Thin tail of binding gaps** (post-shim, ~5 files): missing globals
   `customElements` / `HTMLElement` / `URL` / `frames`, and "Not a callable
-  object" for unimplemented APIs. These are *serval-surface* gaps, not engine
+  object" for unimplemented APIs. These are *genet-surface* gaps, not engine
   divergences — they'd fail on Boa too once it reaches them; the diff only
   shows them because the engines throw at slightly different points.
 
@@ -300,7 +300,7 @@ unmeasured" into a short, located, upstream-actionable list.
 
 ## Relationship to existing docs
 
-- [Script engine plan](./2026-05-20_serval_script_engine_plan.md) owns
+- [Script engine plan](./2026-05-20_genet_script_engine_plan.md) owns
   the trait, the `script-engine-*` / `script-runtime-api` ladder, and
   the reflector findings. This doc does not restate them; it pins the
   testharness-specific binding slice and the per-engine cost to reach it.

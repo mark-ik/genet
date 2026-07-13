@@ -1,23 +1,23 @@
 # inker
 
-`inker` is the engine/renderer controller for the serval engine family and
+`inker` is the engine/renderer controller for the genet engine family and
 its hosts (merecat's mere, pelt, strophe, isometry). It owns the question
 "*which engine should handle this content,*" taking into account the URI
 scheme, the content type, which engines are actually available on the host,
 and any user preference — and it defines the three engine kinds the answer
 dispatches to: **document engines** (request/response, serializable blocks),
-**session engines** (retained documents producing paint frames — the serval
+**session engines** (retained documents producing paint frames — the genet
 HTML lanes, smolweb native), and **surface engines** (external GPU-texture
 producers: scrying / graft / weld). One registry pattern, one routing
 vocabulary, one a11y-capability declaration across all three.
 
-> **Home:** [`mark-ik/serval`](https://github.com/mark-ik/serval), at
+> **Home:** [`mark-ik/genet`](https://github.com/mark-ik/genet), at
 > `components/inker` (adopted 2026-07). The former standalone repository is archived
 > and links here.
 
 
 Inker is the right home for arbitrating among engines when several are valid
-for the same input. For full-web pages, both the Servo/wgpu fork (Serval) and
+for the same input. For full-web pages, both the Servo/wgpu fork (Genet) and
 a Wry system webview can serve `https://`; only one of them may be built or
 installed on a given host, and the user may prefer one over the other for a
 specific domain or node. Resolving that is inker's job.
@@ -57,7 +57,7 @@ ready to ink the platen.
   - `Engine` trait — `engine_id() -> &str` and
     `render(&EngineInput) -> Result<EngineDocument, EngineError>`.
     Implementations live in protocol-specific crates (`nematic` ships 12;
-    `serval` for full web).
+    `genet` for full web).
   - `EngineInput` — already-fetched content with optional `content_type`.
     Network / disk I/O is the host's job; engines stay wasm32-portable.
   - `EngineRegistry` — engine ID → instance dispatch with `register`,
@@ -92,7 +92,7 @@ ready to ink the platen.
   RSS roots, knot frontmatter, gemtext link lines, markdown markers, and
   falls through to `text/plain` when the head window has no NUL bytes.
   Reads at most the first 1 KiB.
-- **Engine ID constants**: `ENGINE_SERVAL_WEB`, `ENGINE_SCRYING_WEB`,
+- **Engine ID constants**: `ENGINE_GENET_WEB`, `ENGINE_SCRYING_WEB`,
   `ENGINE_NEMATIC_FEED`, `ENGINE_NEMATIC_FILE`,
   `ENGINE_NEMATIC_FINGER`, `ENGINE_NEMATIC_GEMTEXT`,
   `ENGINE_NEMATIC_GOPHER`, `ENGINE_NEMATIC_GUPPY`, `ENGINE_NEMATIC_KNOT`,
@@ -108,7 +108,7 @@ ready to ink the platen.
   for the design rationale (preferred non-Servo path; embedded-frame
   vs overlay composition models).
 - **Default policy** (full set):
-  - Scheme rules: `http`/`https` → Serval; `gemini`/`spartan` →
+  - Scheme rules: `http`/`https` → Genet; `gemini`/`spartan` →
     `nematic.gemtext`; `gopher` → `nematic.gopher`; `finger` →
     `nematic.finger`; `scroll` → `nematic.scroll`; `misfin` →
     `nematic.misfin`; `nex` → `nematic.nex`; `guppy` → `nematic.guppy`;
@@ -136,7 +136,7 @@ inker hands back.
               │             (engine_id + SurfaceContract)
               │
               ▼
-       engine_id selects: serval | scrying | nematic | wry | internal
+       engine_id selects: genet | scrying | nematic | wry | internal
                                                        │
                                                        ▼
                                                   verso-core
@@ -156,10 +156,10 @@ inker hands back.
 - [`uxtree`](https://crates.io/crates/uxtree) — projects `EngineDocument`
   into an AccessKit `TreeUpdate` for OS a11y APIs and inspector overlays;
   every `DocumentBlock` and `InlineSpan` variant maps to an AccessKit role.
-- **Serval** (Servo/wgpu fork) — referenced by engine ID `serval.web`; lives
+- **Genet** (Servo/wgpu fork) — referenced by engine ID `genet.web`; lives
   outside the mere workspace. The future "three-head Hekate" mode (smolweb
   extract / middlenet / fullweb negotiator for the same HTML input) is
-  Serval's evolution; nematic explicitly does not own an HTML reader-mode
+  Genet's evolution; nematic explicitly does not own an HTML reader-mode
   engine.
 - **Wry** (system webview, third-party) — available as an alternative engine;
   not in the default policy but a custom `EngineRouteRule` (or per-host
@@ -186,7 +186,7 @@ Planned expansions left:
 - **Pinned-engine surface mode lookup** — currently defaults
   `CompositedTexture`; should consult the engine's preferred mode for
   pinned routes targeting headless engines.
-- **Serval "head" preference** — when Serval becomes the three-head
+- **Genet "head" preference** — when Genet becomes the three-head
   negotiator, route decisions may need to carry a "preferred head"
   (smolweb extract / middlenet / fullweb) along with the `engine_id`.
 

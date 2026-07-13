@@ -69,7 +69,7 @@ impl EvalOutput {
 /// fence lane.
 ///
 /// This is the **thin slice** the knot path needs — evaluate a source string
-/// under a budget and hand back text — deliberately distinct from serval's
+/// under a budget and hand back text — deliberately distinct from genet's
 /// full DOM-shaped `ScriptEngine` seam (reflectors, host promises, native
 /// callbacks), which mod and DOM scripting use. Lua, Rhai, and JS all satisfy
 /// this cheaply; a backend whose language has a native operation cap (Rhai)

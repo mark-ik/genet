@@ -1,24 +1,24 @@
 # Pseudo-element follow-ups: scope (post ::before/::after + :checked)
 
 **Status (2026-06-11):** scoping, for review. Sibling to the
-[layout infrastructure scope](2026-06-07_serval_layout_infrastructure_scope.md)
+[layout infrastructure scope](2026-06-07_genet_layout_infrastructure_scope.md)
 (§4 of which this completes and supersedes for pseudo-elements). The tractable
-serval-layout slice shipped this round: inline `::before`/`::after` generated
+genet-layout slice shipped this round: inline `::before`/`::after` generated
 content (`0694833a3ed`, via `push_pseudo_content`, construct.rs:263-265) and
 `:checked` (`e1fb3680db9`) — the cascade resolves eager pseudos for free, so
 the content slice was small. The five remainders each hit a verified wall and
 are scoped here as their own sub-projects, in value-over-effort order. (No
 boa gate: **pelt-live builds** — it has no script-engine dependency, only
-`serval-wpt` pulls the boa fork's WIP — so the host-side wiring halves land
-now alongside their serval-layout halves. Earlier drafts of this doc gated §1
-on a pelt-live build failure that was actually serval-wpt's; corrected
+`genet-wpt` pulls the boa fork's WIP — so the host-side wiring halves land
+now alongside their genet-layout halves. Earlier drafts of this doc gated §1
+on a pelt-live build failure that was actually genet-wpt's; corrected
 2026-06-11 against `cargo build -p pelt-live`.)
 
 Verified grounding for all five: the pinned stylo's servo-mode eager set is
 **4** (`EAGER_PSEUDO_COUNT = 4` — After / Before / FirstLetter / Selection;
 `stylo @ 572ecba`, `style/servo/selector_parser.rs:130`), so `::marker` is
 lazy and `::first-line` does not exist in the servo `PseudoElement` enum at
-all. `selection_rects` (single-node) already exists in serval-layout and
+all. `selection_rects` (single-node) already exists in genet-layout and
 pelt-live already paints it with a hardcoded color
 (`pelt-live/render.rs:42,159`).
 
@@ -33,13 +33,13 @@ pelt-live already paints it with a hardcoded color
 exists end to end (`selection_rects` → `push_selection`); only the color is
 hardcoded (`render.rs:42`).
 
-**Approach:** a serval-layout read-back helper (`selection_style(styles,
+**Approach:** a genet-layout read-back helper (`selection_style(styles,
 node) -> Option<(bg, fg)>`, nearest ancestor with a `::selection` slot);
 pelt-live replaces the constant with the resolved background. The
 **foreground** half (recoloring selected glyphs) needs per-range glyph
 recolor and rides §5's range work — ship background-only first.
 
-**Touch-points:** serval-layout (helper + unit test); `pelt-live/render.rs`
+**Touch-points:** genet-layout (helper + unit test); `pelt-live/render.rs`
 (one constant replaced); meerkat chrome inherits via the same `TextCursor`
 path for free.
 
@@ -81,7 +81,7 @@ a reftest, and absent `::marker` rules behave exactly as today.
 
 ## 3. Selection-range geometry (DOM ranges; design it as cheap-path C1 API)
 
-**Unblocks:** content selection read-back (`ServalLaneView::selection`
+**Unblocks:** content selection read-back (`GenetLaneView::selection`
 rects), multi-node highlight, and §1's foreground half.
 
 **Current state:** the "large split-out" shrank: single-node
@@ -96,8 +96,8 @@ cheap-path C1 laid-out-document query object**, not a free function — C1 is
 exactly the retained-artifacts query home (mere's host cheap-path plan), and
 this becomes its first new query.
 
-**Touch-points:** serval-layout (range walk), the C1 query seam (pelt-live),
-serval_lane (selection read-back).
+**Touch-points:** genet-layout (range walk), the C1 query seam (pelt-live),
+genet_lane (selection read-back).
 
 **Effort / risk:** Medium. Range ordering across block boundaries is the
 fiddly part; the per-leaf rect math exists.
@@ -123,7 +123,7 @@ shaping and paint already handle per-run style. **Out of scope v1:**
 limit. **`::first-line`: deferred indefinitely** — it is not in the servo
 `PseudoElement` enum, so it would require patching stylo itself (a fork we
 deliberately do not carry), for per-line restyle machinery with near-zero
-value in serval's lanes.
+value in genet's lanes.
 
 **Touch-points:** construct.rs (split helper + boundary rules),
 text_measure (verify run-boundary mapping), paint (no change expected).
@@ -164,7 +164,7 @@ per-node style from `StylePlane` keyed by `dom_id` (`styles.get(id)`) and
 consults the box tree only for inline content via `node_map`. A synthetic
 pseudo box has no `dom_id` and no `StylePlane` entry, so the DOM walk never
 visits it and its box decorations (padding / background / border) never
-paint. Hit-testing (`serval_lane`) is DOM-driven the same way.
+paint. Hit-testing (`genet_lane`) is DOM-driven the same way.
 
 **Decision (2026-06-11):** a content lane now needs block-level generated
 content, so this is greenlit. Chosen shape: **re-root paint emission onto the
@@ -200,7 +200,7 @@ ImagePlane key) is a follow-up; color/gradient backgrounds work day one.
 3. **Block pseudo synthesis** — construct emits block `BoxNode`s for block
    `::before`/`::after` (source `Pseudo`, style = pseudo CV, inline_content =
    generated run) as first/last children of the element box.
-4. **Hit-test routing** — `serval_lane` resolves a pseudo-box hit to its
+4. **Hit-test routing** — `genet_lane` resolves a pseudo-box hit to its
    originating element.
 
 **Effort / risk:** Large; the one genuine architectural change. The layout
@@ -275,7 +275,7 @@ block-only container's inline `::after` lands on its own line after the blocks.
 `emit_paint_list(dom, styles, fragments, constructed, …)` (text_ctx `None` →
 un-shaped empty runs) has **no production callers** — every live path goes
 through `emit_paint_list_with_layouts`. It survives only as a terser box-only
-test harness across ~10 serval-layout / paint_stacking tests.
+test harness across ~10 genet-layout / paint_stacking tests.
 
 **Do**: either fold those tests onto `emit_paint_list_with_layouts` (they
 already build the box tree) and delete the cache-less entry point, or keep it

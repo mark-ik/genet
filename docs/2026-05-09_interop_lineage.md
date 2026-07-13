@@ -32,13 +32,13 @@ direction-neutral pieces are stable.
    as direction-neutral building blocks usable across producers.
    The trait shape stayed import-coupled.
 
-4. **serval** (`components/paint/interop/`). **Direction
+4. **genet** (`components/paint/interop/`). **Direction
    reversed.** Producer is now netrender (wgpu's hidden
    Vulkan / Metal / DX12 queue); consumer is the OS compositor
    (DCOMP / CALayer / Wayland subsurface). Import-shaped types
    (`NativeFrame`, `ImportedTexture`, `InteropSynchronizer`)
    don't fit — they encode an import flow that doesn't exist
-   when serval *is* the producer. The direction-neutral pieces
+   when genet *is* the producer. The direction-neutral pieces
    survived intact and moved here.
 
 ## What carried over (the "bit in between")
@@ -58,7 +58,7 @@ object — all useful regardless of who is producing what.
 
 All in [components/paint/interop/](../components/paint/interop/).
 
-## What serval drops, and why — the trait-shape mismatch concretely
+## What genet drops, and why — the trait-shape mismatch concretely
 
 The earlier iterations defined synchronization through a trait
 roughly shaped like (illustrative-signature-only):
@@ -84,17 +84,17 @@ direction**:
 
 - `&NativeFrame` is an enum like `{ MetalTextureRef, Dx12SharedTexture,
   VulkanDmabuf, … }` — producer-side platform handles being handed
-  *into* the consumer's wgpu world. In serval, the producer is
+  *into* the consumer's wgpu world. In genet, the producer is
   *netrender's own wgpu queue*; there is no native frame from an
   external producer to package up.
 - `&ImportedTexture` is the wgpu-side wrapper post-import (carrying
-  format, size, generation, the consumer-sync handle). serval
+  format, size, generation, the consumer-sync handle). genet
   doesn't import a texture — it allocates its own destination
   textures via `OsCompositorBackend::declare` and renders into
   them.
 
 So the trait signatures don't translate. Two ways to deal with
-that, and serval picked the second:
+that, and genet picked the second:
 
 1. **Patch `InteropSynchronizer`** — make `NativeFrame` /
    `ImportedTexture` into `Option`s, or split the trait into
@@ -108,11 +108,11 @@ that, and serval picked the second:
    side.
 
 Picking (2) means the trait shape can stay import-coupled in
-graft/scrying without serval pulling on it, and serval's per-
+graft/scrying without genet pulling on it, and genet's per-
 platform fence usage is per-`OsCompositorBackend`-impl rather
 than indirected through a generic trait. **Per project policy:
-serval does not shape graft / WNTI / scrying to fit its needs.**
-The price is that serval's
+genet does not shape graft / WNTI / scrying to fit its needs.**
+The price is that genet's
 [`crate::interop`](../components/paint/interop/) inlines the
 direction-neutral primitives instead of importing them as a
 crate.
@@ -124,11 +124,11 @@ crate.
   owns the per-frame fence dance directly via inherent-method
   calls on its synchronizer. See above.
 - **No `NativeFrame` / `ImportedTexture` / `WgpuTextureImporter`
-  types.** Producer-side handles don't exist in serval; the
+  types.** Producer-side handles don't exist in genet; the
   producer is netrender's own wgpu queue, accessed via wgpu-hal's
   `as_hal::<A>().raw_*()` accessors.
 - **No GL plumbing** (`vulkan_dmabuf`, `raw_gl`, `surfman_gl`,
-  GL `ProducerCapabilities`). serval's renderer is wgpu-only
+  GL `ProducerCapabilities`). genet's renderer is wgpu-only
   post-C1 (the GL/surfman corpus cut).
 
 ## Pending: Mac synchronizer wrapper
@@ -190,7 +190,7 @@ reach for `crate::interop` for:
    from `OsCompositorBackend::sync_mechanism()` so consumers of the
    trait can branch on it.
 
-Don't reach for WNTI — it's not in the serval dep graph (was
+Don't reach for WNTI — it's not in the genet dep graph (was
 removed in [commit `d0dea13` "cargo dependency fixes"](../components/paint/interop/mod.rs))
 and the trait shape is wrong for the export direction anyway.
 

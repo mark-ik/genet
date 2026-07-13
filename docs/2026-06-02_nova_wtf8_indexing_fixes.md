@@ -1,9 +1,9 @@
 # Nova WTF-8 / UTF-16 string-indexing fixes
 
-Status: **landed in the fork (`crates/nova`, branch `serval-embedder`),
+Status: **landed in the fork (`crates/nova`, branch `genet-embedder`),
 2026-06-02.** Six numbered bugs plus an audit pass that closed the rest of the
 family (the position-taking search methods), all upstream candidates (we are a
-thin fork; clean to contribute). Verified by a serval-side end-to-end regression
+thin fork; clean to contribute). Verified by a genet-side end-to-end regression
 test (`components/script-engine-nova/tests/wtf8_indexing_regression.rs`), nova_vm
 and `small_string` unit tests, the dom/nodes WPT sweep, and a test262
 String/RegExp pass (results below).

@@ -919,7 +919,7 @@ const HTML_INTERFACES: &[HtmlInterface] = &[
 ];
 
 pub(crate) fn bootstrap_script() -> String {
-    let mut out = String::from("globalThis.__servalHtmlInterfaceTable = [");
+    let mut out = String::from("globalThis.__genetHtmlInterfaceTable = [");
     for (i, interface) in HTML_INTERFACES.iter().enumerate() {
         if i != 0 {
             out.push(',');

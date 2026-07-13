@@ -27,10 +27,10 @@ fn request_with_content_type(address: &str, content_type: &str) -> EngineRouteRe
 }
 
 #[test]
-fn default_policy_routes_full_web_to_serval() {
+fn default_policy_routes_full_web_to_genet() {
     let decision = EngineRoutePolicy::default().route(&request("https://example.test"));
 
-    assert_eq!(decision.engine_id, ENGINE_SERVAL_WEB);
+    assert_eq!(decision.engine_id, ENGINE_GENET_WEB);
     assert_eq!(
         decision.surface_contract.mode,
         SurfaceContractMode::CompositedTexture
@@ -102,7 +102,7 @@ fn content_type_routes_markdown_regardless_of_scheme() {
 
 #[test]
 fn content_type_wins_over_scheme_match() {
-    // https alone would route to Serval; with text/plain it should
+    // https alone would route to Genet; with text/plain it should
     // route to the text engine instead.
     let decision = EngineRoutePolicy::default().route(&request_with_content_type(
         "https://example.test/raw.txt",
@@ -127,8 +127,8 @@ fn unknown_content_type_falls_back_to_scheme() {
         "application/x-unknown-format",
     ));
     // Unknown content-type → no content-type rule matches → fall back
-    // to the scheme rule (https → Serval).
-    assert_eq!(decision.engine_id, ENGINE_SERVAL_WEB);
+    // to the scheme rule (https → Genet).
+    assert_eq!(decision.engine_id, ENGINE_GENET_WEB);
 }
 
 // (JSON-LD graph-contribution routing is a host-handled marker, layered onto
@@ -146,7 +146,7 @@ fn content_type_match_is_case_insensitive() {
 #[test]
 fn route_filtered_skips_rules_whose_engine_is_unavailable() {
     // Only the gemtext engine is "registered" here. https would normally
-    // route to Serval; with that filtered out, routing falls through to
+    // route to Genet; with that filtered out, routing falls through to
     // the fallback (no other scheme rule matches https).
     let policy = EngineRoutePolicy::default();
     let decision = policy.route_filtered(&request("https://example.test"), |id| {
@@ -170,13 +170,13 @@ fn route_filtered_uses_first_available_matching_rule() {
 #[test]
 fn route_filtered_lets_content_type_rule_fall_back_to_scheme() {
     // text/markdown normally wins over scheme. With the markdown engine
-    // filtered out, the scheme rule (https → Serval) takes over.
+    // filtered out, the scheme rule (https → Genet) takes over.
     let policy = EngineRoutePolicy::default();
     let decision = policy.route_filtered(
         &request_with_content_type("https://example.test/", "text/markdown"),
         |id| id != ENGINE_NEMATIC_MARKDOWN,
     );
-    assert_eq!(decision.engine_id, ENGINE_SERVAL_WEB);
+    assert_eq!(decision.engine_id, ENGINE_GENET_WEB);
 }
 
 #[test]
@@ -216,11 +216,11 @@ fn pinned_engine_skipped_when_not_available() {
     // Filter says nothing called "not.registered" exists; routing falls
     // through to the scheme rule.
     let decision = policy.route_filtered(&req, |id| id != "not.registered");
-    assert_eq!(decision.engine_id, ENGINE_SERVAL_WEB);
+    assert_eq!(decision.engine_id, ENGINE_GENET_WEB);
 }
 
 #[test]
-fn scrying_web_pin_wins_over_default_serval_routing() {
+fn scrying_web_pin_wins_over_default_genet_routing() {
     // `scrying.web` isn't in the default policy — it's opt-in per
     // tile. A user pinning it should route through.
     let policy = EngineRoutePolicy::default();
@@ -243,7 +243,7 @@ fn per_host_override_wins_over_scheme_rule() {
 
     // Other hosts on the same scheme still go through the scheme rule.
     let other = policy.route(&request("https://example.test/"));
-    assert_eq!(other.engine_id, ENGINE_SERVAL_WEB);
+    assert_eq!(other.engine_id, ENGINE_GENET_WEB);
 }
 
 #[test]
@@ -272,7 +272,7 @@ fn per_host_override_skipped_when_engine_not_available() {
     let decision =
         policy.route_filtered(&request("https://blog.test/"), |id| id != "not.registered");
     // Falls through to the scheme rule.
-    assert_eq!(decision.engine_id, ENGINE_SERVAL_WEB);
+    assert_eq!(decision.engine_id, ENGINE_GENET_WEB);
 }
 
 #[test]
@@ -287,44 +287,44 @@ fn per_host_override_match_is_case_insensitive() {
 }
 
 #[test]
-fn serval_rungs_classify_and_round_trip() {
-    // serval.web is the static rung (the legacy id, kept for pin compatibility).
-    assert_eq!(serval_rung(ENGINE_SERVAL_WEB), Some(ServalRung::Static));
+fn genet_rungs_classify_and_round_trip() {
+    // genet.web is the static rung (the legacy id, kept for pin compatibility).
+    assert_eq!(genet_rung(ENGINE_GENET_WEB), Some(GenetRung::Static));
     assert_eq!(
-        serval_rung(ENGINE_SERVAL_SCRIPTED),
-        Some(ServalRung::Scripted)
+        genet_rung(ENGINE_GENET_SCRIPTED),
+        Some(GenetRung::Scripted)
     );
     assert_eq!(
-        serval_rung(ENGINE_SERVAL_SCRIPTED_NOVA),
-        Some(ServalRung::Scripted)
+        genet_rung(ENGINE_GENET_SCRIPTED_NOVA),
+        Some(GenetRung::Scripted)
     );
     // Each rung's engine id round-trips back to the rung.
-    for rung in ServalRung::ALL {
-        assert_eq!(serval_rung(rung.engine_id()), Some(rung));
+    for rung in GenetRung::ALL {
+        assert_eq!(genet_rung(rung.engine_id()), Some(rung));
     }
-    // Non-serval engines are not rungs.
-    assert_eq!(serval_rung(ENGINE_SCRYING_WEB), None);
-    assert_eq!(serval_rung(ENGINE_NEMATIC_GEMTEXT), None);
-    assert!(is_serval_rung(ENGINE_SERVAL_WEB) && !is_serval_rung(ENGINE_SCRYING_WEB));
+    // Non-genet engines are not rungs.
+    assert_eq!(genet_rung(ENGINE_SCRYING_WEB), None);
+    assert_eq!(genet_rung(ENGINE_NEMATIC_GEMTEXT), None);
+    assert!(is_genet_rung(ENGINE_GENET_WEB) && !is_genet_rung(ENGINE_SCRYING_WEB));
 }
 
 #[test]
-fn serval_rungs_order_by_capability() {
-    assert!(ServalRung::Static < ServalRung::Interactive);
-    assert!(ServalRung::Interactive < ServalRung::Scripted);
-    assert!(ServalRung::Scripted < ServalRung::FullWeb);
+fn genet_rungs_order_by_capability() {
+    assert!(GenetRung::Static < GenetRung::Interactive);
+    assert!(GenetRung::Interactive < GenetRung::Scripted);
+    assert!(GenetRung::Scripted < GenetRung::FullWeb);
     // Static is the base of the ladder (the default, JS-free rung).
-    assert_eq!(ServalRung::ALL[0], ServalRung::Static);
+    assert_eq!(GenetRung::ALL[0], GenetRung::Static);
 }
 
 #[test]
 fn unregistered_higher_rung_pin_falls_back_to_static() {
     // A node pinned to a rung the host has not registered (e.g. scripted before it
     // ships) must not route to an unavailable engine: `route_filtered` walks past the
-    // pin to the scheme rule, which for an https page is the static serval rung.
+    // pin to the scheme rule, which for an https page is the static genet rung.
     let mut req = request("https://example.com/app");
-    req.pinned_engine = Some(ENGINE_SERVAL_SCRIPTED.to_string());
+    req.pinned_engine = Some(ENGINE_GENET_SCRIPTED.to_string());
     // Only the static rung is "registered" on this host.
-    let decision = EngineRoutePolicy::default().route_filtered(&req, |id| id == ENGINE_SERVAL_WEB);
-    assert_eq!(decision.engine_id, ENGINE_SERVAL_WEB);
+    let decision = EngineRoutePolicy::default().route_filtered(&req, |id| id == ENGINE_GENET_WEB);
+    assert_eq!(decision.engine_id, ENGINE_GENET_WEB);
 }

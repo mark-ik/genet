@@ -3,13 +3,13 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 //! Windowed-shell glue for the smolweb lane: the [`SmolwebDocument`]
-//! (a `serval-documents` type since the session-engines split) as pelt's
+//! (a `genet-documents` type since the session-engines split) as pelt's
 //! `ViewerContent` / `BrowsableContent`, plus the standalone viewer entry.
 //! Pelt impls its own local traits for the foreign type.
 
 use netrender::Scene;
-use serval_documents::{LocalFetcher, SmolwebDocument, SmolwebTheme};
-use serval_layout::ScrollKey;
+use genet_documents::{LocalFetcher, SmolwebDocument, SmolwebTheme};
+use genet_layout::ScrollKey;
 
 /// The smolweb document as windowed [`ViewerContent`](crate::static_viewer::windowed::ViewerContent),
 /// so it plugs into the shared winit shell like the static document. v1 is read-only:

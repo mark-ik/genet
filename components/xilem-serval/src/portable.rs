@@ -11,7 +11,7 @@
 //! one rebuild pass, keeping its element, view state, and DOM node:
 //!
 //! - A key that **leaves** the list parks its child in the
-//!   [`ServalCtx`] nursery ([`park_portable`](crate::ServalCtx::park_portable))
+//!   [`GenetCtx`] nursery ([`park_portable`](crate::GenetCtx::park_portable))
 //!   instead of tearing it down. The DOM node stays attached under the old
 //!   parent for the moment.
 //! - A **new** key first checks the nursery: on a hit, the parked element is
@@ -20,7 +20,7 @@
 //!   its parked view + state under the new position, which also re-registers
 //!   its event handlers at the new routing path.
 //! - Unclaimed parked children are torn down for real by the runner's
-//!   end-of-rebuild [`drain_nursery`](crate::ServalCtx::drain_nursery).
+//!   end-of-rebuild [`drain_nursery`](crate::GenetCtx::drain_nursery).
 //!
 //! **Ordering caveat**: preservation requires the source sequence to rebuild
 //! before the target within the pass (view tree order). Target-before-source
@@ -44,7 +44,7 @@ use xilem_core::{
 use crate::keyed::{
     assert_unique_keys, bump_generation, create_generational_view_id, view_id_to_slot_generation,
 };
-use crate::{ServalCtx, ServalElement};
+use crate::{GenetCtx, GenetElement};
 
 /// An ordered keyed sequence of portable single-`View` children. See the
 /// module docs for the movement contract.
@@ -93,13 +93,13 @@ fn alloc_slot<K, S>(state: &mut PortableKeyedState<K, S>) -> usize {
     })
 }
 
-impl<State, Action, K, V> ViewSequence<State, Action, ServalCtx, ServalElement>
+impl<State, Action, K, V> ViewSequence<State, Action, GenetCtx, GenetElement>
     for PortableKeyed<K, V>
 where
     State: 'static,
     Action: 'static,
     K: Clone + Eq + Hash + 'static,
-    V: View<State, Action, ServalCtx, Element = ServalElement> + ViewMarker + Clone + 'static,
+    V: View<State, Action, GenetCtx, Element = GenetElement> + ViewMarker + Clone + 'static,
     V::ViewState: 'static,
 {
     type SeqState = PortableKeyedState<K, V::ViewState>;
@@ -108,8 +108,8 @@ where
 
     fn seq_build(
         &self,
-        ctx: &mut ServalCtx,
-        elements: &mut AppendVec<ServalElement>,
+        ctx: &mut GenetCtx,
+        elements: &mut AppendVec<GenetElement>,
         app_state: &mut State,
     ) -> Self::SeqState {
         assert_unique_keys(&self.items);
@@ -143,8 +143,8 @@ where
         &self,
         prev: &Self,
         seq_state: &mut Self::SeqState,
-        ctx: &mut ServalCtx,
-        elements: &mut impl ElementSplice<ServalElement>,
+        ctx: &mut GenetCtx,
+        elements: &mut impl ElementSplice<GenetElement>,
         app_state: &mut State,
     ) {
         assert_unique_keys(&self.items);
@@ -340,7 +340,7 @@ where
                         let dom = ctx.dom();
                         let node = element.node;
                         let parent = dom.borrow().parent(node);
-                        let el = crate::ServalElementMut {
+                        let el = crate::GenetElementMut {
                             node: &mut element.node,
                             dom: dom.clone(),
                             parent,
@@ -414,8 +414,8 @@ where
     fn seq_teardown(
         &self,
         seq_state: &mut Self::SeqState,
-        ctx: &mut ServalCtx,
-        elements: &mut impl ElementSplice<ServalElement>,
+        ctx: &mut GenetCtx,
+        elements: &mut impl ElementSplice<GenetElement>,
     ) {
         // Parent-driven teardown is real teardown, never parking: the whole
         // sequence is going away.
@@ -431,7 +431,7 @@ where
         &self,
         seq_state: &mut Self::SeqState,
         message: &mut MessageCtx,
-        elements: &mut impl ElementSplice<ServalElement>,
+        elements: &mut impl ElementSplice<GenetElement>,
         app_state: &mut State,
     ) -> MessageResult<Action> {
         let start = message

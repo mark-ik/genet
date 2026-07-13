@@ -6,20 +6,20 @@
 //! modifier.
 //!
 //! Modelled on `xilem_web`'s `define_element!`-generated views, collapsed to a
-//! single generic `El` (serval has one element type, so there is no per-tag
+//! single generic `El` (genet has one element type, so there is no per-tag
 //! `DomNode` interface to specialize). Children are any `xilem_core`
-//! [`ViewSequence`] over [`ServalElement`]; attributes are applied eagerly to
+//! [`ViewSequence`] over [`GenetElement`]; attributes are applied eagerly to
 //! the `ScriptedDom`.
 
-use crate::pod::ServalElement;
-use crate::{DomHandle, ServalChildrenSplice, ServalCtx, attr_qual, html_qual};
+use crate::pod::GenetElement;
+use crate::{DomHandle, GenetChildrenSplice, GenetCtx, attr_qual, html_qual};
 use layout_dom_api::LayoutDomMut;
 use xilem_core::{AppendVec, MessageCtx, MessageResult, Mut, View, ViewMarker, ViewSequence};
 
 /// Re-export alias so callers can name the backend element type as
 /// `xilem_serval::Element`, matching `xilem_web`'s convention of an element
 /// type per view. Here there is only one.
-pub use crate::pod::ServalElement as Element;
+pub use crate::pod::GenetElement as Element;
 
 /// Marker for views that produce an **element** node (not text or other
 /// content) — the Element/Text type split.
@@ -27,8 +27,8 @@ pub use crate::pod::ServalElement as Element;
 /// Element-only operations — [`on_click`](crate::on_click),
 /// [`on_key`](crate::on_key), and [`El::attr`] — require `ElementView`, so they
 /// reject text views (`&str` / `String` / [`text`](crate::text)): a text node is
-/// not a sensible click / key / attribute target. Every node in serval is still
-/// one runtime type ([`ServalElement`]) — this is a *compile-time* distinction
+/// not a sensible click / key / attribute target. Every node in genet is still
+/// one runtime type ([`GenetElement`]) — this is a *compile-time* distinction
 /// over views, not a second element type, so the children sequence stays
 /// heterogeneous (text and elements mix freely as children).
 ///
@@ -43,7 +43,7 @@ pub use crate::pod::ServalElement as Element;
 /// let _ = on_click::<_, (), (), (), _>(text("hi"), |_: &mut (), _: PointerClick| {});
 /// ```
 pub trait ElementView<State: 'static, Action>:
-    View<State, Action, ServalCtx, Element = ServalElement>
+    View<State, Action, GenetCtx, Element = GenetElement>
 {
 }
 
@@ -60,14 +60,14 @@ pub struct El<Seq, State, Action> {
 
 /// Create an element view named `name` with the given children sequence.
 ///
-/// `children` is any `xilem_core` [`ViewSequence`] over [`ServalElement`]: a
+/// `children` is any `xilem_core` [`ViewSequence`] over [`GenetElement`]: a
 /// single view, a tuple of views, a `Vec`, an `Option`, a string/number (text),
 /// etc.
 pub fn el<Seq, State, Action>(name: impl Into<String>, children: Seq) -> El<Seq, State, Action>
 where
     State: 'static,
     Action: 'static,
-    Seq: ViewSequence<State, Action, ServalCtx, ServalElement>,
+    Seq: ViewSequence<State, Action, GenetCtx, GenetElement>,
 {
     El {
         name: name.into(),
@@ -96,15 +96,15 @@ impl<Seq, State, Action> El<Seq, State, Action> {
 pub struct ElementState<SeqState> {
     seq_state: SeqState,
     /// The retained child elements, in DOM order.
-    children: Vec<ServalElement>,
-    append_scratch: AppendVec<ServalElement>,
-    vec_splice_scratch: Vec<ServalElement>,
+    children: Vec<GenetElement>,
+    append_scratch: AppendVec<GenetElement>,
+    vec_splice_scratch: Vec<GenetElement>,
 }
 
 /// Apply the attribute diff between `prev` and `next` eagerly to `node`.
 fn apply_attr_diff(
     dom: &DomHandle,
-    node: serval_scripted_dom::NodeId,
+    node: genet_scripted_dom::NodeId,
     prev: &[(String, String)],
     next: &[(String, String)],
 ) {
@@ -129,19 +129,19 @@ fn apply_attr_diff(
 
 impl<Seq, State, Action> ViewMarker for El<Seq, State, Action> {}
 
-impl<Seq, State, Action> View<State, Action, ServalCtx> for El<Seq, State, Action>
+impl<Seq, State, Action> View<State, Action, GenetCtx> for El<Seq, State, Action>
 where
     State: 'static,
     Action: 'static,
-    Seq: ViewSequence<State, Action, ServalCtx, ServalElement>,
+    Seq: ViewSequence<State, Action, GenetCtx, GenetElement>,
 {
-    type Element = ServalElement;
+    type Element = GenetElement;
 
     type ViewState = ElementState<Seq::SeqState>;
 
     fn build(
         &self,
-        ctx: &mut ServalCtx,
+        ctx: &mut GenetCtx,
         app_state: &mut State,
     ) -> (Self::Element, Self::ViewState) {
         let dom = ctx.dom();
@@ -151,7 +151,7 @@ where
         // order (append == insert_before reference None).
         let mut append_scratch = AppendVec::default();
         let seq_state = self.children.seq_build(ctx, &mut append_scratch, app_state);
-        let children: Vec<ServalElement> = append_scratch.into_inner();
+        let children: Vec<GenetElement> = append_scratch.into_inner();
         {
             let mut dom_mut = dom.borrow_mut();
             for child in &children {
@@ -168,14 +168,14 @@ where
             append_scratch: AppendVec::default(),
             vec_splice_scratch: Vec::new(),
         };
-        (ServalElement::new(node, dom), state)
+        (GenetElement::new(node, dom), state)
     }
 
     fn rebuild(
         &self,
         prev: &Self,
         view_state: &mut Self::ViewState,
-        ctx: &mut ServalCtx,
+        ctx: &mut GenetCtx,
         element: Mut<'_, Self::Element>,
         app_state: &mut State,
     ) {
@@ -183,7 +183,7 @@ where
         let dom = element.dom.clone();
 
         // Diff children through the splice.
-        let mut splice = ServalChildrenSplice::new(
+        let mut splice = GenetChildrenSplice::new(
             &mut view_state.append_scratch,
             &mut view_state.children,
             &mut view_state.vec_splice_scratch,
@@ -206,12 +206,12 @@ where
     fn teardown(
         &self,
         view_state: &mut Self::ViewState,
-        ctx: &mut ServalCtx,
+        ctx: &mut GenetCtx,
         element: Mut<'_, Self::Element>,
     ) {
         let node = *element.node;
         let dom = element.dom.clone();
-        let mut splice = ServalChildrenSplice::new(
+        let mut splice = GenetChildrenSplice::new(
             &mut view_state.append_scratch,
             &mut view_state.children,
             &mut view_state.vec_splice_scratch,
@@ -234,7 +234,7 @@ where
     ) -> MessageResult<Action> {
         let node = *element.node;
         let dom = element.dom.clone();
-        let mut splice = ServalChildrenSplice::new(
+        let mut splice = GenetChildrenSplice::new(
             &mut view_state.append_scratch,
             &mut view_state.children,
             &mut view_state.vec_splice_scratch,
@@ -253,6 +253,6 @@ impl<Seq, State, Action> ElementView<State, Action> for El<Seq, State, Action>
 where
     State: 'static,
     Action: 'static,
-    Seq: ViewSequence<State, Action, ServalCtx, ServalElement>,
+    Seq: ViewSequence<State, Action, GenetCtx, GenetElement>,
 {
 }

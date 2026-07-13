@@ -6,14 +6,14 @@
 //!
 //! `pelt --engine headless --out <path> <file>` renders a document GPU-free to a
 //! deterministic textual *scene snapshot* (the `netrender::Scene` pelt's viewer would
-//! present, dumped stably) — serval's first regression net beyond unit tests. On top
+//! present, dumped stably) — genet's first regression net beyond unit tests. On top
 //! of it, [`run_reftests`] walks a directory of `name.html` + `name.scene` fixtures,
 //! re-renders each, and compares against the committed snapshot; `--bless` (re)writes
 //! the snapshots from the current render.
 //!
 //! The scene snapshot is the primary, GPU-free artifact (the plan's byte-deterministic
 //! comparison). A rasterized PNG "for human eyes" is a deferred follow-up: it needs the
-//! offscreen wgpu readback path (serval-wpt's `Renderer`), where the snapshot here
+//! offscreen wgpu readback path (genet-wpt's `Renderer`), where the snapshot here
 //! needs no GPU at all.
 
 use std::path::{Path, PathBuf};

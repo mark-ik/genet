@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-05
 **Status:** v1 landed 2026-07-06 (`507f1331989`: transitions + transition events + WPT slices; T1/T2 and reduced-motion marked landed inline below). CSS animations (`@keyframes`) spun to its own plan 2026-07-09 (`2026-07-09_css_animations_plan.md`), reusing this plan's tick machinery; the renderer-side fast path remains deferred here.
-**Scope:** CSS transitions in serval's Boa/Nova lane, style-tier, host-clocked.
+**Scope:** CSS transitions in genet's Boa/Nova lane, style-tier, host-clocked.
 CSS animations (`@keyframes`) and any renderer-side fast path are explicitly
 deferred phases, not part of the v1 done-condition.
 **Related:** `archive/2026-06-24_event_loop_rigor_plan.md` (completed +
@@ -30,10 +30,10 @@ own that truth; a renderer-side interpolation would lie to script.
 
 The capability is knocked out in exactly two places, per the knockout strategy:
 
-- `components/serval-layout/adapter_stylo.rs:719-886`: `animation_rule` and
+- `components/genet-layout/adapter_stylo.rs:719-886`: `animation_rule` and
   `transition_rule` return `None`; `may_have_animations`, `has_animations`,
   `has_css_animations`, `has_css_transitions` return `false`.
-- `components/serval-layout/cascade.rs:751-761`: the `SharedStyleContext` gets
+- `components/genet-layout/cascade.rs:751-761`: the `SharedStyleContext` gets
   `DocumentAnimationSet::default()` and `current_time_for_animations: 0.0`.
 
 The pinned stylo already ships the machinery (`style::animation` is imported
@@ -44,7 +44,7 @@ Adjacent stubs this plan retires or touches:
 
 - `components/script-runtime-api/lib.rs:1303`: `requestAnimationFrame` is
   `setTimeout(cb, 0)`, comment "no real frame clock yet".
-- `components/serval-layout/incremental.rs`: `IncrementalLayout` already runs
+- `components/genet-layout/incremental.rs`: `IncrementalLayout` already runs
   per-frame inline-style restyles (orrery motion), and
   `restyle_with_snapshots` returns a `RestyleOutcome` classifying damage as
   `RepaintOnly` (the documented hot path, fragments retained) vs re-layout.
@@ -83,14 +83,14 @@ true), and (c) a tick (`cascade::restyle_for_animation_tick`,
 `IncrementalLayout::tick_animations` / `has_active_animations`, T2 surface
 arrived early). Two discoveries recorded for T2/T3: the
 `RESTYLE_CSS_TRANSITIONS` hint requires Gecko's separate animation-only
-traversal (serval does not run one), so the tick hints `RESTYLE_SELF` and rule
+traversal (genet does not run one), so the tick hints `RESTYLE_SELF` and rule
 collection re-reads the interpolated declarations; and the Pending -> Running
 -> Finished lifecycle is embedder-owned (Servo does it in its script thread),
 so the tick advances states itself, which is exactly where T3's
 `transitionstart`/`transitionend` will hook. Guards:
-`transition_interpolates_across_animation_ticks` (serval-layout) and
+`transition_interpolates_across_animation_ticks` (genet-layout) and
 `transition_interpolates_via_get_computed_style_on_boa`/`_on_nova`
-(serval-scripted; a persistent session + `ComputedStyleHandler` bridge, since
+(genet-scripted; a persistent session + `ComputedStyleHandler` bridge, since
 `ScriptedDocument::frame` still rebuilds its session per frame, its named
 retained-session follow-up).
 
@@ -133,7 +133,7 @@ reports no active animations and produces no dirty tiles.
   `transitionstart` / `transitionend` / `transitioncancel` are derived off the
   cascade and dispatched through the runtime, in order, with `propertyName` and
   `elapsedTime`. Design:
-  - New `components/serval-layout/transition_events.rs`: `TransitionEventRecord`
+  - New `components/genet-layout/transition_events.rs`: `TransitionEventRecord`
     / `TransitionEventKind`, and `harvest_transition_events`, which diffs each
     transition's *clock-derived* lifecycle phase (not Stylo's `state`) against a
     per-session tracker and emits the ordered events. Deriving phase from the
@@ -151,9 +151,9 @@ reports no active animations and produces no dirty tiles.
     `__dispatchTransition` bootstrap pair. The host loop's per-frame step:
     apply/tick, `take_transition_events`, dispatch each (off the cascade).
   - Guards: `transition_events_fire_run_start_end` +
-    `transition_cancel_fires_on_display_none` (serval-layout),
+    `transition_cancel_fires_on_display_none` (genet-layout),
     `transition_events_dispatch_to_listeners_on_boa`/`_on_nova`
-    (serval-scripted, end to end through real listeners).
+    (genet-scripted, end to end through real listeners).
   - *Bonus fix:* dispatching by node id exposed the pre-existing doc-tag/f64
     precision bug (`2026-07-05_event_loop_rigor_followups.md`). Passing the raw
     id as a **string** literal to the `__dispatch*` bridges (not a bare number
@@ -178,18 +178,18 @@ reports no active animations and produces no dirty tiles.
     value enum (shared `queries::values`), a `Device` preference field with
     getter/setter (kept out of `Device::new` so callers stay source-compatible,
     the `color_scheme` pattern), and the media-feature evaluator + descriptor.
-    serval repoints all 8 stylo crate pins (workspace deps + the two
+    genet repoints all 8 stylo crate pins (workspace deps + the two
     `[patch.crates-io]` redirects) at the fork branch; `cascade.rs` gains
     `make_device_with_prefs` and `set_stylist_reduced_motion` (the live
     re-evaluation counterpart of `set_stylist_color_scheme`). Guard:
     `prefers_reduced_motion_media_query_evaluates_and_reevaluates` proves
     `@media (prefers-reduced-motion: reduce/no-preference)` selects the right
-    rule at the default and flips after the setter. serval-layout suite green
+    rule at the default and flips after the setter. genet-layout suite green
     (257) against the fork. **This is the first entry in the planned Servo-mode
     media-feature parity set** (~30 standard features stylo's Servo build omits:
     hover/pointer/any-\*, prefers-contrast, forced-colors, resolution,
     orientation, display-mode, …); the fork + wiring pattern established here
-    (atom + enum + Device field/setter + evaluator + serval device plumbing)
+    (atom + enum + Device field/setter + evaluator + genet device plumbing)
     repeats mechanically for the rest. Outstanding: consolidate the per-preference
     `Device` rebuilds into one host-set bundle (today `set_stylist_reduced_motion`
     resets color scheme), and push the remaining features when a WPT slice or
@@ -205,7 +205,7 @@ reports no active animations and produces no dirty tiles.
     status-only baseline instead (see `2026-07-09_css_animations_plan.md`, A3);
     the same capability also gates 85 of the 155 dead `dom` tests
     (`2026-06-24_wpt_harness_exactness_plan.md`, H6). One driven rendering loop in
-    `serval-wpt` unblocks all three.
+    `genet-wpt` unblocks all three.
   - Stricter task-source queueing: events dispatch off the cascade today (post
     apply/tick), which satisfies "not synchronously inside the cascade"; routing
     them through a named task source is a rigor follow-up.
@@ -235,6 +235,6 @@ cancel-on-detach) are in the expected-pass set.
 
 - No animation runtime, `Animated<T>` wrapper, or wall-clock coupling in
   netrender (its D2 doctrine is a constraint on this plan, not a gap).
-- No serval-scripted (Servo lane) work; that lane inherits Servo's own
+- No genet-scripted (Servo lane) work; that lane inherits Servo's own
   animation path if it ever goes live in meerkat.
 - No smolweb involvement; nematic has no CSS transition surface.

@@ -24,7 +24,7 @@
 //! owned `FontResource` bytes, is the IPC-self-contained form — not the
 //! packet.
 //!
-//! Mirrors serval-layout's `FontCollector`: dedup by `parley::Blob::id()`
+//! Mirrors genet-layout's `FontCollector`: dedup by `parley::Blob::id()`
 //! (a stable per-allocation id), so a face shared across many runs is
 //! stored once.
 
@@ -112,7 +112,7 @@ mod tests {
     // `parley::FontData` can't be constructed synthetically without
     // pulling in `linebender_resource_handle` directly, and a real layout
     // is the more honest exercise of the intern path (mirrors
-    // serval-layout's `FontCollector` tests).
+    // genet-layout's `FontCollector` tests).
 
     #[test]
     fn empty_table_get_is_none() {

@@ -1,12 +1,12 @@
 # Hekate lanes + observable planes (cross-engine, for review)
 
-**Status (2026-05-17, revised PM-3):** proposed; lane decomposition tightened to three peer lanes (Nematic, Serval, Scrying). Earlier framings split Serval into "Middlenet/static HTML" and "Serval fullweb" — that was an artificial cut, since "static HTML, no JS" is a *profile tier within Serval*, not a separate engine. The tier decision is Serval-internal; Hekate sees one Serval lane and chooses the profile when handing the document to it.
+**Status (2026-05-17, revised PM-3):** proposed; lane decomposition tightened to three peer lanes (Nematic, Genet, Scrying). Earlier framings split Genet into "Middlenet/static HTML" and "Genet fullweb" — that was an artificial cut, since "static HTML, no JS" is a *profile tier within Genet*, not a separate engine. The tier decision is Genet-internal; Hekate sees one Genet lane and chooses the profile when handing the document to it.
 
-**Universal framing rule:** observable planes are defined as **snapshots / query surfaces**, not engine-owned structs. Internal storage stays private to each lane; the public ABI is a trait family (`FragmentQuery`, `InteractionQuery`, etc.) that lanes implement and the host consumes. This applies to *every* plane in the vocabulary — not just Fragment and Interaction. Nematic, Serval, and the system-webview lane are free to store their internals differently while mere/apparatus gets stable affordances.
+**Universal framing rule:** observable planes are defined as **snapshots / query surfaces**, not engine-owned structs. Internal storage stays private to each lane; the public ABI is a trait family (`FragmentQuery`, `InteractionQuery`, etc.) that lanes implement and the host consumes. This applies to *every* plane in the vocabulary — not just Fragment and Interaction. Nematic, Genet, and the system-webview lane are free to store their internals differently while mere/apparatus gets stable affordances.
 
-This doc lives in `serval/docs/` because the immediate consumer is the serval-layout architecture, but its scope is **ecosystem-wide** — Nematic, mere/apparatus, and host code all rely on it. Sibling reads:
+This doc lives in `genet/docs/` because the immediate consumer is the genet-layout architecture, but its scope is **ecosystem-wide** — Nematic, mere/apparatus, and host code all rely on it. Sibling reads:
 
-- [2026-05-17_serval_layout_planes_architecture.md](./2026-05-17_serval_layout_planes_architecture.md) — serval-layout's piece (Style + Layout + Fragment + Paint planes for HTML).
+- [2026-05-17_genet_layout_planes_architecture.md](./2026-05-17_genet_layout_planes_architecture.md) — genet-layout's piece (Style + Layout + Fragment + Paint planes for HTML).
 - [2026-05-16_layout_dom_api_design.md](./2026-05-16_layout_dom_api_design.md) — the HTML-specific DOM-side contract.
 
 ---
@@ -15,17 +15,17 @@ This doc lives in `serval/docs/` because the immediate consumer is the serval-la
 
 Earlier docs went through two rounds of correction:
 
-**Round 1 (mid-2026-05-17):** framed Hekate as "three heads of Serval" — extract / middlenet / fullweb, all served by serval-layout. Two category errors:
+**Round 1 (mid-2026-05-17):** framed Hekate as "three heads of Genet" — extract / middlenet / fullweb, all served by genet-layout. Two category errors:
 
-1. **Made Nematic an alternate path** rather than a first-class engine. Smolweb protocols (Gemini, Scroll, Markdown, etc.) shouldn't route through HTML to reach a renderer. Nematic does protocol-faithful direct rendering. It's a *peer* to Serval, not a special case of it.
-2. **Made extract a render lane.** Extraction (readability scoring, classification, cheap facts) isn't a peer engine. It's cross-cutting — it can extract from HTML, Gemini, Markdown, feeds, future PDFs, whatever. Making it a Serval head implies the wrong shape.
+1. **Made Nematic an alternate path** rather than a first-class engine. Smolweb protocols (Gemini, Scroll, Markdown, etc.) shouldn't route through HTML to reach a renderer. Nematic does protocol-faithful direct rendering. It's a *peer* to Genet, not a special case of it.
+2. **Made extract a render lane.** Extraction (readability scoring, classification, cheap facts) isn't a peer engine. It's cross-cutting — it can extract from HTML, Gemini, Markdown, feeds, future PDFs, whatever. Making it a Genet head implies the wrong shape.
 
-**Round 2 (PM-3):** still had four lanes (Nematic, Middlenet/static HTML, Serval fullweb, system-webview). Two more cleanups:
+**Round 2 (PM-3):** still had four lanes (Nematic, Middlenet/static HTML, Genet fullweb, system-webview). Two more cleanups:
 
-1. **Middlenet was an artificial cut.** "HTML without JS" is a profile tier within Serval, not a separate engine. The profile-ladder plan from 2026-05-12 already had this right: `serval-static-html` / `serval-interactive-html` / `serval-scripted` / `serval-fullweb` are tier crates within Serval, all sharing `serval-layout`. From Hekate's view, there's one Serval lane; Serval picks the tier when given the document.
+1. **Middlenet was an artificial cut.** "HTML without JS" is a profile tier within Genet, not a separate engine. The profile-ladder plan from 2026-05-12 already had this right: `genet-static-html` / `genet-interactive-html` / `genet-scripted` / `genet-fullweb` are tier crates within Genet, all sharing `genet-layout`. From Hekate's view, there's one Genet lane; Genet picks the tier when given the document.
 2. **system-webview was over-abstracted.** We have one implementation library (`scrying`), and it's not a generic system-webview-with-pluggable-backend — it's specifically `scrying`. Make it its own lane named after what it is.
 
-The fix: **three peer lanes** (Nematic, Serval, Scrying). Serval has internal tiering. Hekate routes by *which engine handles this source*; the within-Serval tier is Serval's own choice (informed by Hekate's extract hints).
+The fix: **three peer lanes** (Nematic, Genet, Scrying). Genet has internal tiering. Hekate routes by *which engine handles this source*; the within-Genet tier is Genet's own choice (informed by Hekate's extract hints).
 
 ---
 
@@ -43,7 +43,7 @@ The fix: **three peer lanes** (Nematic, Serval, Scrying). Serval has internal ti
                           ┌───────────────┼───────────────┐
                           ▼               ▼               ▼
                 ┌────────────────┐ ┌──────────────┐ ┌──────────────┐
-                │    Nematic     │ │    Serval    │ │   Scrying    │
+                │    Nematic     │ │    Genet    │ │   Scrying    │
                 │ (Gemini/Scroll │ │ (HTML, tiered│ │ (fallback;   │
                 │  /Markdown/    │ │  internally: │ │  wgpu-scry/  │
                 │   feeds/...)   │ │   static →   │ │   scrying    │
@@ -79,27 +79,27 @@ Protocol-faithful direct render for smolweb sources where HTML/CSS would be a lo
 
 - **Sources:** Gemini, Gopher, Scroll, Spartan, Markdown, RSS/Atom, Finger, Nex, Mercury, Scorpion, Guppy, Molerat, Terse, FSP, SuperText, etc.
 - **Pipeline:** source bytes → protocol-specific parser → `SemanticDocument` → text/layout/render observables.
-- **What it doesn't do:** HTML at any fidelity, CSS, JS, browser APIs. Those route to Serval.
+- **What it doesn't do:** HTML at any fidelity, CSS, JS, browser APIs. Those route to Genet.
 - **What it publishes:** Source/Semantic Plane + Fragment Plane + Paint Plane (no Style Plane — these formats have no CSS).
 
 Per [project_nematic_scope](../../../.claude/projects/c--Users-mark--Code/memory/project_nematic_scope.md): Nematic = smolweb protocols only, word-processor-faithful.
 
-### Serval
+### Genet
 
-The HTML/CSS/(JS) lane. Internally tiered — `serval-layout` is shared across all tiers; the tier crates wrap it with the right DOM provider and capability set.
+The HTML/CSS/(JS) lane. Internally tiered — `genet-layout` is shared across all tiers; the tier crates wrap it with the right DOM provider and capability set.
 
-- **Tiers** (per the [2026-05-12 profile-ladder plan](./2026-05-12_serval_profile_ladder_plan.md)):
-  - `serval-static-html` — HTML parsing → `StaticDocument` → `serval-layout` planes → Paint. No JS. No incremental invalidation. The "reader-mode-shaped" tier — fast, audit-clean, the static-profile target.
-  - `serval-interactive-html` — adds form/input/focus/accessibility hooks. Still no JS.
-  - `serval-scripted` — adds the scripted-DOM provider, JS engine, DOM mutation. Incremental invalidation lit up.
-  - `serval-fullweb` — adds browser APIs (storage, workers, WebGL, etc.).
-- **Tier selection:** Hekate hands Serval the document plus a tier *hint* (informed by extract: noscript content available? app-shell-shaped? domain memory says JS is needed?). Serval picks the tier to instantiate. The tier choice can re-escalate mid-session if the static tier proves insufficient (link click that needs JS, etc.) — Serval reports back to Hekate, which records the re-escalation as route-hint evidence.
-- **From Hekate's view:** one Serval lane. The tier is Serval's internal concern.
+- **Tiers** (per the [2026-05-12 profile-ladder plan](./2026-05-12_genet_profile_ladder_plan.md)):
+  - `genet-static-html` — HTML parsing → `StaticDocument` → `genet-layout` planes → Paint. No JS. No incremental invalidation. The "reader-mode-shaped" tier — fast, audit-clean, the static-profile target.
+  - `genet-interactive-html` — adds form/input/focus/accessibility hooks. Still no JS.
+  - `genet-scripted` — adds the scripted-DOM provider, JS engine, DOM mutation. Incremental invalidation lit up.
+  - `genet-fullweb` — adds browser APIs (storage, workers, WebGL, etc.).
+- **Tier selection:** Hekate hands Genet the document plus a tier *hint* (informed by extract: noscript content available? app-shell-shaped? domain memory says JS is needed?). Genet picks the tier to instantiate. The tier choice can re-escalate mid-session if the static tier proves insufficient (link click that needs JS, etc.) — Genet reports back to Hekate, which records the re-escalation as route-hint evidence.
+- **From Hekate's view:** one Genet lane. The tier is Genet's internal concern.
 - **What it publishes:** Source/Semantic + Style + Layout/Fragment + Paint + Interaction + Loading planes. (Scripted+ tiers also publish mutation/invalidation events.)
 
-The tier ladder also matters for the audit canary: `serval-static-html` and `serval-interactive-html` carry **no JS engine at all** (no `script-engine-*`, no `nova_vm`, no `mozjs`); `serval-scripted` and `serval-fullweb` are where the engine lives.
+The tier ladder also matters for the audit canary: `genet-static-html` and `genet-interactive-html` carry **no JS engine at all** (no `script-engine-*`, no `nova_vm`, no `mozjs`); `genet-scripted` and `genet-fullweb` are where the engine lives.
 
-**Updated 2026-05-21:** the primary engine is now **Nova** (pure-Rust, wasm-clean), not SpiderMonkey — see [script-engine plan Part 6](./2026-05-20_serval_script_engine_plan.md). The no-engine tiers stay engine-free for **attack-surface + bundle-size + DOM-as-library** reasons, *not* wasm-safety: Nova compiles to wasm too, so the wasm *target* is now orthogonal to the capability *tier*. SpiderMonkey, if it ever returns, is a native-fullweb-only backend.
+**Updated 2026-05-21:** the primary engine is now **Nova** (pure-Rust, wasm-clean), not SpiderMonkey — see [script-engine plan Part 6](./2026-05-20_genet_script_engine_plan.md). The no-engine tiers stay engine-free for **attack-surface + bundle-size + DOM-as-library** reasons, *not* wasm-safety: Nova compiles to wasm too, so the wasm *target* is now orthogonal to the capability *tier*. SpiderMonkey, if it ever returns, is a native-fullweb-only backend.
 
 ### Scrying
 
@@ -133,10 +133,10 @@ Each lane implements a subset of this vocabulary. The host (mere/apparatus/inker
 Source spans, protocol nodes, links, headings, roles, language, document title, anchors.
 
 - **Nematic:** the parsed `SemanticDocument` (gemtext blocks, markdown nodes, feed entries).
-- **Serval:** the DOM tree (`LayoutDom` view).
+- **Genet:** the DOM tree (`LayoutDom` view).
 - **Scrying:** the URL + protocol metadata only (the webview is opaque).
 
-**Per Mark's correction:** don't force Nematic's `SemanticDocument` and Serval's DOM into one fake tree model. Use **common-minimum query trait + engine-specific extensions**. The common minimum is *facts the host can index/search/preview uniformly*; extensions let apparatus inspect native protocol shape.
+**Per Mark's correction:** don't force Nematic's `SemanticDocument` and Genet's DOM into one fake tree model. Use **common-minimum query trait + engine-specific extensions**. The common minimum is *facts the host can index/search/preview uniformly*; extensions let apparatus inspect native protocol shape.
 
 ```rust
 /// Common minimum every lane that has a document publishes.
@@ -154,7 +154,7 @@ pub trait SemanticQuery {
     fn source_range(&self, node: Self::NodeId) -> Option<SourceRange>;
 }
 
-/// Serval-specific extension: DOM-ish element/query details.
+/// Genet-specific extension: DOM-ish element/query details.
 pub trait HtmlSemanticExt: SemanticQuery {
     fn element_name(&self, node: Self::NodeId) -> Option<&QualName>;
     fn attribute(&self, node: Self::NodeId, ns: &Namespace, local: &LocalName)
@@ -184,7 +184,7 @@ Hekate's indexing/search/preview pipeline consumes `SemanticQuery` only — unif
 Computed style, atomized id/class, selector flags, inline-style cache.
 
 - **Nematic:** not implemented (Gemini/Scroll/etc. have no CSS).
-- **Serval:** Stylo-computed `ElementData` keyed by `D::NodeId`.
+- **Genet:** Stylo-computed `ElementData` keyed by `D::NodeId`.
 - **Scrying:** not implemented.
 
 What's queryable:
@@ -198,7 +198,7 @@ What's queryable:
 Boxes, rects, scroll containers, text runs, hit targets, line boxes.
 
 - **Nematic:** simple text-flow fragments (Gemini line + indent levels become rectangles).
-- **Serval:** Taffy-computed boxes + parley line boxes (FragmentPlane in the planes doc).
+- **Genet:** Taffy-computed boxes + parley line boxes (FragmentPlane in the planes doc).
 - **Scrying:** opaque; one root fragment matching the window rect.
 
 **Query surface** (per Mark's correction — don't expose raw layout internals as a permanent ABI):
@@ -238,19 +238,19 @@ Display list / render scene. **See [2026-05-17_paintlist_polyglot_renderer.md](.
 
 Briefly: paint has three distinct layers — producer-facing `PaintList` trait (what engines emit), transport-friendly wire payload (the same `PaintList`, since it's `Serialize`), and renderer-private `netrender::Scene` (NetRender owns lowering). Common-minimum vocabulary + engine-specific extensions, **mirroring SemanticQuery's pattern**.
 
-Extensions are **typed serializable payloads** per engine (`ServalPaintExt`, `NematicPaintExt`), not callbacks. NetRender has a registered renderer for each engine's extension variants and lowers them into its internal scene. This keeps paint transportable (no `dyn` across IPC), capture/replay-able, tile-cacheable.
+Extensions are **typed serializable payloads** per engine (`GenetPaintExt`, `NematicPaintExt`), not callbacks. NetRender has a registered renderer for each engine's extension variants and lowers them into its internal scene. This keeps paint transportable (no `dyn` across IPC), capture/replay-able, tile-cacheable.
 
 - **Nematic:** `NematicPaintList: impl PaintList`. Common items only initially (text, rect, stroke, gradient, image). `NematicPaintExt` empty until protocol-shaped items earn a slot.
-- **Serval:** `ServalPaintList: impl PaintList` (renamed from `ServalDisplayList`). Common items for most box content; `ServalPaintExt` variants for paint worklets, mix-blend-mode regions, masks, native form controls.
+- **Genet:** `GenetPaintList: impl PaintList` (renamed from `GenetDisplayList`). Common items for most box content; `GenetPaintExt` variants for paint worklets, mix-blend-mode regions, masks, native form controls.
 - **Scrying:** `ScryingPaintList: impl PaintList` with one `DrawExternalTexture(scrying_texture)` command. NetRender composites natively.
 
 Common vocabulary includes gradients (linear/radial/conic), shadows, text runs, strokes — anything NetRender already renders natively. Graduation rule: if NetRender supports the primitive, it's common; engine extensions are reserved for items the renderer doesn't natively know.
 
-Text shaping happens in serval-layout (parley) — paint carries shaped glyph runs. NetRender owns font registration + glyph cache + scene emission, **does not reshape**. This keeps layout and paint from drifting.
+Text shaping happens in genet-layout (parley) — paint carries shaped glyph runs. NetRender owns font registration + glyph cache + scene emission, **does not reshape**. This keeps layout and paint from drifting.
 
 Direct Vello access is an **escape hatch outside the PaintList pipeline**: lanes that want it use Vello directly and hand NetRender the resulting texture via `DrawExternalTexture` (what Scrying already does). The pipeline doesn't force a callback-into-Vello model.
 
-NetRender lives on its own terms in its own crate, knowing nothing about Serval / Nematic / Scrying internals. Each pairing (engine + NetRender) delivers real value via the shared trait surface.
+NetRender lives on its own terms in its own crate, knowing nothing about Genet / Nematic / Scrying internals. Each pairing (engine + NetRender) delivers real value via the shared trait surface.
 
 ### Interaction Plane
 
@@ -360,7 +360,7 @@ pub trait ExtractCapableLane {
 }
 ```
 
-Nematic implements `extract_structure` cheaply (it knows protocol structure); E3/E4 not applicable (no style/layout in smolweb). Serval implements all three (E3 = run cascade only; E4 = run cascade + Taffy).
+Nematic implements `extract_structure` cheaply (it knows protocol structure); E3/E4 not applicable (no style/layout in smolweb). Genet implements all three (E3 = run cascade only; E4 = run cascade + Taffy).
 
 ### E3/E4 escalation signals (for future Hekate)
 
@@ -394,18 +394,18 @@ This is phrased as *consistent with eidetic's current crate scope*, not *roadmap
 
 ## What this means for each repo
 
-### serval-layout
+### genet-layout
 
-- Drops the `extract.rs` module I had in the planes doc's module layout. Extract is Hekate's, not Serval's.
-- Implements the `FragmentQuery` + `InteractionQuery` traits over its FragmentPlane + StylePlane data. The internal plane storage stays serval-layout's implementation detail.
-- Provides `Serval`'s impl of `ExtractCapableLane` (structure / style-assisted / layout-assisted).
+- Drops the `extract.rs` module I had in the planes doc's module layout. Extract is Hekate's, not Genet's.
+- Implements the `FragmentQuery` + `InteractionQuery` traits over its FragmentPlane + StylePlane data. The internal plane storage stays genet-layout's implementation detail.
+- Provides `Genet`'s impl of `ExtractCapableLane` (structure / style-assisted / layout-assisted).
 - Lives as one of several lanes; doesn't need to know about Hekate's routing decisions or other lanes.
 
-### serval-static-html / serval-interactive-html / serval-scripted / serval-fullweb (tier crates)
+### genet-static-html / genet-interactive-html / genet-scripted / genet-fullweb (tier crates)
 
-- These are Serval's profile-tier crates. From Hekate's view, they're all "Serval" — Hekate picks which tier when handing the document over.
-- All wrap `serval-layout` + a tier-appropriate DOM provider.
-- Static and interactive tiers carry no JS engine — no `script-engine-*` / `nova_vm` / `mozjs` (audit-canary load-bearing; rationale updated 2026-05-21 to attack-surface/bundle-size, not wasm — see the Serval-lane note above).
+- These are Genet's profile-tier crates. From Hekate's view, they're all "Genet" — Hekate picks which tier when handing the document over.
+- All wrap `genet-layout` + a tier-appropriate DOM provider.
+- Static and interactive tiers carry no JS engine — no `script-engine-*` / `nova_vm` / `mozjs` (audit-canary load-bearing; rationale updated 2026-05-21 to attack-surface/bundle-size, not wasm — see the Genet-lane note above).
 - Publish observables via the trait API; tier just controls what's enabled (e.g., scripted+ adds mutation/invalidation events).
 
 ### nematic
@@ -424,20 +424,20 @@ This is phrased as *consistent with eidetic's current crate scope*, not *roadmap
 ### Hekate (new crate)
 
 - Lives at `repos/mere/components/hekate/` (decided 2026-05-17 — just `hekate`, not `mere-hekate`).
-- Owns: source sniffing, capability detection, route choice (between Nematic / Serval / Scrying), extract tiers (E0–E2 directly, escalates E3/E4 to lanes), observables cache/index. For Serval, also passes a tier hint (informed by extract).
+- Owns: source sniffing, capability detection, route choice (between Nematic / Genet / Scrying), extract tiers (E0–E2 directly, escalates E3/E4 to lanes), observables cache/index. For Genet, also passes a tier hint (informed by extract).
 - Calls into lanes via the trait API. Doesn't render. Doesn't parse HTML or Gemini itself (lanes own their parsers).
 - Apparatus reads from Hekate's observables cache for the inspector view.
 
 ### mere / mere-host / apparatus
 
 - The host consumes the observable-plane traits (`FragmentQuery`, `InteractionQuery`, `SemanticQuery`, `LoadingQuery`, `ExtractCapableLane` extras).
-- mere doesn't care whether the engine behind a given route is Nematic, Serval (at whatever tier), or Scrying — observable contracts are the same.
-- Apparatus (inspector) reads observable planes via the trait API; works uniformly for HTML pages (Serval, at any tier), Gemini pages (Nematic), or Scrying-rendered pages (with degenerate observables).
+- mere doesn't care whether the engine behind a given route is Nematic, Genet (at whatever tier), or Scrying — observable contracts are the same.
+- Apparatus (inspector) reads observable planes via the trait API; works uniformly for HTML pages (Genet, at any tier), Gemini pages (Nematic), or Scrying-rendered pages (with degenerate observables).
 
 ### layout_dom_api
 
-- Stays specific to HTML/serval — it's the DOM-side trait that Stylo cascade and Taffy construction consume. **Not** the cross-engine observable vocabulary.
-- The cross-engine vocabulary (the traits in this doc) lives elsewhere. Probably a new crate `engine_observables_api` in serval/components/shared/, OR in mere if the host is the canonical consumer. Decide at implementation time.
+- Stays specific to HTML/genet — it's the DOM-side trait that Stylo cascade and Taffy construction consume. **Not** the cross-engine observable vocabulary.
+- The cross-engine vocabulary (the traits in this doc) lives elsewhere. Probably a new crate `engine_observables_api` in genet/components/shared/, OR in mere if the host is the canonical consumer. Decide at implementation time.
 
 ---
 
@@ -447,11 +447,11 @@ The traits sketched here (`FragmentQuery`, `InteractionQuery`, `ExtractCapableLa
 
 Options:
 
-- **A. New `engine_observables_api` crate** in `serval/components/shared/`. Stays serval-side; depended on by serval-layout, nematic (when nematic depends on it), mere-host.
-- **B. Inside mere/components/shared/`. Stays mere-side; serval-layout depends on mere via published-crate or git dep. More awkward dependency direction.
-- **C. Inside `serval-traits` or similar lane-side**, with mere re-exporting. Same shape as A but lane-flavored naming.
+- **A. New `engine_observables_api` crate** in `genet/components/shared/`. Stays genet-side; depended on by genet-layout, nematic (when nematic depends on it), mere-host.
+- **B. Inside mere/components/shared/`. Stays mere-side; genet-layout depends on mere via published-crate or git dep. More awkward dependency direction.
+- **C. Inside `genet-traits` or similar lane-side**, with mere re-exporting. Same shape as A but lane-flavored naming.
 
-Lean **A**. Cross-engine observable contracts have no inherent serval/mere allegiance; putting them in a neutral crate (`engine_observables_api`) under serval/shared/ matches where the early lifting is happening and lets nematic and mere both consume without cross-repo dep awkwardness.
+Lean **A**. Cross-engine observable contracts have no inherent genet/mere allegiance; putting them in a neutral crate (`engine_observables_api`) under genet/shared/ matches where the early lifting is happening and lets nematic and mere both consume without cross-repo dep awkwardness.
 
 If the answer turns out to be "this belongs in mere," easy to move once both sides actually consume it.
 
@@ -470,9 +470,9 @@ All six original open questions are now resolved. New open items below.
 
 Still open:
 
-- **Cross-engine vocab crate location.** Where do `SemanticQuery`, `FragmentQuery`, `InteractionQuery`, `LoadingQuery` live? Lean **A**: new `engine_observables_api` crate in serval/components/shared/. Lets nematic, serval-layout, mere/hekate all depend without cross-repo dep awkwardness. (Alternatives: in mere; serval-traits with mere re-export.) Decide at implementation time; easy to move once both sides actually consume it.
+- **Cross-engine vocab crate location.** Where do `SemanticQuery`, `FragmentQuery`, `InteractionQuery`, `LoadingQuery` live? Lean **A**: new `engine_observables_api` crate in genet/components/shared/. Lets nematic, genet-layout, mere/hekate all depend without cross-repo dep awkwardness. (Alternatives: in mere; genet-traits with mere re-export.) Decide at implementation time; easy to move once both sides actually consume it.
 - **Composition shape vs nematic's existing design.** Nematic was previously scoped before the observable-planes framing arrived. If nematic's current internal design assumes a non-engine-observable shape, the trait family above needs reconciling. Worth a quick read of nematic's existing design docs before the engine_observables_api crate is stood up.
-- **Loading/Network plane: which lane owns the network adapter?** Most likely the lane spawns its own network adapter (Nematic for gemini://, Serval for https://, Scrying when Hekate routes there). But shared HTTP cache, cookie jar, TLS config across lanes is a real concern. Probably solved by a host-owned "network broker" service that lanes use. Defer until a second lane needs the same shared resource.
+- **Loading/Network plane: which lane owns the network adapter?** Most likely the lane spawns its own network adapter (Nematic for gemini://, Genet for https://, Scrying when Hekate routes there). But shared HTTP cache, cookie jar, TLS config across lanes is a real concern. Probably solved by a host-owned "network broker" service that lanes use. Defer until a second lane needs the same shared resource.
 
 ---
 
@@ -483,13 +483,13 @@ Still open:
 - [ ] Is the **session/lane handle abstraction** in mere actually a real existing concept, or do I need to flag it as a new mere-side concept? Sketched as `tile.set_lane(lane_handle)` — verify against mere's panel/session existing model.
 - [ ] Is the **eidetic boundary** right? "Hekate owns live cache + decisions; eidetic owns durable artifacts" feels right but eidetic's actual scope may push back.
 - [ ] Where does the **Scrying lane wrapper crate** live? Probably mere-side (alongside hekate) since it bridges into host compositing — but could be its own crate `mere-scrying-lane` or could live inside hekate. Resolve at implementation time.
-- [ ] Does Serval's **tier escalation mid-session** need a public protocol with Hekate, or is it a pure-Serval concern that just reports back as an event? Lean event-based (Serval tells Hekate "I had to upgrade tier," Hekate records as route-hint evidence).
+- [ ] Does Genet's **tier escalation mid-session** need a public protocol with Hekate, or is it a pure-Genet concern that just reports back as an event? Lean event-based (Genet tells Hekate "I had to upgrade tier," Hekate records as route-hint evidence).
 
 ---
 
 ## Decision log
 
-- **Decided 2026-05-17:** Hekate is a router + document-intelligence layer, not a renderer. **Three peer lanes** (revised PM-3): Nematic, Serval, Scrying. Serval has internal profile tiering (`serval-static-html` / `serval-interactive-html` / `serval-scripted` / `serval-fullweb`) — Hekate picks the tier when handing the document over. Extract is Hekate's own work, with tiers E0–E4 that escalate into lanes only when style/layout are required.
+- **Decided 2026-05-17:** Hekate is a router + document-intelligence layer, not a renderer. **Three peer lanes** (revised PM-3): Nematic, Genet, Scrying. Genet has internal profile tiering (`genet-static-html` / `genet-interactive-html` / `genet-scripted` / `genet-fullweb`) — Hekate picks the tier when handing the document over. Extract is Hekate's own work, with tiers E0–E4 that escalate into lanes only when style/layout are required.
 - **Decided 2026-05-17:** Shared observable-plane vocabulary across engines (Source/Semantic, Style, Layout/Fragment, Paint, Interaction, Loading/Network). Each lane implements the subset that applies; host consumes the same trait API regardless of lane.
 - **Decided 2026-05-17:** Observable planes are defined as snapshots/query surfaces — `FragmentQuery`, `InteractionQuery`, `SemanticQuery`, `LoadingQuery`. Raw plane storage stays implementation detail of each lane.
 - **Decided 2026-05-17:** A11y is built by fusing Source/Semantic Plane + Style Plane + Fragment Plane. Builder lives in mere/apparatus, not in any render lane.
@@ -500,4 +500,4 @@ Still open:
 - **Decided 2026-05-17:** Loading/Network plane added to vocabulary. Lanes emit loading events; Hekate records normalized snapshot; host displays.
 - **Decided 2026-05-17:** E3/E4 escalation signals defined as six classes (low confidence, contradiction, CSS suspicion, user action, domain memory, security/content hint). Implementation deferred; enum variants stand in.
 - **Decided 2026-05-17:** Extract storage = eidetic. Boundary: Hekate live + decisions; eidetic durable + indexes. Don't let eidetic decide routes.
-- **Open:** cross-engine vocab crate location (lean `engine_observables_api` in serval/shared/); composition reconciliation with nematic's existing internal design; network-adapter ownership when shared resources matter.
+- **Open:** cross-engine vocab crate location (lean `engine_observables_api` in genet/shared/); composition reconciliation with nematic's existing internal design; network-adapter ownership when shared resources matter.

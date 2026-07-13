@@ -14,7 +14,7 @@ prunable, monotonic-keyed node store hits all of them while keeping the borrow
 API byte-for-byte. gc-arena stays where it earns its keep — *inside* the
 piccolo backend (G3-of-DOM owes it nothing).
 **Scope**: Put the piccolo fork (`Code/crates/piccolo`, v0.3.3, MIT) to work on
-two fronts: (a) the gc-arena direction for `serval-scripted-dom` — kill the
+two fronts: (a) the gc-arena direction for `genet-scripted-dom` — kill the
 never-reuse slab's unbounded growth and give the scripted lane real
 detached-node collection; (b) a piccolo `ScriptEngine` backend as the
 mod-scripting Lua option, which is also the fork's first in-tree consumer and
@@ -34,7 +34,7 @@ updated with the piccolo entry).
   workspace pin yet. Nova and Boa are also vendored forks in `Code/crates/`,
   so engine-side hooks (weak refs / finalization) are patchable, not
   upstream-gated.
-- **The slab** (`serval-scripted-dom/lib.rs:70-75`): `Vec<Option<Node>>`,
+- **The slab** (`genet-scripted-dom/lib.rs:70-75`): `Vec<Option<Node>>`,
   slots never reused, so the arena grows monotonically with every node ever
   created. Two removal flavors exist: `LayoutDomMut::remove` drops the
   subtree (slot becomes a permanent `None`), and `remove_child`
@@ -42,7 +42,7 @@ updated with the piccolo entry).
   because script may hold a reference. Orphans whose JS references die are
   never freed. That is the leak this plan exists to close.
 - **The hard constraint** (`lib.rs:27-33`): `NodeId(usize)` must stay
-  pointer-sized — serval-layout's Stylo style-sharing cache asserts
+  pointer-sized — genet-layout's Stylo style-sharing cache asserts
   `size_of::<NodeId>() == size_of::<usize>()` and packs it into an
   `OpaqueElement`. On wasm32 that is 32 bits total, which rules out
   always-on generation/doc-tag packing in the id. Any reclamation design
@@ -79,7 +79,7 @@ updated with the piccolo entry).
    side-table (which forces generation bits back in, and the wasm32
    packing problem with them) — a deliberate later trade, out of scope
    here.
-3. **One gc-arena rev across the tree.** When serval takes the dep, pin it
+3. **One gc-arena rev across the tree.** When genet takes the dep, pin it
    deliberately at the workspace level (check crates.io's latest release
    against kyren's pinned rev first, per the workspace-pins doctrine) and
    point the piccolo fork at the same pin.
@@ -111,9 +111,9 @@ entries. Per-backend:
 - **Boa — DONE (real).** `boa_gc` exposes the weak primitive
   (`WeakGc::upgrade`), but the `JsObject → WeakGc` bridge was private
   (`JsObject::inner: Gc<…>`). Added an additive vendored patch to
-  `Code/crates/boa` (`serval` branch, same HEAD as the build): a public
+  `Code/crates/boa` (`genet` branch, same HEAD as the build): a public
   `JsObject::downgrade() -> WeakJsObject` + `WeakJsObject::upgrade()`.
-  serval's `[patch.crates-io]` now points boa_engine/boa_gc at the local
+  genet's `[patch.crates-io]` now points boa_engine/boa_gc at the local
   path (like the vendored piccolo fork) so the patch builds without a
   push. `script-engine-boa`'s cache now holds `WeakJsObject`;
   `drain_dead_reflectors` sweeps and reports collected reflectors. Tested
@@ -122,7 +122,7 @@ entries. Per-backend:
 - **Nova — DONE (real).** The WeakRef route turned out tractable: a
   reflector `EmbedderObject` *is* already a valid `WeakKey` (the enum lists
   it), so no enum surgery was needed. Three vendored changes to
-  `Code/crates/nova` (serval-embedder branch, same HEAD as the build):
+  `Code/crates/nova` (genet-embedder branch, same HEAD as the build):
   1. *Additive native API* on `EmbedderObject`: `into_weak_ref` /
      `from_weak_ref` (over the existing pub(crate) `WeakRef::set_target` /
      `get_target` + `Heap::create`) and a `clear_weak_ref_kept_objects`
@@ -140,7 +140,7 @@ entries. Per-backend:
   `script-engine-nova`'s canonical cache now holds a `WeakRef` (rooted via
   `Global`, target weak) per reflector; `drain_dead_reflectors` derefs each
   and reports the collected ones. Tested end-to-end
-  (`reflector_for_reports_death_after_gc`). serval's nova_vm patch repointed
+  (`reflector_for_reports_death_after_gc`). genet's nova_vm patch repointed
   to the local path (same bare-clone trade-off as boa).
 - **Piccolo — DONE (real, no fork).** piccolo *is* gc-arena
   (`UserData::into_inner` → `Gc::downgrade` → `GcWeak`). The canonical cache
@@ -151,7 +151,7 @@ entries. Per-backend:
   reported and swept. No fork patch needed.
 
 The bare-clone trade-off (local-path boa patch) and the option to push the
-patch upstream to mark-ik/boa to restore it are noted in serval's root
+patch upstream to mark-ik/boa to restore it are noted in genet's root
 `Cargo.toml`.
 
 - Probe both vendored engines for death reporting: Boa's
@@ -224,10 +224,10 @@ live) and every cross-frame holder reads through an `Option`-returning lookup:
   detached id, but consumers *apply* it (remove), never read live data off
   it; the log is drained each frame.
 - *meerkat caches / popup anchors*: meerkat is **cross-repo** (the mere
-  workspace), not in serval. It consumes this contract; its 44+63 suites are
+  workspace), not in genet. It consumes this contract; its 44+63 suites are
   the consumer-side guard and are audited there, not here.
 
-No serval-side fixes were required; the contract is documented and the slab
+No genet-side fixes were required; the contract is documented and the slab
 churn test is the regression guard, so G3 changes the allocator, not the
 contract.
 
@@ -289,30 +289,30 @@ suite and meerkat's 44+63 stay green; and a soak (the orrery's 400-frame
 pattern plus DOM churn) shows no `collect`-pause regression in the A4-style
 frame timings.
 
-**Landed (2026-06-12).** `serval-scripted-dom`'s store is now
+**Landed (2026-06-12).** `genet-scripted-dom`'s store is now
 `HashMap<usize, Node>` over a no-dep deterministic FNV `BuildHasherDefault`,
 keyed by a monotonic `next_id`; the G0 fence's pack/index feed it unchanged.
 `collect(extra_roots)` is the undirected mark-sweep; `live_node_count` is the
 bounded-memory signal. The host helpers `collect_dom(dom, &pins)` and
-`pump_retire_collect(engine, pins, dom)` (in `serval-scripted`) drive it from
+`pump_retire_collect(engine, pins, dom)` (in `genet-scripted`) drive it from
 the G1 pin set. Tests: `collect_reaps_unpinned_orphans_keeps_pinned_components`
 (undirected — a pin on a deep leaf spares its ancestors),
 `collect_bounds_memory_under_churn` (store back to baseline after 500×9-node
 cycles while `next_id` climbs past 4000 — the plateau vs the slab's growth),
 `idle_collect_reaps_orphans_without_mutations`,
 `secondary_document_subtree_survives_collect`, and
-`collect_dom_uses_pins_as_roots`. All 14 scripted-dom + 7 serval-scripted
-tests green; downstream stays green (serval-layout 55, xilem-serval 48,
+`collect_dom_uses_pins_as_roots`. All 14 scripted-dom + 7 genet-scripted
+tests green; downstream stays green (genet-layout 55, xilem-serval 48,
 pelt-live 21 **incl. `cascade_is_deterministic`**, script-runtime-api 159);
-**serval-scripted-dom compiles for wasm32**.
+**genet-scripted-dom compiles for wasm32**.
 
 Two carve-outs remain. (1) *Cadence wiring* — **correction (2026-06-12)**: the
 persistent host loop *does* exist — it's `script-runtime-api::Runtime` (owns the
 engine + the `ScriptedDom` in `HostState`, runs `run_microtasks` /
 `run_event_loop` / `run_timers`). The pin table was moved down to
-`serval-scripted-dom` as `Pins` (keyed on `NodeId`) so `Runtime` can use it
+`genet-scripted-dom` as `Pins` (keyed on `NodeId`) so `Runtime` can use it
 through its existing dep — *not* via a dep on the Nova-specific, layout-dragging
-`serval-scripted`. **The tick is now wired (2026-06-12).** Audited the reflector surface: **19**
+`genet-scripted`. **The tick is now wired (2026-06-12).** Audited the reflector surface: **19**
 `reflector_for` handoffs in `dom.rs`, **zero** `make_reflector` — all 19 now
 route through `reflect_pinned` (pin the node in `HostState.pins`, then
 `reflector_for`), so pin-on-mint is complete (no unpinned handoff that
@@ -441,14 +441,14 @@ front-loads visible wins.
 
 - **Nova weak-hook absence** — Boa's weak hook is now landed (vendored
   `JsObject::downgrade` patch); Nova's is the remaining lift (weak-global or
-  `EmbedderObject` finalization on the serval-embedder branch). Mitigated
+  `EmbedderObject` finalization on the genet-embedder branch). Mitigated
   meanwhile by the G1 fallback mode (today's lifetime, named).
 - **Arena-entry overhead** (every `ScriptedDom` method enters
   `arena.mutate`) — measure in G3's soak; expected noise-level against the
   cascade, but it is the refit's main perf unknown.
 - **gc-arena API infection** — rule 1 is the guard; if `'gc` ever wants to
   escape into a public signature, stop and redesign.
-- **Pin skew** — piccolo pins kyren's git rev while serval would want a
+- **Pin skew** — piccolo pins kyren's git rev while genet would want a
   released gc-arena; resolve at G3 entry with one workspace pin for both
   (rule 3).
 
@@ -467,7 +467,7 @@ front-loads visible wins.
   orphans, not only a drain-boundary tick; (4) every document root
   (including `create_document`'s secondaries) must be a gc-arena root or
   G2's "attached is always live" half breaks. No phase reordering.
-- **2026-06-11** — **G0 landed** in `serval-scripted-dom/lib.rs`. Each
+- **2026-06-11** — **G0 landed** in `genet-scripted-dom/lib.rs`. Each
   `ScriptedDom` mints a process-unique `doc_tag` from a global atomic; on
   64-bit debug builds the tag packs into a `NodeId`'s high 16 bits
   (index in the low 48) and a centralized `index()` accessor
@@ -479,7 +479,7 @@ front-loads visible wins.
   `secondary_root_is_same_document` (no false positive across
   `create_document`), `distinct_documents_get_distinct_tags`; all 8
   scripted-dom tests green, release build warning-clean, and
-  serval-layout / serval-scripted / script-runtime-api still build
+  genet-layout / genet-scripted / script-runtime-api still build
   unchanged (rule 1 held). Next entry point: G4 (piccolo backend, no DOM
   dependency) or G1's reflector-death probe.
 - **2026-06-11** — **G1 seam + fallback landed.** Added
@@ -487,14 +487,14 @@ front-loads visible wins.
   `script-engine-api` (default = empty = the epoch-pin fallback, documented).
   Added `ReflectorPins` (per-document pin/unpin/retire/clear table, keyed on
   `ReflectorData`, engine-agnostic) and `pump_and_retire` (pump + drain →
-  retire) at the `serval-scripted` crate root. Probe verdict recorded above:
+  retire) at the `genet-scripted` crate root. Probe verdict recorded above:
   real death-reporting is a fork patch on both backends (Boa
   `JsObject::downgrade`; Nova weak-global / `EmbedderObject` finalization), so
   both ship the explicit fallback override with the precise patch named at the
   impl site. Tests: `pin_unpin_and_retire`, `clear_is_the_epoch_pin_teardown`,
   and `nova_fallback_keeps_pins_until_teardown` (mints a reflector, drops it,
   pumps, asserts the pin survives — the fallback as the documented mode); all
-  green across script-engine-api / script-engine-boa / serval-scripted, rule 1
+  green across script-engine-api / script-engine-boa / genet-scripted, rule 1
   consumers unchanged. **Open decision for Mark:** do the two fork hooks now
   (real-GC reclamation, but cross-repo churn on mark-ik/boa + mark-ik/nova),
   or stay on the documented fallback until the scripted lane matures (G3's
@@ -512,15 +512,15 @@ front-loads visible wins.
   `reflector_for` canonical identity, and pump/deviation. Documented
   deviations: null/undefined both → Lua `nil`; no Promise (host-promise
   methods error / no-op; `pump` is always `Quiescent`). Whole script-engine
-  family + serval-scripted still build. Pin note: piccolo pulls gc-arena
-  `5a7534b` transitively; serval takes no direct gc-arena dep until G3
+  family + genet-scripted still build. Pin note: piccolo pulls gc-arena
+  `5a7534b` transitively; genet takes no direct gc-arena dep until G3
   (rule 3's workspace pin is resolved there). Next structural piece: G2
   (the dangle-contract audit), which gates G3.
 - **2026-06-11** — **G1 real reclamation landed on Boa** (Mark green-lit the
-  fork patch). Vendored an additive patch to `Code/crates/boa` (`serval`
+  fork patch). Vendored an additive patch to `Code/crates/boa` (`genet`
   branch): public `JsObject::downgrade() -> WeakJsObject` +
   `WeakJsObject::upgrade()` (plus a manual `Debug` to keep the fork
-  warning-clean). Repointed serval's `[patch.crates-io]` boa_engine/boa_gc
+  warning-clean). Repointed genet's `[patch.crates-io]` boa_engine/boa_gc
   to the local path (consistent with the vendored piccolo fork; bare-clone
   trade-off + the push-upstream alternative documented in root
   `Cargo.toml`). `script-engine-boa`'s canonical cache now holds
@@ -528,7 +528,7 @@ front-loads visible wins.
   reflectors. New test `reflector_for_reports_death_after_gc`: canonical
   `===` identity holds while referenced, then drop + `boa_gc::force_collect`
   → drain reports `[0x42]`, second drain empty. All 7 boa + 6 piccolo + 6
-  serval-scripted tests green. Nova stays on the documented fallback (bigger
+  genet-scripted tests green. Nova stays on the documented fallback (bigger
   fork lift). Also **scoped the piccolo host-promise bridge** (see the
   G4-promise section): coroutine-yield awaitable, `settle`→`resume`, real
   `pump`, with deviations. Remaining reclamation lift: Nova weak hook,
@@ -563,9 +563,9 @@ front-loads visible wins.
   pinning every reflector; it now `take`s them. `script-engine-nova`'s
   canonical cache holds a `WeakRef` per reflector; `drain_dead_reflectors`
   derefs and reports the dead. Repointed nova_vm to the local vendored path.
-  Test `reflector_for_reports_death_after_gc` green; serval-scripted's
+  Test `reflector_for_reports_death_after_gc` green; genet-scripted's
   `non_canonical_reflector_pin_survives_until_teardown` re-framed (Nova is no
-  longer fallback). All script-engine + serval-scripted + script-runtime-api
+  longer fallback). All script-engine + genet-scripted + script-runtime-api
   tests green. Next: the promise bridge (G4-promise), then G2.
 - **2026-06-11** — **G4-promise landed** (piccolo host-promise bridge). Global
   `await(p)` suspends the running executor (via `Execution::executor`, stash,
@@ -589,7 +589,7 @@ front-loads visible wins.
   no correctness violations — ids never alias and every holder reads through
   an `Option` lookup, so the worst case is a bounded registry memory leak
   cleaned on view teardown, exactly the plan's prediction. meerkat is
-  cross-repo (mere), audited there. No serval-side fixes needed. **G3 is now
+  cross-repo (mere), audited there. No genet-side fixes needed. **G3 is now
   unblocked** (G1 + G2 done); its done-conditions already carry the four
   folded refinements (prunable side-table, wasm32 id ceiling, idle collection
   tick, secondary-root registration).
@@ -604,24 +604,24 @@ front-loads visible wins.
   Implemented: store → `HashMap<usize, Node>` (deterministic FNV hasher, so
   byte-determinism holds incl. wasm), monotonic `next_id`, document-roots
   list, `collect(extra_roots)` mark-sweep, `live_node_count`; host drivers
-  `collect_dom` / `pump_retire_collect` in `serval-scripted`. 5 new collection
+  `collect_dom` / `pump_retire_collect` in `genet-scripted`. 5 new collection
   tests (bounded-memory plateau, undirected pin-component, idle reap,
   secondary-root safety, host pin-roots) + all prior green; downstream green
-  (serval-layout / xilem-serval / pelt-live incl. determinism /
+  (genet-layout / xilem-serval / pelt-live incl. determinism /
   script-runtime-api); compiles for wasm32. Then **did carve-out #3**:
   secondary documents are pin-kept, not permanent roots, so a dropped
   `createHTMLDocument` auto-collects (no leak) and the roots list collapses to
-  the primary root. Remaining carve-outs (need other pieces, not serval-layout):
+  the primary root. Remaining carve-outs (need other pieces, not genet-layout):
   live-loop cadence wiring (waits on the persistent scripted host loop) and the
   orrery perf soak (runtime harness). **All of G0–G4 are now done.**
 - **2026-06-12** — **Pin table relocated (G3 cadence prep).** Moved the
-  reflector-pin table from `serval-scripted` down to `serval-scripted-dom` as
+  reflector-pin table from `genet-scripted` down to `genet-scripted-dom` as
   `Pins`, keyed on `NodeId` (was `ReflectorData`/`u64`) so it lives next to the
-  `collect` it feeds and carries no engine-type coupling; `serval-scripted`
+  `collect` it feeds and carries no engine-type coupling; `genet-scripted`
   re-exports it as `ReflectorPins` and keeps the engine-coupled helpers
   (`pump_and_retire`/`collect_dom`). Chosen over making the *generic*
-  `script-runtime-api` depend on the Nova-specific, `serval-layout`-dragging
-  `serval-scripted` (which would invert the layering and pull `nova_vm` into the
+  `script-runtime-api` depend on the Nova-specific, `genet-layout`-dragging
+  `genet-scripted` (which would invert the layering and pull `nova_vm` into the
   generic host). 16 scripted-dom + 5 scripted tests green; no other consumers.
   Identified the live host loop as `script-runtime-api::Runtime`; the GC-tick
   wiring (pin-on-mint + `collect_garbage`) is the next step (see G3 carve-out

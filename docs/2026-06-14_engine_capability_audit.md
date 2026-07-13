@@ -1,13 +1,13 @@
 # Engine capability audit: hit-testing + browser-readiness, re-grounded
 
 **Date:** 2026-06-14. **Method:** two parallel-agent sweeps verified against the
-actual serval + mere code (file:line), prompted by the inline-link hit-testing
+actual genet + mere code (file:line), prompted by the inline-link hit-testing
 gap. The prior roadmap labels were steering by a stale 2026-06-12 scoping
 snapshot; this corrects them.
 
 ## Landed this session
 
-- **Inline-box hit-testing** (`serval-layout/inline_hit.rs`, commit
+- **Inline-box hit-testing** (`genet-layout/inline_hit.rs`, commit
   `4a159c24074`). A `display:inline` element establishes no box, so the block
   hit-walk could only resolve its containing block; `construct` now records a
   byte-range -> source-element index per inline-formatting leaf, `BoxTree`
@@ -36,7 +36,7 @@ snapshot; this corrects them.
   Tab. (Only scroll-into-view / tabindex / autofocus remain.)
 - **CSS text-decoration** all three lines (overline reconstructed from the
   source run, since parley carries none).
-- **A11y tree + OS adapters** (`serval-render/a11y.rs` -> AccessKit; meerkat
+- **A11y tree + OS adapters** (`genet-render/a11y.rs` -> AccessKit; meerkat
   wires Win/macOS/Linux). Block-level bounds present.
 - Host-side form controls + IME preedit (xilem-serval). Affordances query.
   Tab-drag / divider-drag gestures (pelt).
@@ -77,11 +77,11 @@ Follow-ons (recorded, not done):
 
 The original plan, for reference — a **data-flow gap, not an algorithm gap**:
 the paint walk translates descendants by `-offset` (`paint_emit.rs:850`) and the
-hit walk maps the query point through `+offset` (`serval_lane.rs:450`) already,
+hit walk maps the query point through `+offset` (`genet_lane.rs:450`) already,
 both tested; the feature is dead only because `incremental.rs` always passes
 `ScrollOffsets::default()`, so the per-element map is perpetually empty.
 
-Slice (self-contained in serval-layout, no public-API break):
+Slice (self-contained in genet-layout, no public-API break):
 
 1. `IncrementalLayout` retains an `element_scroll: ScrollOffsets<Id>` field,
    parallel to how `Viewport` retains document scroll.

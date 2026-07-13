@@ -1,17 +1,17 @@
 [package]
 name = "serval-chisel"
 version = "0.1.0"
-repository = "https://github.com/mark-ik/serval"
+repository = "https://github.com/mark-ik/genet"
 publish = true
 authors.workspace = true
-# License: workspace default (MPL-2.0) while chisel lives inside the serval
+# License: workspace default (MPL-2.0) while chisel lives inside the genet
 # workspace. chisel is new, engine-neutral code (not Servo-derived); relicense
 # at spinout to match the standalone wgpu-sibling libs. See
 # docs/2026-07-07_chisel_widget_leaf_design.md.
 license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Custom-paint widget leaves for the serval host: a small contract that plugs a leaf into serval's layout / paint / input / a11y passes."
+description = "Custom-paint widget leaves for the genet host: a small contract that plugs a leaf into genet's layout / paint / input / a11y passes."
 
 [lib]
 name = "chisel"
@@ -19,7 +19,7 @@ path = "src/lib.rs"
 
 # Engine-neutral: chisel targets the paint seam (`paint_list_api`, the netrender
 # common vocabulary), accesskit, and vello (Path-B scene leaves encode a
-# vello::Scene CPU-side; rasterization stays with the host) — not the serval
+# vello::Scene CPU-side; rasterization stays with the host) — not the genet
 # engine concretely.
 [dependencies]
 paint_list_api = { workspace = true }

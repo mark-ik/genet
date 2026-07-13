@@ -1,6 +1,6 @@
 # Scope: z-index / stacking and the remaining form controls
 
-Forward scope for the serval-as-host track after Stage 6 (scrolling). It covers
+Forward scope for the genet-as-host track after Stage 6 (scrolling). It covers
 the no-z-index gap that scrolling surfaced, and the three open T2 form controls
 (radio, textarea, slider). Each section gives the current state, what the work
 needs, the done condition, relative size, and dependencies.
@@ -36,10 +36,10 @@ workaround and makes overlays, popups, and dropdowns robust.
 
 - Done when: an absolutely-positioned box declared before a later in-flow
   sibling paints over it, and `z-index` orders two overlapping positioned boxes.
-- Size: medium, engine-only (serval-layout `paint_emit`). The walk gathers each
+- Size: medium, engine-only (genet-layout `paint_emit`). The walk gathers each
   positioned subtree into a deferred list keyed by `(z-index, document-order)`,
   emits the in-flow pass, then emits the sorted list.
-- Also touches hit-testing: `ServalLaneView` must resolve the topmost positioned
+- Also touches hit-testing: `GenetLaneView` must resolve the topmost positioned
   element first so clicks match paint. Without this, paint and hit-test disagree
   (the bug we just worked around by ordering).
 
@@ -75,7 +75,7 @@ clicking one selects it and deselects the rest.
 
 ## 3. textarea (multiline text)
 
-**Status: done (`99998dae76a`).** Confirmed serval feeds raw text to parley,
+**Status: done (`99998dae76a`).** Confirmed genet feeds raw text to parley,
 which breaks at `\n`, so newlines render as line breaks with no engine work. Up
 / down navigate `\n`-delimited (hard) lines; soft-wrap visual-line navigation
 (needs the layout) is the remaining refinement.
@@ -132,4 +132,4 @@ exists.
    reusable for scrollbar-drag, resize, and drag-tab-out.
 
 IME (the Mere-flip long pole) sits outside this scope; see the staging section
-of `2026-05-27_serval_as_host_xilem_serval_plan.md`.
+of `2026-05-27_genet_as_host_xilem_serval_plan.md`.

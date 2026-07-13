@@ -28,7 +28,7 @@ default = ["viewer-netrender"]
 # viewer-engine pulls the desktop host (smoke runners, present backends).
 # The Masonry-era Xilem viewer (pelt-viewer) was retired 2026-06-12 — its
 # CPU-readback render path predated direct present; pelt-live is the
-# on-screen serval window until a serval-native viewer mode is built on the
+# on-screen genet window until a genet-native viewer mode is built on the
 # pelt-core/pelt-desktop contracts. (The egui chrome crate was retired
 # 2026-05-20 before it.)
 viewer-engine = ["dep:pelt-desktop"]
@@ -59,16 +59,16 @@ netfetch = ["viewer-engine", "pelt-desktop/viewer", "pelt-desktop/netfetch"]
 # renders a native, per-site-themed capsule (gemtext / gopher / feed) over the errand
 # transport. Off by default — the async network stack is opt-in.
 smolweb = ["viewer-engine", "pelt-desktop/viewer", "pelt-desktop/chrome", "pelt-desktop/smolweb"]
-# C4 headed-presentation smoke. Pulls serval's `WindowsDxgiBackend`
+# C4 headed-presentation smoke. Pulls genet's `WindowsDxgiBackend`
 # in through `pelt-desktop`. Inner code is `cfg(target_os = "windows")`
 # gated so the feature still builds on non-Windows hosts.
 windows-present = ["viewer-engine", "pelt-desktop/windows-present"]
-# C4 headed-presentation smoke on macOS / iOS. Pulls serval's
+# C4 headed-presentation smoke on macOS / iOS. Pulls genet's
 # `MacosCALayerBackend` in through `pelt-desktop`. Inner code is
 # `cfg(target_vendor = "apple")` gated so the feature still builds
 # on non-Apple hosts.
 macos-present = ["viewer-engine", "pelt-desktop/macos-present"]
-# C4 headed-presentation smoke on Linux. Pulls serval's
+# C4 headed-presentation smoke on Linux. Pulls genet's
 # `WaylandSubsurfaceBackend` in through `pelt-desktop`. Inner code is
 # `cfg(target_os = "linux")` gated so the feature still builds
 # on non-Linux hosts.

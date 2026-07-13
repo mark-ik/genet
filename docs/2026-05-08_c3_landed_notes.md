@@ -7,7 +7,7 @@ conditions for C4.
 
 Companion to:
 
-- [archive/2026-05-05_serval_netrender_cut_plan.md](./archive/2026-05-05_serval_netrender_cut_plan.md) — overall cut plan (archived 2026-05-17)
+- [archive/2026-05-05_genet_netrender_cut_plan.md](./archive/2026-05-05_genet_netrender_cut_plan.md) — overall cut plan (archived 2026-05-17)
 - [archive/2026-05-06_c3_layout_reshape_plan.md](./archive/2026-05-06_c3_layout_reshape_plan.md) — the C3 layout-reshape plan that was executed (archived 2026-05-17)
 
 ---
@@ -29,20 +29,20 @@ The plan's done condition was *"`cargo check -p servo` reaches script through la
 
 | File | Change |
 |---|---|
-| [components/layout/display_list/conversions.rs](../components/layout/display_list/conversions.rs) | `ToWebRender` impls retargeted to `paint_types` + `paint_api::serval_display_list::FilterOp`. New `FilterOp` shape (single-arg `Blur`/`Opacity`, struct-variant `DropShadow`). |
-| [components/layout/display_list/mod.rs](../components/layout/display_list/mod.rs) | Local `wr` shim re-exports paint-side types under historical names. `DisplayListBuilder::build` returns `ServalDisplayList`. `webrender_api::*` direct refs replaced. `CommonItemPlacement` uses webrender field names (`clip_rect`/`spatial_id`/`clip_chain_id`). |
+| [components/layout/display_list/conversions.rs](../components/layout/display_list/conversions.rs) | `ToWebRender` impls retargeted to `paint_types` + `paint_api::genet_display_list::FilterOp`. New `FilterOp` shape (single-arg `Blur`/`Opacity`, struct-variant `DropShadow`). |
+| [components/layout/display_list/mod.rs](../components/layout/display_list/mod.rs) | Local `wr` shim re-exports paint-side types under historical names. `DisplayListBuilder::build` returns `GenetDisplayList`. `webrender_api::*` direct refs replaced. `CommonItemPlacement` uses webrender field names (`clip_rect`/`spatial_id`/`clip_chain_id`). |
 | [components/layout/display_list/stacking_context.rs](../components/layout/display_list/stacking_context.rs) | Imports retargeted; `FilterOp::Opacity` arity dropped 2 → 1; `ReferenceFrameKind` simplified to unit variants (optimization-hint fields deferred). |
 | [components/layout/display_list/background.rs](../components/layout/display_list/background.rs), [gradient.rs](../components/layout/display_list/gradient.rs) | Imports + body retargets. `builder.wr().create_*_gradient(...)` replaced with direct `GradientPayload` construction. |
 | [components/layout/display_list/hit_test.rs](../components/layout/display_list/hit_test.rs) | Picks up `BoxCorners` trait (added to paint_types::units). |
-| [components/layout/style_ext.rs](../components/layout/style_ext.rs) | `wr::PrimitiveFlags` → `paint_api::serval_display_list::PrimitiveFlags`. |
-| [components/layout/layout_impl.rs](../components/layout/layout_impl.rs) | Imports retargeted; empty + main `send_display_list` paths use `ServalDisplayList`; `paint_info` plumbed through (was a FIXME); `send_initial_transaction` removed in favor of lazy painter-side init. |
+| [components/layout/style_ext.rs](../components/layout/style_ext.rs) | `wr::PrimitiveFlags` → `paint_api::genet_display_list::PrimitiveFlags`. |
+| [components/layout/layout_impl.rs](../components/layout/layout_impl.rs) | Imports retargeted; empty + main `send_display_list` paths use `GenetDisplayList`; `paint_info` plumbed through (was a FIXME); `send_initial_transaction` removed in favor of lazy painter-side init. |
 
 ### Shared paint-side surface
 
 | File | Change |
 |---|---|
 | [components/shared/paint/lib.rs](../components/shared/paint/lib.rs) | `PaintMessage::SendDisplayList` carries `paint_info: PaintDisplayListInfo` alongside the `display_list`. `CrossProcessPaintApi::send_display_list` takes 3 args. |
-| [components/shared/paint/serval_display_list.rs](../components/shared/paint/serval_display_list.rs) | ~30 webrender-shaped compat methods on `ServalDisplayList` (`push_rect` / `push_image` / `push_text` / `push_border` / `push_box_shadow` / `push_gradient` / `push_iframe` / `push_hit_test` / `push_stacking_context` / `push_reference_frame` / `define_clip_rect` / `define_clip_rounded_rect` / `define_clip_chain` / `define_scroll_frame` / `define_sticky_frame` + `begin`/`end`/`dump_serialized_display_list` no-ops). Stub types: `ComplexClipRegion`, `Shadow`, `SpaceAndClipInfo`, `HasScrollLinkedEffect`, `WrClipId`. Unified on `paint_types::SpatialId`/`PropertyBindingKey`/`PropertyValue` (re-exported as `PropertyBinding`); duplicates dropped. |
+| [components/shared/paint/genet_display_list.rs](../components/shared/paint/genet_display_list.rs) | ~30 webrender-shaped compat methods on `GenetDisplayList` (`push_rect` / `push_image` / `push_text` / `push_border` / `push_box_shadow` / `push_gradient` / `push_iframe` / `push_hit_test` / `push_stacking_context` / `push_reference_frame` / `define_clip_rect` / `define_clip_rounded_rect` / `define_clip_chain` / `define_scroll_frame` / `define_sticky_frame` + `begin`/`end`/`dump_serialized_display_list` no-ops). Stub types: `ComplexClipRegion`, `Shadow`, `SpaceAndClipInfo`, `HasScrollLinkedEffect`, `WrClipId`. Unified on `paint_types::SpatialId`/`PropertyBindingKey`/`PropertyValue` (re-exported as `PropertyBinding`); duplicates dropped. |
 | [components/shared/paint-types/composite.rs](../components/shared/paint-types/composite.rs) | Added `MixBlendMode::PlusLighter`. |
 | [components/shared/paint-types/sticky.rs](../components/shared/paint-types/sticky.rs) | Added `StickyOffsetBounds::new(min, max)`. |
 | [components/shared/paint-types/units.rs](../components/shared/paint-types/units.rs) | Added `BoxCorners` trait (`top_left`/`top_right`/`bottom_left`/`bottom_right` for `Box2D`). |
@@ -62,9 +62,9 @@ The plan's done condition was *"`cargo check -p servo` reaches script through la
 ## Translator coverage
 
 What `translate_display_list` does today, in the order each variant
-appears in `ServalDisplayItem`:
+appears in `GenetDisplayItem`:
 
-| `ServalDisplayItem` | `netrender::SceneOp` (or other) | Notes |
+| `GenetDisplayItem` | `netrender::SceneOp` (or other) | Notes |
 |---|---|---|
 | `Rect` | `SceneRect` via `push_rect` | Full coverage. |
 | `RectWithAnimation` | `SceneRect` via `push_rect` | Static color (animation hook deferred — `paint_info.caret_property_binding` is consulted but not advanced per-frame yet). |
@@ -145,7 +145,7 @@ Plus the unresolved imports `paint_api::rendering_context` and
 `components/servo/lib.rs:49,54`.
 
 C4 design sketch is in
-[archive/2026-05-05_serval_netrender_cut_plan.md § C4](./archive/2026-05-05_serval_netrender_cut_plan.md#c4--build-servocompositor-adapter)
+[archive/2026-05-05_genet_netrender_cut_plan.md § C4](./archive/2026-05-05_genet_netrender_cut_plan.md#c4--build-servocompositor-adapter)
 (archived 2026-05-17).
 
 ---
@@ -165,10 +165,10 @@ direction-neutral at the data level (`InteropBackend`,
 trait is import-coupled — `producer_complete(&NativeFrame)` and
 `consumer_ready(&ImportedTexture)` take parameter shapes that don't
 exist in the export direction. To use WNTI we'd either patch its
-trait (forbidden — WNTI is not getting reshaped to fit serval) or
+trait (forbidden — WNTI is not getting reshaped to fit genet) or
 fabricate dummy `NativeFrame` values to satisfy the signature. Both
 are worse than mirroring the small direction-neutral foundation in
-serval.
+genet.
 
 The extracted surface:
 
@@ -189,11 +189,11 @@ What's *missing* compared to WNTI — and why that's fine:
   backend impl calls into directly. No import-direction wrapping.
 - No `NativeFrame` / `ImportedTexture` / `WgpuTextureImporter` /
   `vulkan_dmabuf` / `raw_gl` / `surfman_gl` / `ProducerCapabilities`.
-  These are import-side only; serval has no use for them.
+  These are import-side only; genet has no use for them.
 - No `thiserror` dep — `InteropError` impls `Display` + `Error` by
   hand (the enum is small).
 
-Serval's `components/paint` does not import any WNTI symbol; only
+Genet's `components/paint` does not import any WNTI symbol; only
 the `windows` crate (Windows-only target dep) is added directly.
 Re-exports surface from
 [`components/paint/lib.rs`](../components/paint/lib.rs):

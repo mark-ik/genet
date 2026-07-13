@@ -3,7 +3,7 @@ name = "spartan-protocol"
 version = "0.1.1"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/mark-ik/serval"
+repository = "https://github.com/mark-ik/genet"
 description = "A spec-faithful implementation of the Spartan protocol (spartan://): async client, server with a handler seam, static file serving, and a CLI. Plaintext smolweb with uploads via the =: prompt."
 keywords = ["spartan", "smolweb", "gemini", "protocol", "gemtext"]
 categories = ["network-programming"]

@@ -1,0 +1,87 @@
+[package]
+name = "genet-layout"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Profile-neutral layout engine for genet; consumes any LayoutDom-shaped DOM and emits GenetPaintList."
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+accesskit = { workspace = true }
+app_units = { workspace = true }
+atomic_refcell = { workspace = true }
+data-url = { workspace = true }
+cssparser = { workspace = true }
+euclid = { workspace = true }
+# Font enumeration + family resolution (fontique) and font metrics reading
+# (skrifa) — the same stack parley uses, so the cascade's font-metrics provider
+# resolves fonts identically to text layout (font-relative units: ex/ch/cap/ic).
+fontique = { workspace = true, features = ["system"] }
+html5ever = { workspace = true }
+image = { workspace = true }
+skrifa = { workspace = true }
+# layout_api = { workspace = true }  # EXPERIMENT: genet-layout uses parley, not servo-fonts/layout-api
+layout_dom_api = { workspace = true }
+markup5ever = { workspace = true }
+malloc_size_of = { workspace = true }
+malloc_size_of_derive = { workspace = true }
+engine_observables_api = { workspace = true }
+url = { workspace = true }
+paint_list_api = { workspace = true }
+paint_types = { workspace = true }
+parley = { workspace = true }
+pixels = { workspace = true }
+# Parallel inline-text shaping pre-pass (see box_tree::layout_via_box_tree):
+# fans the width-independent shaping of inline leaves across a work-stealing
+# pool before Taffy's serial measure walk. Already in the workspace via Stylo.
+rayon = { workspace = true }
+# SVG background-image / <img> rasterization. resvg re-exports usvg + tiny_skia,
+# so the whole SVG decode path (parse → rasterize to RGBA) needs only this crate.
+# Pinned via the workspace at the upstream-current 0.47 (unified with masonry's
+# resvg; the older 0.45 servo-malloc-size-of pulled was bumped to match).
+resvg = { workspace = true }
+serde = { workspace = true }
+rustc-hash = { workspace = true }
+selectors = { workspace = true }
+servo_arc = { workspace = true }
+# servo-base = { workspace = true }  # EXPERIMENT: unused by genet-layout source
+servo-url = { workspace = true }
+style = { workspace = true }
+stylo_atoms = { workspace = true }
+stylo_dom = { workspace = true }
+stylo_static_prefs = { workspace = true }
+stylo_traits = { workspace = true }
+# stylo_taffy pins taffy to this exact experimental pre-release, so
+# genet-layout overrides the workspace taffy 0.10.1 to match (the two
+# must resolve to one taffy version since stylo_taffy returns
+# `taffy::Style` we consume). Reach is genet-layout + paint's dev-dep;
+# Servo's components/layout stays on 0.10.1. See
+# docs/2026-05-20_stylo_taffy_adoption_plan.md.
+taffy = { version = "=0.12.1", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "float_layout", "calc", "content_size", "detailed_layout_info"] }
+stylo_taffy = { version = "0.3.0-beta.1", features = ["floats"] }
+# Host-neutral diagnostics facade: this crate only EMITS tracing events; the
+# consuming app (e.g. meerkat) installs the subscriber. No dep on any app or
+# diagnostics registry.
+tracing = "0.1"
+
+# std::time::Instant panics on wasm32-unknown-unknown ("time not implemented");
+# web-time is the drop-in Instant backed by performance.now() there and a
+# re-export of std on native. Only the diagnostics timer in lay_out_content
+# needs it (the GENET_LAYOUT_TIMING probes are env-gated, dead on wasm).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-time = "1"
+
+[dev-dependencies]
+base64 = { workspace = true }
+serde_json = { workspace = true }
+genet-static-dom = { path = "../genet-static-dom" }
+# Mutable DOM provider — drives the snapshot-builder tests (set_attribute →
+# DomMutation → build_snapshot_map). No cycle: genet-scripted-dom depends
+# only on layout-dom-api, not genet-layout.
+genet-scripted-dom = { path = "../genet-scripted-dom" }

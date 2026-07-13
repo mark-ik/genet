@@ -7,7 +7,7 @@ top missing host globals to the binding bootstrap. No regressions.
 ## (2) Widened WPT sweep
 
 Previously swept: `dom/nodes`, `dom/traversal`, `dom/collections`. Now the rest of
-`dom/`, on Boa and Nova (release `serval-wpt`):
+`dom/`, on Boa and Nova (release `genet-wpt`):
 
 | subset | files | nova panics | boa panics | boa↔nova divergences |
 |---|---|---|---|---|

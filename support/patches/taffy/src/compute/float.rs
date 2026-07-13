@@ -480,7 +480,7 @@ impl FloatContext {
     /// which reflows to whatever the slot offers) matches the first vertically
     /// eligible band, preserving the prior behaviour.
     ///
-    /// serval patch: upstream `find_content_slot` took no `min_width` and
+    /// genet patch: upstream `find_content_slot` took no `min_width` and
     /// returned the first vertically eligible band regardless of its width, so a
     /// full-width float yielded a zero-width slot at its right edge and a
     /// fixed-width BFC child was placed there (overflowing) instead of dropping
@@ -556,7 +556,7 @@ impl FloatContext {
     /// omitted, since they exclude nothing from inline content. An empty result
     /// means no active floats below `min_y`.
     ///
-    /// serval patch (float wrap-around): a thin read over the existing
+    /// genet patch (float wrap-around): a thin read over the existing
     /// `segments` walk, the raw material for `BlockContext::inline_exclusion_bands`,
     /// which converts each segment into a content-box-local [`InlineFloatBand`]
     /// for parley line breaking.
@@ -581,7 +581,7 @@ impl FloatContext {
 /// breaking to give each line box its own (narrowed) width, so text wraps to
 /// the side of a float and reclaims the full column below it.
 ///
-/// serval patch (float wrap-around): produced by
+/// genet patch (float wrap-around): produced by
 /// [`FloatContext::exclusion_bands`] + `BlockContext::inline_exclusion_bands`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InlineFloatBand {

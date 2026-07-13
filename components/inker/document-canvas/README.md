@@ -1,7 +1,7 @@
 # document-canvas
 
 `document-canvas` is the document-view canvas for inker's block model
-(serval engine family; hosts: merecat's mere, pelt). It owns *within-document
+(genet engine family; hosts: merecat's mere, pelt). It owns *within-document
 layout*: parley-driven text shaping, simple block stacking, link
 interaction regions, and render-packet derivation for downstream
 rendering. Sibling to [`graph-canvas`](https://crates.io/crates/graph-canvas)

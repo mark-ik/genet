@@ -1,6 +1,6 @@
 # Local path overrides (gitignored, local-dev only) — OPTIONAL, never committed.
 #
-# Convention: serval's committed manifests reference every sibling repo by GIT
+# Convention: genet's committed manifests reference every sibling repo by GIT
 # (`git = "https://github.com/mark-ik/<repo>", branch = "main"`), so a bare clone
 # builds anywhere by fetching from GitHub. This file redirects those git-deps to
 # local working copies when present, so cross-repo edits rebuild without a push +
