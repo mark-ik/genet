@@ -1,24 +1,25 @@
 # The stylo fork: decomposition and opportunistic divergence
 
 **Date:** 2026-07-13
-**Status:** research + proposed tracks (Mark's framing: "we have a fork, and
-we should use it," opportunistically taking from upstream as with every
-fork). Grounding facts verified against the fork and serval this session.
+**Status:** Track U landed; decomposition tracks remain proposed (Mark's
+framing: "we have a fork, and we should use it," opportunistically taking
+from upstream as with every fork). Grounding facts verified against the fork
+and serval this session.
 
-Coordinates with the in-flight ring-3 fork rename
+Coordinates with the completed ring-3 fork rename
 ([2026-07-12_ring3_fork_rename_publish_plan.md](./2026-07-12_ring3_fork_rename_publish_plan.md)):
-the local checkout sits on `mark-ik/serval-publish-names` (stylo →
-`serval-stylo` and kin). Everything here that moves files LANDS AFTER that
-rename, on the renamed family, so the two surgeries never collide.
+the renamed `serval-stylo` family is now on fork `main` at `eec60c2464`.
+Everything here that moves files lands on that renamed family.
 
 ## The fork today (verified 2026-07-13)
 
-- **Divergence is shallow**: ~9 real fork commits on
-  `mark-ik/servo-media-features` atop servo's stylo — the media-feature
+- **Divergence is shallow**: fork `main` is v0.19.0 plus eight Serval
+  commits (seven behavior/refactor commits and the ring-3 rename). They
+  carry the media-feature
   tiers A–E (the fork's identity: geometry, device-capability,
   accessibility, display-mode/scripting, prefers-reduced-motion,
-  multi-capability pointer/hover) plus animation edge-fixes. Everything
-  else in `upstream/main..` is servo's own downstream. Merges are cheap
+  multi-capability pointer/hover) plus an animation edge-fix. Everything
+  else in `upstream/main..` is servo's own downstream. Realignment is cheap
   today; every proposal below is priced against keeping them cheap-ish.
 - **Anatomy**: `style` is the 75.6k-LOC monolith; inside it `values/` is
   47.8k (63%), `properties/` is 15.6k of source *plus mako templates that
@@ -174,12 +175,12 @@ fixes into main. Probed 2026-07-13 in a throwaway worktree; findings:
 *rebased* branch atop a pure Gecko-export `upstream` branch (sync.sh /
 sync-upstream.yml), so merge-bases against upstream land down on the
 Gecko line — the correct rebase base is the fork's own boundary. That
-boundary is exactly the **v0.18.0 tag** (`8bde0e96db`): the fork line is
+boundary was exactly the **v0.18.0 tag** (`8bde0e96db`): the old fork line was
 v0.18.0 + 11 Mark commits (tiers + pointer/hover + forced-color-adjust
-pair + animation fix + the ring-3 rename). Nobody pins `main` — serval
-pins `mark-ik/serval-publish-names`, mere pins
-`mark-ik/servo-media-features` — so building a realigned `main` has zero
-breakage window; consumers repoint deliberately afterwards.
+pair + animation fix + the ring-3 rename). At probe time nobody pinned
+`main`: serval pinned `mark-ik/serval-publish-names`, while mere pinned
+`mark-ik/servo-media-features`. That gave the realignment a zero-breakage
+window; both consumers now deliberately pin `main`.
 
 **The big finding: upstream v0.19.0 subsumed part of the fork.** Its
 MEDIA_FEATURES table has 15 entries: width, height, orientation,
@@ -192,7 +193,8 @@ those keeps compiling unchanged. Reconciliation per commit:
 
 | Fork commit | v0.19.0 | Action |
 | --- | --- | --- |
-| Tier A/B geometry (aspect-ratio, orientation, device-*, resolution) | present | drop (subsumed) |
+| Tier A geometry except device-aspect-ratio | present | drop the subsumed features |
+| device-aspect-ratio + Tier B constants (color, color-index, monochrome, grid) | absent | carry the residual five |
 | multi-capability pointer/hover | present, same API | drop (subsumed) |
 | prefers-reduced-motion | absent | carry |
 | Tier C accessibility | absent | carry |
@@ -203,22 +205,22 @@ those keeps compiling unchanged. Reconciliation per commit:
 | animation end-keyframe f32 fix | unknown | attempt; rebase drops it if already applied |
 | ring-3 rename | n/a | carry (Cargo.toml conflicts mechanical; versions become 0.19.0) |
 
-Post-realignment divergence: ~6 commits instead of 11, on a tagged
-release base. Bonus dissolved workaround: crates.io `stylo_taffy`
+Post-realignment divergence: eight focused commits instead of 11, on a
+tagged release base. The probe's estimate of about six missed the residual
+five-feature A/B slice; the media-query WPT wall caught it. Bonus dissolved
+workaround: crates.io `stylo_taffy`
 requires stylo `^0.19` — the whole vendored-stylo_taffy dance exists
 because the fork sat at 0.18; at 0.19 the version families align (the
 vendor stays for the rename, but the version skew goes).
 
-**Execution shape** (a focused session of its own — the semantic
-reconciliation plus verification walls make it more than a probe):
-worktree at v0.19.0 → cherry-pick the carried commits per the table,
-re-expressing the tier plumbing on upstream's Device → fast-forward
-`main` to the result and push (old branches untouched until consumers
-repoint) → repoint serval's seven workspace entries + the stylo_taffy
-vendor, sweep serval-layout for 0.18→0.19 API churn → full serval
-verification (workspace check, suites, the nine WPT baselines) →
-repoint mere's two patch entries last, coordinated with whatever lane
-is active there. Reference for tier semantics:
+**Landed 2026-07-13.** Fork `main` is `eec60c2464`; Serval `main` is
+`0c5fc79e9b6`; Mere `main` is `34f4d90`. The Serval sweep covered Device
+construction, native pointer capability setters, font-face computed values,
+variation settings, stylo_taffy's v0.19 API, and the new shape-radius enum.
+The workspace check, 320 serval-layout tests, focused paint/Xilem/scripted
+suites, seven testharness baselines, and two GPU reftest baselines are green.
+Mere's supported Meerkat check is green on the repointed graph. Reference
+for tier semantics:
 [2026-07-06_servo_media_feature_parity_plan.md](./2026-07-06_servo_media_feature_parity_plan.md).
 
 Track U goes FIRST — before profile overrides land anywhere and before
@@ -238,10 +240,9 @@ divergence we stop carrying.
 
 ## Order and done conditions
 
-0. **Track U realignment** (receipt: `main` = v0.19.0 + the carried
-   commits, pushed; serval repointed and fully green incl. WPT
-   baselines; mere repointed last). Everything below diffs against this
-   base.
+0. **Track U realignment: landed.** `main` = v0.19.0 + the carried
+   commits, pushed; Serval repointed and green including WPT baselines;
+   Mere repointed last. Everything below diffs against this base.
 1. Track 0.1 profile overrides land in serval + mere (receipt: link-time
    delta on `cargo build -p serval-layout` dev).
 2. Track 2b verification (receipt: no style pool thread in a serval run's
@@ -258,12 +259,8 @@ divergence we stop carrying.
 
 ## Open items
 
-- Ring-3 state as of 2026-07-13: the rename branch
-  (`mark-ik/serval-publish-names`, efaa436663) is pushed; T0–T3's
-  engineering landed and verified per the ring-3 plan; **nothing
+- Ring-3 state as of 2026-07-13: the rename is incorporated into realigned
+  fork `main`; the name-claim stubs are pushed and the publish commands are
+  prepared. **Nothing
   published** — `serval-stylo`/`serval-taffy` don't exist on crates.io,
   not even as name claims. Publishing stays Mark's per-crate call.
-- Whether stylo_taffy's vendored copy (support/patches/stylo_taffy) rides
-  the renamed family cleanly after ring 3 — it already git-deps
-  serval-stylo on the rename branch; the decomposition must keep it
-  building.
