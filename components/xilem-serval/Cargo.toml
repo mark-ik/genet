@@ -1,5 +1,12 @@
 [package]
-name = "xilem-serval"
+# The `serval-` prefix is the family convention for serval-coupled
+# infrastructure (own components + forks: serval-chisel, serval-xilem-core,
+# serval-stylo, ...); adopted independents that serve any host keep their own
+# names (inker, tinct, illume, verso-tile). This crate is serval's xilem host,
+# so it takes the prefix — and in that order: `xilem-*` is Linebender's
+# namespace, and publishing into it would imply an affiliation that does not
+# exist. The `[lib]` name stays `xilem_serval`, so no consumer's imports churn.
+name = "serval-xilem"
 version = "0.1.0"
 repository = "https://github.com/mark-ik/serval"
 publish = true
