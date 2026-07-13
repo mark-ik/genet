@@ -2,84 +2,70 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Smolweb documents as native genet views (the `smolweb` feature).
+//! Retained smolweb documents through Genet's engine-native document path.
 //!
-//! The smolweb twin of [`Chrome`](crate::chrome::Chrome): errand parses a fetched
-//! capsule into a per-format AST, a `nematic::views` view renders it into a
-//! `ScriptedDom`, and genet lays it out and paints it to a [`Scene`] through the
-//! same GPU-free path the chrome uses. Native, not gemtext-to-HTML — real focusable
-//! link elements, per-format classes, per-site theming. A link click resolves to a
-//! navigation target via the view's `on_navigate` action.
-//!
-//! This is the GPU-free foundation (load → parse → view → scene, plus click → URL);
-//! the windowed viewer that presents it is the integration step on top, mirroring
-//! [`static_viewer`](crate::static_viewer) / [`chrome_viewer`](crate::chrome_viewer).
+//! Nematic parses protocol content into an [`inker::EngineDocument`].
+//! `document-canvas` owns layout, visible-band derivation, link regions, and
+//! PaintList lowering. This module retains that packet plus viewport scroll
+//! and exposes the existing session API to Pelt and Mere.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
-use errand::parse::{feed, gemtext, gopher, nex};
+use document_canvas::{
+    ColorVocabulary, DocumentStyleSheet, InteractionKind, LaidOutDocument, Viewport,
+    layout_document, netrender_backend::scene_from_packet,
+};
+use genet_layout::ScrollKey;
+use inker::{Engine, EngineDocument, EngineInput};
 use netrender::Scene;
 use pelt_core::ResourceFetcher;
-use genet_layout::{IncrementalLayout, ScrollKey, ScrollOffsets};
-use genet_render::scene_from_session_dom;
-use genet_scripted_dom::{NodeId, ScriptedDom};
-use nematic::views::{
-    SmolwebTheme, SmolwebView, feed_view, gemtext_view, gopher_view, nex_view, stylesheet,
-};
-use xilem_serval::{DomHandle, PointerClick, GenetAppRunner};
 
-/// A link-click navigation target, the action the smolweb views bubble.
-struct Navigate(String);
-impl xilem_serval::Action for Navigate {}
-
-/// A fetched capsule parsed into the AST its native view consumes.
-enum Content {
-    Gemtext(Vec<gemtext::GemLine>),
-    Gopher(Vec<gopher::GopherItem>),
-    Feed(feed::Feed),
-    /// A nex directory listing, with the request address the entries resolve
-    /// against. A nex content response (not a listing) renders as gemtext.
-    Nex(String, Vec<nex::NexEntry>),
+/// How an engine-native smolweb document is colored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SmolwebTheme {
+    /// A stable palette derived from the capsule host.
+    Site,
+    /// A neutral light palette.
+    Plain,
+    /// A warm fixed light palette.
+    Light,
+    /// A fixed dark palette.
+    Dark,
+    /// Colors supplied by the application host.
+    App(SmolwebPalette),
+    /// Host-resolved system theme. Light is the fallback.
+    System,
 }
 
-/// The view's app state: just the parsed content (the view is a pure projection of
-/// it; navigation bubbles out as a [`Navigate`] action, not via state).
-struct SmolwebState {
-    content: Content,
-}
-
-type SmolwebLogic = fn(&SmolwebState) -> SmolwebView<SmolwebState, Navigate>;
-
-/// Project the parsed content onto its native view, each link emitting `Navigate`.
-fn view(state: &SmolwebState) -> SmolwebView<SmolwebState, Navigate> {
-    match &state.content {
-        Content::Gemtext(lines) => gemtext_view(lines, |url| Navigate(url.to_string())),
-        Content::Gopher(items) => gopher_view(items, |url| Navigate(url.to_string())),
-        Content::Feed(parsed) => feed_view(parsed, |url| Navigate(url.to_string())),
-        Content::Nex(address, entries) => {
-            nex_view(address, entries, |url| Navigate(url.to_string()))
-        }
+impl Default for SmolwebTheme {
+    fn default() -> Self {
+        Self::Site
     }
 }
 
-/// A loaded smolweb document: a genet `ScriptedDom` built from a native smolweb
-/// view, rendered GPU-free to a [`Scene`], with link clicks resolving to URLs.
+/// Compatibility palette used by current Pelt and Mere hosts.
+///
+/// New engine-native callers may configure [`DocumentStyleSheet`] directly
+/// through [`SmolwebDocument::from_document`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SmolwebPalette {
+    pub bg: String,
+    pub fg: String,
+    pub link: String,
+    pub quote: String,
+    pub pre_bg: String,
+}
+
+/// A retained engine document, its document-canvas layout, and host viewport.
 pub struct SmolwebDocument {
-    runner:
-        GenetAppRunner<SmolwebState, SmolwebLogic, SmolwebView<SmolwebState, Navigate>, Navigate>,
-    sheets: Vec<String>,
-    /// The retained cascade + layout session, owner of the viewport scroll. Built
-    /// lazily at the first render size and rebuilt on resize; `None` before the first
-    /// frame. Mirrors `LoadedDocument`'s render-first session.
-    session: Option<IncrementalLayout<NodeId>>,
-    /// The size `session` was laid out at, to detect a resize.
+    document: EngineDocument,
+    style: DocumentStyleSheet,
+    background: [f32; 4],
+    layout: Option<LaidOutDocument>,
     size: (u32, u32),
+    scroll_y: f32,
 }
 
 impl SmolwebDocument {
-    /// Fetch `url` (a smolweb scheme) through `fetcher` and parse + theme it. `Err`
-    /// when the fetch fails (the caller surfaces a load error).
+    /// Fetch `url` through the host fetcher, then lower and retain the body.
     pub fn load(
         fetcher: &impl ResourceFetcher,
         url: &str,
@@ -91,369 +77,424 @@ impl SmolwebDocument {
         Ok(Self::parse(url, &String::from_utf8_lossy(&bytes), theme))
     }
 
-    /// Parse already-fetched `body` for `url` (the fetch-free half, for tests).
+    /// Lower already-fetched content through the matching Nematic engine.
     pub fn parse(url: &str, body: &str, theme: SmolwebTheme) -> Self {
-        let content = detect(url, body);
-        // Structural display defaults (div/p/h1/… block) under the themed sheet, the
-        // same base the static document path layers its sheets over.
-        let mut sheets: Vec<String> = crate::STRUCTURAL_SHEET
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        sheets.push(stylesheet(theme, url));
-        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let runner = GenetAppRunner::new(dom, view as SmolwebLogic, SmolwebState { content });
+        let document = lower(url, body);
+        let (style, background) = style_for_theme(&theme, url);
+        Self::from_document(document, style, background)
+    }
+
+    /// Retain an already-lowered document with an explicit host style.
+    pub fn from_document(
+        document: EngineDocument,
+        style: DocumentStyleSheet,
+        background: [f32; 4],
+    ) -> Self {
         Self {
-            runner,
-            sheets,
-            session: None,
+            document,
+            style,
+            background,
+            layout: None,
             size: (0, 0),
+            scroll_y: 0.0,
         }
     }
 
-    /// Build (or rebuild, on a size change) the retained layout session.
-    fn ensure_session(&mut self, width: u32, height: u32) {
-        if self.session.is_some() && self.size == (width, height) {
+    /// The portable document retained by this session.
+    pub fn document(&self) -> &EngineDocument {
+        &self.document
+    }
+
+    fn ensure_layout(&mut self, width: u32, height: u32) {
+        let size = (width.max(1), height.max(1));
+        if self.layout.is_some() && self.size == size {
             return;
         }
-        let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
-        let session = {
-            let dom = self.runner.dom();
-            let dom = dom.borrow();
-            // `&*dom`: `IncrementalLayout::new` is generic over `D: LayoutDom`.
-            IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32)
-        };
-        self.session = Some(session);
-        self.size = (width, height);
+        self.layout = Some(layout_document(
+            &self.document,
+            Viewport::new(size.0 as f32, size.1 as f32),
+            &self.style,
+        ));
+        self.size = size;
+        self.scroll_y = self.scroll_y.min(self.max_scroll());
     }
 
-    /// Render the document to a [`Scene`] at `width`×`height`, at the current scroll.
-    /// Rebuilds the session on a size change.
+    fn max_scroll(&self) -> f32 {
+        let Some(layout) = &self.layout else {
+            return 0.0;
+        };
+        (layout.packet.content_bounds.size.height - self.size.1 as f32).max(0.0)
+    }
+
+    /// Paint the visible document band at the retained scroll offset.
     pub fn frame(&mut self, width: u32, height: u32) -> Scene {
-        self.ensure_session(width, height);
-        let dom = self.runner.dom();
-        let dom = dom.borrow();
-        let session = self
-            .session
-            .as_ref()
-            .expect("session built by ensure_session");
-        scene_from_session_dom(session, &*dom, width.max(1), height.max(1))
+        self.ensure_layout(width, height);
+        let layout = self.layout.as_ref().expect("layout built above");
+        let packet = layout.packet.window(self.scroll_y, self.size.1 as f32);
+        let mut scene = scene_from_packet(&packet, &layout.fonts, &self.style.colors);
+        scene.push_rect(
+            0.0,
+            0.0,
+            self.size.0 as f32,
+            self.size.1 as f32,
+            self.background,
+        );
+        let background = scene.ops.pop().expect("push_rect appended an op");
+        scene.ops.insert(0, background);
+        scene
     }
 
-    /// Scroll by a device-px wheel delta; returns whether the viewport moved (false at
-    /// an edge or before the first frame).
-    pub fn scroll_by(&mut self, dx: f32, dy: f32) -> bool {
-        let Some(session) = self.session.as_mut() else {
+    /// Move the single host-owned document viewport.
+    pub fn scroll_by(&mut self, _dx: f32, dy: f32) -> bool {
+        if self.layout.is_none() {
             return false;
-        };
-        let dom = self.runner.dom();
-        let dom = dom.borrow();
-        let before = session.viewport_scroll();
-        before != session.scroll_by(&*dom, dx, dy)
+        }
+        let before = self.scroll_y;
+        self.scroll_y = (self.scroll_y + dy).clamp(0.0, self.max_scroll());
+        self.scroll_y != before
     }
 
-    /// Scroll by a wheel delta at scene point `(x, y)`: a nested `overflow` container
-    /// under the pointer takes it first, else the viewport. Returns whether anything
-    /// moved. A no-op before the first frame.
-    pub fn scroll_at(&mut self, x: f32, y: f32, dx: f32, dy: f32) -> bool {
-        let Some(session) = self.session.as_mut() else {
-            return false;
-        };
-        let dom = self.runner.dom();
-        let dom = dom.borrow();
-        session.scroll_at(&*dom, x, y, dx, dy)
+    /// document-canvas has one viewport scroller, so point routing delegates
+    /// to [`scroll_by`](Self::scroll_by).
+    pub fn scroll_at(&mut self, _x: f32, _y: f32, dx: f32, dy: f32) -> bool {
+        self.scroll_by(dx, dy)
     }
 
-    /// Apply a keyboard scroll default (arrows / page / home-end); returns whether the
-    /// viewport moved. A no-op before the first frame.
+    /// Apply the established Genet keyboard-scroll vocabulary.
     pub fn scroll_for_key(&mut self, key: ScrollKey) -> bool {
-        let Some(session) = self.session.as_mut() else {
+        if self.layout.is_none() {
             return false;
-        };
-        let dom = self.runner.dom();
-        let dom = dom.borrow();
-        session.scroll_for_key(&*dom, key)
+        }
+        let before = self.scroll_y;
+        let page = self.size.1 as f32 * 0.9;
+        self.scroll_y = match key {
+            ScrollKey::Up => self.scroll_y - 40.0,
+            ScrollKey::Down => self.scroll_y + 40.0,
+            ScrollKey::PageUp => self.scroll_y - page,
+            ScrollKey::PageDown => self.scroll_y + page,
+            ScrollKey::Home => 0.0,
+            ScrollKey::End => self.max_scroll(),
+            ScrollKey::Left | ScrollKey::Right => self.scroll_y,
+        }
+        .clamp(0.0, self.max_scroll());
+        self.scroll_y != before
     }
 
-    /// Scroll to an absolute vertical offset (device px), clamped to the document's
-    /// scroll range. A no-op before the first frame (the caller should [`frame`](Self::frame)
-    /// once first, e.g. at `(width, height)`, before scrolling to a host-requested band).
+    /// Jump to an absolute full-document offset.
     pub fn scroll_to(&mut self, y: f32) {
-        let Some(session) = self.session.as_mut() else {
-            return;
-        };
-        let dom = self.runner.dom();
-        let dom = dom.borrow();
-        let x = session.viewport_scroll().0;
-        session.set_viewport_scroll(&*dom, (x, y));
+        if self.layout.is_some() {
+            self.scroll_y = y.clamp(0.0, self.max_scroll());
+        }
     }
 
-    /// The document's full content height (px): the viewport height plus its maximum
-    /// downward scroll ([`genet_layout::IncrementalLayout::scroll_range`]) at
-    /// `width`×`height`. Builds (or reuses) the session at that size. A host uses this
-    /// to decide whether the capsule needs scroll banding at all.
+    /// Full laid-out content height, floored to the viewport height.
     pub fn content_height(&mut self, width: u32, height: u32) -> u32 {
-        self.ensure_session(width, height);
-        let dom = self.runner.dom();
-        let dom = dom.borrow();
-        let session = self
-            .session
+        self.ensure_layout(width, height);
+        self.layout
             .as_ref()
-            .expect("session built by ensure_session");
-        let (_, max_y) = session.scroll_range(&*dom);
-        height.max(1) + max_y.round() as u32
+            .expect("layout built above")
+            .packet
+            .content_bounds
+            .size
+            .height
+            .ceil()
+            .max(height.max(1) as f32) as u32
     }
 
-    /// Every link's hit rect(s) + href, in full-document px (unscrolled) — see
-    /// [`genet_layout::IncrementalLayout::link_rects`]. A host that composites this
-    /// document's flat scene (rather than querying a retained packet) ships this
-    /// alongside the scene so a click resolves via a cached rect table, the same
-    /// mechanism the HTML/genet lane uses. Empty before the first frame.
+    /// Full-document link rectangles as `[x0, y0, x1, y1]`.
     pub fn links(&self) -> Vec<(String, [f32; 4])> {
-        let Some(session) = self.session.as_ref() else {
+        let Some(layout) = &self.layout else {
             return Vec::new();
         };
-        let dom = self.runner.dom();
-        let dom = dom.borrow();
-        session.link_rects(&*dom)
+        layout
+            .packet
+            .interactions
+            .iter()
+            .map(|region| {
+                let url = match &region.kind {
+                    InteractionKind::Link { url } => url.clone(),
+                };
+                let rect = region.bounds;
+                (
+                    url,
+                    [
+                        rect.origin.x,
+                        rect.origin.y,
+                        rect.origin.x + rect.size.width,
+                        rect.origin.y + rect.size.height,
+                    ],
+                )
+            })
+            .collect()
     }
 
-    /// Resolve a click at scene-local `(x, y)` to a navigation target, if it landed on
-    /// a link. Uses the current layout (built at `width`×`height` if needed), then
-    /// dispatches the click and returns the first navigation its handlers emitted.
+    /// Resolve a viewport-local click through the retained full-document packet.
     pub fn click_at(&mut self, x: f32, y: f32, width: u32, height: u32) -> Option<String> {
-        self.ensure_session(width, height);
-        let node = {
-            let session = self.session.as_ref()?;
-            let dom = self.runner.dom();
-            let dom = dom.borrow();
-            session.hit_test(&*dom, x, y, &ScrollOffsets::default())?
-        };
-        let actions = self.runner.dispatch_click(node, PointerClick::at((x, y)));
-        actions.into_iter().next().map(|Navigate(url)| url)
-    }
-
-    /// The document DOM handle (for the host's hit-testing / inspection).
-    pub fn dom(&self) -> DomHandle {
-        self.runner.dom()
+        self.ensure_layout(width, height);
+        self.layout
+            .as_ref()?
+            .packet
+            .link_at(x, y + self.scroll_y)
+            .map(str::to_string)
     }
 }
 
-/// Choose a parser by scheme, with a feed sniff for the gemini family (an XML body
-/// served over gemini is a feed; otherwise gemtext).
-fn detect(url: &str, body: &str) -> Content {
-    let scheme = url.split_once("://").map(|(s, _)| s).unwrap_or("");
-    match scheme {
-        "gopher" => Content::Gopher(gopher::parse(body)),
-        // A nex directory listing gets its native view (the listing IS the
-        // links); a nex content response falls through to gemtext.
-        "nex" => match nex::parse(body) {
-            Some(entries) => Content::Nex(url.to_string(), entries),
-            None => Content::Gemtext(gemtext::parse(body)),
-        },
-        _ if looks_like_feed(body) => match feed::parse(body) {
-            Ok(parsed) => Content::Feed(parsed),
-            // A malformed "feed" falls back to gemtext rather than erroring.
-            Err(_) => Content::Gemtext(gemtext::parse(body)),
-        },
-        // gemini and the wrapper protocols whose bodies ARE gemtext by
-        // definition (spartan / titan / guppy / scroll / misfin), plus finger
-        // (plain text, no link syntax) and anything else: gemtext.
-        _ => Content::Gemtext(gemtext::parse(body)),
-    }
+fn lower(url: &str, body: &str) -> EngineDocument {
+    let scheme = url
+        .split_once("://")
+        .map(|(scheme, _)| scheme)
+        .unwrap_or("");
+    let engine: Box<dyn Engine> = match scheme {
+        "gopher" => Box::new(nematic::GopherEngine::new()),
+        "nex" => Box::new(nematic::NexEngine::new()),
+        "finger" => Box::new(nematic::FingerEngine::new()),
+        "spartan" => Box::new(nematic::SpartanEngine::new()),
+        "titan" => Box::new(nematic::TitanEngine::new()),
+        "misfin" => Box::new(nematic::MisfinEngine::new()),
+        "guppy" => Box::new(nematic::GuppyEngine::new()),
+        "scroll" => Box::new(nematic::ScrollEngine::new()),
+        _ if looks_like_feed(body) => Box::new(nematic::FeedEngine::new()),
+        _ => Box::new(nematic::GemtextEngine::new()),
+    };
+    let input = EngineInput::new(url, body);
+    engine.render(&input).unwrap_or_else(|_| {
+        nematic::GemtextEngine::new()
+            .render(&input)
+            .expect("gemtext lowering is infallible")
+    })
 }
 
 fn looks_like_feed(body: &str) -> bool {
-    let trimmed = body.trim_start();
-    trimmed.starts_with("<?xml") || trimmed.starts_with("<rss") || trimmed.starts_with("<feed")
+    let body = body.trim_start();
+    body.starts_with("<?xml") || body.starts_with("<rss") || body.starts_with("<feed")
 }
 
-// (The windowed viewer glue — ViewerContent / BrowsableContent impls and
-// run_smolweb_viewer — moved back to pelt with the component split: those
-// traits are pelt's windowed-shell vocabulary, and pelt impls its own local
-// traits for this foreign type. See pelt-desktop/smolweb_glue.rs.)
+fn style_for_theme(theme: &SmolwebTheme, url: &str) -> (DocumentStyleSheet, [f32; 4]) {
+    let palette = match theme {
+        SmolwebTheme::Site => site_palette(url),
+        SmolwebTheme::Plain => fixed_palette("#ffffff", "#1a1a1a", "#0b57d0", "#555555", "#f4f4f4"),
+        SmolwebTheme::Light | SmolwebTheme::System => {
+            fixed_palette("#fbfaf7", "#23211c", "#1a6e57", "#5b574e", "#f0eee8")
+        }
+        SmolwebTheme::Dark => fixed_palette("#16181c", "#e6e3dc", "#7db4ff", "#a8a49a", "#21242a"),
+        SmolwebTheme::App(palette) => palette.clone(),
+    };
+    let defaults = ColorVocabulary::default();
+    let background = parse_color(&palette.bg).unwrap_or([1.0, 1.0, 1.0, 1.0]);
+    let foreground = parse_color(&palette.fg).unwrap_or(defaults.body_text);
+    let link = parse_color(&palette.link).unwrap_or(defaults.link_text);
+    let quote = parse_color(&palette.quote).unwrap_or(defaults.badge_text);
+    let pre = parse_color(&palette.pre_bg).unwrap_or(defaults.placeholder_image);
+    let mut style = DocumentStyleSheet::default();
+    style.body_font_family = "serif".into();
+    style.line_height_ratio = 1.5;
+    style.horizontal_padding = 32.0;
+    style.vertical_padding = 24.0;
+    style.colors = ColorVocabulary {
+        body_text: foreground,
+        heading_text: foreground,
+        link_text: link,
+        code_text: foreground,
+        badge_text: quote,
+        rule: quote,
+        placeholder_text: foreground,
+        placeholder_image: pre,
+    };
+    (style, background)
+}
+
+fn fixed_palette(bg: &str, fg: &str, link: &str, quote: &str, pre_bg: &str) -> SmolwebPalette {
+    SmolwebPalette {
+        bg: bg.into(),
+        fg: fg.into(),
+        link: link.into(),
+        quote: quote.into(),
+        pre_bg: pre_bg.into(),
+    }
+}
+
+fn site_palette(url: &str) -> SmolwebPalette {
+    let hue = hue_from_host(url);
+    let css = |saturation, lightness| {
+        let [r, g, b, _] = hsl(hue as f32, saturation, lightness);
+        format!(
+            "rgb({}, {}, {})",
+            (r * 255.0).round() as u8,
+            (g * 255.0).round() as u8,
+            (b * 255.0).round() as u8
+        )
+    };
+    SmolwebPalette {
+        bg: css(0.30, 0.97),
+        fg: css(0.25, 0.15),
+        link: css(0.70, 0.36),
+        quote: css(0.18, 0.40),
+        pre_bg: css(0.28, 0.93),
+    }
+}
+
+fn hue_from_host(url: &str) -> u16 {
+    let host = url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or("");
+    let hash = host.bytes().fold(5381_u32, |hash, byte| {
+        hash.wrapping_mul(33).wrapping_add(u32::from(byte))
+    });
+    (hash % 360) as u16
+}
+
+fn hsl(hue: f32, saturation: f32, lightness: f32) -> [f32; 4] {
+    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
+    let sector = (hue.rem_euclid(360.0)) / 60.0;
+    let x = chroma * (1.0 - (sector.rem_euclid(2.0) - 1.0).abs());
+    let (r, g, b) = match sector as u8 {
+        0 => (chroma, x, 0.0),
+        1 => (x, chroma, 0.0),
+        2 => (0.0, chroma, x),
+        3 => (0.0, x, chroma),
+        4 => (x, 0.0, chroma),
+        _ => (chroma, 0.0, x),
+    };
+    let m = lightness - chroma / 2.0;
+    [r + m, g + m, b + m, 1.0]
+}
+
+fn parse_color(value: &str) -> Option<[f32; 4]> {
+    let value = value.trim();
+    if let Some(hex) = value.strip_prefix('#') {
+        let (r, g, b) = match hex.len() {
+            3 => {
+                let mut chars = hex.chars();
+                let expand = |c: char| u8::from_str_radix(&format!("{c}{c}"), 16).ok();
+                (
+                    expand(chars.next()?)?,
+                    expand(chars.next()?)?,
+                    expand(chars.next()?)?,
+                )
+            }
+            6 => (
+                u8::from_str_radix(&hex[0..2], 16).ok()?,
+                u8::from_str_radix(&hex[2..4], 16).ok()?,
+                u8::from_str_radix(&hex[4..6], 16).ok()?,
+            ),
+            _ => return None,
+        };
+        return Some([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]);
+    }
+    let body = value.strip_prefix("rgb(")?.strip_suffix(')')?;
+    let channels: Vec<u8> = body
+        .split(',')
+        .map(|channel| channel.trim().parse())
+        .collect::<Result<_, _>>()
+        .ok()?;
+    (channels.len() == 3).then(|| {
+        [
+            channels[0] as f32 / 255.0,
+            channels[1] as f32 / 255.0,
+            channels[2] as f32 / 255.0,
+            1.0,
+        ]
+    })
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layout_dom_api::LayoutDom;
 
-    /// A gemtext capsule renders to a scene with painted text — the GPU-free render
-    /// path produces glyphs (mirrors the chrome's render test).
     #[test]
-    fn gemtext_renders_text() {
+    fn gemtext_uses_engine_document_and_paints_text() {
         let mut doc = SmolwebDocument::parse(
             "gemini://x.test/",
             "# Hello\n\nWorld.\n",
             SmolwebTheme::Site,
         );
+        assert_eq!(
+            doc.document().provenance.source_kind.as_deref(),
+            Some(nematic::ENGINE_GEMTEXT)
+        );
         let scene = doc.frame(800, 600);
         assert!(
             scene
                 .ops
                 .iter()
-                .any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
-            "the capsule paints text",
+                .any(|op| matches!(op, netrender::SceneOp::GlyphRun(_)))
         );
+        assert!(matches!(
+            scene.ops.first(),
+            Some(netrender::SceneOp::Rect(_))
+        ));
     }
 
-    /// A long capsule scrolls: after a frame builds the session, a downward wheel
-    /// delta moves the viewport (the retained-session scroll path).
     #[test]
-    fn long_capsule_scrolls() {
-        let body: String = (0..200).map(|i| format!("Line {i}\n")).collect();
+    fn long_document_scrolls_and_windows() {
+        let body: String = (0..200).map(|i| format!("Line {i}\n\n")).collect();
         let mut doc = SmolwebDocument::parse("gemini://x.test/", &body, SmolwebTheme::Plain);
-        let _ = doc.frame(400, 300); // build the session at a short viewport
-        assert!(
-            !doc.scroll_by(0.0, -50.0),
-            "at the top, scrolling up clamps (no move)"
-        );
-        assert!(
-            doc.scroll_by(0.0, 240.0),
-            "a capsule taller than the viewport scrolls down"
-        );
+        assert!(doc.content_height(400, 300) > 300);
+        assert!(!doc.scroll_by(0.0, -50.0));
+        assert!(doc.scroll_by(0.0, 240.0));
+        assert_eq!(doc.frame(400, 300).viewport_height, 300);
     }
 
-    /// `content_height` reports more than the viewport for a tall capsule, and
-    /// `scroll_to` jumps to an absolute offset (clamped to the scroll range) — the two
-    /// primitives a host's band-scroll protocol needs.
     #[test]
-    fn content_height_and_scroll_to() {
-        let body: String = (0..200).map(|i| format!("Line {i}\n")).collect();
-        let mut doc = SmolwebDocument::parse("gemini://x.test/", &body, SmolwebTheme::Plain);
-        let height = doc.content_height(400, 300);
-        assert!(
-            height > 300,
-            "a 200-line capsule exceeds a 300px viewport: {height}"
-        );
-
-        doc.scroll_to(1_000_000.0);
-        let (_, y) = {
-            let _ = doc.frame(400, 300);
-            doc.session.as_ref().expect("framed").viewport_scroll()
-        };
-        assert!(
-            y > 0.0 && y < 1_000_000.0,
-            "scroll_to clamps to the scroll range: {y}"
-        );
-
-        doc.scroll_to(0.0);
-        let (_, y0) = {
-            let _ = doc.frame(400, 300);
-            doc.session.as_ref().expect("framed").viewport_scroll()
-        };
-        assert_eq!(y0, 0.0, "scroll_to(0) returns to the top");
-    }
-
-    /// `links()` is empty before the first frame, and after framing returns every link
-    /// line's href + rect — the cached table a host resolves a click against.
-    #[test]
-    fn links_reports_hrefs_after_a_frame() {
+    fn links_and_clicks_use_full_document_coordinates() {
         let mut doc = SmolwebDocument::parse(
             "gemini://x.test/",
-            "=> gemini://x.test/a First\n=> gemini://x.test/b Second\n",
+            "=> gemini://x.test/page A link\n",
             SmolwebTheme::Plain,
         );
-        assert!(doc.links().is_empty(), "no rects before the first frame");
-
+        assert!(doc.links().is_empty());
         let _ = doc.frame(400, 300);
-        let links = doc.links();
-        let hrefs: Vec<&str> = links.iter().map(|(href, _)| href.as_str()).collect();
-        assert!(hrefs.contains(&"gemini://x.test/a"));
-        assert!(hrefs.contains(&"gemini://x.test/b"));
-        for (_, rect) in &links {
-            assert!(
-                rect[2] > rect[0] && rect[3] > rect[1],
-                "positive-area rect: {rect:?}"
-            );
-        }
-    }
-
-    /// A short capsule's content height is just its own extent (no scroll needed), not
-    /// artificially inflated to the viewport.
-    #[test]
-    fn short_capsule_content_height_is_not_inflated_past_viewport() {
-        let mut doc = SmolwebDocument::parse("gemini://x.test/", "# Hi\n", SmolwebTheme::Plain);
-        let height = doc.content_height(400, 300);
+        let (url, [x0, y0, x1, y1]) = doc.links().into_iter().next().expect("link region");
+        assert_eq!(url, "gemini://x.test/page");
+        assert!(x1 > x0 && y1 > y0);
         assert_eq!(
-            height, 300,
-            "a short capsule's height floors at the viewport, no scroll range"
+            doc.click_at((x0 + x1) / 2.0, (y0 + y1) / 2.0, 400, 300)
+                .as_deref(),
+            Some("gemini://x.test/page")
         );
     }
 
-    /// A gopher menu is detected by scheme and renders a typed item line.
     #[test]
-    fn gopher_scheme_detected() {
-        let mut doc = SmolwebDocument::parse(
+    fn schemes_select_their_nematic_engines() {
+        let gopher = SmolwebDocument::parse(
             "gopher://x.test/",
             "1Files\t/files\tx.test\t70\r\n",
             SmolwebTheme::Plain,
         );
-        let scene = doc.frame(800, 600);
-        assert!(
-            scene
-                .ops
-                .iter()
-                .any(|op| matches!(op, netrender::SceneOp::GlyphRun(_)))
-        );
-    }
-
-    /// An RSS body served over gemini is detected as a feed.
-    #[test]
-    fn feed_sniffed_from_xml_body() {
-        let body = "<?xml version=\"1.0\"?><rss><channel><title>Log</title></channel></rss>";
-        let mut doc = SmolwebDocument::parse("gemini://x.test/feed", body, SmolwebTheme::Dark);
-        assert!(matches!(doc, SmolwebDocument { .. }));
-        // The feed title paints.
-        let scene = doc.frame(800, 600);
-        assert!(
-            scene
-                .ops
-                .iter()
-                .any(|op| matches!(op, netrender::SceneOp::GlyphRun(_)))
-        );
-    }
-
-    /// Clicking a gemtext link resolves to its navigation target — the `on_navigate`
-    /// action bubbles out of `dispatch_click`. Finds the anchor node directly (no
-    /// layout coords needed), the way the chrome's button test does.
-    #[test]
-    fn gemtext_link_click_resolves_to_url() {
-        let mut doc = SmolwebDocument::parse(
-            "gemini://x.test/",
-            "=> gemini://x.test/page  A link\n",
-            SmolwebTheme::Plain,
-        );
-        let anchor = find_anchor(&doc).expect("a link anchor in the DOM");
-        let actions = doc
-            .runner
-            .dispatch_click(anchor, PointerClick::at((0.0, 0.0)));
         assert_eq!(
-            actions
-                .into_iter()
-                .next()
-                .map(|Navigate(url)| url)
-                .as_deref(),
-            Some("gemini://x.test/page"),
+            gopher.document().provenance.source_kind.as_deref(),
+            Some(nematic::ENGINE_GOPHER)
+        );
+
+        let feed = SmolwebDocument::parse(
+            "gemini://x.test/feed",
+            "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel><title>Log</title></channel></rss>",
+            SmolwebTheme::Dark,
+        );
+        assert_eq!(
+            feed.document().provenance.source_kind.as_deref(),
+            Some(nematic::ENGINE_FEED)
         );
     }
 
-    /// Walk the document DOM for the first `<a>` element.
-    fn find_anchor(doc: &SmolwebDocument) -> Option<NodeId> {
-        let dom = doc.dom();
-        let dom = dom.borrow();
-        let mut stack = vec![dom.document()];
-        while let Some(node) = stack.pop() {
-            if dom
-                .element_name(node)
-                .is_some_and(|q| q.local.as_ref() == "a")
-            {
-                return Some(node);
-            }
-            for child in dom.dom_children(node) {
-                stack.push(child);
-            }
-        }
-        None
+    #[test]
+    fn app_rgb_palette_maps_into_document_style() {
+        let theme = SmolwebTheme::App(SmolwebPalette {
+            bg: "rgb(16, 32, 48)".into(),
+            fg: "rgb(250, 250, 250)".into(),
+            link: "rgb(51, 204, 255)".into(),
+            quote: "rgb(153, 170, 187)".into(),
+            pre_bg: "rgb(10, 22, 34)".into(),
+        });
+        let (style, background) = style_for_theme(&theme, "gemini://x.test/");
+        assert_eq!(background, [16.0 / 255.0, 32.0 / 255.0, 48.0 / 255.0, 1.0]);
+        assert_eq!(
+            style.colors.link_text,
+            [51.0 / 255.0, 204.0 / 255.0, 1.0, 1.0]
+        );
     }
 }

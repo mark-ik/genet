@@ -14,10 +14,10 @@ path = "src/lib.rs"
 default = []
 # Remote http(s) loading for LocalFetcher via the netfetcher engine.
 netfetch = ["dep:netfetcher", "dep:tokio", "dep:bytes", "dep:url"]
-# The smolweb native lane: errand transport/parse + nematic::views rendering.
+# The smolweb engine-native lane: errand transport, Nematic EngineDocument
+# lowering, and document-canvas layout/paint.
 smolweb = [
-    "dep:errand", "dep:nematic", "nematic/views", "dep:tokio", "dep:url",
-    "dep:genet-scripted-dom", "dep:xilem-serval",
+    "dep:errand", "dep:nematic", "dep:document-canvas", "dep:tokio", "dep:url",
 ]
 # The scripted lane: a live ScriptedDocument on Boa.
 scripted = [
@@ -44,7 +44,7 @@ script-engine-api = { path = "../script-engine-api", optional = true }
 script-engine-boa = { path = "../script-engine-boa", optional = true }
 script-engine-nova = { path = "../script-engine-nova", optional = true }
 nematic = { workspace = true, optional = true }
-xilem-serval = { package = "serval-xilem", version = "0.1.0", path = "../xilem-serval", optional = true }
+document-canvas = { workspace = true, features = ["netrender"], optional = true }
 errand = { workspace = true, optional = true }
 # Same git source pelt uses; not a root workspace entry (sibling repo).
 netfetcher = { git = "https://github.com/mark-ik/netfetcher.git", branch = "main", optional = true }
@@ -56,5 +56,3 @@ url = { workspace = true, optional = true }
 # Offline mock HTTP server for the netfetch integration test (moved with
 # net_fetch.rs from pelt); runs without a live network.
 mockito = "1"
-# The smolweb tests walk the built ScriptedDom through the LayoutDom trait.
-layout_dom_api = { package = "layout-dom-api", path = "../shared/layout-dom" }

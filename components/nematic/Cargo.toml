@@ -15,13 +15,6 @@ categories = ["web-programming", "rendering"]
 # Override genet's workspace-wide publish = false: nematic is a published crate.
 publish = true
 
-[features]
-default = []
-# The native render lane (nematic::views): per-format xilem-serval views over
-# errand's ASTs, with theming. Off by default so block-engine consumers stay
-# clear of the view/render stack.
-views = ["dep:xilem-serval"]
-
 [lib]
 path = "src/lib.rs"
 
@@ -39,18 +32,6 @@ jotdown = "0.10"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
-# Version req so the crate can publish: locally the path satisfies it; on
-# the registry the xilem-serval name-claim stub does (a consumer enabling
-# `views` from crates.io needs the real component, i.e. the genet git dep,
-# until genet's view stack publishes for real).
-xilem-serval = { package = "serval-xilem", version = "0.1.0", path = "../xilem-serval", optional = true }
-
-[dev-dependencies]
-# The views tests build into a real ScriptedDom and inspect the result
-# (moved with the views from the retired smolweb-views component).
-genet-scripted-dom = { path = "../genet-scripted-dom" }
-layout_dom_api = { package = "layout-dom-api", path = "../shared/layout-dom" }
-
 # `test = true` runs the example's embedded round-trip tests under `cargo test`.
 [[example]]
 name = "knot-render"

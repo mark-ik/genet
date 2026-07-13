@@ -30,8 +30,8 @@ pub(crate) mod href {
 mod smolweb_glue;
 #[cfg(feature = "smolweb")]
 pub use genet_documents::SmolwebDocument;
-// Re-exported so a host that builds a `SmolwebDocument` can name its theme (and, for
-// the App theme, supply a palette) without depending on `nematic::views` directly.
+// Re-exported so a host that builds a `SmolwebDocument` can name its compatibility
+// theme and, for the App theme, supply a palette.
 #[cfg(all(feature = "smolweb", feature = "viewer", feature = "chrome"))]
 pub use chrome_viewer::run_smolweb_browser;
 #[cfg(all(feature = "smolweb", feature = "viewer"))]

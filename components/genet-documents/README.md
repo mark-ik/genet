@@ -16,8 +16,9 @@ session, take paint frames, scroll, click, settle).
   feature): a live page whose JS runs on Boa (or Nova on the nova rung),
   with the tick + quiescence seam (`pump` / `settled`).
 - `SmolwebDocument` / `SmolwebSessionEngine` (`smolweb` feature): capsules
-  rendered natively through `nematic::views` — errand parse, per-format
-  views, genet layout.
+  rendered through the engine-native document path: Nematic lowers protocol
+  content to `EngineDocument`, then document-canvas lays it out and lowers its
+  PaintList to a scene.
 
 Construction seams (fetchers, cookie jars, themes) live on the engine at
 registration; the spawn request stays plain data. The session wrappers are

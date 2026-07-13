@@ -26,12 +26,7 @@ pub(crate) mod net_fetch;
 #[cfg(feature = "smolweb")]
 pub mod smolweb;
 #[cfg(feature = "smolweb")]
-pub use smolweb::SmolwebDocument;
-// Re-exported so a host that builds a `SmolwebDocument` can name its theme
-// (and, for the App theme, supply a palette) without depending on
-// `nematic::views` directly.
-#[cfg(feature = "smolweb")]
-pub use nematic::views::{SmolwebPalette, SmolwebTheme};
+pub use smolweb::{SmolwebDocument, SmolwebPalette, SmolwebTheme};
 
 #[cfg(feature = "scripted")]
 pub use genet_scripted::{

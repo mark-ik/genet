@@ -236,7 +236,7 @@ impl<E: script_engine_api::ScriptEngine> ScriptedDocumentSession<E> {
     }
 }
 
-// ── Smolweb native lane (per-format ids) ───────────────────────────────────
+// ── Smolweb engine-native document lane (per-format ids) ──────────────────
 
 /// Session engine for the smolweb native lane. One instance per format id
 /// (`nematic.gemtext` / `nematic.gopher` / `nematic.feed` today) so routing
@@ -303,8 +303,8 @@ impl SmolwebDocumentSession {
         Self { doc, viewport }
     }
 
-    /// The concrete document, for observation downcasts (link tables with
-    /// host-side banding math, DOM handles).
+    /// The concrete document, for observation downcasts and host-side
+    /// banding/link-table inspection.
     pub fn document_mut(&mut self) -> &mut crate::SmolwebDocument {
         &mut self.doc
     }

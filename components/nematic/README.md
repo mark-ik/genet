@@ -1,13 +1,10 @@
 # nematic
 
-`nematic` is the smolweb engine family for genet and its hosts. It has two
-products: `nematic::blocks`-style **document engines** (the default) that
-lower Gemini, Gopher, Spartan, Finger, plain text, Markdown, RSS/Atom, and
-the knot note format into inker's portable block model — the stored/authored
-lane (cards, clips, worker-shippable packets) — and, behind the `views`
-feature, **`nematic::views`**: native per-format xilem-serval views over
-errand's ASTs, the idiom-preserving live-render lane (real focusable links,
-per-format classes, per-site theming; no lowest-common-denominator lowering).
+`nematic` is the portable smolweb engine family for Genet and its hosts. It
+lowers Gemini, Gopher, Spartan, Finger, plain text, Markdown, RSS/Atom, and
+the knot note format into Inker's `EngineDocument` model for stored,
+authored, and worker-shippable content. Cambium-native projections over the
+protocol ASTs live separately in `cambium-nematic`.
 
 > **Home:** [`mark-ik/genet`](https://github.com/mark-ik/genet), at
 > `components/nematic` (adopted 2026-07). The former standalone repository is archived
