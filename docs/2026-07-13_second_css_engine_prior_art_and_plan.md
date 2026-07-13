@@ -2,10 +2,12 @@
 
 **Date:** 2026-07-13
 **Status:** E0a full-path audit and E0b Cambium lane choice/40-property
-clean-room catalog contract landed. E1 has started: Livery now owns the catalog,
-generates its property and shorthand IDs plus metadata, and verifies the
-Cambium fixture against generated output. Value types and computed structs
-remain. The first audit invalidated the proposed 33-accessor full-crate seam.
+clean-room catalog contract landed. E1 is landed: Livery owns the catalog,
+generates its property and shorthand IDs, typed `ComputedValues`, initial and
+inheritance behavior, and verifies the Cambium fixture against generated
+output. Its seed value layer covers lengths, percentages, linear `calc()`,
+colors, and the lane's keyword families with CSS round trips. The first audit
+invalidated the proposed 33-accessor full-crate seam.
 The second chose Cambium structural UI as the bounded first lane.
 Mark's framing: "grow a rust alternative using firefox, chrome, servo,
 blitz, ladybird, and gosub as prior art... think it'd be neat to have two
@@ -177,16 +179,17 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   first lane. Its generated declarations plus Genet's baseline UA sheet produce
   a 22-longhand structural seed. The real Cambium component-catalog theme adds
   18 longhands for a 40-property contract. The checked-in `properties.toml`
-  records name, inheritance, initial value, grammar, seed values, animation
-  class, and specification source. An executable guard expands the theme's
+  records name, concrete value family, inheritance, initial value, grammar,
+  seed values, animation class, and specification source. An executable guard
+  expands the theme's
   shorthands and rejects declarations absent from the database.
-- **E1 — codegen + values: in progress.** Livery's Rust generator now emits
-  property and shorthand enums plus the catalog's initial, inheritance,
-  grammar, animation, seed-value, and specification-source metadata. Remaining:
-  the selected lane's concrete computed-value structs and the Livery values
-  layer (lengths, percentages, calc, color,
-  keywords) with serialization round-trip tests. Receipt: generated
-  code compiles standalone; round-trip property tests green.
+- **E1 — codegen + values: landed.** Livery's Rust generator emits property and
+  shorthand enums, 20 concrete value families, and a 40-field
+  `ComputedValues` with generated CSS initial values and inheritance behavior.
+  The seed layer covers px/em/rem lengths, percentages, linear `calc()`,
+  colors through cssparser's hardened color tables, and the lane's keyword and
+  numeric types. Receipt: generated code compiles standalone; ten catalog,
+  initial/inheritance, rejection, and CSS round-trip tests are green.
 - **E2 — cascade + media.** Matching via `selectors`, cascade
   (origins, specificity, importance, inheritance), media evaluation on
   a Genet-shaped Device. Receipt: a hand-built corpus of

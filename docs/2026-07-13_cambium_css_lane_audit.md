@@ -93,8 +93,9 @@ Production evidence:
 
 The clean-room database is
 [`components/livery/properties.toml`](../components/livery/properties.toml). Each
-row records the CSS name, inheritance, initial value, grammar, seed values,
-animation class, and an official specification source. The `seed_values` field
+row records the CSS name, concrete value family, inheritance, initial value,
+grammar, seed values, animation class, and an official specification source.
+The `seed_values` field
 describes the values the audited corpus needs first; `grammar` records the
 normative property shape it grows toward.
 
@@ -117,8 +118,8 @@ The lane choice, themed fixture, expanded database, and executable coverage
 guard are landed. `components/livery/tests/catalog_contract.rs` checks the
 catalog declarations against Livery's generated property and shorthand tables
 and fails if a required longhand is absent. This completes the audit's E1
-handoff: the named engine crate now owns the database, fixture, generator, and
-guard.
+handoff: the named engine crate owns the database, fixture, generator, typed
+computed values, and guard.
 
 The 40-property set is the catalog contract, not a promise about every future
 Merecat theme declaration. New declarations enter through the same failing

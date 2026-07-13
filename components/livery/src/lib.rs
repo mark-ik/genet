@@ -6,4 +6,6 @@
 
 #![forbid(unsafe_code)]
 
+pub mod values;
+
 include!(concat!(env!("OUT_DIR"), "/properties.rs"));

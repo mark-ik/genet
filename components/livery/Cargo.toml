@@ -7,6 +7,9 @@ repository = "https://github.com/mark-ik/genet"
 description = "Clean-room, generated CSS property and cascade engine."
 readme = "README.md"
 
+[dependencies]
+cssparser.workspace = true
+
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }
 toml = "1"

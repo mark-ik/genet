@@ -71,6 +71,7 @@ source = "css_text_4"
 
 [[property]]
 name = "background-color"
+value_type = "color"
 inherited = false
 initial = "transparent"
 grammar = "<color>"
@@ -80,6 +81,7 @@ source = "css_backgrounds_3"
 
 [[property]]
 name = "border-bottom-color"
+value_type = "color"
 inherited = false
 initial = "currentcolor"
 grammar = "<color>"
@@ -89,6 +91,7 @@ source = "css_backgrounds_3"
 
 [[property]]
 name = "border-bottom-style"
+value_type = "border-style"
 inherited = false
 initial = "none"
 grammar = "<line-style>"
@@ -98,6 +101,7 @@ source = "css_backgrounds_3"
 
 [[property]]
 name = "border-bottom-width"
+value_type = "border-width"
 inherited = false
 initial = "medium"
 grammar = "<line-width>"
@@ -107,6 +111,7 @@ source = "css_backgrounds_3"
 
 [[property]]
 name = "border-left-color"
+value_type = "color"
 inherited = false
 initial = "currentcolor"
 grammar = "<color>"
@@ -116,6 +121,7 @@ source = "css_backgrounds_3"
 
 [[property]]
 name = "border-left-style"
+value_type = "border-style"
 inherited = false
 initial = "none"
 grammar = "<line-style>"
@@ -125,6 +131,7 @@ source = "css_backgrounds_3"
 
 [[property]]
 name = "border-left-width"
+value_type = "border-width"
 inherited = false
 initial = "medium"
 grammar = "<line-width>"
@@ -134,6 +141,7 @@ source = "css_backgrounds_3"
 
 [[property]]
 name = "border-right-color"
+value_type = "color"
 inherited = false
 initial = "currentcolor"
 grammar = "<color>"
@@ -143,6 +151,7 @@ source = "css_backgrounds_3"
 
 [[property]]
 name = "border-right-style"
+value_type = "border-style"
 inherited = false
 initial = "none"
 grammar = "<line-style>"
@@ -152,6 +161,7 @@ source = "css_backgrounds_3"
 
 [[property]]
 name = "border-right-width"
+value_type = "border-width"
 inherited = false
 initial = "medium"
 grammar = "<line-width>"
@@ -161,6 +171,7 @@ source = "css_backgrounds_3"
 
 [[property]]
 name = "border-top-color"
+value_type = "color"
 inherited = false
 initial = "currentcolor"
 grammar = "<color>"
@@ -170,6 +181,7 @@ source = "css_backgrounds_3"
 
 [[property]]
 name = "border-top-style"
+value_type = "border-style"
 inherited = false
 initial = "none"
 grammar = "<line-style>"
@@ -179,6 +191,7 @@ source = "css_backgrounds_3"
 
 [[property]]
 name = "border-top-width"
+value_type = "border-width"
 inherited = false
 initial = "medium"
 grammar = "<line-width>"
@@ -188,6 +201,7 @@ source = "css_backgrounds_3"
 
 [[property]]
 name = "color"
+value_type = "color"
 inherited = true
 initial = "CanvasText"
 grammar = "<color>"
@@ -197,6 +211,7 @@ source = "css_color_4"
 
 [[property]]
 name = "display"
+value_type = "display"
 inherited = false
 initial = "inline"
 grammar = "[ <display-outside> || <display-inside> ] | <display-listitem> | <display-internal> | <display-box> | <display-legacy>"
@@ -206,6 +221,7 @@ source = "css_display_3"
 
 [[property]]
 name = "font-family"
+value_type = "font-family"
 inherited = true
 initial = "depends-on-user-agent"
 grammar = "[ <font-family-name> | <generic-font-family> ]#"
@@ -215,6 +231,7 @@ source = "css_fonts_4"
 
 [[property]]
 name = "font-size"
+value_type = "font-size"
 inherited = true
 initial = "medium"
 grammar = "<absolute-size> | <relative-size> | <length-percentage>"
@@ -224,6 +241,7 @@ source = "css_fonts_4"
 
 [[property]]
 name = "font-style"
+value_type = "font-style"
 inherited = true
 initial = "normal"
 grammar = "normal | italic | oblique <angle>?"
@@ -233,6 +251,7 @@ source = "css_fonts_4"
 
 [[property]]
 name = "font-weight"
+value_type = "font-weight"
 inherited = true
 initial = "normal"
 grammar = "normal | bold | bolder | lighter | <number [1,1000]>"
@@ -242,6 +261,7 @@ source = "css_fonts_4"
 
 [[property]]
 name = "height"
+value_type = "size"
 inherited = false
 initial = "auto"
 grammar = "auto | <length-percentage> | min-content | max-content | fit-content(<length-percentage>)"
@@ -251,6 +271,7 @@ source = "css_sizing_3"
 
 [[property]]
 name = "left"
+value_type = "inset"
 inherited = false
 initial = "auto"
 grammar = "auto | <length-percentage>"
@@ -260,6 +281,7 @@ source = "css_position_3"
 
 [[property]]
 name = "line-height"
+value_type = "line-height"
 inherited = true
 initial = "normal"
 grammar = "normal | <number [0,∞]> | <length-percentage [0,∞]>"
@@ -269,6 +291,7 @@ source = "css_inline_3"
 
 [[property]]
 name = "list-style-type"
+value_type = "list-style-type"
 inherited = true
 initial = "disc"
 grammar = "<counter-style> | <string> | none"
@@ -278,6 +301,7 @@ source = "css_lists_3"
 
 [[property]]
 name = "margin-bottom"
+value_type = "margin"
 inherited = false
 initial = "0"
 grammar = "<length-percentage> | auto"
@@ -287,6 +311,7 @@ source = "css_box_4"
 
 [[property]]
 name = "margin-left"
+value_type = "margin"
 inherited = false
 initial = "0"
 grammar = "<length-percentage> | auto"
@@ -296,6 +321,7 @@ source = "css_box_4"
 
 [[property]]
 name = "margin-right"
+value_type = "margin"
 inherited = false
 initial = "0"
 grammar = "<length-percentage> | auto"
@@ -305,6 +331,7 @@ source = "css_box_4"
 
 [[property]]
 name = "margin-top"
+value_type = "margin"
 inherited = false
 initial = "0"
 grammar = "<length-percentage> | auto"
@@ -314,6 +341,7 @@ source = "css_box_4"
 
 [[property]]
 name = "overflow-x"
+value_type = "overflow"
 inherited = false
 initial = "visible"
 grammar = "visible | hidden | clip | scroll | auto"
@@ -323,6 +351,7 @@ source = "css_overflow_3"
 
 [[property]]
 name = "overflow-y"
+value_type = "overflow"
 inherited = false
 initial = "visible"
 grammar = "visible | hidden | clip | scroll | auto"
@@ -332,6 +361,7 @@ source = "css_overflow_3"
 
 [[property]]
 name = "padding-bottom"
+value_type = "padding"
 inherited = false
 initial = "0"
 grammar = "<length-percentage [0,∞]>"
@@ -341,6 +371,7 @@ source = "css_box_4"
 
 [[property]]
 name = "padding-left"
+value_type = "padding"
 inherited = false
 initial = "0"
 grammar = "<length-percentage [0,∞]>"
@@ -350,6 +381,7 @@ source = "css_box_4"
 
 [[property]]
 name = "padding-right"
+value_type = "padding"
 inherited = false
 initial = "0"
 grammar = "<length-percentage [0,∞]>"
@@ -359,6 +391,7 @@ source = "css_box_4"
 
 [[property]]
 name = "padding-top"
+value_type = "padding"
 inherited = false
 initial = "0"
 grammar = "<length-percentage [0,∞]>"
@@ -368,6 +401,7 @@ source = "css_box_4"
 
 [[property]]
 name = "position"
+value_type = "position"
 inherited = false
 initial = "static"
 grammar = "static | relative | absolute | sticky | fixed"
@@ -377,6 +411,7 @@ source = "css_position_3"
 
 [[property]]
 name = "text-decoration-line"
+value_type = "text-decoration-line"
 inherited = false
 initial = "none"
 grammar = "none | [ underline || overline || line-through || blink ]"
@@ -386,6 +421,7 @@ source = "css_text_decor_4"
 
 [[property]]
 name = "text-wrap-mode"
+value_type = "text-wrap-mode"
 inherited = true
 initial = "wrap"
 grammar = "wrap | nowrap"
@@ -395,6 +431,7 @@ source = "css_text_4"
 
 [[property]]
 name = "top"
+value_type = "inset"
 inherited = false
 initial = "auto"
 grammar = "auto | <length-percentage>"
@@ -404,6 +441,7 @@ source = "css_position_3"
 
 [[property]]
 name = "white-space-collapse"
+value_type = "white-space-collapse"
 inherited = true
 initial = "collapse"
 grammar = "collapse | discard | preserve | preserve-breaks | preserve-spaces | break-spaces"
@@ -413,6 +451,7 @@ source = "css_text_4"
 
 [[property]]
 name = "width"
+value_type = "size"
 inherited = false
 initial = "auto"
 grammar = "auto | <length-percentage> | min-content | max-content | fit-content(<length-percentage>)"
@@ -422,6 +461,7 @@ source = "css_sizing_3"
 
 [[property]]
 name = "z-index"
+value_type = "z-index"
 inherited = false
 initial = "auto"
 grammar = "auto | <integer>"
