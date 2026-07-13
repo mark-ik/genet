@@ -112,3 +112,4 @@ justfile
 
 # Claude Code session state: worktrees, hooks, agent transcripts.
 .claude/
+support/name-claims/*/target/
