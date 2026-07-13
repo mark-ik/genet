@@ -1,14 +1,18 @@
 # A second CSS engine: prior art and growth plan
 
 **Date:** 2026-07-13
-**Status:** research + proposed staging. Mark's framing: "grow a rust
-alternative using firefox, chrome, servo, blitz, ladybird, and gosub as
-prior art... think it'd be neat to have two css engines. seems like
-that's what we do around here."
+**Status:** research + proposed staging; E0a consumed-property audit landed.
+The audit invalidated the proposed 33-accessor full-crate seam and split E0
+into a current-consumer census and a lane-specific clean-room database.
+Mark's framing: "grow a rust alternative using firefox, chrome, servo,
+blitz, ladybird, and gosub as prior art... think it'd be neat to have two
+css engines. seems like that's what we do around here."
 **Companions:**
 [2026-07-13_stylo_fork_decomposition_and_divergence_plan.md](./2026-07-13_stylo_fork_decomposition_and_divergence_plan.md)
 (the fork stays the full-fat engine; the two plans share their first
 deliverable, the consumed-property audit),
+[2026-07-13_serval_consumed_css_property_audit.md](./2026-07-13_serval_consumed_css_property_audit.md)
+(the landed census and seam correction),
 [2026-07-02_gosub_lessons.md](./2026-07-02_gosub_lessons.md) (the
 existing gosub harvest).
 
@@ -21,10 +25,11 @@ pluggable backends, three engine kinds in inker. The pairing here:
 - **serval-stylo (the fork)** stays the web-correct engine for the
   fullweb lane — 450 longhands, spec-hardened, opportunistically merged
   from upstream.
-- **The lean engine** is grown, not ported: a serval-native cascade
-  sized to what serval actually renders (~33 longhands through 10 style
-  structs today), owned end to end, no gecko residue, no Python, no
-  75.6k-LOC monolith on the critical path.
+- **The lean engine** is grown, not ported: a serval-native cascade sized
+  to a chosen lane, owned end to end, without Gecko residue, Python, or the
+  75.6k-LOC monolith on the critical path. The full current Serval path
+  consumes 126 longhands through 16 Stylo style structs; a smaller number
+  requires a lane-specific boundary rather than a whole-crate engine swap.
 
 The candidate first consumers make the split concrete: host chrome
 (xilem_serval UI), smolweb documents, and card-sized content are small
@@ -101,7 +106,7 @@ A CSS engine is five things, and two of them are free:
    media-feature work, the `MediaEnvironment` consolidation); the lean
    engine gets a Device shaped for serval hosts from day one.
 
-Value types are the honest hard part: even 33 longhands need lengths,
+Value types are the honest hard part: even a small lane subset needs lengths,
 percentages, calc(), colors, and round-trip serialization. Stylo's
 values/ is 47.8k LOC for the full set; the lean subset is thousands of
 lines, not hundreds. The win is not avoiding CSS — it is avoiding the
@@ -109,26 +114,31 @@ lines, not hundreds. The win is not avoiding CSS — it is avoiding the
 
 ## The seam: how serval-layout hosts two engines
 
-serval-layout today imports `style::` directly (67 value imports, 10
-style structs, 33 longhand accessors). Computed styles are hot-path
-data, not behavior — a trait-object seam per style read is the wrong
-tool. The Rust-y seam is type-level: the lean engine exposes a
-`ComputedValues` with the **same 33 accessor names and value types**
-serval-layout already calls (`get_box().clone_display()`, ...), and
-serval-layout selects its engine by cargo feature. Costs stated: the
-accessor-compatible surface couples the lean engine's API to stylo's
-shape. Accepted deliberately — it is 33 accessors, it makes the engines
-swappable without rewriting serval-layout, and a neutral
-`layout-style-api` contract crate (the layout-dom-api precedent) can
-graduate out of it later if the surface stabilizes.
+The landed audit found 126 consumed longhands across 16 Stylo style structs:
+59 through `stylo_taffy`, 73 through direct Serval reads, 30 through
+`getComputedStyle`, and 13 animation/transition controls, with overlaps.
+`serval-layout` also has 257 `style::` references across 24 source files.
+The proposed `ComputedValues` clone with 33 accessors therefore cannot swap
+the full crate.
 
-The consumed-property audit (Track 2a of the fork plan) is therefore
-the shared first deliverable of BOTH plans: it is the lean engine's
-property spec and the fork's pruning list. Do it once. And the two
-tracks trade off: if the lean engine takes the chrome/smolweb/card
-lanes, stylo pruning (fork Track 2a) matters less — stylo can stay
-fat for fullweb only. Choose per-lane after the audit, don't do both
-blindly.
+Computed styles remain hot-path data, so a trait-object call per property read
+is still the wrong seam. The viable type-level seam is a neutral
+`layout-style-api` owned by the selected lane, with concrete computed-value
+types behind it. That contract must precede the second engine rather than
+graduate later.
+
+There is also a selection mismatch to resolve: a Cargo feature chooses one
+engine for the whole build, while the intended product behavior chooses an
+engine per document. Runtime choice requires both engines behind a shared
+document-facing boundary, or separate layout implementations selected by the
+document multiplexer.
+
+The consumed-property audit (Track 2a of the fork plan) is the shared first
+deliverable of both plans. It supplies the fork's hard keep-set and bounds the
+full swap at 126 longhands. It is not yet the lean engine's property database:
+the first lane must be chosen and audited separately, then its initial values,
+grammars, inheritance, and animation classes must be authored from
+specifications under the clean-room rule.
 
 ## Licensing and home
 
@@ -149,12 +159,15 @@ lane); this doc deliberately says "the lean engine."
 
 ## Stages, each with a receipt
 
-- **E0 — audit + database.** The consumed-property audit (shared with
-  the fork plan) becomes `properties.toml`: name, inherited?, initial
-  value, value type, animation class. Receipt: the checked-in table,
+- **E0a - current-consumer audit: landed.** The checked-in audit establishes
+  the 126-longhand full path, the 16 incumbent structs, and the wider API seam.
+- **E0b - lane choice + database.** Choose chrome, smolweb, or cards; census
+  that lane's stylesheets and reftests; author `properties.toml` from
+  specifications with name, inheritance, initial value, value type, and
+  animation class. Receipt: the clean-room table and its source ledger,
   reviewed.
 - **E1 — codegen + values.** Rust generator emits property enums,
-  ComputedValues structs (33-accessor-compatible), initial/inheritance
+  the selected lane's concrete computed-value structs, initial/inheritance
   tables; the lean values layer (lengths, percentages, calc, color,
   keywords) with serialization round-trip tests. Receipt: generated
   code compiles standalone; round-trip property tests green.
@@ -162,11 +175,11 @@ lane); this doc deliberately says "the lean engine."
   (origins, specificity, importance, inheritance), media evaluation on
   a serval-shaped Device. Receipt: a hand-built corpus of
   style-resolution unit tests (Ladybird-style spec-literal cases).
-- **E3 — serval-layout behind a feature.** The engine feature lands;
-  the chrome/smolweb reftest corpus passes identically under both
-  engines. Receipt: reftest parity run, plus the build-time delta
-  (whole-tree cold check with stylo out of the graph vs the 30m35s
-  baseline).
+- **E3 - lane integration.** The selected lane's concrete style/layout
+  implementation lands behind the document-facing engine boundary; its
+  reftest corpus passes identically under both paths. Receipt: reftest parity
+  plus the cold-build delta with Stylo absent from that lane's build graph,
+  compared with the 30m35s baseline.
 - **E4 — first production lane.** One real lane (host chrome or
   smolweb) ships on the lean engine by default. Receipt: the lane's
   existing suites green + capture receipts.

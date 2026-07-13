@@ -46,11 +46,12 @@ Everything here that moves files lands on that renamed family.
   of it is one file rustc cannot parallelize over.
 - **serval-layout is the SOLE stylo consumer** in the whole engine
   (serval-render/scripted/extract: zero style imports). Its measured
-  surface: 10 style structs (`get_box` 22, `get_inherited_text` 14,
-  `get_background` 9, `get_position` 8, `get_effects` 5, `get_border` 4,
-  then text/svg/inherited_box/font), ~33 distinct longhand accessors —
-  against stylo's ~450 longhands. One crate to audit; one place to verify
-  any divergence.
+  surface after the landed audit is 126 consumed longhands across 16
+  incumbent style structs: 59 through `stylo_taffy`, 73 through direct
+  Serval reads, 30 through `getComputedStyle`, and 13 animation/transition
+  controls, with overlaps. There are 257 `style::` references across 24
+  source files. One crate to change, but a much wider seam than the earlier
+  33-accessor estimate.
 
 ## Track 0 — zero-divergence wins (do first, no fork edits)
 
@@ -120,7 +121,7 @@ exactly that).
 ## Track 2 — divergences with outsized benefit (serval ≠ servo ≠ firefox)
 
 **2a. The property lane: prune to what serval renders.** The single
-biggest lever. Serval consumes ~33 longhands through 10 structs; stylo
+biggest lever. Serval consumes 126 longhands through 16 structs; stylo
 compiles ~450 longhands, each with specified/computed/animated types,
 parse/serialize impls, and derive expansions, most feeding capabilities
 serval deliberately knocked out (the W3C-knockout doctrine applies: delete
@@ -128,19 +129,22 @@ now, rebuild deliberately later). Mako already supports per-product
 gating — add a `serval` product lane to the templates that drops longhand
 families serval-layout cannot consume (ruby, MathML-adjacent, paged/print
 media, view-transitions, scroll-driven animation timelines, the long tail
-of -webkit compat). Unknown properties already parse as ignored, so
-pruned properties degrade to exactly what an unsupported property does in
-any engine. Expected: a large fraction of the generated code and its
+of -webkit compat). The landed audit is a hard keep-set, not a deletion
+allowlist: shorthands, keyframes, `transition-property`, CSS-wide keywords,
+custom-property substitution, and CSSOM parsing retain dependencies beyond
+direct reads. Expected: a meaningful fraction of the generated code and its
 values types gone from the build, plus real runtime wins (smaller
 ComputedValues, smaller cascade tables). Cost: template-level divergence
-where upstream churns; the audit list must be data-driven (start from the
-33, walk what getComputedStyle/serval-extract/scripted CSSOM expose, gate
-conservatively). This is the track that justifies 1b's split.
+where upstream churns; subtraction from the keep-set must be gated in
+generated-property batches and verified through the full WPT walls. This is
+the track that justifies 1b's split. Audit:
+[2026-07-13_serval_consumed_css_property_audit.md](./2026-07-13_serval_consumed_css_property_audit.md).
 **Interaction with the second-engine plan
 ([2026-07-13_second_css_engine_prior_art_and_plan.md](./2026-07-13_second_css_engine_prior_art_and_plan.md)):**
-the audit is the shared first deliverable of both plans — it is
-simultaneously this track's pruning list and the lean engine's property
-spec. Do it once; then choose per-lane. If the lean engine takes the
+the audit is the shared first deliverable of both plans. It supplies this
+track's hard keep-set and corrects the full swap boundary. The lean engine's
+database still requires a chosen lane and clean-room spec authorship. If the
+lean engine takes the
 chrome/smolweb/card lanes, this track may de-prioritize (stylo stays
 fat for fullweb only) rather than run alongside.
 
@@ -249,8 +253,9 @@ divergence we stop carrying.
    thread list).
 3. Track 1a mako pre-generation (receipt: fresh clone builds with no
    Python on PATH).
-4. Property audit for 2a: the definitive consumed-longhand list, from
-   serval-layout + CSSOM exposure (receipt: a checked-in audit table).
+4. **Property audit for 2a: landed.** The checked-in table records 126
+   consumed longhands, 16 incumbent style structs, and the wider
+   non-property API seam.
 5. Track 1b split, after the ring-3 rename lands (receipt: cold-build
    `--timings` before/after; the style node leaves the critical path).
 6. Track 2a serval product lane, gated by the audit (receipt: generated-
