@@ -4,7 +4,7 @@ version.workspace = true
 description = "Retained custom-paint leaves and arrangement helpers for Rust GUI hosts"
 edition.workspace = true
 rust-version.workspace = true
-license = "MPL-2.0"
+license = "MIT OR Apache-2.0"
 repository.workspace = true
 publish = true
 

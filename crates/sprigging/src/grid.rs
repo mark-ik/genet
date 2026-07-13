@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Data-grid math (the catalog's flagship arrangement-leaf widget): a column
 //! model over [`VirtualWindow`](crate::VirtualWindow) row virtualization.
 //! Pure, engine-free; the view half (`cambium::data_grid`) turns it into

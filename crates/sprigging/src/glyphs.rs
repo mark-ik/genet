@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! First catalog leaves (tier-2 Path-A glyphs from the widget catalog,
 //! `docs/history/2026-07-08_chisel_widget_catalog.md`): [`GraphGlyph`], [`Meter`],
 //! [`Knob`]. Pure geometry: data in, `PaintCmd`s out. Labels/values belong in

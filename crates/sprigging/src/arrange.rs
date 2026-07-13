@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Arrangement-leaf math (catalog tier 3): pure placement + virtualization
 //! helpers for a container that owns its children's x/y/z while the children
 //! stay real, first-class DOM nodes (hit-test, a11y, paint all engine-native).

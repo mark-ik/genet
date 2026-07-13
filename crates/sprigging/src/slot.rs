@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! [`SceneSlot`]: the Path-B leaf for hosts whose scene production is deeply
 //! app-coupled (meerkat's orrery: graph, camera, layout strategies, gnode
 //! pool). The build stays host-side; the slot carries the built scene through

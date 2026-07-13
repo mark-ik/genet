@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Sprigging supplies retained custom-paint leaves for GUI hosts.
 //!
 //! A small, sharp contract that lets an imperative custom-paint widget (a knob,

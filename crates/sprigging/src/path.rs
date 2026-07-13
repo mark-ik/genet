@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! A small builder over [`PathData`] so leaves author geometry fluently, plus
 //! the arc/circle math (`PathData` has no arc verb; arcs are lowered to cubic
 //! Beziers here, in the leaf's local coordinates).
