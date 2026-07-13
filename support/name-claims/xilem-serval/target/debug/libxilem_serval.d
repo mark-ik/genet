@@ -1,1 +1,0 @@
-C:\Users\mark_\Code\repos\serval\support\name-claims\xilem-serval\target\debug\libxilem_serval.rlib: C:\Users\mark_\Code\repos\serval\support\name-claims\xilem-serval\target\package\xilem-serval-0.0.1\src\lib.rs

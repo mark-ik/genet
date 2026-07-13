@@ -1,1 +1,0 @@
-C:\Users\mark_\Code\repos\serval\support\name-claims\layout-dom-api\target\debug\liblayout_dom_api.rlib: C:\Users\mark_\Code\repos\serval\support\name-claims\layout-dom-api\target\package\layout-dom-api-0.0.1\src\lib.rs
