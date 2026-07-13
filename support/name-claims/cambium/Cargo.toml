@@ -3,7 +3,7 @@ name = "cambium"
 version = "0.0.1"
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/mark-ik/genet"
+repository = "https://github.com/mark-ik/cambium"
 description = "Cambium: the reactive view layer over the genet engine (xilem-fork heritage; cambium depends on genet, never the reverse). NAME CLAIM: the real crate is being refactored out of mark-ik/serval; consume it as a git dependency."
 
 [workspace]

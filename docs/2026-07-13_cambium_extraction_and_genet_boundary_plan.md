@@ -76,7 +76,11 @@ Record these before any history rewrite or directory move:
   `genet-stylo` were claimed at the same time.
 - `cambium-winit` and `cambium-nematic` were unclaimed when audited on
   2026-07-13; that observation is not a reservation.
-- `mark-ik/cambium` was not present on GitHub on 2026-07-13.
+- `mark-ik/cambium` was not present on GitHub when this was written; it was
+  **created public and pushed on 2026-07-13** (head `f2524901`, six commits:
+  extraction, Sprigging relicense, Genet alignment, winit adapter, component
+  catalog, Nematic views). Repository publication only — crates.io releases
+  remain separately authorized.
 
 The claims establish namespace ownership. Publishing implementation releases
 remains a separately authorized action.
