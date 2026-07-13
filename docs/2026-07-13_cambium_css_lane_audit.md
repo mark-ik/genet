@@ -27,9 +27,9 @@ The lane is deliberately narrower than a complete host theme. It covers:
 - Genet's baseline UA stylesheet, which every styled DOM currently receives;
 - the selectors and values needed to render those declarations.
 
-It excludes application-owned theme sheets because Cambium's component catalog
-has not yet been restored in the extracted workspace. That corpus must be added
-before this can be called the production host-chrome contract.
+It excludes application-owned theme sheets because Cambium's proposed component
+catalog has not yet been implemented in the extracted workspace. That corpus
+must be added before this can be called the production host-chrome contract.
 
 ## Why this lane
 
@@ -97,7 +97,7 @@ select the native engine.
 
 The lane choice and seed database are landed. Before E1 code generation starts:
 
-1. restore the Cambium component-catalog/theme fixture;
+1. create the Cambium component-catalog/theme fixture;
 2. merge its application-owned property corpus into the database;
 3. add a fixture that fails when a Cambium-owned declaration is absent from the
    database;

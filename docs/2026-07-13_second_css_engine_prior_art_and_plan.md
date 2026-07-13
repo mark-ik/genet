@@ -144,7 +144,7 @@ The consumed-property audit (Track 2a of the fork plan) was the shared first
 deliverable of both plans. It supplies the fork's hard keep-set and bounds the
 full swap at 126 longhands. The Cambium audit then supplied the first lean-engine
 database: 22 longhands with initial values, grammars, inheritance, animation
-classes, and specification sources. The restored component-catalog theme must
+classes, and specification sources. The future component-catalog theme must
 extend that seed before production-host claims.
 
 ## Licensing and home
