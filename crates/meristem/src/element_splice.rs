@@ -109,3 +109,49 @@ impl<T> Default for AppendVec<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{AppendVec, ElementSplice};
+    use crate::ViewElement;
+
+    #[derive(Debug, PartialEq)]
+    struct TestElement(u8);
+
+    impl ViewElement for TestElement {
+        type Mut<'a> = &'a mut Self;
+    }
+
+    struct MinimalSplice;
+
+    impl ElementSplice<TestElement> for MinimalSplice {
+        fn with_scratch<R>(&mut self, f: impl FnOnce(&mut AppendVec<TestElement>) -> R) -> R {
+            f(&mut AppendVec::default())
+        }
+
+        fn insert(&mut self, _element: TestElement) {}
+
+        fn mutate<R>(&mut self, _f: impl FnOnce(&mut TestElement) -> R) -> R {
+            unreachable!()
+        }
+
+        fn skip(&mut self, _n: usize) {}
+
+        fn index(&self) -> usize {
+            0
+        }
+
+        fn delete<R>(&mut self, _f: impl FnOnce(&mut TestElement) -> R) -> R {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn move_extensions_default_to_unsupported_without_consuming_elements() {
+        let mut splice = MinimalSplice;
+
+        assert!(!splice.hoist_pending(1));
+        assert_eq!(splice.extract_pending(), None);
+        assert_eq!(splice.adopt_pending(TestElement(7)), Err(TestElement(7)));
+    }
+}

@@ -45,7 +45,7 @@ impl<A> MessageResult<A> {
 /// A simple dynamically typed message for the [`View`] trait.
 ///
 /// This is a thin wrapper around `Box<dyn Any>`, with added support for debug printing.
-/// It is used as the default message type in Xilem Core.
+/// It is used as the default message type in Meristem.
 ///
 /// To convert a `DynMessage` into its concrete message type, you should use
 /// [`downcast`](Self::downcast).

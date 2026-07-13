@@ -5,7 +5,7 @@
 
 /// A type which can be used as the `Element` associated type for a [`View`](crate::View).
 ///
-/// It is expected that most libraries using `xilem_core` will have a generic
+/// It is expected that most libraries using `meristem` will have a generic
 /// implementation of this trait for their widget type.
 /// Additionally, this may also be implemented for other types, depending on the
 /// needs of the specific parent view.

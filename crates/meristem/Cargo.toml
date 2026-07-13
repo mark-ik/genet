@@ -1,0 +1,25 @@
+# Meristem is Cambium's fork-derived reactive diff and message core. Its source
+# began as Linebender's Apache-2.0 `xilem_core`; see docs/upstream-xilem.md for
+# the pinned bases and the local semantic patch ledger.
+[package]
+name = "meristem"
+version.workspace = true
+description = "The reactive diff and message core of the Cambium GUI toolkit"
+edition.workspace = true
+rust-version.workspace = true
+license = "Apache-2.0"
+repository.workspace = true
+publish = true
+
+[lib]
+name = "meristem"
+path = "src/lib.rs"
+
+[features]
+kurbo = ["dep:kurbo"]
+
+[dependencies]
+tracing = { workspace = true }
+kurbo = { workspace = true, optional = true }
+hashbrown = { version = "0.17.0", default-features = false, features = ["default-hasher"] }
+anymore = "1.0.0"

@@ -16,7 +16,7 @@ use crate::{MessageCtx, MessageResult, Mut, NoElement, View, ViewMarker, ViewPat
 /// This can be useful for logging a value:
 ///
 /// ```
-/// # use xilem_core::{run_once, View, docs::{Fake as ViewCtx, DocsView as WidgetView}};
+/// # use meristem::{run_once, View, docs::{Fake as ViewCtx, DocsView as WidgetView}};
 /// # struct AppData;
 /// fn log_lifecycle(data: &mut AppData) -> impl WidgetView<AppData, ()> {
 ///     run_once(|| eprintln!("View constructed"))
@@ -32,7 +32,7 @@ use crate::{MessageCtx, MessageResult, Mut, NoElement, View, ViewMarker, ViewPat
 /// // <https://doc.rust-lang.org/error_codes/E0080.html>
 /// // Note that this error code is only checked on nightly
 /// ```compile_fail,E0080
-/// # use xilem_core::{run_once, View, docs::{DocsView as WidgetView}};
+/// # use meristem::{run_once, View, docs::{DocsView as WidgetView}};
 /// # struct AppData {
 /// #    data: u32
 /// # }

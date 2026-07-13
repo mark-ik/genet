@@ -5,7 +5,8 @@ use crate::{MessageCtx, MessageResult, Mut, View, ViewElement, ViewMarker, ViewP
 
 /// This trait provides a way to add [`View`] implementations for types that would be restricted otherwise by the orphan rules.
 ///
-/// Every type that can be supported with this trait, needs a concrete `View` implementation in `xilem_core`, possibly feature-gated.
+/// Every type that can be supported with this trait needs a concrete `View`
+/// implementation in `meristem`, possibly feature-gated.
 pub trait OrphanView<V, State: 'static, Action>: ViewPathTracker + Sized {
     /// See [`View::Element`]
     type OrphanElement: ViewElement;
@@ -122,7 +123,8 @@ impl_orphan_view_for!(isize);
 impl_orphan_view_for!(usize);
 
 #[cfg(feature = "kurbo")]
-/// These [`OrphanView`] implementations can e.g. be used in a vector graphics context, as for example seen in `xilem_web` within svg nodes
+/// These [`OrphanView`] implementations can be used in vector-graphics
+/// contexts whose child types differ from the backend's generic elements.
 mod kurbo {
     use super::OrphanView;
     use crate::{MessageCtx, MessageResult, Mut, View, ViewMarker};

@@ -50,8 +50,8 @@ impl<CF, V, F, ParentState, ChildState, Action, Context> Debug
 /// In code, the date picker example might look like:
 ///
 /// ```
-/// # use xilem_core::docs::{DocsView as WidgetView, State as Date, State as Flight, some_component};
-/// use xilem_core::lens;
+/// # use meristem::docs::{DocsView as WidgetView, State as Date, State as Flight, some_component};
+/// use meristem::lens;
 ///
 /// fn date_picker(date: &mut Date) -> impl WidgetView<Date> + use<> {
 /// # some_component(date)

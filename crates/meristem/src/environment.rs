@@ -109,7 +109,7 @@ impl Environment {
                     vacant_entry.insert(slot);
                     slot
                 }
-            },
+            }
         }
     }
 
@@ -442,7 +442,7 @@ where
             let Some(pos) = pos else {
                 panic!(
                     // TODO: Track caller for this view?
-                    "Xilem: Tried to get context for {}, but it hasn't been provided. Did you forget to wrap this view with `xilem_core::environment::provides`?",
+                    "Meristem: Tried to get context for {}, but it hasn't been provided. Did you forget to wrap this view with `meristem::environment::provides`?",
                     core::any::type_name::<Context>()
                 );
             };
@@ -581,7 +581,7 @@ where
                 None => {
                     tracing::warn!("Expected `Rebuild` in WithContext::Message, got {message:?}");
                     return MessageResult::Stale;
-                },
+                }
             }
         };
         debug_assert_eq!(
@@ -669,7 +669,7 @@ where
         let Some(pos) = pos else {
             panic!(
                 // TODO: Track caller for this view?
-                "Xilem: Tried to get context for {}, but it hasn't been provided. Did you forget to wrap this view with `xilem_core::environment::provides`?",
+                "Meristem: Tried to get context for {}, but it hasn't been provided. Did you forget to wrap this view with `meristem::environment::provides`?",
                 core::any::type_name::<Context>()
             );
         };

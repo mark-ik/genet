@@ -24,7 +24,7 @@ use crate::{
 /// This is also useful for memoization, by storing an `Option<Arc<dyn AnyView<...>>>`,
 /// then [inserting](Option::get_or_insert_with) into that option at view tree construction time.
 ///
-/// Libraries using `xilem_core` are expected to have a type alias for their own `AnyView`, which specifies
+/// Libraries using `meristem` are expected to have a type alias for their own `AnyView`, which specifies
 /// the `Context` and `Element` types.
 pub trait AnyView<State: 'static, Action, Context, Element: ViewElement> {
     /// Get an [`Any`] reference to `self`.

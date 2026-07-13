@@ -2,15 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Hide these docs from "general audiences" online.
-// but keep them available for developers of Xilem Core to browse.
+// but keep them available for developers of Meristem to browse.
 #![cfg_attr(docsrs, doc(hidden))]
 
 //! Fake implementations of Xilem traits for use within documentation examples and tests.
 //!
-//! Users of Xilem Core should not use these traits.
+//! Users of Meristem should not use these traits.
 //!
 //! The items defined in this trait will often be imported in doc comments in renamed form.
-//! This is mostly intended for writing documentation internally to Xilem Core.
+//! This is mostly intended for writing documentation internally to Meristem.
 //!
 //! This module is not required to follow semver. It is public only for documentation purposes.
 //!
@@ -21,8 +21,8 @@
 //! ///
 //! /// # Examples
 //! /// ```
-//! /// # use xilem_core::docs::{DocsView as WidgetView, State};
-//! /// use xilem_core::interesting_primitive;
+//! /// # use meristem::docs::{DocsView as WidgetView, State};
+//! /// use meristem::interesting_primitive;
 //! /// fn user_component() -> WidgetView<State> {
 //! ///     interesting_primitive()
 //! /// }
@@ -61,8 +61,8 @@ impl ViewPathTracker for Fake {
 ///
 /// This will often be imported by a different name in a hidden use item.
 ///
-/// In most cases, that name will be `WidgetView`, as Xilem Core's documentation is
-/// primarily targeted at users of [Xilem](https://crates.io/crates/xilem/).
+/// In most cases, that name will be `WidgetView`, as Meristem's documentation is
+/// primarily targeted at backend authors.
 pub trait DocsView<State: 'static, Action = ()>: View<State, Action, Fake> {}
 impl<V, State, Action> DocsView<State, Action> for V
 where
@@ -75,8 +75,8 @@ where
 ///
 /// This will often be imported by a different name in a hidden use item.
 ///
-/// In most cases, that name will be `WidgetViewSequence`, as Xilem Core's documentation is
-/// primarily targeted at users of [Xilem](https://crates.io/crates/xilem/).
+/// In most cases, that name will be `WidgetViewSequence`, as Meristem's
+/// documentation is primarily targeted at backend authors.
 pub trait DocsViewSequence<State: 'static, Action = ()>:
     ViewSequence<State, Action, Fake, NoElement>
 {

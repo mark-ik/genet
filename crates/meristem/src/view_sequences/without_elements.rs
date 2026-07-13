@@ -56,8 +56,8 @@ pub struct WithoutElements<Seq, State, Action, Context> {
 /// # Examples
 ///
 /// ```
-/// # use xilem_core::docs::{DocsViewSequence as WidgetViewSequence, some_component_generic as component};
-/// use xilem_core::{without_elements, run_once};
+/// # use meristem::docs::{DocsViewSequence as WidgetViewSequence, some_component_generic as component};
+/// use meristem::{without_elements, run_once};
 ///
 /// fn isolated_child(state: &mut AppState) -> impl WidgetViewSequence<AppState> {
 ///     (component(state), without_elements(run_once(|| {})))

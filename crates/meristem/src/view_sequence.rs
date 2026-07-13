@@ -34,22 +34,22 @@ impl Count {
         while idx < N {
             idx += 1;
             match vals[idx] {
-                Count::Zero => {},
+                Count::Zero => {}
                 Count::One if matches!(current_count, Count::Zero) => {
                     current_count = Count::One;
-                },
+                }
                 Count::One if matches!(current_count, Count::One) => {
                     current_count = Count::Many;
-                },
-                Count::One => {},
+                }
+                Count::One => {}
                 // Many overwrites everything, including unknown
                 // Because if we have one "many" child, we definitely have several
                 Count::Many => {
                     current_count = Count::Many;
-                },
+                }
                 Count::Unknown if !matches!(current_count, Count::Many) => {
                     current_count = Count::Unknown;
-                },
+                }
                 _ => panic!("How to report this properly"),
             }
         }

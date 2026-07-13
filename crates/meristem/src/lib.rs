@@ -1,37 +1,18 @@
 // Copyright 2022 the Xilem Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// After you edit the crate's doc comment, run this command, then check README.md for any missing links
-// cargo rdme --workspace-project=xilem_core
-
-//! Xilem Core provides primitives which are used by [Xilem][] (a cross-platform GUI toolkit) and [Xilem Web][] (a web frontend framework).
-//! If you are using Xilem, [its documentation][xilem docs] will probably be more helpful for you. <!-- TODO: In the long-term, we probably also need a book? -->
-//!
-//! Xilem apps will interact with some of the functions from this crate, particularly fundamental views such as [`memoize`][] and [`lens`][].
-//! Xilem apps which use custom widgets (and therefore must implement custom views), will implement the [`View`][] trait.
-//!
-//! If you wish to implement the Xilem pattern in a different domain (such as for a terminal user interface), this crate can be used to do so.
-//! Though, while Xilem Core should be able to support all kinds of domains, the crate prioritizes the ergonomics for users of Xilem.
+//! Meristem is Cambium's renderer-independent reactive diff and message core.
+//! Backends implement its [`View`] and element contracts; Cambium's primary
+//! backend targets Serval.
 //!
 //! # Hot reloading
 //!
-//! Xilem Core does not currently include infrastructure to enable hot reloading, but this is planned.
-//! The current proposal would split the application into two processes:
-//!
-//!  - The app process, which contains the app state and create the views, which would be extremely lightweight and can be recompiled and restarted quickly.
-//!  - The display process, which contains the widgets and would be long-lived, updating to match the new state of the view tree provided by the app process.
-//!
-//! # Quickstart
-//!
-//! <!-- TODO? -->
+//! Meristem does not include a hot-reloading runtime. Its message and view
+//! boundaries are deliberately independent of a renderer or process model.
 //!
 //! # `no_std` support
 //!
-//! Xilem Core supports running with `#![no_std]`, but does require [`alloc`][] to be available.
-//!
-//! [Xilem]: https://crates.io/crates/xilem
-//! [Xilem Web]: https://crates.io/crates/xilem_web
-//! [xilem docs]: https://docs.rs/xilem/latest/xilem/
+//! Meristem supports `#![no_std]` with [`alloc`].
 
 // LINEBENDER LINT SET - lib.rs - v3
 // See https://linebender.org/wiki/canonical-lints/
