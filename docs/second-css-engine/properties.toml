@@ -1,0 +1,246 @@
+schema = 1
+lane = "cambium-structural"
+engine_owner = "genet"
+consumer = "cambium"
+status = "clean-room seed; not yet wired to code generation"
+
+[sources.css_color_4]
+url = "https://www.w3.org/TR/css-color-4/#propdef-color"
+
+[sources.css_display_3]
+url = "https://www.w3.org/TR/css-display-3/#propdef-display"
+
+[sources.css_fonts_4]
+url = "https://www.w3.org/TR/css-fonts-4/"
+
+[sources.css_sizing_3]
+url = "https://www.w3.org/TR/css-sizing-3/"
+
+[sources.css_position_3]
+url = "https://www.w3.org/TR/css-position-3/"
+
+[sources.css_lists_3]
+url = "https://www.w3.org/TR/css-lists-3/#propdef-list-style-type"
+
+[sources.css_box_4]
+url = "https://www.w3.org/TR/css-box-4/"
+
+[sources.css_overflow_3]
+url = "https://www.w3.org/TR/css-overflow-3/"
+
+[sources.css_text_decor_4]
+url = "https://www.w3.org/TR/css-text-decor-4/#text-decoration-line-property"
+
+[sources.css_text_4]
+url = "https://www.w3.org/TR/css-text-4/"
+
+[shorthands.margin]
+longhands = ["margin-top", "margin-right", "margin-bottom", "margin-left"]
+grammar = "<length-percentage> | auto, one to four values"
+seed_values = ["px", "em", "zero"]
+source = "css_box_4"
+
+[shorthands.white_space]
+css_name = "white-space"
+longhands = ["white-space-collapse", "text-wrap-mode"]
+grammar = "normal | pre | pre-wrap | pre-line | <white-space-collapse> || <text-wrap-mode>"
+seed_values = ["normal", "pre"]
+source = "css_text_4"
+
+[[property]]
+name = "color"
+inherited = true
+initial = "CanvasText"
+grammar = "<color>"
+seed_values = ["rgb()", "hex"]
+animation = "by-computed-value"
+source = "css_color_4"
+
+[[property]]
+name = "display"
+inherited = false
+initial = "inline"
+grammar = "[ <display-outside> || <display-inside> ] | <display-listitem> | <display-internal> | <display-box> | <display-legacy>"
+seed_values = ["inline", "block", "inline-block", "none", "table", "table-row-group", "table-row", "table-cell", "table-caption"]
+animation = "discrete"
+source = "css_display_3"
+
+[[property]]
+name = "font-size"
+inherited = true
+initial = "medium"
+grammar = "<absolute-size> | <relative-size> | <length-percentage>"
+seed_values = ["medium", "em"]
+animation = "by-computed-value"
+source = "css_fonts_4"
+
+[[property]]
+name = "font-style"
+inherited = true
+initial = "normal"
+grammar = "normal | italic | oblique <angle>?"
+seed_values = ["normal", "italic"]
+animation = "by-computed-value"
+source = "css_fonts_4"
+
+[[property]]
+name = "font-weight"
+inherited = true
+initial = "normal"
+grammar = "normal | bold | bolder | lighter | <number [1,1000]>"
+seed_values = ["normal", "bold"]
+animation = "by-computed-value"
+source = "css_fonts_4"
+
+[[property]]
+name = "height"
+inherited = false
+initial = "auto"
+grammar = "auto | <length-percentage> | min-content | max-content | fit-content(<length-percentage>)"
+seed_values = ["auto", "px", "percentage"]
+animation = "by-computed-value"
+source = "css_sizing_3"
+
+[[property]]
+name = "left"
+inherited = false
+initial = "auto"
+grammar = "auto | <length-percentage>"
+seed_values = ["auto", "px", "percentage"]
+animation = "by-computed-value"
+source = "css_position_3"
+
+[[property]]
+name = "list-style-type"
+inherited = true
+initial = "disc"
+grammar = "<counter-style> | <string> | none"
+seed_values = ["disc", "decimal"]
+animation = "discrete"
+source = "css_lists_3"
+
+[[property]]
+name = "margin-bottom"
+inherited = false
+initial = "0"
+grammar = "<length-percentage> | auto"
+seed_values = ["0", "px", "em"]
+animation = "by-computed-value"
+source = "css_box_4"
+
+[[property]]
+name = "margin-left"
+inherited = false
+initial = "0"
+grammar = "<length-percentage> | auto"
+seed_values = ["0", "px", "em"]
+animation = "by-computed-value"
+source = "css_box_4"
+
+[[property]]
+name = "margin-right"
+inherited = false
+initial = "0"
+grammar = "<length-percentage> | auto"
+seed_values = ["0", "px", "em"]
+animation = "by-computed-value"
+source = "css_box_4"
+
+[[property]]
+name = "margin-top"
+inherited = false
+initial = "0"
+grammar = "<length-percentage> | auto"
+seed_values = ["0", "px", "em"]
+animation = "by-computed-value"
+source = "css_box_4"
+
+[[property]]
+name = "overflow-x"
+inherited = false
+initial = "visible"
+grammar = "visible | hidden | clip | scroll | auto"
+seed_values = ["visible", "hidden"]
+animation = "discrete"
+source = "css_overflow_3"
+
+[[property]]
+name = "overflow-y"
+inherited = false
+initial = "visible"
+grammar = "visible | hidden | clip | scroll | auto"
+seed_values = ["visible", "hidden"]
+animation = "discrete"
+source = "css_overflow_3"
+
+[[property]]
+name = "padding-left"
+inherited = false
+initial = "0"
+grammar = "<length-percentage>"
+seed_values = ["0", "px"]
+animation = "by-computed-value"
+source = "css_box_4"
+
+[[property]]
+name = "position"
+inherited = false
+initial = "static"
+grammar = "static | relative | absolute | sticky | fixed"
+seed_values = ["static", "relative", "absolute"]
+animation = "discrete"
+source = "css_position_3"
+
+[[property]]
+name = "text-decoration-line"
+inherited = false
+initial = "none"
+grammar = "none | [ underline || overline || line-through || blink ]"
+seed_values = ["none", "underline"]
+animation = "discrete"
+source = "css_text_decor_4"
+
+[[property]]
+name = "text-wrap-mode"
+inherited = true
+initial = "wrap"
+grammar = "wrap | nowrap"
+seed_values = ["wrap", "nowrap"]
+animation = "discrete"
+source = "css_text_4"
+
+[[property]]
+name = "top"
+inherited = false
+initial = "auto"
+grammar = "auto | <length-percentage>"
+seed_values = ["auto", "px", "percentage"]
+animation = "by-computed-value"
+source = "css_position_3"
+
+[[property]]
+name = "white-space-collapse"
+inherited = true
+initial = "collapse"
+grammar = "collapse | discard | preserve | preserve-breaks | preserve-spaces | break-spaces"
+seed_values = ["collapse", "preserve"]
+animation = "discrete"
+source = "css_text_4"
+
+[[property]]
+name = "width"
+inherited = false
+initial = "auto"
+grammar = "auto | <length-percentage> | min-content | max-content | fit-content(<length-percentage>)"
+seed_values = ["auto", "px", "percentage"]
+animation = "by-computed-value"
+source = "css_sizing_3"
+
+[[property]]
+name = "z-index"
+inherited = false
+initial = "auto"
+grammar = "auto | <integer>"
+seed_values = ["auto", "integer"]
+animation = "by-computed-value"
+source = "css_position_3"

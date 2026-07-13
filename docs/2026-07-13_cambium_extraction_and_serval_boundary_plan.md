@@ -1,22 +1,22 @@
-# Cambium extraction and Serval boundary plan
+# Cambium extraction and Genet boundary plan
 
 **Date:** 2026-07-13
 **Status:** in progress; live dependency audit complete, local Cambium workspace
-through backend/Sprigging extraction landed at
-`769644eb92962289022d8934893b4b5018f80176`.
+through backend/Sprigging extraction and Genet-boundary naming alignment landed
+at `1f2e38d99ad47d5410f2fa292a27ca4460dd8b54`.
 
 ## Decision
 
-Create **Cambium**, a standalone Serval-native reactive GUI toolkit derived
+Create **Cambium**, a standalone Genet-native reactive GUI toolkit derived
 from Xilem's reactive core and the current `serval-xilem` backend. Name the
 reactive core **Meristem**: it is the structure-producing layer inside the
 Cambium umbrella, while `cambium` remains the application-facing crate.
 
 The correction that keeps the architecture honest:
 
-- **Serval replaces Masonry.** Serval owns DOM, style, layout, paint, input,
+- **Genet replaces Masonry.** Genet owns DOM, style, layout, paint, input,
   accessibility, and browser-engine behavior.
-- **Sprigging extends Serval.** It supplies retained custom-paint leaves and
+- **Sprigging extends Genet.** It supplies retained custom-paint leaves and
   arrangement geometry for pixels and virtualization CSS cannot express.
 - **Cambium replaces the Xilem application layer.** It owns reactive diffing,
   application views, controls, component composition, and the host adapters
@@ -25,15 +25,21 @@ The correction that keeps the architecture honest:
 The target dependency rule is strict:
 
 ```text
-applications -> Cambium -> Serval seams -> netrender / platform
+applications -> Cambium -> Genet seams -> netrender / platform
                          -> Nematic / other document engines as needed
 
-Serval engine crates -X-> Cambium
+Genet engine crates -X-> Cambium
 ```
 
-Cambium is both a Serval consumer and the GUI provider to Mere, Isometry,
-Strophe, and Woodshed. Serval remains independently usable as a browser and
+Cambium is both a Genet consumer and the GUI provider to Mere, Isometry,
+Strophe, and Woodshed. Genet remains independently usable as a browser and
 document engine without Cambium.
+
+**Naming migration:** Genet is the engine product formerly called Serval. The
+repository, current `serval-*` packages, Rust identifiers, and historical source
+references retain their Serval names until the source migration lands. Product
+ownership statements in this plan use Genet; literal current identifiers keep
+their existing spelling.
 
 ## Why extract now
 
@@ -79,18 +85,18 @@ remains a separately authorized action.
 
 | Current code | Actual responsibility | Target home |
 | --- | --- | --- |
-| `components/xilem-core` | reactive diff/message core plus Serval-required move extensions | `meristem` |
-| `components/xilem-serval` | Serval DOM backend, app runner, controls, component catalog | `cambium` |
+| `components/xilem-core` | reactive diff/message core plus Genet-required move extensions | `meristem` |
+| `components/xilem-serval` | Genet DOM backend, app runner, controls, component catalog | `cambium` |
 | `components/chisel` | custom-paint leaf contract, retention, arrangements, glyphs | `sprigging` |
 | `serval-winit-host` key/modifier mapping | winit events into Cambium key types | `cambium-winit` |
-| `serval-winit-host` render/surface/a11y core | generic Serval/netrender presentation | stays in Serval |
-| `serval-render` Sprigging convenience adapters | Cambium leaf registry into Serval's neutral leaf seams | Cambium integration module |
+| `serval-winit-host` render/surface/a11y core | generic Genet/netrender presentation | stays in Genet |
+| `serval-render` Sprigging convenience adapters | Cambium leaf registry into Genet's neutral leaf seams | Cambium integration module |
 | `nematic::views` | Cambium views over Nematic ASTs | `cambium-nematic` |
 | `serval-documents::smolweb` native-view runner | Cambium-authored smolweb document adapter | `cambium-nematic` |
-| Nematic parsers and `EngineDocument` lowering | protocol-faithful document engine | stays with Nematic/Serval engine family |
+| Nematic parsers and `EngineDocument` lowering | protocol-faithful document engine | stays with Nematic/Genet engine family |
 | Inker and `document-canvas` | engine routing and document-to-PaintList lowering | stay outside Cambium |
 | `knot-editor-host` lexer/model code | editor intelligence over existing parsers | stays outside Cambium; view adapter may move later |
-| Pelt | Serval reference shell and integration consumer | stays in Serval, depends on Cambium where needed |
+| Pelt | Genet reference shell and integration consumer | stays in Genet, depends on Cambium where needed |
 
 ## Target Cambium workspace
 
@@ -102,7 +108,7 @@ cambium/
   LICENSES/
   crates/
     meristem/           reactive core derived from xilem_core
-    cambium/            Serval backend, runner, controls, catalog
+    cambium/            Genet backend, runner, controls, catalog
     sprigging/          leaf contract, registry, arrangements, glyphs
     cambium-winit/      winit -> Cambium input mapping
     cambium-nematic/    optional native views/adapters over Nematic formats
@@ -462,10 +468,10 @@ license against its shipped license texts before publication.
 
 Cambium is extracted when all of the following are true:
 
-1. Cambium owns the reactive core fork, Serval backend, Sprigging, component
+1. Cambium owns the reactive core fork, Genet backend, Sprigging, component
    catalog, and platform-to-Cambium input adapters.
-2. Serval owns the browser/document engine and exposes only neutral seams upward.
-3. Dependency direction is one-way from Cambium to Serval for engine packages.
+2. Genet owns the browser/document engine and exposes only neutral seams upward.
+3. Dependency direction is one-way from Cambium to Genet for engine packages.
 4. Pelt, Isometry, Woodshed, Strophe, and Mere consume Cambium successfully.
 5. Xilem provenance and the Meristem patch ledger are explicit.
 6. Old Serval package names are removed or intentionally compatibility-only.

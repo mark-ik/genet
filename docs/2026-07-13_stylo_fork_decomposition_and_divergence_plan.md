@@ -4,7 +4,12 @@
 **Status:** Track U landed; decomposition tracks remain proposed (Mark's
 framing: "we have a fork, and we should use it," opportunistically taking
 from upstream as with every fork). Grounding facts verified against the fork
-and serval this session.
+and the Genet repository currently named `serval` this session.
+
+**Naming migration:** Genet is the engine formerly called Serval.
+`genet-stylo` supersedes the `serval-stylo` package family; current repository,
+branch, package, and source identifiers keep their existing names until their
+respective rename commits land.
 
 Coordinates with the completed ring-3 fork rename
 ([2026-07-12_ring3_fork_rename_publish_plan.md](./2026-07-12_ring3_fork_rename_publish_plan.md)):
@@ -118,15 +123,16 @@ priciest item in the plan; it should land only after 1a and only when the
 fork expects sustained iteration (the property-pruning track below is
 exactly that).
 
-## Track 2 — divergences with outsized benefit (serval ≠ servo ≠ firefox)
+## Track 2 — divergences with outsized benefit (Genet ≠ Servo ≠ Firefox)
 
-**2a. The property lane: prune to what serval renders.** The single
-biggest lever. Serval consumes 126 longhands through 16 structs; stylo
-compiles ~450 longhands, each with specified/computed/animated types,
+**2a. The property lane: prune to what Genet renders.** The single
+biggest lever. Genet's current Serval-named path consumes 126 longhands
+through 16 structs; Stylo compiles ~450 longhands, each with
+specified/computed/animated types,
 parse/serialize impls, and derive expansions, most feeding capabilities
-serval deliberately knocked out (the W3C-knockout doctrine applies: delete
+Genet deliberately knocked out (the W3C-knockout doctrine applies: delete
 now, rebuild deliberately later). Mako already supports per-product
-gating — add a `serval` product lane to the templates that drops longhand
+gating — add a `genet` product lane to the templates that drops longhand
 families serval-layout cannot consume (ruby, MathML-adjacent, paged/print
 media, view-transitions, scroll-driven animation timelines, the long tail
 of -webkit compat). The landed audit is a hard keep-set, not a deletion
@@ -258,13 +264,14 @@ divergence we stop carrying.
    non-property API seam.
 5. Track 1b split, after the ring-3 rename lands (receipt: cold-build
    `--timings` before/after; the style node leaves the critical path).
-6. Track 2a serval product lane, gated by the audit (receipt: generated-
+6. Track 2a Genet product lane, gated by the audit (receipt: generated-
    code line count + cold build + ComputedValues size, before/after).
 7. 2c/2d as measure-first follow-ons.
 
 ## Open items
 
 - Ring-3 state as of 2026-07-13: the rename is incorporated into realigned
-  fork `main`; the `genet` and `genet-stylo` crates.io names are claimed. The
-  exact mapping between those names and the planned `serval-stylo` family is
-  still open. Implementation publication stays Mark's per-crate call.
+  fork `main`; the `genet` and `genet-stylo` crates.io names are claimed.
+  `genet-stylo` is the replacement name for the current `serval-stylo` family.
+  The native second CSS engine remains unnamed. Implementation publication
+  stays Mark's per-crate call.

@@ -1,7 +1,10 @@
-# Serval consumed CSS property audit
+# Genet consumed CSS property audit (current Serval paths)
 
 **Date:** 2026-07-13  
 **Status:** landed against Serval `6b955ff96ed` and Stylo `eec60c2464`
+
+Genet is the engine product formerly called Serval. Current repository, crate,
+and source paths retain `serval` compatibility names during the migration.
 
 This is the shared first receipt for the Stylo pruning track and the second
 CSS engine plan. It answers one narrow question: which CSS longhands does the
@@ -115,8 +118,9 @@ from specifications and clean-room references.
 That splits the old E0 receipt into two parts:
 
 - **E0a, landed here:** current-consumer census and seam correction.
-- **E0b, remaining:** choose the first lane, derive its smaller corpus-backed
-  subset, and author the clean-room property database from specifications.
+- **E0b, landed separately:** the Cambium structural lane audit derives a
+  22-longhand seed and authors the clean-room property database from
+  specifications. Its component-catalog theme expansion remains a pre-E1 gate.
 
 ## Fork pruning use
 
