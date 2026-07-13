@@ -110,7 +110,8 @@ pub(crate) fn field_children(input: &TextInput, styles: &[StyleRange]) -> Vec<Fi
     emit(&mut kids, text, &runs, 0, at);
     if !preedit.is_empty() {
         kids.push(Box::new(
-            el::<_, TextInput, ()>("span", preedit).attr("style", "text-decoration: underline;"),
+            el::<_, TextInput, ()>("span", preedit)
+                .attr("style", "text-decoration-line: underline;"),
         ));
     }
     emit(&mut kids, text, &runs, at, text.len());

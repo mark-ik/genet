@@ -120,7 +120,7 @@ where
     let body = el::<_, State, Action>("div", rows).attr("class", "grid-body").attr(
         "style",
         format!(
-            "position: relative; overflow: hidden; width: {width}px; height: {viewport_height}px;"
+            "position: relative; overflow-x: hidden; overflow-y: hidden; width: {width}px; height: {viewport_height}px;"
         ),
     );
 
