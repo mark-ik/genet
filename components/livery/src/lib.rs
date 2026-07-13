@@ -6,6 +6,10 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cascade;
+pub mod media;
+pub mod selector;
+pub mod stylesheet;
 pub mod values;
 
 include!(concat!(env!("OUT_DIR"), "/properties.rs"));

@@ -314,6 +314,41 @@ fn generate(db: &Database) -> String {
     }
     out.push_str("        }\n    }\n}\n\n");
 
+    out.push_str("#[derive(Clone, Debug, PartialEq)]\npub enum PropertyValue {\n");
+    for value_type in &value_types {
+        out.push_str(&format!(
+            "    {}({}),\n",
+            rust_name(value_type),
+            value_type_path(value_type)
+        ));
+    }
+    out.push_str("}\n\nimpl PropertyValue {\n    pub fn parse(property: PropertyId, input: &str) -> Result<Self, crate::values::ParseError> {\n        match property {\n");
+    for property in &db.property {
+        out.push_str(&format!(
+            "            PropertyId::{property} => input.parse::<{value_path}>().map(Self::{value_variant}),\n",
+            property = rust_name(&property.name),
+            value_path = value_type_path(&property.value_type),
+            value_variant = rust_name(&property.value_type),
+        ));
+    }
+    out.push_str("        }\n    }\n\n    pub const fn value_type(&self) -> ValueType {\n        match self {\n");
+    for value_type in &value_types {
+        let variant = rust_name(value_type);
+        out.push_str(&format!(
+            "            Self::{variant}(..) => ValueType::{variant},\n"
+        ));
+    }
+    out.push_str(
+        "        }\n    }\n\n    pub fn to_css_string(&self) -> String {\n        match self {\n",
+    );
+    for value_type in &value_types {
+        out.push_str(&format!(
+            "            Self::{}(value) => value.to_string(),\n",
+            rust_name(value_type)
+        ));
+    }
+    out.push_str("        }\n    }\n}\n\n");
+
     out.push_str("#[derive(Clone, Debug, PartialEq)]\npub struct ComputedValues {\n");
     for property in &db.property {
         out.push_str(&format!(
@@ -343,6 +378,29 @@ fn generate(db: &Database) -> String {
             }
         } else {
             out.push_str(&format!("            {field}: initial.{field},\n"));
+        }
+    }
+    out.push_str("        }\n    }\n\n    /// Assign one generated property, returning the value unchanged on a type mismatch.\n    pub fn set(&mut self, property: PropertyId, value: PropertyValue) -> Result<(), PropertyValue> {\n        match (property, value) {\n");
+    for property in &db.property {
+        let property_variant = rust_name(&property.name);
+        let value_variant = rust_name(&property.value_type);
+        let field = rust_field(&property.name);
+        out.push_str(&format!(
+            "            (PropertyId::{property_variant}, PropertyValue::{value_variant}(value)) => {{ self.{field} = value; Ok(()) }},\n"
+        ));
+    }
+    out.push_str("            (_, value) => Err(value),\n        }\n    }\n\n    /// Copy one property from another computed style.\n    pub fn copy_property_from(&mut self, property: PropertyId, source: &Self) {\n        match property {\n");
+    for property in &db.property {
+        let property_variant = rust_name(&property.name);
+        let field = rust_field(&property.name);
+        if value_type_is_copy(&property.value_type) {
+            out.push_str(&format!(
+                "            PropertyId::{property_variant} => self.{field} = source.{field},\n"
+            ));
+        } else {
+            out.push_str(&format!(
+                "            PropertyId::{property_variant} => self.{field} = source.{field}.clone(),\n"
+            ));
         }
     }
     out.push_str("        }\n    }\n}\n\n");

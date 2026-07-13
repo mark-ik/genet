@@ -1,13 +1,13 @@
 # A second CSS engine: prior art and growth plan
 
 **Date:** 2026-07-13
-**Status:** E0a full-path audit and E0b Cambium lane choice/40-property
-clean-room catalog contract landed. E1 is landed: Livery owns the catalog,
-generates its property and shorthand IDs, typed `ComputedValues`, initial and
-inheritance behavior, and verifies the Cambium fixture against generated
-output. Its seed value layer covers lengths, percentages, linear `calc()`,
-colors, and the lane's keyword families with CSS round trips. The first audit
-invalidated the proposed 33-accessor full-crate seam.
+**Status:** E0a full-path audit, E0b Cambium lane choice/40-property catalog,
+E1 values/codegen, and the bounded E2 style resolver are landed. Livery parses
+the lane's declarations and shorthands, matches selectors through `selectors`,
+orders the cascade by origin, layer, importance, specificity, and source order,
+applies CSS-wide keywords and inheritance, and evaluates media queries against
+a Genet-shaped `Device`. The first audit invalidated the proposed 33-accessor
+full-crate seam.
 The second chose Cambium structural UI as the bounded first lane.
 Mark's framing: "grow a rust alternative using firefox, chrome, servo,
 blitz, ladybird, and gosub as prior art... think it'd be neat to have two
@@ -190,10 +190,14 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   colors through cssparser's hardened color tables, and the lane's keyword and
   numeric types. Receipt: generated code compiles standalone; ten catalog,
   initial/inheritance, rejection, and CSS round-trip tests are green.
-- **E2 — cascade + media.** Matching via `selectors`, cascade
-  (origins, specificity, importance, inheritance), media evaluation on
-  a Genet-shaped Device. Receipt: a hand-built corpus of
-  style-resolution unit tests (Ladybird-style spec-literal cases).
+- **E2 — cascade + media: landed.** Livery parses declarations and the lane's
+  margin, padding, border, and white-space shorthands; matches structural,
+  attribute, state, and combinator selectors through `selectors`; and resolves
+  origin, layer, importance, specificity, source order, CSS-wide keywords, and
+  inheritance into its generated `ComputedValues`. Media-query lists evaluate
+  viewport, input, accessibility, display, scripting, and color features on a
+  Genet-shaped `Device`. Receipt: the hand-built style-resolution corpus is
+  green, including an integrated selector + media + cascade rule.
 - **E3 - lane integration.** The selected lane's concrete style/layout
   implementation lands behind the document-facing engine boundary; its
   reftest corpus passes identically under both paths. Receipt: reftest parity

@@ -9,6 +9,8 @@ readme = "README.md"
 
 [dependencies]
 cssparser.workspace = true
+precomputed-hash = "0.1"
+selectors = "0.39"
 
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }

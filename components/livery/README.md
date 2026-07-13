@@ -9,5 +9,7 @@ Genet Stylo.
 The 40-property first-lane catalog generates concrete property metadata and a
 typed `ComputedValues`. The seed value layer covers the audited Cambium and UA
 stylesheet values, including lengths, percentages, linear `calc()`, colors,
-and the lane's keyword families. Cascade and media evaluation are the next
-stage.
+and the lane's keyword families. The bounded E2 resolver adds declaration and
+shorthand parsing, selector matching, cascade ordering and inheritance, and
+media evaluation on a Genet-shaped `Device`. Cambium lane integration is the
+next stage.
