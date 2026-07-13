@@ -29,8 +29,20 @@ rename, on the renamed family, so the two surgeries never collide.
   `gecko_string_cache/` (~7k) compile only under the `gecko` feature, which
   serval never enables. Deleting them is hygiene, not compile speed — and
   pure merge tax. Leave them.
-- **The build needs Python**: `style/build.rs` shells to python3 + mako to
-  expand the property templates on every fresh build environment.
+- **The build needs a Python interpreter (only)**: `style/build.rs` finds
+  `python.exe`/`python3` (or `PYTHON3`) and runs `properties/build.py`,
+  which loads a **TOML property database** (`longhands.toml`,
+  `shorthands.toml`, plus descriptor TOMLs) through `data.py` and renders
+  `properties.mako.rs` (~5.9k lines, with `helpers.mako.rs`) into a single
+  generated file. mako + toml + markupsafe are **vendored as wheels
+  in-tree** (`properties/vendored_python/`) — no pip, no packages, just an
+  interpreter on PATH. Output: `OUT_DIR/properties.rs` at **97,717 lines /
+  4.4 MB** — every longhand's specified/computed types, parse/serialize,
+  the PropertyDeclaration/LonghandId enums, cascade tables, and the
+  ComputedValues style structs serval-layout's accessors live on. So the
+  crate's *effective* compile surface is ~167k lines (69k handwritten +
+  98k generated), not the 75.6k the source count suggests — and a quarter
+  of it is one file rustc cannot parallelize over.
 - **serval-layout is the SOLE stylo consumer** in the whole engine
   (serval-render/scripted/extract: zero style imports). Its measured
   surface: 10 style structs (`get_box` 22, `get_inherited_text` 14,
@@ -48,21 +60,37 @@ rename, on the renamed family, so the two surgeries never collide.
    (the same mechanism both already use for jemalloc/num-bigint). Faster
    dev links and smaller incremental artifacts for every consumer, zero
    divergence, one commit per workspace.
-2. **Timing baseline.** A cold `cargo check` of the style crate is being
-   measured (background, pending as this doc is written); record it here
-   plus a `cargo build --timings` critical-path graph for serval-layout
-   before/after each track lands, so wins are receipts, not vibes.
+2. **Timing baseline (recorded 2026-07-13).** Cold `cargo check` of the
+   style crate **including its full dependency tree**, empty target, dev
+   profile, on the primary Windows laptop: **30m 35s**. That is the
+   whole-tree number, not style alone; the per-crate attribution needs a
+   `cargo build --timings` critical-path graph for serval-layout, to be
+   captured before/after each track lands so wins are receipts, not vibes.
 
 ## Track 1 — decomposition (compile speed)
 
-**1a. Pre-generate the mako output.** Commit the expanded properties code
-to the fork and reduce `build.rs` to nothing; keep a `regen.py` script run
-manually after each upstream sync. Wins: no Python/mako in anyone's build
+**1a. Pre-generate the mako output.** Commit the expanded `properties.rs`
+(97.7k lines) to the fork and reduce `build.rs` to nothing; the regen tool
+already exists — it is `properties/build.py` itself, run manually after
+each upstream sync instead of by cargo. Wins: no Python in anyone's build
 environment (Windows-vanilla friction gone — the build-env snapshot doc's
-biggest asterisk), build-script rerun invalidations gone, better behavior
+biggest asterisk), build-script rerun invalidations gone (today *any*
+touch under `properties/` reruns the whole expansion), better behavior
 under any future sccache. Honest sizing: raw compile time barely moves
 (the generated code still compiles); this is a build-*environment* and
-cache-hygiene win. Merge cost: one script run per sync, mechanical.
+cache-hygiene win. Merge cost: one script run per sync, mechanical — and
+the committed output makes template-diff review *easier* (2a's product
+lane shows up as a reviewable generated-code diff).
+
+**Rejected alternative, named:** porting the codegen off mako entirely
+(Rust build.rs/xtask reading the TOML database, or a proc-macro). More
+tractable than it used to be — upstream moved the property database to
+declarative TOML — but `properties.mako.rs` still carries real Python
+logic (loops, conditionals, `data.py` class methods), so it's a genuine
+port of ~6k template lines at exactly the layer upstream churns hardest.
+All cost, no win over 1a: once the output is committed, mako is a
+maintainer-side tool a build never sees, and staying on upstream's
+generator keeps template merges trivial.
 
 **1b. Split the monolith on its natural fault line.** Three crates:
 
@@ -156,8 +184,11 @@ are ours.
 
 ## Open items
 
-- The cold-check timing baseline (background task running as this doc was
-  written; record when it lands).
+- Ring-3 state as of 2026-07-13: the rename branch
+  (`mark-ik/serval-publish-names`, efaa436663) is pushed; T0–T3's
+  engineering landed and verified per the ring-3 plan; **nothing
+  published** — `serval-stylo`/`serval-taffy` don't exist on crates.io,
+  not even as name claims. Publishing stays Mark's per-crate call.
 - Whether stylo_taffy's vendored copy (support/patches/stylo_taffy) rides
   the renamed family cleanly after ring 3 — it already git-deps
   serval-stylo on the rename branch; the decomposition must keep it
