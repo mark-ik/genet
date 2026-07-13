@@ -265,7 +265,6 @@ divergence we stop carrying.
 ## Open items
 
 - Ring-3 state as of 2026-07-13: the rename is incorporated into realigned
-  fork `main`; the name-claim stubs are pushed and the publish commands are
-  prepared. **Nothing
-  published** — `serval-stylo`/`serval-taffy` don't exist on crates.io,
-  not even as name claims. Publishing stays Mark's per-crate call.
+  fork `main`; the `genet` and `genet-stylo` crates.io names are claimed. The
+  exact mapping between those names and the planned `serval-stylo` family is
+  still open. Implementation publication stays Mark's per-crate call.

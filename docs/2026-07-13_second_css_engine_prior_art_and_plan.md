@@ -154,8 +154,11 @@ the lean engine is neither.
 **Home:** start as a serval component (`components/`, publish = the
 usual rings posture) for the tight edit loop with serval-layout, with
 the extraction-to-sibling-repo option held open once it stabilizes —
-both patterns are established. Naming: TBD with Mark (product-name
-lane); this doc deliberately says "the lean engine."
+both patterns are established. The crates.io names `genet` and `genet-stylo`
+were claimed by this project on 2026-07-13. Their exact engine/package mapping,
+including whether `genet-stylo` supersedes `serval-stylo`, remains a separate
+naming decision; this doc continues to say "the lean engine" until that mapping
+is explicit.
 
 ## Stages, each with a receipt
 
