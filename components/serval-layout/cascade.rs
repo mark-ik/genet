@@ -58,6 +58,7 @@ use style::properties::declaration_block::parse_style_attribute;
 use style::properties::style_structs::Font;
 use style::queries::values::{MediaEnvironment, PrefersColorScheme, PrefersReducedMotion};
 use style::selector_parser::{RestyleDamage, SnapshotMap};
+use style::servo::media_features::PointerCapabilities;
 use style::shared_lock::{SharedRwLock, StylesheetGuards};
 use style::stylesheets::{
     AllowImportRules, CssRuleType, CustomMediaEvaluator, DocumentStyleSheet, Origin, Stylesheet,
@@ -174,14 +175,33 @@ fn make_device_with_prefs(
     quirks: QuirksMode,
     env: MediaEnvironment,
 ) -> Device {
+    make_device_with_environment(
+        viewport,
+        quirks,
+        env,
+        PointerCapabilities::default(),
+        PointerCapabilities::default(),
+    )
+}
+
+fn make_device_with_environment(
+    viewport: euclid::default::Size2D<f32>,
+    quirks: QuirksMode,
+    env: MediaEnvironment,
+    primary_pointer_capabilities: PointerCapabilities,
+    all_pointer_capabilities: PointerCapabilities,
+) -> Device {
     let mut device = Device::new(
         MediaType::screen(),
         quirks,
+        euclid::Size2D::from_untyped(viewport),
         euclid::Size2D::from_untyped(viewport),
         euclid::Scale::new(1.0),
         Box::new(SkrifaFontMetricsProvider),
         ComputedValues::initial_values_with_font_override(Font::initial_values()),
         env.prefers_color_scheme,
+        primary_pointer_capabilities,
+        all_pointer_capabilities,
     );
     device.set_media_environment(env);
     device
@@ -201,7 +221,41 @@ pub fn set_stylist_media_env(
     quirks: QuirksMode,
     env: MediaEnvironment,
 ) {
-    let device = make_device_with_prefs(viewport, quirks, env);
+    let primary_pointer_capabilities = stylist.device().primary_pointer_capabilities();
+    let all_pointer_capabilities = stylist.device().all_pointer_capabilities();
+    let device = make_device_with_environment(
+        viewport,
+        quirks,
+        env,
+        primary_pointer_capabilities,
+        all_pointer_capabilities,
+    );
+    replace_stylist_device(stylist, lock, device);
+}
+
+/// Re-evaluate the Stylist's media queries under new pointer capabilities while
+/// preserving every preference and non-pointer capability in the current
+/// [`MediaEnvironment`]. v0.19 owns pointer/hover state directly on `Device`.
+pub fn set_stylist_pointer_capabilities(
+    stylist: &mut Stylist,
+    lock: &SharedRwLock,
+    viewport: euclid::default::Size2D<f32>,
+    quirks: QuirksMode,
+    primary_pointer_capabilities: PointerCapabilities,
+    all_pointer_capabilities: PointerCapabilities,
+) {
+    let env = stylist.device().media_environment();
+    let device = make_device_with_environment(
+        viewport,
+        quirks,
+        env,
+        primary_pointer_capabilities,
+        all_pointer_capabilities,
+    );
+    replace_stylist_device(stylist, lock, device);
+}
+
+fn replace_stylist_device(stylist: &mut Stylist, lock: &SharedRwLock, device: Device) {
     let read = lock.read();
     let guards = StylesheetGuards {
         author: &read,
@@ -2076,7 +2130,8 @@ mod tests {
         use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
         use serval_scripted_dom::ScriptedDom;
-        use style::queries::values::{ColorGamut, PointerCapabilities, Update};
+        use style::queries::values::{ColorGamut, Update};
+        use style::servo::media_features::PointerCapabilities;
 
         const SHEET: &[&str] = &[
             "p { color: rgb(0, 0, 0); } \
@@ -2112,19 +2167,25 @@ mod tests {
             color_of::<ScriptedDom>(plane, p)
         };
 
+        let check_pointers = |stylist: &mut Stylist,
+                              plane: &mut StylePlane<_>,
+                              primary: PointerCapabilities| {
+            set_stylist_pointer_capabilities(stylist, &lock, vp, quirks, primary, primary);
+            restyle_structural(&dom, plane, stylist, &[h]);
+            color_of::<ScriptedDom>(plane, p)
+        };
+
         // Primary pointer is coarse but can still hover (COARSE|HOVER) →
         // (pointer: coarse) matches; (hover: none) does not.
-        let c = check(&mut stylist, &mut plane, MediaEnvironment {
-            primary_pointer_capabilities: PointerCapabilities::COARSE | PointerCapabilities::HOVER,
-            ..MediaEnvironment::default()
-        });
+        let c = check_pointers(
+            &mut stylist,
+            &mut plane,
+            PointerCapabilities::COARSE | PointerCapabilities::HOVER,
+        );
         assert!(c[0] > 0.99 && c[1] < 0.01, "pointer: coarse → red, got {c:?}");
 
         // Primary pointer is fine but can't hover → (hover: none) matches.
-        let c = check(&mut stylist, &mut plane, MediaEnvironment {
-            primary_pointer_capabilities: PointerCapabilities::FINE,
-            ..MediaEnvironment::default()
-        });
+        let c = check_pointers(&mut stylist, &mut plane, PointerCapabilities::FINE);
         assert!(c[1] > 0.99 && c[0] < 0.01, "hover: none → green, got {c:?}");
 
         // color-gamut: p3 matches when the device gamut is at least p3.
@@ -2151,7 +2212,7 @@ mod tests {
         use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
         use serval_scripted_dom::ScriptedDom;
-        use style::queries::values::PointerCapabilities;
+        use style::servo::media_features::PointerCapabilities;
 
         const SHEET: &[&str] = &[
             "p { color: rgb(0, 0, 0); } \
@@ -2182,12 +2243,16 @@ mod tests {
         // Hybrid: any-pointer is coarse + fine + hover; primary stays the fine
         // mouse. The combined any-pointer rule matches (red); (pointer: coarse)
         // does not (primary is fine).
-        set_stylist_media_env(&mut stylist, &lock, vp, quirks, MediaEnvironment {
-            all_pointer_capabilities: PointerCapabilities::COARSE
+        set_stylist_pointer_capabilities(
+            &mut stylist,
+            &lock,
+            vp,
+            quirks,
+            PointerCapabilities::FINE | PointerCapabilities::HOVER,
+            PointerCapabilities::COARSE
                 | PointerCapabilities::FINE
                 | PointerCapabilities::HOVER,
-            ..MediaEnvironment::default()
-        });
+        );
         restyle_structural(&dom, &mut plane, &stylist, &[h]);
         let c = color_of::<ScriptedDom>(&plane, p);
         assert!(

@@ -253,12 +253,12 @@ rustls-pki-types = "1.14"
 rustls-platform-verifier = "0.7.0"
 sea-query = { version = "=1.0.0-rc.31", default-features = false, features = ["backend-sqlite", "derive"] }
 sea-query-rusqlite = { version = "=0.8.0-rc.15" }
-selectors = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/serval-publish-names" }
+selectors = { git = "https://github.com/mark-ik/stylo", branch = "main" }
 serde = "1.0.228"
 serde_bytes = "0.11"
 serde_core = "1.0.226"
 serde_json = "1.0"
-servo_arc = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/serval-publish-names" }
+servo_arc = { git = "https://github.com/mark-ik/stylo", branch = "main" }
 sha2 = "0.10"
 speexdsp-resampler = "0.1.0"
 # Font enumeration + family resolution, the same stack parley uses (so the
@@ -278,12 +278,12 @@ strum = { version = "0.28", features = ["derive"] }
 # used workspace-wide) or every consumer's source breaks. `stylo_atoms` /
 # `stylo_dom` / `stylo_static_prefs` have no such mismatch (their `[lib]
 # name` already equals their old package name), so their keys are untouched.
-style = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/serval-publish-names", package = "serval-stylo" }
-stylo_atoms = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/serval-publish-names", package = "serval-stylo-atoms" }
-stylo_dom = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/serval-publish-names", package = "serval-stylo-dom" }
-stylo_malloc_size_of = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/serval-publish-names" }
-stylo_static_prefs = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/serval-publish-names", package = "serval-stylo-static-prefs" }
-stylo_traits = { git = "https://github.com/mark-ik/stylo", branch = "mark-ik/serval-publish-names" }
+style = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "serval-stylo" }
+stylo_atoms = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "serval-stylo-atoms" }
+stylo_dom = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "serval-stylo-dom" }
+stylo_malloc_size_of = { git = "https://github.com/mark-ik/stylo", branch = "main" }
+stylo_static_prefs = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "serval-stylo-static-prefs" }
+stylo_traits = { git = "https://github.com/mark-ik/stylo", branch = "main" }
 syn = { version = "2", default-features = false, features = ["clone-impls", "derive", "parsing"] }
 synstructure = "0.13"
 taffy = { version = "0.10.1", default-features = false, features = ["calc", "detailed_layout_info", "grid", "std"] }

@@ -33,6 +33,11 @@ $baselines = @(
         Subset = "css/mediaqueries"
         Engine = "boa"
         Expectations = "ports/serval-wpt/expectations/reftest/css_mediaqueries_boa.json"
+    },
+    @{
+        Subset = "css/css-position"
+        Engine = "boa"
+        Expectations = "ports/serval-wpt/expectations/reftest/css_position_boa.json"
     }
 )
 

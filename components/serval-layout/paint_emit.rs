@@ -3533,6 +3533,11 @@ fn clip_path_of(cv: &ComputedValues, w: f32, h: f32) -> Option<ClipKind> {
                 },
                 ShapeRadius::ClosestSide => cx.min(cy).min(w - cx).min(h - cy).max(0.0),
                 ShapeRadius::FarthestSide => cx.max(cy).max(w - cx).max(h - cy).max(0.0),
+                // Stylo 0.19 parses the new radial-extent corner keywords, but
+                // Gecko's used-radius implementation has not landed with them.
+                // Keep Serval's prior unsupported behavior instead of drawing
+                // guessed geometry.
+                ShapeRadius::ClosestCorner | ShapeRadius::FarthestCorner => return None,
             };
             Some(ClipKind::Path(ellipse_path(cx, cy, r, r)))
         },
@@ -3542,15 +3547,16 @@ fn clip_path_of(cv: &ComputedValues, w: f32, h: f32) -> Option<ClipKind> {
                         c: f32,
                         near: f32,
                         basis: f32|
-             -> f32 {
+             -> Option<f32> {
                 match r {
-                    ShapeRadius::Length(nn) => nn.0.resolve(Length::new(basis)).px(),
-                    ShapeRadius::ClosestSide => c.min(near).max(0.0),
-                    ShapeRadius::FarthestSide => c.max(near).max(0.0),
+                    ShapeRadius::Length(nn) => Some(nn.0.resolve(Length::new(basis)).px()),
+                    ShapeRadius::ClosestSide => Some(c.min(near).max(0.0)),
+                    ShapeRadius::FarthestSide => Some(c.max(near).max(0.0)),
+                    ShapeRadius::ClosestCorner | ShapeRadius::FarthestCorner => None,
                 }
             };
-            let rx = axis(&e.semiaxis_x, cx, w - cx, cw);
-            let ry = axis(&e.semiaxis_y, cy, h - cy, ch);
+            let rx = axis(&e.semiaxis_x, cx, w - cx, cw)?;
+            let ry = axis(&e.semiaxis_y, cy, h - cy, ch)?;
             Some(ClipKind::Path(ellipse_path(cx, cy, rx, ry)))
         },
         // `inset()` (computed `<basic-shape-rect>`): an inset rect. CSS order is

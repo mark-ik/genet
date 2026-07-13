@@ -255,9 +255,11 @@ impl FontTemplate {
                 variation_settings
                     .0
                     .iter()
-                    .map(|variation| FontVariation {
-                        tag: variation.tag.0,
-                        value: variation.value.get(),
+                    .filter_map(|variation| {
+                        variation.value.get().map(|value| FontVariation {
+                            tag: variation.tag.0,
+                            value,
+                        })
                     })
                     .for_each(&mut add_variation);
             }

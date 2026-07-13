@@ -52,6 +52,11 @@ $baselines = @(
         Expectations = "ports/serval-wpt/expectations/testharness/css_mediaqueries_boa.json"
     },
     @{
+        Subset = "css/css-position"
+        Engine = "boa"
+        Expectations = "ports/serval-wpt/expectations/testharness/css_position_boa.json"
+    },
+    @{
         # `@keyframes` parsing + computed values. The event-order and
         # interpolation-over-time tests in this corpus cannot pass yet: the
         # testharness lane drives no layout session, so it has no animation clock
