@@ -205,7 +205,7 @@ mod tests {
         assert!(h < 40.0, "expected single-line height (<40px), got {h}");
     }
 
-    /// The syntax-highlighting path: `xilem_serval::styled_textarea` paints highlight runs as
+    /// The syntax-highlighting path: `cambium::styled_textarea` paints highlight runs as
     /// `<span style="…">` children. Confirm an **inline `style`** `font-weight` / `font-family`
     /// lands on *that span's run only* (not the whole element) — so highlighting is not capped to
     /// colour-only by a forced-uniform field font. Exercised through the same inline-`style` path

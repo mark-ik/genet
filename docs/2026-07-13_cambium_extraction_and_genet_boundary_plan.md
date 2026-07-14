@@ -1,9 +1,9 @@
 # Cambium extraction and Genet boundary plan
 
 **Date:** 2026-07-13
-**Status:** in progress; extraction and C4 consumer migration are complete
-locally. C5 publication or revision pinning and removal of the old Genet copies
-remain.
+**Status:** complete. Extraction, consumer migration, publication, and removal
+of the old Genet source copies landed. Further control and release hardening
+lives in Cambium.
 
 ## Decision
 
@@ -413,18 +413,19 @@ Before removing the originals:
   directories.
 - [x] Cambium's Genet compatibility table names the exact supported Genet
   package versions and tested commit.
-- Decide whether the already-published `serval-xilem-core`, `serval-xilem`, and
+- [x] Decide whether the already-published `serval-xilem-core`, `serval-xilem`, and
   `serval-chisel` packages need one thin compatibility release. Use actual
-  external-consumer evidence; do not preserve wrappers indefinitely by default.
+  external-consumer evidence; none was found, so the old packages remain
+  retired rather than gaining wrappers.
 
 Then:
 
 - [x] Remove the moved workspace members and their internal path dependencies
   from Genet.
-- Replace old plan status text with explicit supersession links to Cambium.
-- Keep historical implementation docs, but label their old crate homes as
+- [x] Replace active plan status text with explicit supersession links to Cambium.
+- [x] Keep historical implementation docs, but label their old crate homes as
   historical.
-- Update application docs to say Cambium authors the UI and Genet renders it.
+- [x] Update application docs to say Cambium authors the UI and Genet renders it.
 
 Done when:
 

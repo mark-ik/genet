@@ -8,7 +8,7 @@
 //! removed 2026-06-12),
 //! but pointed at a live, mutable [`ScriptedDom`] instead of parsing HTML: the
 //! genet engine pipeline (cascade → layout → emit) runs over the same DOM that
-//! [`GenetAppRunner`](xilem_serval::GenetAppRunner) diffs. This is the render
+//! Cambium's `GenetAppRunner` diffs. This is the render
 //! half of Stage 1b — state change → DOM diff → genet layout/paint, offline.
 //!
 //! `run_cascade` / `layout` / `emit_paint_list_with_layouts` are all generic
