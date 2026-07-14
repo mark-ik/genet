@@ -123,12 +123,13 @@ registry as the explicitly pinned `genet.livery` static rung and lowers through
 the shared netrender translator. Parley's positioned output now replaces the
 placeholder block boxes for inline paint: wrapped spans emit one fragment per
 line, and `inline-block` children take atomic space in the shared line.
-Retained sessions now feed Parley's shaped text-leaf height through Taffy's
-measure callback, so wrapping increases parent block height and moves following
-blocks. `genet.web` remains the default. Collapsing a shared inline group into
-one measured Taffy leaf, inline box-edge decoration, bidi paint ordering,
-clipping and stacking, link/scroll/focus semantics, and cross-engine reftest
-parity remain the gate for production selection.
+Retained sessions now resolve atomic box sizes in a preliminary Taffy pass,
+then collapse each consecutive inline group into one Parley-measured Taffy
+leaf. The shared line layout drives both paint geometry and parent block flow,
+including mixed text, styled spans, and atomic boxes. `genet.web` remains the
+default. Inline box-edge decoration, bidi paint ordering, clipping and
+stacking, link/scroll/focus semantics, and cross-engine reftest parity remain
+the gate for production selection.
 
 ## E0 closeout
 

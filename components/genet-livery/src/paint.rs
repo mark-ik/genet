@@ -176,10 +176,10 @@ fn emit_node<D>(
             Some(style)
         },
         NodeKind::Text => {
-            if let (Some(style), Some(fragment), Some(value)) =
-                (inherited, fragments.get(id), dom.text(id))
-                && paintable_fragment(fragment)
+            if let (Some(style), Some(value)) = (inherited, dom.text(id))
                 && !text.frame.drain(id, &mut list.commands)
+                && let Some(fragment) = fragments.get(id)
+                && paintable_fragment(fragment)
             {
                 text.system
                     .emit_single(text.frame, value, style, fragment, &mut list.commands);

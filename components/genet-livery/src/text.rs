@@ -68,36 +68,57 @@ impl TextSystem {
         self.fonts.len()
     }
 
-    /// Measure a text leaf with the same Parley styles and line breaking used
-    /// by paint. Retained sessions pass this result back through Taffy's leaf
-    /// callback so wrapped text contributes its real block height.
-    pub(crate) fn measure_single(
+    /// Measure one consecutive inline group with the same collection, styles,
+    /// atomic boxes, and line breaking used by paint.
+    pub(crate) fn measure_inline_group<D>(
         &mut self,
-        source: &str,
-        style: &ComputedValues,
+        dom: &D,
+        styles: &StylePlane<D::NodeId>,
+        fragments: &FragmentPlane<D::NodeId>,
+        roots: &[D::NodeId],
+        parent_style: &ComputedValues,
         width: f32,
-    ) -> (f32, f32) {
-        let text = normalized_text(source, style);
-        if text.is_empty() {
+    ) -> (f32, f32)
+    where
+        D: LayoutDom,
+        D::NodeId: Copy + Eq + Hash,
+    {
+        let mut text = String::new();
+        let mut spans = Vec::new();
+        let mut inline_boxes = Vec::new();
+        let mut owners = Vec::new();
+        let already_prepared = HashSet::new();
+        {
+            let mut collector = InlineCollector {
+                dom,
+                styles,
+                fragments,
+                already_prepared: &already_prepared,
+                owners: &mut owners,
+                text: &mut text,
+                spans: &mut spans,
+                inline_boxes: &mut inline_boxes,
+            };
+            for root in roots {
+                collector.collect(*root, parent_style);
+            }
+        }
+        if spans.is_empty() && inline_boxes.is_empty() {
             return (0.0, 0.0);
         }
-        let mut spans = vec![SourceSpan::<()> {
-            source: None,
-            owners: Vec::new(),
-            style: style.clone(),
-            range: 0..text.len(),
-        }];
-        let items = self.shape(text.as_ref(), &mut spans, &[], width, style);
+
+        let items = self.shape(&text, &mut spans, &inline_boxes, width, parent_style);
         let mut right = 0.0_f32;
         let mut top = f32::INFINITY;
         let mut bottom = f32::NEG_INFINITY;
         for item in items {
-            let ShapedItem::Text(run) = item else {
-                continue;
+            let fragment = match item {
+                ShapedItem::Text(run) => run.fragment,
+                ShapedItem::InlineBox { fragment, .. } => fragment,
             };
-            right = right.max(run.fragment.x + run.fragment.width);
-            top = top.min(run.fragment.y);
-            bottom = bottom.max(run.fragment.y + run.fragment.height);
+            right = right.max(fragment.x + fragment.width);
+            top = top.min(fragment.y);
+            bottom = bottom.max(fragment.y + fragment.height);
         }
         if top.is_finite() && bottom.is_finite() {
             (right.max(0.0), (bottom - top).max(0.0))
@@ -575,7 +596,12 @@ where
                     return;
                 }
                 if style.display == Display::InlineBlock {
-                    if let Some(fragment) = self.fragments.get(id).copied() {
+                    if let Some(fragment) = self
+                        .fragments
+                        .atomic(id)
+                        .or_else(|| self.fragments.get(id))
+                        .copied()
+                    {
                         self.inline_boxes.push(InlineAtom {
                             source: id,
                             owners: self.owners.clone(),

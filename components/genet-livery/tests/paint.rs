@@ -273,6 +273,50 @@ fn shaped_text_height_moves_the_following_block() {
 }
 
 #[test]
+fn shared_inline_group_height_matches_its_painted_lines() {
+    let document = StaticDocument::parse(
+        r#"<html><body><div class="label"><span class="all">one <em>two three</em><span class="badge"></span> four five six</span></div><div class="after"></div></body></html>"#,
+    );
+    let mut document = LiveryDocument::new(
+        document,
+        StyleSet::cambium(&[
+            ".label { width: 72px; font-size: 16px; line-height: 20px; } \
+             .all { background-color: lime; } em { color: blue; } \
+             .badge { display: inline-block; width: 18px; height: 26px; } \
+             .after { width: 10px; height: 10px; background-color: #ff00ff; }",
+        ]),
+        Device::screen(320.0, 240.0),
+    );
+    let frame = document.frame(320, 240).unwrap();
+    let inline_bottom = frame
+        .commands()
+        .iter()
+        .filter_map(|command| match command {
+            PaintCmd::DrawRect(rect) if rect.color == ColorF::new(0.0, 1.0, 0.0, 1.0) => {
+                Some(rect.placement.bounds.max.y)
+            },
+            _ => None,
+        })
+        .reduce(f32::max)
+        .expect("the shared inline owner paints its Parley fragments");
+    let following_top = frame
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::DrawRect(rect) if rect.color == ColorF::new(1.0, 0.0, 1.0, 1.0) => {
+                Some(rect.placement.bounds.min.y)
+            },
+            _ => None,
+        })
+        .expect("the following block paints");
+
+    assert!(
+        (following_top - inline_bottom).abs() <= 0.5,
+        "Taffy block flow must consume exactly the shared Parley group height: inline_bottom={inline_bottom}, following_top={following_top}"
+    );
+}
+
+#[test]
 fn collapsed_whitespace_crosses_inline_element_boundaries() {
     fn blue_origin(html: &str) -> f32 {
         render(

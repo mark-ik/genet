@@ -20,9 +20,10 @@ line, and `inline-block` children occupy atomic space in that line.
 `genet-documents` can register this path as the opt-in `genet.livery` static
 session rung.
 
-Retained sessions also use Parley in Taffy's text-leaf measurement callback, so
-wrapped text increases its parent block height and moves following blocks.
-Shared inline groups still need to become a single measured Taffy leaf. Inline
-box-edge decoration, bidi paint ordering, clipping, stacking contexts, links,
-scrolling, and focus remain open. `genet.livery` therefore stays an explicit
-pin rather than the default static route.
+Retained sessions first use Taffy to resolve atomic `inline-block` sizes, then
+represent each consecutive inline group as one Parley-measured Taffy leaf. The
+same shared line layout therefore drives paint geometry and parent block
+height, including mixed text, styled spans, and atomic boxes. Inline box-edge
+decoration, bidi paint ordering, clipping, stacking contexts, links, scrolling,
+and focus remain open. `genet.livery` therefore stays an explicit pin rather
+than the default static route.

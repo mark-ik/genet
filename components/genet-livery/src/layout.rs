@@ -29,12 +29,14 @@ pub struct Fragment {
 #[derive(Clone, Debug)]
 pub struct FragmentPlane<Id> {
     fragments: HashMap<Id, Fragment>,
+    atomic_fragments: HashMap<Id, Fragment>,
 }
 
 impl<Id> Default for FragmentPlane<Id> {
     fn default() -> Self {
         Self {
             fragments: HashMap::new(),
+            atomic_fragments: HashMap::new(),
         }
     }
 }
@@ -42,6 +44,10 @@ impl<Id> Default for FragmentPlane<Id> {
 impl<Id: Eq + Hash> FragmentPlane<Id> {
     pub fn get(&self, id: Id) -> Option<&Fragment> {
         self.fragments.get(&id)
+    }
+
+    pub(crate) fn atomic(&self, id: Id) -> Option<&Fragment> {
+        self.atomic_fragments.get(&id)
     }
 
     pub fn len(&self) -> usize {
@@ -68,8 +74,6 @@ impl Error for LayoutError {}
 struct TextMeasure {
     width: f32,
     height: f32,
-    text: String,
-    style: ComputedValues,
 }
 
 struct BuildState<'a, D: LayoutDom> {
@@ -77,6 +81,22 @@ struct BuildState<'a, D: LayoutDom> {
     styles: &'a StylePlane<D::NodeId>,
     tree: TaffyTree<TextMeasure>,
     sources: HashMap<NodeId, D::NodeId>,
+}
+
+#[derive(Clone, Debug)]
+struct InlineMeasure<Id> {
+    roots: Vec<Id>,
+    style: ComputedValues,
+    width: f32,
+    height: f32,
+}
+
+struct InlineBuildState<'a, D: LayoutDom> {
+    dom: &'a D,
+    styles: &'a StylePlane<D::NodeId>,
+    preliminary: &'a FragmentPlane<D::NodeId>,
+    tree: TaffyTree<InlineMeasure<D::NodeId>>,
+    sources: HashMap<NodeId, Vec<D::NodeId>>,
 }
 
 /// Lay out a Livery style plane through a standalone Taffy tree.
@@ -94,7 +114,7 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    layout_impl(dom, styles, viewport_width, viewport_height, None)
+    layout_impl(dom, styles, viewport_width, viewport_height)
 }
 
 pub(crate) fn layout_with_text_system<D>(
@@ -108,7 +128,15 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    layout_impl(dom, styles, viewport_width, viewport_height, Some(text))
+    let preliminary = layout_impl(dom, styles, viewport_width, viewport_height)?;
+    layout_inline_groups(
+        dom,
+        styles,
+        viewport_width,
+        viewport_height,
+        text,
+        &preliminary,
+    )
 }
 
 fn layout_impl<D>(
@@ -116,7 +144,6 @@ fn layout_impl<D>(
     styles: &StylePlane<D::NodeId>,
     viewport_width: f32,
     viewport_height: f32,
-    mut text: Option<&mut TextSystem>,
 ) -> Result<FragmentPlane<D::NodeId>, LayoutError>
 where
     D: LayoutDom,
@@ -162,20 +189,11 @@ where
                     AvailableSpace::MinContent => 0.0,
                     AvailableSpace::MaxContent => context.width,
                 };
-                let (measured_width, measured_height) =
-                    text.as_deref_mut()
-                        .map_or((context.width, context.height), |text| {
-                            text.measure_single(
-                                &context.text,
-                                &context.style,
-                                known.width.unwrap_or(available_width),
-                            )
-                        });
                 Size {
                     width: known
                         .width
-                        .unwrap_or(measured_width.min(available_width.max(0.0))),
-                    height: known.height.unwrap_or(measured_height),
+                        .unwrap_or(context.width.min(available_width.max(0.0))),
+                    height: known.height.unwrap_or(context.height),
                 }
             },
         )
@@ -190,6 +208,226 @@ where
         &mut fragments,
     )?;
     Ok(fragments)
+}
+
+fn layout_inline_groups<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    viewport_width: f32,
+    viewport_height: f32,
+    text: &mut TextSystem,
+    preliminary: &FragmentPlane<D::NodeId>,
+) -> Result<FragmentPlane<D::NodeId>, LayoutError>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut state = InlineBuildState {
+        dom,
+        styles,
+        preliminary,
+        tree: TaffyTree::new(),
+        sources: HashMap::new(),
+    };
+    let document = state.build_node(dom.document(), None, 16.0)?;
+    let children = document.into_iter().collect::<Vec<_>>();
+    let root = state
+        .tree
+        .new_with_children(
+            Style {
+                display: Display::Block,
+                size: Size {
+                    width: Dimension::length(viewport_width),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            &children,
+        )
+        .map_err(taffy_error)?;
+
+    state
+        .tree
+        .compute_layout_with_measure(
+            root,
+            Size {
+                width: AvailableSpace::Definite(viewport_width),
+                height: AvailableSpace::Definite(viewport_height),
+            },
+            |known, available, _, context, _| {
+                let Some(context) = context else {
+                    return Size::ZERO;
+                };
+                let available_width = match available.width {
+                    AvailableSpace::Definite(width) => width,
+                    AvailableSpace::MinContent => 0.0,
+                    AvailableSpace::MaxContent => context.width,
+                };
+                let (measured_width, measured_height) = text.measure_inline_group(
+                    dom,
+                    styles,
+                    preliminary,
+                    &context.roots,
+                    &context.style,
+                    known.width.unwrap_or(available_width),
+                );
+                let measured_width = if measured_width > 0.0 {
+                    measured_width
+                } else {
+                    context.width
+                };
+                let measured_height = if measured_height > 0.0 {
+                    measured_height
+                } else {
+                    context.height
+                };
+                Size {
+                    width: known
+                        .width
+                        .unwrap_or(measured_width.min(available_width.max(0.0))),
+                    height: known.height.unwrap_or(measured_height),
+                }
+            },
+        )
+        .map_err(taffy_error)?;
+
+    let mut fragments = FragmentPlane::default();
+    collect_inline_fragments(
+        &state.tree,
+        &state.sources,
+        root,
+        Point { x: 0.0, y: 0.0 },
+        &mut fragments,
+    )?;
+    for (id, fragment) in &preliminary.fragments {
+        if styles
+            .get(*id)
+            .is_some_and(|style| style.display == CssDisplay::InlineBlock)
+        {
+            fragments.atomic_fragments.insert(*id, *fragment);
+        }
+    }
+    Ok(fragments)
+}
+
+impl<D> InlineBuildState<'_, D>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    fn build_node(
+        &mut self,
+        id: D::NodeId,
+        inherited: Option<&ComputedValues>,
+        parent_font_size: f32,
+    ) -> Result<Option<NodeId>, LayoutError> {
+        match self.dom.kind(id) {
+            NodeKind::Document | NodeKind::DocumentFragment => {
+                let child_ids = self.dom.dom_children(id).collect::<Vec<_>>();
+                let children = child_ids
+                    .into_iter()
+                    .filter_map(|child| {
+                        self.build_node(child, inherited, parent_font_size)
+                            .transpose()
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                if children.is_empty() {
+                    Ok(None)
+                } else if children.len() == 1 {
+                    Ok(children.into_iter().next())
+                } else {
+                    self.tree
+                        .new_with_children(
+                            Style {
+                                display: Display::Block,
+                                ..Style::default()
+                            },
+                            &children,
+                        )
+                        .map(Some)
+                        .map_err(taffy_error)
+                }
+            },
+            NodeKind::Element => {
+                let computed = self.styles.get(id).cloned().unwrap_or_default();
+                let font_size = font_size_px(&computed.font_size, parent_font_size);
+                let children = self.build_children(id, &computed, font_size)?;
+                let node = self
+                    .tree
+                    .new_with_children(to_taffy_style(&computed, font_size), &children)
+                    .map_err(taffy_error)?;
+                self.sources.insert(node, vec![id]);
+                Ok(Some(node))
+            },
+            NodeKind::Text => {
+                let style = inherited.cloned().unwrap_or_default();
+                self.build_inline_group(&[id], &style).map(Some)
+            },
+            _ => Ok(None),
+        }
+    }
+
+    fn build_children(
+        &mut self,
+        parent: D::NodeId,
+        parent_style: &ComputedValues,
+        parent_font_size: f32,
+    ) -> Result<Vec<NodeId>, LayoutError> {
+        let child_ids = self.dom.dom_children(parent).collect::<Vec<_>>();
+        let mut children = Vec::new();
+        let mut inline_group = Vec::new();
+        for child in child_ids {
+            if is_inline(self.dom, self.styles, child) {
+                inline_group.push(child);
+                continue;
+            }
+            if !inline_group.is_empty() {
+                children.push(self.build_inline_group(&inline_group, parent_style)?);
+                inline_group.clear();
+            }
+            if let Some(node) = self.build_node(child, Some(parent_style), parent_font_size)? {
+                children.push(node);
+            }
+        }
+        if !inline_group.is_empty() {
+            children.push(self.build_inline_group(&inline_group, parent_style)?);
+        }
+        Ok(children)
+    }
+
+    fn build_inline_group(
+        &mut self,
+        roots: &[D::NodeId],
+        parent_style: &ComputedValues,
+    ) -> Result<NodeId, LayoutError> {
+        let width = roots
+            .iter()
+            .filter_map(|id| self.preliminary.get(*id))
+            .map(|fragment| fragment.width)
+            .sum();
+        let height = roots
+            .iter()
+            .filter_map(|id| self.preliminary.get(*id))
+            .map(|fragment| fragment.height)
+            .fold(0.0_f32, f32::max);
+        let node = self
+            .tree
+            .new_leaf_with_context(
+                Style {
+                    display: Display::Block,
+                    ..Style::default()
+                },
+                InlineMeasure {
+                    roots: roots.to_vec(),
+                    style: parent_style.clone(),
+                    width,
+                    height,
+                },
+            )
+            .map_err(taffy_error)?;
+        self.sources.insert(node, roots.to_vec());
+        Ok(node)
+    }
 }
 
 impl<D> BuildState<'_, D>
@@ -272,12 +510,7 @@ where
                             display: Display::Block,
                             ..Style::default()
                         },
-                        TextMeasure {
-                            width,
-                            height,
-                            text: text.to_owned(),
-                            style: inherited.cloned().unwrap_or_default(),
-                        },
+                        TextMeasure { width, height },
                     )
                     .map_err(taffy_error)?;
                 self.sources.insert(node, id);
@@ -318,6 +551,52 @@ where
         collect_fragments(tree, sources, child, origin, fragments)?;
     }
     Ok(())
+}
+
+fn collect_inline_fragments<Id>(
+    tree: &TaffyTree<InlineMeasure<Id>>,
+    sources: &HashMap<NodeId, Vec<Id>>,
+    node: NodeId,
+    parent_origin: Point<f32>,
+    fragments: &mut FragmentPlane<Id>,
+) -> Result<(), LayoutError>
+where
+    Id: Copy + Eq + Hash,
+{
+    let computed = tree.layout(node).map_err(taffy_error)?;
+    let origin = Point {
+        x: parent_origin.x + computed.location.x,
+        y: parent_origin.y + computed.location.y,
+    };
+    if let Some(source_ids) = sources.get(&node) {
+        let fragment = Fragment {
+            x: origin.x,
+            y: origin.y,
+            width: computed.size.width,
+            height: computed.size.height,
+        };
+        for source in source_ids {
+            fragments.fragments.insert(*source, fragment);
+        }
+    }
+    for child in tree.children(node).map_err(taffy_error)? {
+        collect_inline_fragments(tree, sources, child, origin, fragments)?;
+    }
+    Ok(())
+}
+
+fn is_inline<D>(dom: &D, styles: &StylePlane<D::NodeId>, id: D::NodeId) -> bool
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    match dom.kind(id) {
+        NodeKind::Text => true,
+        NodeKind::Element => styles.get(id).is_some_and(|style| {
+            matches!(style.display, CssDisplay::Inline | CssDisplay::InlineBlock)
+        }),
+        _ => false,
+    }
 }
 
 fn to_taffy_style(computed: &ComputedValues, font_size: f32) -> Style {
