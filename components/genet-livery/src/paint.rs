@@ -151,12 +151,14 @@ fn emit_node<D>(
                 .prepare_inline_children(text.frame, dom, styles, fragments, id, style);
             if matches!(style.display, Display::Inline | Display::InlineBlock) {
                 if let Some(inline_fragments) = text.frame.inline_fragments(id) {
-                    for fragment in inline_fragments
+                    let paintable = inline_fragments
                         .iter()
                         .filter(|fragment| paintable_fragment(fragment))
-                    {
+                        .collect::<Vec<_>>();
+                    let last = paintable.len().saturating_sub(1);
+                    for (index, fragment) in paintable.into_iter().enumerate() {
                         emit_background(list, style, fragment);
-                        emit_border(list, style, fragment);
+                        emit_inline_border(list, style, fragment, index == 0, index == last);
                     }
                 } else if style.display == Display::InlineBlock
                     && let Some(fragment) = fragments
@@ -220,12 +222,30 @@ fn emit_background(list: &mut LiveryPaintList, style: &ComputedValues, fragment:
 }
 
 fn emit_border(list: &mut LiveryPaintList, style: &ComputedValues, fragment: &Fragment) {
+    emit_inline_border(list, style, fragment, true, true);
+}
+
+fn emit_inline_border(
+    list: &mut LiveryPaintList,
+    style: &ComputedValues,
+    fragment: &Fragment,
+    paint_left: bool,
+    paint_right: bool,
+) {
     let em = used_font_size(style);
     let widths = LayoutSideOffsets::new(
         border_width_px(style.border_top_style, style.border_top_width, em),
-        border_width_px(style.border_right_style, style.border_right_width, em),
+        if paint_right {
+            border_width_px(style.border_right_style, style.border_right_width, em)
+        } else {
+            0.0
+        },
         border_width_px(style.border_bottom_style, style.border_bottom_width, em),
-        border_width_px(style.border_left_style, style.border_left_width, em),
+        if paint_left {
+            border_width_px(style.border_left_style, style.border_left_width, em)
+        } else {
+            0.0
+        },
     );
     if widths.top == 0.0 && widths.right == 0.0 && widths.bottom == 0.0 && widths.left == 0.0 {
         return;

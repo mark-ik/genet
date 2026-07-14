@@ -397,6 +397,115 @@ fn inline_background_uses_the_shaped_line_fragment() {
 }
 
 #[test]
+fn inline_horizontal_edges_occupy_text_advance() {
+    fn trailing_origin(edges: &str) -> f32 {
+        render(
+            r#"<html><body><div class="label">a<span>b</span><em>c</em></div></body></html>"#,
+            &format!(
+                ".label {{ width: 200px; font-size: 16px; }} \
+                 span {{ {edges} }} em {{ color: blue; }}"
+            ),
+            1,
+        )
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::DrawText(run) if run.color == ColorF::new(0.0, 0.0, 1.0, 1.0) => {
+                run.glyphs.first().map(|glyph| glyph.point.x)
+            },
+            _ => None,
+        })
+        .expect("trailing inline text paints")
+    }
+
+    let plain = trailing_origin("");
+    let decorated =
+        trailing_origin("padding-left: 10px; padding-right: 10px; border: 2px solid lime;");
+
+    assert!(
+        decorated - plain >= 23.5,
+        "inline padding and borders must consume advance: plain={plain}, decorated={decorated}"
+    );
+}
+
+#[test]
+fn wrapped_inline_borders_use_slice_edges() {
+    let list = render(
+        r#"<html><body><div class="label"><span>one two three four five six seven</span></div></body></html>"#,
+        ".label { width: 52px; font-size: 16px; line-height: 20px; } \
+         span { padding: 14px 3px; border: 2px solid lime; }",
+        1,
+    );
+    let borders = list
+        .commands()
+        .iter()
+        .filter_map(|command| match command {
+            PaintCmd::DrawBorder(border) => Some(border.widths),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(
+        borders.len() >= 3,
+        "the inline must wrap across three fragments"
+    );
+    assert_eq!(borders.first().unwrap().left, 2.0);
+    assert_eq!(borders.first().unwrap().right, 0.0);
+    assert_eq!(borders.last().unwrap().left, 0.0);
+    assert_eq!(borders.last().unwrap().right, 2.0);
+    for border in &borders {
+        assert_eq!((border.top, border.bottom), (2.0, 2.0));
+    }
+    for border in &borders[1..borders.len() - 1] {
+        assert_eq!((border.left, border.right), (0.0, 0.0));
+    }
+}
+
+#[test]
+fn vertical_inline_edges_paint_outside_the_line_box() {
+    let document = StaticDocument::parse(
+        r#"<html><body><div class="label"><span>text</span></div><div class="after"></div></body></html>"#,
+    );
+    let mut document = LiveryDocument::new(
+        document,
+        StyleSet::cambium(&[
+            ".label { width: 120px; font-size: 16px; line-height: 20px; } \
+             span { padding-top: 4px; padding-bottom: 6px; \
+                    border: 2px solid lime; background-color: lime; } \
+             .after { width: 10px; height: 10px; background-color: #ff00ff; }",
+        ]),
+        Device::screen(320.0, 240.0),
+    );
+    let frame = document.frame(320, 240).unwrap();
+    let decoration = frame
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::DrawRect(rect) if rect.color == ColorF::new(0.0, 1.0, 0.0, 1.0) => {
+                Some(rect.placement.bounds)
+            },
+            _ => None,
+        })
+        .expect("inline decoration paints");
+    let following_top = frame
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::DrawRect(rect) if rect.color == ColorF::new(1.0, 0.0, 1.0, 1.0) => {
+                Some(rect.placement.bounds.min.y)
+            },
+            _ => None,
+        })
+        .expect("following block paints");
+
+    assert!(decoration.height() >= 33.5);
+    assert!(
+        following_top < decoration.max.y,
+        "vertical inline edges are paint overflow, not line-height input"
+    );
+}
+
+#[test]
 fn wrapped_inline_spans_paint_one_fragment_per_line() {
     let list = render(
         r#"<html><body><div class="label"><span>one two three four five</span></div></body></html>"#,

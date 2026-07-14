@@ -732,6 +732,14 @@ fn absolute_length_percentage(
     }
 }
 
+pub(crate) fn length_percentage_px(
+    value: CssLengthPercentage,
+    em: f32,
+    percentage_basis: f32,
+) -> f32 {
+    absolute_length_percentage(value, em, 16.0, percentage_basis).max(0.0)
+}
+
 fn absolute_length(length: Length, em: f32, rem: f32) -> f32 {
     length.value
         * match length.unit {

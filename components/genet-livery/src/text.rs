@@ -98,6 +98,7 @@ impl TextSystem {
                 text: &mut text,
                 spans: &mut spans,
                 inline_boxes: &mut inline_boxes,
+                percentage_basis: width,
             };
             for root in roots {
                 collector.collect(*root, parent_style);
@@ -263,6 +264,7 @@ impl TextSystem {
                 text: &mut text,
                 spans: &mut spans,
                 inline_boxes: &mut inline_boxes,
+                percentage_basis: parent_fragment.width,
             };
             for root in roots {
                 collector.collect(*root, parent_style);
@@ -293,13 +295,23 @@ impl TextSystem {
                         continue;
                     };
                     translate_fragment(&mut run.fragment, origin);
+                    let line_y = run.fragment.y;
                     for glyph in &mut run.glyphs {
                         glyph.point.x += origin.0;
                         glyph.point.y += origin.1;
                     }
-                    frame.record_inline_fragment(source, run.fragment);
+                    frame.record_inline_fragment(source, run.fragment, line_y);
                     for owner in run.owners {
-                        frame.record_inline_fragment(owner, run.fragment);
+                        frame.record_inline_fragment(
+                            owner,
+                            decorated_inline_fragment(
+                                styles,
+                                owner,
+                                run.fragment,
+                                parent_fragment.width,
+                            ),
+                            line_y,
+                        );
                     }
                     let command = PaintCmd::DrawText(TextRunItem {
                         placement: CommonPlacement::new(super::paint::bounds(parent_fragment)),
@@ -317,11 +329,36 @@ impl TextSystem {
                     source,
                     owners,
                     mut fragment,
+                    edge,
+                    mut line_y,
                 } => {
                     translate_fragment(&mut fragment, origin);
-                    frame.record_inline_fragment(source, fragment);
+                    line_y += origin.1;
+                    frame.record_inline_fragment(
+                        source,
+                        if edge {
+                            decorated_inline_fragment(
+                                styles,
+                                source,
+                                fragment,
+                                parent_fragment.width,
+                            )
+                        } else {
+                            fragment
+                        },
+                        line_y,
+                    );
                     for owner in owners {
-                        frame.record_inline_fragment(owner, fragment);
+                        frame.record_inline_fragment(
+                            owner,
+                            decorated_inline_fragment(
+                                styles,
+                                owner,
+                                fragment,
+                                parent_fragment.width,
+                            ),
+                            line_y,
+                        );
                     }
                 },
             }
@@ -356,7 +393,11 @@ impl TextSystem {
                 kind: InlineBoxKind::InFlow,
                 index: inline_box.index,
                 width: inline_box.fragment.width,
-                height: inline_box.fragment.height,
+                height: if inline_box.edge {
+                    0.0
+                } else {
+                    inline_box.fragment.height
+                },
             });
         }
         let mut layout = builder.build(text);
@@ -414,10 +455,20 @@ impl TextSystem {
                             owners: inline_box.owners.clone(),
                             fragment: Fragment {
                                 x: positioned.x,
-                                y: positioned.y,
+                                y: if inline_box.edge {
+                                    metrics.block_min_coord
+                                } else {
+                                    positioned.y
+                                },
                                 width: positioned.width,
-                                height: positioned.height,
+                                height: if inline_box.edge {
+                                    (metrics.block_max_coord - metrics.block_min_coord).max(0.0)
+                                } else {
+                                    positioned.height
+                                },
                             },
+                            edge: inline_box.edge,
+                            line_y: metrics.block_min_coord,
                         });
                     },
                 }
@@ -447,6 +498,7 @@ pub(crate) struct TextFrame<Id> {
     prepared: HashMap<Id, Vec<PaintCmd>>,
     prepared_sources: HashSet<Id>,
     inline_fragments: HashMap<Id, Vec<Fragment>>,
+    inline_line_keys: HashMap<Id, Vec<f32>>,
     used_fonts: HashSet<FontInstanceKey>,
 }
 
@@ -456,6 +508,7 @@ impl<Id> Default for TextFrame<Id> {
             prepared: HashMap::new(),
             prepared_sources: HashSet::new(),
             inline_fragments: HashMap::new(),
+            inline_line_keys: HashMap::new(),
             used_fonts: HashSet::new(),
         }
     }
@@ -477,20 +530,25 @@ where
         self.inline_fragments.get(&source).map(Vec::as_slice)
     }
 
-    fn record_inline_fragment(&mut self, source: Id, fragment: Fragment) {
+    fn record_inline_fragment(&mut self, source: Id, fragment: Fragment, line_y: f32) {
         let fragments = self.inline_fragments.entry(source).or_default();
+        let line_keys = self.inline_line_keys.entry(source).or_default();
         if let Some(previous) = fragments.last_mut()
-            && same_line(previous, &fragment)
+            && line_keys
+                .last()
+                .is_some_and(|previous_line| (previous_line - line_y).abs() <= 0.5)
             && fragment.x <= previous.x + previous.width + 0.5
         {
             let right = (previous.x + previous.width).max(fragment.x + fragment.width);
+            let bottom = (previous.y + previous.height).max(fragment.y + fragment.height);
             previous.x = previous.x.min(fragment.x);
             previous.width = right - previous.x;
             previous.y = previous.y.min(fragment.y);
-            previous.height = previous.height.max(fragment.height);
+            previous.height = bottom - previous.y;
             return;
         }
         fragments.push(fragment);
+        line_keys.push(line_y);
     }
 }
 
@@ -506,6 +564,7 @@ struct InlineAtom<Id> {
     owners: Vec<Id>,
     index: usize,
     fragment: Fragment,
+    edge: bool,
 }
 
 enum ShapedItem<Id> {
@@ -514,6 +573,8 @@ enum ShapedItem<Id> {
         source: Id,
         owners: Vec<Id>,
         fragment: Fragment,
+        edge: bool,
+        line_y: f32,
     },
 }
 
@@ -530,11 +591,6 @@ struct ShapedRun<Id> {
 fn translate_fragment(fragment: &mut Fragment, origin: (f32, f32)) {
     fragment.x += origin.0;
     fragment.y += origin.1;
-}
-
-fn same_line(left: &Fragment, right: &Fragment) -> bool {
-    let overlap = (left.y + left.height).min(right.y + right.height) - left.y.max(right.y);
-    overlap > left.height.min(right.height) * 0.5
 }
 
 fn is_inline<D>(dom: &D, styles: &StylePlane<D::NodeId>, id: D::NodeId) -> bool
@@ -563,6 +619,7 @@ where
     text: &'a mut String,
     spans: &'a mut Vec<SourceSpan<D::NodeId>>,
     inline_boxes: &'a mut Vec<InlineAtom<D::NodeId>>,
+    percentage_basis: f32,
 }
 
 impl<D> InlineCollector<'_, D>
@@ -607,10 +664,13 @@ where
                             owners: self.owners.clone(),
                             index: self.text.len(),
                             fragment,
+                            edge: false,
                         });
                     }
                     return;
                 }
+                let ancestor_owners = self.owners.clone();
+                self.push_edge(id, &style, &ancestor_owners, true);
                 self.owners.push(id);
                 for child in self.dom.dom_children(id) {
                     if is_inline(self.dom, self.styles, child) {
@@ -618,10 +678,89 @@ where
                     }
                 }
                 self.owners.pop();
+                self.push_edge(id, &style, &ancestor_owners, false);
             },
             _ => {},
         }
     }
+}
+
+impl<D> InlineCollector<'_, D>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    fn push_edge(
+        &mut self,
+        source: D::NodeId,
+        style: &ComputedValues,
+        owners: &[D::NodeId],
+        start: bool,
+    ) {
+        let edges = inline_decoration_edges(style, self.percentage_basis);
+        let width = if start { edges.left } else { edges.right };
+        if width <= 0.0 {
+            return;
+        }
+        self.inline_boxes.push(InlineAtom {
+            source,
+            owners: owners.to_vec(),
+            index: self.text.len(),
+            fragment: Fragment {
+                width,
+                ..Fragment::default()
+            },
+            edge: true,
+        });
+    }
+}
+
+#[derive(Clone, Copy)]
+struct InlineDecorationEdges {
+    left: f32,
+    right: f32,
+    top: f32,
+    bottom: f32,
+}
+
+fn inline_decoration_edges(style: &ComputedValues, percentage_basis: f32) -> InlineDecorationEdges {
+    let em = super::paint::used_font_size(style);
+    InlineDecorationEdges {
+        left: super::layout::length_percentage_px(style.padding_left.0, em, percentage_basis)
+            + super::layout::border_width_px(style.border_left_style, style.border_left_width, em),
+        right: super::layout::length_percentage_px(style.padding_right.0, em, percentage_basis)
+            + super::layout::border_width_px(
+                style.border_right_style,
+                style.border_right_width,
+                em,
+            ),
+        top: super::layout::length_percentage_px(style.padding_top.0, em, percentage_basis)
+            + super::layout::border_width_px(style.border_top_style, style.border_top_width, em),
+        bottom: super::layout::length_percentage_px(style.padding_bottom.0, em, percentage_basis)
+            + super::layout::border_width_px(
+                style.border_bottom_style,
+                style.border_bottom_width,
+                em,
+            ),
+    }
+}
+
+fn decorated_inline_fragment<Id>(
+    styles: &StylePlane<Id>,
+    source: Id,
+    mut fragment: Fragment,
+    percentage_basis: f32,
+) -> Fragment
+where
+    Id: Copy + Eq + Hash,
+{
+    let Some(style) = styles.get(source) else {
+        return fragment;
+    };
+    let edges = inline_decoration_edges(style, percentage_basis);
+    fragment.y -= edges.top;
+    fragment.height += edges.top + edges.bottom;
+    fragment
 }
 
 fn normalized_text<'a>(source: &'a str, style: &ComputedValues) -> Cow<'a, str> {

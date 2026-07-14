@@ -23,7 +23,9 @@ session rung.
 Retained sessions first use Taffy to resolve atomic `inline-block` sizes, then
 represent each consecutive inline group as one Parley-measured Taffy leaf. The
 same shared line layout therefore drives paint geometry and parent block
-height, including mixed text, styled spans, and atomic boxes. Inline box-edge
-decoration, bidi paint ordering, clipping, stacking contexts, links, scrolling,
-and focus remain open. `genet.livery` therefore stays an explicit pin rather
-than the default static route.
+height, including mixed text, styled spans, and atomic boxes. Inline padding
+and border edges enter Parley as zero-height atoms, consume horizontal advance,
+paint vertical overflow without changing line height, and use default slice
+semantics across wrapped fragments. Bidi paint ordering, clipping, stacking
+contexts, links, scrolling, and focus remain open. `genet.livery` therefore
+stays an explicit pin rather than the default static route.

@@ -127,9 +127,11 @@ Retained sessions now resolve atomic box sizes in a preliminary Taffy pass,
 then collapse each consecutive inline group into one Parley-measured Taffy
 leaf. The shared line layout drives both paint geometry and parent block flow,
 including mixed text, styled spans, and atomic boxes. `genet.web` remains the
-default. Inline box-edge decoration, bidi paint ordering, clipping and
-stacking, link/scroll/focus semantics, and cross-engine reftest parity remain
-the gate for production selection.
+default. Inline padding and borders now consume horizontal line advance, paint
+vertical overflow without altering line height, and use slice edges across
+wrapped fragments. Bidi paint ordering, clipping and stacking,
+link/scroll/focus semantics, and cross-engine reftest parity remain the gate
+for production selection.
 
 ## E0 closeout
 
