@@ -132,6 +132,15 @@ pub use tags::*;
 pub use text::text;
 pub use wheel::{OnWheel, WheelEvent, on_wheel};
 
+// Package-source migration aliases. Genet renamed these backend types after
+// Cambium was extracted; consumers can switch packages first, then rename
+// their Rust imports in a separate commit.
+pub use context::ServalCtx as GenetCtx;
+pub use multi::ServalMultiRunner as GenetMultiRunner;
+pub use pod::{ServalElement as GenetElement, ServalElementMut as GenetElementMut};
+pub use runner::ServalAppRunner as GenetAppRunner;
+pub use splice::ServalChildrenSplice as GenetChildrenSplice;
+
 // The generic, backend-agnostic composition vocabulary from `meristem`. These
 // views are parametric over any `Context: ViewPathTracker`, so they work over
 // `ServalCtx` with no serval-side impl; re-exported here so chrome authors can
