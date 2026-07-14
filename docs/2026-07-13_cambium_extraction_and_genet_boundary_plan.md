@@ -1,9 +1,9 @@
 # Cambium extraction and Genet boundary plan
 
 **Date:** 2026-07-13
-**Status:** in progress; live dependency audit complete, local Cambium workspace
-through backend/Sprigging extraction and Genet-boundary naming alignment landed
-at `1f2e38d99ad47d5410f2fa292a27ca4460dd8b54`.
+**Status:** in progress; extraction and native Cambium/Sprigging source naming
+have landed across all five consumers. Three C4 verification walls pass; the
+Woodshed and Strophe walls remain in Cargo dependency resolution.
 
 ## Decision
 
@@ -329,17 +329,20 @@ without a dependency on Pelt.
 
 ### C4 - Migrate consumers without a source flag day
 
-**Status (2026-07-14): in progress.** Pelt now names Cambium and Sprigging in
-both its manifest and Rust imports, and all 29 tile tests pass after the rename.
-Genet also follows the published `stylo_traits` crate name, and Cambium builds
-against the renamed local `repos/genet` checkout. Isometry's package-source
-migration passes all 20 `isometry-views` tests and its refreshed lock resolves
-Cambium and Sprigging, though that lock also contains a concurrent Stylo patch
-refresh and remains uncommitted. Woodshed's source and local override paths are
-migrated, but its stale lock still drives Cargo into prolonged dependency
-resolution. Strophe now names Cambium and Sprigging in source and its manifest
-parses; its focused test remains. Mere still awaits lock refresh, focused tests,
-and source-import renaming.
+**Status (2026-07-14): in progress, source migration complete.** Pelt,
+Isometry, Woodshed, Strophe, and Mere now name Cambium and Sprigging in their
+manifests and Rust imports. Pelt passes all 29 tile tests, Isometry passes all 20
+`isometry-views` tests, and `scripts/check-meerkat.ps1` passes. The Meerkat wall
+also moved winit key translation to `cambium-winit` and exposed two source
+identity bugs: Sprigging's `paint_list_api` now follows Netrender's git source,
+while Mere and Cambium share the published `tinct` package.
+
+Woodshed and Strophe both parse after the rename, but their focused tests still
+enter prolonged CPU-bound Cargo dependency resolution before compilation. A
+fresh Strophe lock and a current Mere lock used as a donor produce the same
+result, so stale lock content is not the sufficient cause. Isometry's refreshed
+lock also contains its concurrent Stylo realignment and remains uncommitted;
+the migration commits were isolated from that work.
 
 First switch package source while preserving old Rust import names through
 Cargo dependency aliases. Rename source imports to `cambium` and `sprigging`
