@@ -138,6 +138,9 @@ WPT-baseline sweep repeated post-sweep. Mark approved publication on
 2026-07-13. Cargo's registry-only verification exposed the missing traits
 rename, so `genet-stylo-traits` joined the family before `genet-stylo` itself
 was uploaded. All five Stylo-family crates are published at `0.19.0`.
+Genet's workspace dependencies and vendored `stylo_taffy` adapter now consume
+those registry packages; the remaining upstream-compatible Stylo support
+crates also returned to their registry releases.
 
 **The finding that made this take longer than expected: `package =`
 overrides Cargo's extern-name binding, not just its source.** Cargo's rule,
@@ -175,22 +178,11 @@ genet-scripted 45; WPT — all nine baselines (`dom`, `css_animations`,
 `dom_abort`, `dom_nodes`, `css_mediaqueries`, `html_webappapis_timers`,
 `css_position` testharness + `css_position`/`css_mediaqueries` reftest) at
 `unexpected=0`, both immediately after T0/T2 and again after T3's sweep.
+Post-publish, `cargo check -p stylo_taffy --locked` passed against the five
+registry-only Genet packages.
 
 ## Residuals, named
 
-- **meerkat (mere) build is currently red against this work — a cross-repo
-  git-sync timing artifact, not a bug in the verified state above.** mere
-  pins genet by `git … branch = "main"`; the rings 0–2 lane's opportunistic
-  commit of this session's in-flight edits (`dc394172`, "vendor the
-  stylo_taffy patch crate that HEAD already references") captured an
-  *intermediate* snapshot of the stylo_taffy vendor — mid-edit, before the
-  git-direct-dependency fix and the `style`-key rename above — so mere
-  currently hits the exact `links` conflict this doc's finding describes.
-  Confirmed by running `cargo check --workspace` directly against this
-  session's actual local tree (green, see Verification) — the discrepancy is
-  purely which commit mere's lock resolves against. Self-resolves on the
-  next full sweep/push of genet's `main`; no action taken here to force a
-  push, consistent with how commits to genet have been handled all session.
 - **`examples/genet_web_smoke` is broken independent of this work.** Its own
   standalone `[workspace]` fails with `no matching package named
   xilem-serval found` — that package was renamed to `serval-xilem` by a

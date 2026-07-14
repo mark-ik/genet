@@ -255,12 +255,12 @@ rustls-pki-types = "1.14"
 rustls-platform-verifier = "0.7.0"
 sea-query = { version = "=1.0.0-rc.31", default-features = false, features = ["backend-sqlite", "derive"] }
 sea-query-rusqlite = { version = "=0.8.0-rc.15" }
-selectors = { git = "https://github.com/mark-ik/stylo", branch = "main" }
+selectors = "0.39.0"
 serde = "1.0.228"
 serde_bytes = "0.11"
 serde_core = "1.0.226"
 serde_json = "1.0"
-servo_arc = { git = "https://github.com/mark-ik/stylo", branch = "main" }
+servo_arc = "0.4.3"
 sha2 = "0.10"
 speexdsp-resampler = "0.1.0"
 # Font enumeration + family resolution, the same stack parley uses (so the
@@ -280,12 +280,12 @@ strum = { version = "0.28", features = ["derive"] }
 # used workspace-wide) or every consumer's source breaks. `stylo_atoms` /
 # `stylo_dom` / `stylo_static_prefs` have no such mismatch (their `[lib]
 # name` already equals their old package name), so their keys are untouched.
-style = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "genet-stylo" }
-stylo_atoms = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "genet-stylo-atoms" }
-stylo_dom = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "genet-stylo-dom" }
-stylo_malloc_size_of = { git = "https://github.com/mark-ik/stylo", branch = "main" }
-stylo_static_prefs = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "genet-stylo-static-prefs" }
-stylo_traits = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "genet-stylo-traits" }
+style = { version = "0.19.0", package = "genet-stylo" }
+stylo_atoms = { version = "0.19.0", package = "genet-stylo-atoms" }
+stylo_dom = { version = "0.19.0", package = "genet-stylo-dom" }
+stylo_malloc_size_of = "0.19.0"
+stylo_static_prefs = { version = "0.19.0", package = "genet-stylo-static-prefs" }
+stylo_traits = { version = "0.19.0", package = "genet-stylo-traits" }
 syn = { version = "2", default-features = false, features = ["clone-impls", "derive", "parsing"] }
 synstructure = "0.13"
 taffy = { version = "0.10.1", default-features = false, features = ["calc", "detailed_layout_info", "grid", "std"] }
@@ -553,11 +553,9 @@ ipc-channel = { path = "support/patches/ipc-channel" }
 # docs/2026-07-12_ring3_fork_rename_publish_plan.md, the stylo rename to
 # `genet-stylo`/`genet-stylo-atoms`): `[patch]` cannot rename its target
 # (the patch source's package name must match the registry name being
-# replaced), so every consumer now depends on the renamed git packages
-# directly instead — `[workspace.dependencies]` above for in-workspace
-# crates, and support/patches/stylo_taffy/Cargo.toml's own direct git deps
-# for the vendored stylo_taffy (which is what needed unifying with genet's
-# Stylo in the first place). See docs/2026-05-20_stylo_taffy_adoption_plan.md
+# replaced). The renamed family now has its own registry packages, consumed
+# through `[workspace.dependencies]` above and directly by the vendored
+# stylo_taffy adapter. See docs/2026-05-20_stylo_taffy_adoption_plan.md
 # and the css transitions plan for the original rationale.
 # vello patch removed 2026-05-15 per Mark's audit — bumping to vello 0.9
 # directly from crates.io. If vello upstream needs a fork applied later,

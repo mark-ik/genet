@@ -9,8 +9,8 @@ from crates.io for the package-renaming reason documented in
 
 `[patch]` cannot rename its target (a patch source's package name must match
 the registry name it replaces), so a crate that needs genet's renamed stylo
-fork (`genet-stylo`, per T1) must depend on it directly by git URL +
-`package =`, not via a patched registry name. Since registry `stylo_taffy`
+fork (`genet-stylo`, per T1) must depend on that package directly, not via a
+patched registry name. Since registry `stylo_taffy`
 depends on registry `stylo`/`stylo_atoms` by their real names, it cannot
 resolve to genet's fork as-is.
 
@@ -29,8 +29,7 @@ possible; the required local change is the renamed dependency pair in
 
 ## Dependencies
 
-`Cargo.toml` depends on `style`/`style_atoms` directly by git URL (branch
-`main`, `package = "genet-stylo"` /
-`"genet-stylo-atoms"`) rather than through the workspace root's
+`Cargo.toml` depends on the published `genet-stylo` and
+`genet-stylo-atoms` packages directly rather than through the workspace root's
 `[patch.crates-io]` — again because patches can't rename. `taffy` (unrenamed)
 rides the workspace root's `taffy` patch normally.

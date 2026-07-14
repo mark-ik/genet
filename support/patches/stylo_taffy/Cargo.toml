@@ -15,16 +15,10 @@ name = "stylo_taffy"
 path = "src/lib.rs"
 
 [dependencies]
-# Direct git deps on the renamed fork (`[patch]` cannot rename its target —
-# a patch source's package name must match the registry name being
-# replaced — so unlike `taffy` below, this can't go through
-# `[patch.crates-io]`; every consumer of the renamed stylo family depends on
-# it this way, same as the workspace root's `[workspace.dependencies]`
-# entries). Branch `main`; see
-# docs/2026-07-12_ring3_fork_rename_publish_plan.md (T1/T2) and this crate's
-# own README.
-style = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "genet-stylo" }
-style_atoms = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "genet-stylo-atoms" }
+# The renamed fork family is published under its own registry names, so this
+# vendored adapter can consume it directly without a source patch.
+style = { version = "0.19.0", package = "genet-stylo" }
+style_atoms = { version = "0.19.0", package = "genet-stylo-atoms" }
 # Redirected by the workspace root's `[patch.crates-io]` to
 # `support/patches/taffy` (re-vendored 0.12.1, see its own README) — `taffy`
 # is not renamed, so the patch mechanism applies cleanly here.
