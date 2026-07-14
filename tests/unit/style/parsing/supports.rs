@@ -4,7 +4,7 @@
 
 use cssparser::{Parser, ParserInput};
 use style::stylesheets::supports_rule::SupportsCondition;
-use style_traits::ToCss;
+use stylo_traits::ToCss;
 
 #[test]
 fn test_supports_condition() {

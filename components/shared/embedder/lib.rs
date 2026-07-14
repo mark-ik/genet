@@ -46,7 +46,7 @@ use servo_geometry::{DeviceIndependentIntRect, DeviceIndependentIntSize};
 use servo_url::ServoUrl;
 use strum::{EnumMessage, IntoStaticStr};
 use style::queries::values::PrefersColorScheme;
-use style_traits::CSSPixel;
+use stylo_traits::CSSPixel;
 use url::Url;
 use uuid::Uuid;
 
@@ -869,8 +869,8 @@ malloc_size_of_is_0!(UntrustedNodeAddress);
 #[expect(unsafe_code)]
 unsafe impl Send for UntrustedNodeAddress {}
 
-impl From<style_traits::dom::OpaqueNode> for UntrustedNodeAddress {
-    fn from(o: style_traits::dom::OpaqueNode) -> Self {
+impl From<stylo_traits::dom::OpaqueNode> for UntrustedNodeAddress {
+    fn from(o: stylo_traits::dom::OpaqueNode) -> Self {
         UntrustedNodeAddress(o.0 as *const c_void)
     }
 }

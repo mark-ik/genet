@@ -6,7 +6,7 @@ use cssparser::{Parser, ParserInput, ToCss};
 use selectors::parser::{ParseRelative, SelectorList};
 use style::selector_parser::{SelectorImpl, SelectorParser};
 use style::stylesheets::{Namespaces, Origin};
-use style_traits::ParseError;
+use stylo_traits::ParseError;
 use url::Url;
 
 fn parse_selector<'i>(

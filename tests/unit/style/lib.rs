@@ -15,7 +15,7 @@ extern crate selectors;
 extern crate serde_json;
 extern crate servo_arc;
 extern crate style;
-extern crate style_traits;
+extern crate stylo_traits;
 extern crate stylo_atoms;
 extern crate test;
 extern crate url;

@@ -10,7 +10,7 @@ use std::str::FromStr;
 use euclid::Scale;
 use serde::{Deserialize, Serialize};
 use servo_geometry::DeviceIndependentPixel;
-use style_traits::CSSPixel;
+use stylo_traits::CSSPixel;
 
 /// Default viewport constraints
 ///

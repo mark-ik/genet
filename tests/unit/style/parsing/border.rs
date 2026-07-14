@@ -10,7 +10,7 @@ use style::properties::longhands::{
 };
 use style::properties::shorthands::border_image;
 use style::values::specified::BorderRadius;
-use style_traits::ToCss;
+use stylo_traits::ToCss;
 
 use crate::parsing::parse;
 
@@ -38,35 +38,35 @@ macro_rules! assert_border_radius_values {
         let input = parse(BorderRadius::parse, $input)
             .expect(&format!("Failed parsing {} as border radius", $input));
         assert_eq!(
-            ::style_traits::ToCss::to_css_string(&input.top_left.0.width()),
+            ::stylo_traits::ToCss::to_css_string(&input.top_left.0.width()),
             $tlw
         );
         assert_eq!(
-            ::style_traits::ToCss::to_css_string(&input.top_right.0.width()),
+            ::stylo_traits::ToCss::to_css_string(&input.top_right.0.width()),
             $trw
         );
         assert_eq!(
-            ::style_traits::ToCss::to_css_string(&input.bottom_right.0.width()),
+            ::stylo_traits::ToCss::to_css_string(&input.bottom_right.0.width()),
             $brw
         );
         assert_eq!(
-            ::style_traits::ToCss::to_css_string(&input.bottom_left.0.width()),
+            ::stylo_traits::ToCss::to_css_string(&input.bottom_left.0.width()),
             $blw
         );
         assert_eq!(
-            ::style_traits::ToCss::to_css_string(&input.top_left.0.height()),
+            ::stylo_traits::ToCss::to_css_string(&input.top_left.0.height()),
             $tlh
         );
         assert_eq!(
-            ::style_traits::ToCss::to_css_string(&input.top_right.0.height()),
+            ::stylo_traits::ToCss::to_css_string(&input.top_right.0.height()),
             $trh
         );
         assert_eq!(
-            ::style_traits::ToCss::to_css_string(&input.bottom_right.0.height()),
+            ::stylo_traits::ToCss::to_css_string(&input.bottom_right.0.height()),
             $brh
         );
         assert_eq!(
-            ::style_traits::ToCss::to_css_string(&input.bottom_left.0.height()),
+            ::stylo_traits::ToCss::to_css_string(&input.bottom_left.0.height()),
             $blh
         );
     };

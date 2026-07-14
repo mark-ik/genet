@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use servo_base::generic_channel::{GenericOneshotSender, GenericSender};
 use servo_base::id::{BrowsingContextId, WebViewId};
 use servo_geometry::{DeviceIndependentIntRect, DeviceIndependentPixel};
-use style_traits::CSSPixel;
+use stylo_traits::CSSPixel;
 use url::Url;
 use webdriver::error::ErrorStatus;
 

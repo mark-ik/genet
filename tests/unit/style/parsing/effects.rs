@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use style::properties::longhands::{perspective_origin, transform_origin};
-use style_traits::ToCss;
+use stylo_traits::ToCss;
 
 use crate::parsing::parse;
 

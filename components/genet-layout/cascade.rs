@@ -66,7 +66,7 @@ use style::stylesheets::{
 };
 use style::stylist::Stylist;
 use style::thread_state::{self, ThreadState};
-use style_traits::{ParsingMode, ToCss};
+use stylo_traits::{ParsingMode, ToCss};
 use style::traversal::{DomTraversal, PerLevelTraversalData, recalc_style_at};
 use style::traversal_flags::TraversalFlags;
 use stylo_dom::ElementState;

@@ -70,7 +70,7 @@ use style::stylesheets::{DocumentStyleSheet, Stylesheet};
 use style::stylist::Stylist;
 use style::thread_state::{self, ThreadState};
 use style::values::computed::Overflow;
-use style_traits::{CSSPixel, SpeculativePainter};
+use stylo_traits::{CSSPixel, SpeculativePainter};
 
 pub trait GenericLayoutDataTrait: Any + MallocSizeOfTrait + Send + Sync + 'static {
     fn as_any(&self) -> &dyn Any;

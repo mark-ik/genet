@@ -4,7 +4,7 @@
 
 use style::parser::Parse;
 use style::values::specified::image::*;
-use style_traits::ToCss;
+use stylo_traits::ToCss;
 
 #[test]
 fn test_linear_gradient() {

@@ -31,7 +31,7 @@ use rustc_hash::FxHashMap;
 use servo_base::generic_channel::RoutedReceiver;
 use servo_base::id::{PainterId, WebViewId};
 use servo_geometry::DeviceIndependentPixel;
-use style_traits::CSSPixel;
+use stylo_traits::CSSPixel;
 
 use crate::InitialPaintState;
 use crate::compositor::{PaintCompositor, WgpuMasterCaptureBackend};

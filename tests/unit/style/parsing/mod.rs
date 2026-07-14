@@ -8,7 +8,7 @@ use cssparser::{Parser, ParserInput};
 use style::context::QuirksMode;
 use style::parser::ParserContext;
 use style::stylesheets::{CssRuleType, Origin};
-use style_traits::{ParseError, ParsingMode};
+use stylo_traits::{ParseError, ParsingMode};
 use url::Url;
 
 fn parse<T, F>(f: F, s: &'static str) -> Result<T, ParseError<'static>>

@@ -18,7 +18,7 @@ use servo_base::Epoch;
 use servo_base::id::{PainterId, PipelineId, WebViewId};
 use smallvec::SmallVec;
 use strum::IntoStaticStr;
-use style_traits::CSSPixel;
+use stylo_traits::CSSPixel;
 
 pub mod display_list;
 pub mod largest_contentful_paint_candidate;
