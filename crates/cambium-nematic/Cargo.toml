@@ -16,11 +16,11 @@ document = ["dep:genet-layout", "dep:genet-render", "dep:netrender"]
 
 [dependencies]
 cambium = { version = "0.1.0", path = "../cambium" }
-errand = { version = "0.1.3", path = "../../../serval/components/errand" }
-genet-layout = { version = "0.2.0", path = "../../../serval/components/genet-layout", optional = true }
-genet-render = { version = "0.2.0", path = "../../../serval/components/genet-render", optional = true }
-serval-scripted-dom = { package = "genet-scripted-dom", version = "0.1.0", path = "../../../serval/components/genet-scripted-dom" }
+errand = { version = "0.1.3", path = "../../../genet/components/errand" }
+genet-layout = { version = "0.2.0", path = "../../../genet/components/genet-layout", optional = true }
+genet-render = { version = "0.2.0", path = "../../../genet/components/genet-render", optional = true }
+serval-scripted-dom = { package = "genet-scripted-dom", version = "0.1.0", path = "../../../genet/components/genet-scripted-dom" }
 netrender = { version = "0.1.0", git = "https://github.com/mark-ik/netrender.git", branch = "main", optional = true }
 
 [dev-dependencies]
-layout_dom_api = { package = "layout-dom-api", version = "0.1.0", path = "../../../serval/components/shared/layout-dom" }
+layout_dom_api = { package = "layout-dom-api", version = "0.1.0", path = "../../../genet/components/shared/layout-dom" }

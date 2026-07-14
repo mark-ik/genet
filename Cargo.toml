@@ -22,7 +22,7 @@ kurbo = "0.13.1"
 # Genet's layout adapter is built against its renamed Stylo fork. Workspace
 # patches do not propagate through path dependencies, so Cambium repeats the
 # two vendored redirects required to keep one Stylo/Taffy graph.
-stylo_taffy = { path = "../serval/support/patches/stylo_taffy" }
-taffy = { path = "../serval/support/patches/taffy" }
-gpu-allocator = { path = "../serval/support/patches/gpu-allocator" }
-ipc-channel = { path = "../serval/support/patches/ipc-channel" }
+stylo_taffy = { path = "../genet/support/patches/stylo_taffy" }
+taffy = { path = "../genet/support/patches/taffy" }
+gpu-allocator = { path = "../genet/support/patches/gpu-allocator" }
+ipc-channel = { path = "../genet/support/patches/ipc-channel" }
