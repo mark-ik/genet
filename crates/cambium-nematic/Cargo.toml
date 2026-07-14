@@ -1,26 +1,18 @@
 [package]
 name = "cambium-nematic"
 version.workspace = true
-description = "Cambium-native views and retained document adapter for Nematic smolweb content"
+description = "Cambium-native views and themes for Nematic smolweb content"
 edition.workspace = true
 rust-version.workspace = true
 license = "MPL-2.0"
 repository.workspace = true
-publish = false
-
-[features]
-default = []
-# Retained Genet layout and Scene production are optional. View consumers can
-# use the AST projections and themes without compiling the engine render stack.
-document = ["dep:genet-layout", "dep:genet-render", "dep:netrender"]
+readme = "README.md"
+publish = true
 
 [dependencies]
 cambium = { version = "0.1.0", path = "../cambium" }
 errand = { version = "0.1.3", path = "../../../genet/components/errand" }
-genet-layout = { version = "0.2.0", path = "../../../genet/components/genet-layout", optional = true }
-genet-render = { version = "0.2.0", path = "../../../genet/components/genet-render", optional = true }
-serval-scripted-dom = { package = "genet-scripted-dom", version = "0.1.0", path = "../../../genet/components/genet-scripted-dom" }
-netrender = { version = "0.1.0", git = "https://github.com/mark-ik/netrender.git", branch = "main", optional = true }
 
 [dev-dependencies]
 layout_dom_api = { package = "layout-dom-api", version = "0.1.0", path = "../../../genet/components/shared/layout-dom" }
+serval-scripted-dom = { package = "genet-scripted-dom", version = "0.1.0", path = "../../../genet/components/genet-scripted-dom" }

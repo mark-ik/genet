@@ -4,22 +4,10 @@
 
 //! Cambium-native presentation for Nematic smolweb content.
 //!
-//! Nematic retains parsing and `EngineDocument` lowering. This crate owns the
-//! reactive view projection and, behind the `document` feature, a Genet-backed
-//! retained document adapter. Hosts fetch bytes and pass the address and body
-//! to that adapter; transport stays above this layer.
+//! Nematic retains `EngineDocument` lowering, while Errand owns the protocol
+//! ASTs consumed here. This crate projects those ASTs into reactive Cambium
+//! views. Genet's retained document sessions remain in `genet-documents`.
 
-#[cfg(feature = "document")]
-mod document;
 pub mod views;
 
-#[cfg(feature = "document")]
-pub use document::SmolwebDocument;
 pub use views::{SmolwebPalette, SmolwebTheme, SmolwebView, stylesheet};
-
-#[cfg(feature = "document")]
-pub(crate) const STRUCTURAL_SHEET: &[&str] = &[
-    "html, body, main, div, section, article, nav, header, footer, h1, h2, h3, h4, h5, h6, p, pre, ul, ol, li { display: block; }",
-    "a { display: inline; }",
-    "body { margin: 0; }",
-];

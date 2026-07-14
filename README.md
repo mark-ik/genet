@@ -13,8 +13,7 @@ consumer and reverse-dependency migration remain staged work.
 - `meristem`: renderer-independent reactive diff and message core
 - `cambium`: Genet backend, application runner, controls, and composition
 - `cambium-winit`: winit keyboard translation for Cambium applications
-- `cambium-nematic`: Nematic AST views, themes, and an optional retained Genet
-  document adapter
+- `cambium-nematic`: reactive views and themes over Errand's smolweb ASTs
 - `sprigging`: engine-neutral custom leaves and arrangement geometry
 
 The crates use their own appropriate licenses: Cambium is MPL-2.0, Meristem is

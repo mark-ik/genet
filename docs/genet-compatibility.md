@@ -1,8 +1,8 @@
 # Genet compatibility
 
-Cambium's public core consumes Genet through registry seam packages. The
-unpublished `cambium-nematic` retained-document adapter still resolves its
-optional layout and render providers from a sibling Genet checkout.
+Cambium consumes Genet through published seam packages. `cambium-nematic`
+adds reactive projections over Errand's portable smolweb ASTs; Genet's retained
+document runtime remains in `genet-documents`.
 
 ## Current verified set
 
@@ -10,8 +10,7 @@ Verified on 2026-07-14:
 
 - `genet-scripted-dom = 0.1.0`
 - `layout-dom-api = 0.1.0`
-- optional document adapter: `errand = 0.1.3`, `genet-layout = 0.2.0`,
-  and `genet-render = 0.2.0`
+- `errand = 0.1.3`
 - core provider release commit:
   `2e462fe8975`
 
@@ -23,13 +22,11 @@ Verified on 2026-07-14:
 | `engine-observables-api` | 0.1.1 | crates.io |
 | `genet-static-dom` | 0.1.0 | crates.io |
 | `genet-scripted-dom` | 0.1.0 | crates.io and sibling path |
-| `genet-layout` | 0.2.0 | optional sibling path; publication pending |
-| `genet-render` | 0.2.0 | optional sibling path; publication pending |
 
 The public Cambium stack is `meristem 0.1.0`, `sprigging 0.1.0`,
-`cambium 0.1.0`, and `cambium-winit 0.1.0`. `cambium-nematic` remains a local
-adapter until the two broad engine providers above have a deliberate release
-boundary.
+`cambium 0.1.0`, and `cambium-winit 0.1.0`. `cambium-nematic` has the same
+publishable boundary: Cambium plus the protocol AST package, without Genet's
+layout or rendering engine.
 
 ## Custom-leaf protocol
 
