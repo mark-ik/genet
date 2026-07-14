@@ -221,8 +221,9 @@ Done when:
 
 **Current status:** partial. The crates and their path-filtered histories now
 live in the local Cambium workspace as `cambium` and `sprigging`. They build and
-test against published Genet seams, and Sprigging's default feature tree has
-no wgpu backend. The example/catalog carryover remains.
+test against versioned Genet seams from the sibling checkout, and Sprigging's
+default feature tree has no wgpu backend. Provider publication remains part of
+C5. The example/catalog carryover remains.
 
 Actions:
 
@@ -385,28 +386,36 @@ in the migration commit rather than weakening the verification wall.
 Publishing is separately authorized external work. Until then, consumers may
 pin a Cambium git commit or branch.
 
-**Status (2026-07-14):** the last in-tree consumer of the moved directories is
-gone. `examples/genet_web_smoke` (a standalone non-member workspace) was
-ported off its `xilem-serval` path dep onto the sibling `repos/cambium`
-checkout, and its stale patch table was re-mirrored (vendored
-`stylo_taffy`/`taffy`, netrender git deps matching the workspace source).
-Receipt: wasm32 build + wasm-bindgen + headless-Edge run flip the title to
-SMOKE PASS. Removal now waits only on the C4 consumer done-conditions and the
-checklist below.
+**Status (2026-07-14): partial, source removal landed locally.** The three moved
+directories are gone from Genet and from its workspace membership. The reduced
+workspace resolves, and `cargo test -p pelt-desktop --features tiles` passes all
+29 tests. `examples/genet_web_smoke` (a standalone non-member workspace) was
+also ported to the sibling Cambium checkout; its wasm32 build, wasm-bindgen
+output, and headless Edge run reach SMOKE PASS.
+
+Cambium's compatibility table now records the exact package versions and Genet
+revision. `layout-dom-api 0.1.0` and `errand 0.1.3` are published. The remaining
+provider packages are not: `genet-scripted-dom 0.1.0`, `genet-layout 0.2.0`,
+and `genet-render 0.2.0`. An exact pin to the full Genet Git repository was
+tested and rejected after five CPU-bound minutes in Cargo resolution without
+reaching compilation. The remaining C5 work is a narrow provider source or
+registry releases, followed by clean-checkout verification and doc cleanup.
 
 Before removing the originals:
 
-- All five consumers pass C4.
-- Genet's workspace passes without the three moved directories.
-- Cambium's Genet compatibility table names the exact supported Genet package
-  versions or git commit.
+- [x] All five consumers pass C4.
+- [x] Genet's workspace resolves and Pelt passes without the three moved
+  directories.
+- [x] Cambium's Genet compatibility table names the exact supported Genet
+  package versions and tested commit.
 - Decide whether the already-published `serval-xilem-core`, `serval-xilem`, and
   `serval-chisel` packages need one thin compatibility release. Use actual
   external-consumer evidence; do not preserve wrappers indefinitely by default.
 
 Then:
 
-- Remove the moved workspace members and path dependencies from Genet.
+- [x] Remove the moved workspace members and their internal path dependencies
+  from Genet.
 - Replace old plan status text with explicit supersession links to Cambium.
 - Keep historical implementation docs, but label their old crate homes as
   historical.
