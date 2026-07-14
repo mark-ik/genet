@@ -1220,7 +1220,7 @@ dependencies = [
  "layout-dom-api",
  "malloc_size_of_derive",
  "markup5ever",
- "paint_list_api 0.1.0 (git+https://github.com/mark-ik/netrender.git?branch=main)",
+ "paint_list_api",
  "parley",
  "rayon",
  "resvg",
@@ -1261,7 +1261,7 @@ dependencies = [
  "genet-scripted-dom",
  "layout-dom-api",
  "netrender",
- "paint_list_api 0.1.0 (git+https://github.com/mark-ik/netrender.git?branch=main)",
+ "paint_list_api",
  "servo-paint",
  "taffy 0.12.1",
 ]
@@ -3126,16 +3126,6 @@ dependencies = [
 [[package]]
 name = "paint_list_api"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf8d106a9c20e5ff07e914931f79dc4c3477593bc751c59f70d6db5f483c0da9"
-dependencies = [
- "euclid",
- "serde",
-]
-
-[[package]]
-name = "paint_list_api"
-version = "0.1.0"
 source = "git+https://github.com/mark-ik/netrender.git?branch=main#1040835e79040cd8aebf5c3fe155172dc3c8da32"
 dependencies = [
  "euclid",
@@ -3149,7 +3139,7 @@ source = "git+https://github.com/mark-ik/netrender.git?branch=main#1040835e79040
 dependencies = [
  "log",
  "netrender",
- "paint_list_api 0.1.0 (git+https://github.com/mark-ik/netrender.git?branch=main)",
+ "paint_list_api",
 ]
 
 [[package]]
@@ -4365,7 +4355,7 @@ dependencies = [
  "objc2-io-surface",
  "objc2-metal 0.3.2",
  "objc2-quartz-core 0.3.2",
- "paint_list_api 0.1.0 (git+https://github.com/mark-ik/netrender.git?branch=main)",
+ "paint_list_api",
  "paint_list_render",
  "raw-window-handle",
  "rustc-hash 2.1.3",
@@ -4397,7 +4387,7 @@ dependencies = [
  "ipc-channel",
  "log",
  "malloc_size_of_derive",
- "paint_list_api 0.1.0 (git+https://github.com/mark-ik/netrender.git?branch=main)",
+ "paint_list_api",
  "parking_lot",
  "pollster",
  "raw-window-handle",
@@ -4702,7 +4692,7 @@ name = "sprigging"
 version = "0.1.0"
 dependencies = [
  "accesskit",
- "paint_list_api 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "paint_list_api",
  "vello",
 ]
 

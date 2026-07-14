@@ -9,6 +9,6 @@ repository.workspace = true
 publish = true
 
 [dependencies]
-paint_list_api = "0.1.0"
+paint_list_api = { version = "0.1.0", git = "https://github.com/mark-ik/netrender.git", branch = "main" }
 accesskit = { version = "0.24.0", features = ["serde"] }
 vello = { version = "0.9", default-features = false }
