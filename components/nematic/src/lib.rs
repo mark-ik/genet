@@ -5,9 +5,8 @@
 //! # Nematic
 //!
 //! Portable smolweb engine for the [`mere`](https://crates.io/crates/mere)
-//! browser — renders Gemini, Gopher, static HTML, Markdown, RSS/Atom, and
-//! other lightweight protocols where content can be rendered with minimal
-//! layout cost.
+//! browser. It lowers Gemini, Gopher, Markdown, RSS/Atom, knot notes, and
+//! other lightweight formats into portable [`inker::EngineDocument`] values.
 //!
 //! The name *nematic* is borrowed from liquid-crystal physics: a nematic
 //! phase has *orientational* order without *positional* order — rod-shaped
@@ -41,11 +40,10 @@
 //!
 //! ## Status
 //!
-//! Pre-1.0. All seven smolweb / file / text protocol lanes shipped. Reader-
-//! mode HTML simplification (a separate concern from full-web rendering,
-//! which Genet owns) is the only major lane still pending.
+//! Pre-1.0. All fifteen registered engines are implemented. HTML reader mode
+//! is outside Nematic's current scope.
 
-#![doc(html_root_url = "https://docs.rs/nematic/0.0.1")]
+#![doc(html_root_url = "https://docs.rs/nematic/0.1.0")]
 
 pub mod feed;
 pub mod file;

@@ -96,7 +96,7 @@ remains a separately authorized action.
 | `genet-winit-host` render/surface/a11y core | generic Genet/netrender presentation | stays in Genet |
 | `genet-render` Sprigging convenience adapters | Cambium leaf registry into Genet's neutral leaf seams | Cambium integration module |
 | `nematic::views` | Cambium views over Nematic ASTs | `cambium-nematic` |
-| `genet-documents::smolweb` native-view runner | Cambium-authored smolweb document adapter | `cambium-nematic` |
+| `genet-documents::smolweb` retained engine document | layout, scroll, interaction, and scene production over `EngineDocument` | stays in Genet |
 | Nematic parsers and `EngineDocument` lowering | protocol-faithful document engine | stays with Nematic/Genet engine family |
 | Inker and `document-canvas` | engine routing and document-to-PaintList lowering | stay outside Cambium |
 | `knot-editor-host` lexer/model code | editor intelligence over existing parsers | stays outside Cambium; view adapter may move later |
@@ -115,7 +115,7 @@ cambium/
     cambium/            Genet backend, runner, controls, catalog
     sprigging/          leaf contract, registry, arrangements, glyphs
     cambium-winit/      winit -> Cambium input mapping
-    cambium-nematic/    optional native views/adapters over Nematic formats
+    cambium-nematic/    native Cambium views over Errand protocol ASTs
   examples/
     counter/
     component-catalog/
@@ -296,23 +296,21 @@ Done when `genet-render` and `genet-layout` have no normal or dev dependency
 on a Cambium crate, and their current code/docs do not name Sprigging as the owner
 of the generic leaf seam.
 
-#### C3c - Nematic views and smolweb document adapter
+#### C3c - Nematic views and smolweb document ownership
 
-**Status (2026-07-13): landed.** `cambium-nematic` owns the four native AST
-projections, their themes and tests, and a fetch-free retained document adapter
-behind its `document` feature. Nematic's compatibility view module and Cambium
-dependency are removed. `genet-documents` now retains an `EngineDocument`,
-windows it through `document-canvas`, and lowers that PaintList to a scene while
-preserving Pelt and Mere's theme, scroll, link-table, and navigation API. Its
-smolweb dependency tree contains no Xilem, Cambium, Meristem, or Sprigging
-package.
+**Status (2026-07-14): landed and reconciled.** `cambium-nematic` owns the four
+native AST projections plus their themes and tests. Its parallel retained Genet
+DOM/layout adapter was removed after comparison with the engine-native path.
+`genet-documents` retains the authoritative `EngineDocument`, windows it through
+`document-canvas`, and lowers that PaintList to a scene while preserving Pelt
+and Mere's theme, scroll, link-table, and navigation API. Its smolweb dependency
+tree contains no Cambium, Meristem, or Sprigging package.
 
 - Keep Nematic's AST parsing and `EngineDocument` lowering in Nematic.
-- Move `nematic::views`, its view tests, and the view-driven
-  `SmolwebDocument` into `cambium-nematic`.
-- Split fetching from the moved document adapter. `cambium-nematic` accepts
-  parsed ASTs or fetched bytes plus an address; it does not depend on Pelt's
-  `ResourceFetcher`. The application/host continues to own transport.
+- Move `nematic::views` and its view tests into `cambium-nematic`.
+- Keep transport above both presentation choices. `cambium-nematic` consumes
+  parsed Errand ASTs, while `genet-documents` accepts host-fetched bytes or an
+  already-lowered `EngineDocument`.
 - Keep the engine-native pipeline explicit:
 
   ```text
@@ -325,8 +323,8 @@ package.
   not the definition of a Genet document session.
 
 Done when Nematic and `genet-documents` build without Cambium, while
-`cambium-nematic` proves focusable links, theming, scrolling, and navigation
-without a dependency on Pelt.
+`cambium-nematic` proves reactive native views and theming without acquiring
+Genet's retained layout and rendering stack.
 
 ### C4 - Migrate consumers without a source flag day
 
@@ -401,11 +399,10 @@ The core provider chain is published as `genet-paint-types 0.1.0`,
 packages; Genet's root patch table redirects their DOM and paint protocol
 dependencies to the workspace provider sources so type identity stays unified.
 
-`cambium-nematic` remains unpublished. Its optional retained-document adapter
-still uses sibling `genet-layout 0.2.0` and `genet-render 0.2.0` paths, whose
-publication closure includes much of the engine. That adapter is the remaining
-C5 clean-checkout gap and should be released separately rather than broadening
-the core toolkit release.
+`cambium-nematic` is now publishable independently. Removing its duplicate
+retained-document adapter eliminated the sibling `genet-layout`, `genet-render`,
+and `netrender` dependency closure; the crate now contains only Cambium views
+over Errand's portable protocol ASTs.
 
 Before removing the originals:
 

@@ -1,10 +1,10 @@
 # nematic
 
-`nematic` is the portable smolweb engine family for Genet and its hosts. It
-lowers Gemini, Gopher, Spartan, Finger, plain text, Markdown, RSS/Atom, and
-the knot note format into Inker's `EngineDocument` model for stored,
-authored, and worker-shippable content. Cambium-native projections over the
-protocol ASTs live separately in `cambium-nematic`.
+`nematic` is the portable smolweb and lightweight-document engine family for
+Genet and its hosts. Its fifteen engines lower protocol and authored formats
+into Inker's `EngineDocument` model for stored, authored, and worker-shippable
+content. Cambium-native projections over Errand's protocol ASTs live
+separately in `cambium-nematic`.
 
 > **Home:** [`mark-ik/genet`](https://github.com/mark-ik/genet), at
 > `components/nematic` (adopted 2026-07). The former standalone repository is archived
@@ -30,8 +30,8 @@ tries to align the molecules and let the light through.
 
 ## Engines
 
-Twelve concrete `inker::Engine` implementations, each spec-faithful to its
-source format. Use [`engines()`](src/lib.rs) to register all twelve in one
+Fifteen concrete `inker::Engine` implementations, each spec-faithful to its
+source format. Use [`engines()`](src/lib.rs) to register all fifteen in one
 call.
 
 | Engine | ID | Module | Notes |
@@ -44,7 +44,10 @@ call.
 | File | `nematic.file` | [`file`](src/file.rs) | Extension-based dispatch for `file://` content (`.md`/`.gmi`/`.gophermap`/`.xml`/`.knot`/…) |
 | Finger | `nematic.finger` | [`finger`](src/finger.rs) | RFC 1288 finger responses; tags `text/x-finger` |
 | Knot | `nematic.knot` | [`knot`](src/knot.rs) | Mere's native note / clip format (frontmatter + polyglot markdown) |
+| Djot Knot | `nematic.knot-djot` | [`knot::djot`](src/knot/djot.rs) | Djot-bodied variant of the knot note format |
 | Scroll | `nematic.scroll` | [`scroll`](src/scroll.rs) | scroll.mozz.us body engine; delegates to gemtext or markdown by content-type |
+| Spartan | `nematic.spartan` | [`spartan`](src/spartan.rs) | Spartan response bodies with gemtext or Markdown lowering |
+| Titan | `nematic.titan` | [`titan`](src/titan.rs) | Titan response bodies; upload remains transport-side |
 | Misfin | `nematic.misfin` | [`misfin`](src/misfin.rs) | misfin.org gemini-style mail body |
 | Nex | `nematic.nex` | [`nex`](src/nex.rs) | Nex directory listings + plain text content |
 | Guppy | `nematic.guppy` | [`guppy`](src/guppy.rs) | UDP-smolweb body (gemtext shape) |
@@ -122,35 +125,29 @@ for the full design.
 
 ## How it relates to other workspace crates
 
-nematic is the engine that [`inker`](https://crates.io/crates/inker)
-dispatches to for smolweb URI schemes; rendered output is presented through
-[`verso-core`](https://crates.io/crates/verso-core)'s surface contracts.
+Nematic implements the engines selected by Inker routing. Its portable output
+then follows Genet's engine-native document path.
 
 ```text
-   inker.routing
-      │ EngineRouteDecision
-      │ engine_id ∈ { nematic.smolweb, nematic.file }
-      ▼
-   nematic
-      │ rendered content
-      ▼
-   verso-core (CompositedTexture surface)
+fetch -> Inker route -> Nematic engine -> EngineDocument
+      -> document-canvas -> PaintList -> netrender / host
 ```
 
-- [`inker`](https://crates.io/crates/inker) — references nematic by engine
-  ID. The default policy routes `gemini`, `gopher`, `finger`, `spartan` →
-  `nematic.smolweb`, and `file` → `nematic.file`.
-- [`verso-core`](https://crates.io/crates/verso-core) — nematic's output is
-  presented as a `CompositedTexture` surface; verso-core owns the surface
-  lifecycle.
+- [`inker`](https://crates.io/crates/inker) defines the engine, registry, and
+  routing contracts Nematic implements.
+- `document-canvas` lowers `EngineDocument` into a windowable `PaintList`.
+- `genet-documents` retains the document, layout, scroll, and interaction
+  state for Genet hosts.
+- [`cambium-nematic`](https://crates.io/crates/cambium-nematic) is a separate
+  presentation option over Errand's native protocol ASTs.
 - [`mere`](https://crates.io/crates/mere) — composes nematic into the
   product.
 
 ## Status
 
-Pre-1.0. Markdown lane shipped; smolweb (gemini/gopher), file, and feed
-lanes pending. Implementation is in progress within the
-[mere workspace](https://github.com/mark-ik/mere).
+Pre-1.0. All fifteen registered engines are implemented and covered by the
+crate's dispatch tests. HTML reader mode remains outside Nematic's current
+scope.
 
 ## Fun Fact
 
