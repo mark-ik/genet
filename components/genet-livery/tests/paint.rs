@@ -5,7 +5,7 @@ use genet_livery::{
 };
 use genet_static_dom::StaticDocument;
 use paint_list_api::{
-    BorderDetails, ColorF, DeviceIntSize, EngineId, PaintCmd, PaintEnvelope, PaintList,
+    BorderDetails, ClipKind, ColorF, DeviceIntSize, EngineId, PaintCmd, PaintEnvelope, PaintList,
 };
 
 fn render(html: &str, css: &str, generation: u64) -> genet_livery::LiveryPaintList {
@@ -75,6 +75,104 @@ fn backgrounds_and_borders_follow_dom_paint_order() {
         panic!("child background follows the parent box");
     };
     assert_eq!(child.color, ColorF::new(0.0, 0.0, 1.0, 1.0));
+}
+
+#[test]
+fn overflow_clips_wrap_descendants_and_nest() {
+    let list = render(
+        r#"<html><body><div class="outer"><div class="inner"><div class="grand"></div></div></div></body></html>"#,
+        r#"
+        .outer {
+            width: 40px; height: 20px; padding: 3px;
+            border: 2px solid black; background-color: red;
+            overflow-x: hidden; overflow-y: hidden;
+        }
+        .inner {
+            width: 80px; height: 40px; background-color: blue;
+            overflow-x: clip; overflow-y: clip;
+        }
+        .grand { width: 100px; height: 60px; background-color: lime; }
+        "#,
+        1,
+    );
+    let command_index =
+        |predicate: &dyn Fn(&PaintCmd) -> bool| list.commands().iter().position(predicate).unwrap();
+    let outer_index = command_index(
+        &|command| matches!(command, PaintCmd::DrawRect(rect) if rect.color == ColorF::new(1.0, 0.0, 0.0, 1.0)),
+    );
+    let inner_index = command_index(
+        &|command| matches!(command, PaintCmd::DrawRect(rect) if rect.color == ColorF::new(0.0, 0.0, 1.0, 1.0)),
+    );
+    let grand_index = command_index(
+        &|command| matches!(command, PaintCmd::DrawRect(rect) if rect.color == ColorF::new(0.0, 1.0, 0.0, 1.0)),
+    );
+    let pushes = list
+        .commands()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, command)| matches!(command, PaintCmd::PushClip(_)).then_some(index))
+        .collect::<Vec<_>>();
+    let pops = list
+        .commands()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, command)| matches!(command, PaintCmd::PopClip).then_some(index))
+        .collect::<Vec<_>>();
+
+    assert_eq!((pushes.len(), pops.len()), (2, 2));
+    assert!(outer_index < pushes[0]);
+    assert!(pushes[0] < inner_index && inner_index < pushes[1]);
+    assert!(pushes[1] < grand_index && grand_index < pops[0]);
+    assert!(pops[0] < pops[1]);
+
+    let PaintCmd::DrawRect(outer) = &list.commands()[outer_index] else {
+        unreachable!()
+    };
+    let PaintCmd::PushClip(outer_clip) = &list.commands()[pushes[0]] else {
+        unreachable!()
+    };
+    let ClipKind::Rect(clip) = &outer_clip.kind else {
+        panic!("overflow uses a rectangular clip")
+    };
+    assert_eq!(clip.min.x, outer.placement.bounds.min.x + 2.0);
+    assert_eq!(clip.min.y, outer.placement.bounds.min.y + 2.0);
+    assert_eq!(clip.max.x, outer.placement.bounds.max.x - 2.0);
+    assert_eq!(clip.max.y, outer.placement.bounds.max.y - 2.0);
+}
+
+#[test]
+fn overflow_clips_only_the_non_visible_axis() {
+    let list = render(
+        r#"<html><body><div class="outer"><div class="child"></div></div></body></html>"#,
+        ".outer { width: 40px; height: 20px; overflow-x: hidden; overflow-y: visible; \
+                  background-color: red; } \
+         .child { width: 80px; height: 40px; background-color: blue; }",
+        1,
+    );
+    let clip = list
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::PushClip(clip) => Some(clip),
+            _ => None,
+        })
+        .expect("x overflow establishes a clip");
+    let ClipKind::Rect(rect) = &clip.kind else {
+        panic!("overflow uses a rectangular clip")
+    };
+
+    let outer = list
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::DrawRect(rect) if rect.color == ColorF::new(1.0, 0.0, 0.0, 1.0) => {
+                Some(rect.placement.bounds)
+            },
+            _ => None,
+        })
+        .expect("outer box paints");
+    assert_eq!((rect.min.x, rect.max.x), (outer.min.x, outer.max.x));
+    assert_eq!((rect.min.y, rect.max.y), (0.0, 240.0));
 }
 
 #[test]

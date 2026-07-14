@@ -28,6 +28,8 @@ and border edges enter Parley as zero-height atoms, consume horizontal advance,
 paint vertical overflow without changing line height, and use default slice
 semantics across wrapped fragments. Parley's visual item order is retained as
 one paint stream per inline group, including bidi runs, while the group's
-decorations paint first. Clipping, stacking contexts, links, scrolling, and
-focus remain open. `genet.livery` therefore stays an explicit pin rather than
-the default static route.
+decorations paint first. Block containers with non-visible overflow emit
+axis-aware padding-box clips around their descendants; nested clips balance and
+intersect through the neutral paint-list stack. Stacking contexts, links,
+scrolling, and focus remain open. `genet.livery` therefore stays an explicit
+pin rather than the default static route.

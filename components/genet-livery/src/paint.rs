@@ -7,13 +7,13 @@ use livery::{
     ComputedValues,
     values::{
         BorderStyle as CssBorderStyle, Color, Display, FontSize, Length, LengthPercentage,
-        LengthUnit,
+        LengthUnit, Overflow as CssOverflow,
     },
 };
 use paint_list_api::{
-    BorderDetails, BorderItem, BorderRadius, BorderSide, BorderStyle, ColorF, CommonPlacement,
-    DeviceIntSize, EngineId, FontResource, LayoutPoint, LayoutRect, LayoutSideOffsets,
-    NormalBorder, PaintCmd, PaintList, RectItem,
+    BorderDetails, BorderItem, BorderRadius, BorderSide, BorderStyle, ClipKind, ClipSpec, ColorF,
+    CommonPlacement, DeviceIntSize, EngineId, FontResource, LayoutPoint, LayoutRect,
+    LayoutSideOffsets, NormalBorder, PaintCmd, PaintList, RectItem,
 };
 use serde::{Deserialize, Serialize};
 
@@ -139,6 +139,7 @@ fn emit_node<D>(
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    let mut clips_descendants = false;
     let inherited = match dom.kind(id) {
         NodeKind::Element => {
             let Some(style) = styles.get(id) else {
@@ -157,6 +158,13 @@ fn emit_node<D>(
             {
                 emit_background(list, style, fragment);
                 emit_border(list, style, fragment);
+            }
+            if !matches!(style.display, Display::Inline | Display::InlineBlock)
+                && let Some(fragment) = fragments.get(id)
+                && let Some(clip) = descendant_clip(style, fragment, list.viewport)
+            {
+                list.commands.push(PaintCmd::PushClip(clip));
+                clips_descendants = true;
             }
             Some(style)
         },
@@ -186,6 +194,48 @@ fn emit_node<D>(
         emit_node(dom, styles, fragments, child, inherited, text, list);
     }
     emit_inline_group(dom, styles, fragments, &inline_group, inherited, text, list);
+    if clips_descendants {
+        list.commands.push(PaintCmd::PopClip);
+    }
+}
+
+fn descendant_clip(
+    style: &ComputedValues,
+    fragment: &Fragment,
+    viewport: DeviceIntSize,
+) -> Option<ClipSpec> {
+    let clips_x = clips_overflow(style.overflow_x);
+    let clips_y = clips_overflow(style.overflow_y);
+    if !clips_x && !clips_y {
+        return None;
+    }
+    let em = used_font_size(style);
+    let left = border_width_px(style.border_left_style, style.border_left_width, em);
+    let right = border_width_px(style.border_right_style, style.border_right_width, em);
+    let top = border_width_px(style.border_top_style, style.border_top_width, em);
+    let bottom = border_width_px(style.border_bottom_style, style.border_bottom_width, em);
+    let min_x = if clips_x { fragment.x + left } else { 0.0 };
+    let max_x = if clips_x {
+        (fragment.x + fragment.width - right).max(min_x)
+    } else {
+        viewport.width as f32
+    };
+    let min_y = if clips_y { fragment.y + top } else { 0.0 };
+    let max_y = if clips_y {
+        (fragment.y + fragment.height - bottom).max(min_y)
+    } else {
+        viewport.height as f32
+    };
+    Some(ClipSpec {
+        kind: ClipKind::Rect(LayoutRect::new(
+            LayoutPoint::new(min_x, min_y),
+            LayoutPoint::new(max_x, max_y),
+        )),
+    })
+}
+
+fn clips_overflow(overflow: CssOverflow) -> bool {
+    overflow != CssOverflow::Visible
 }
 
 fn emit_inline_group<D>(

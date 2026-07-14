@@ -130,9 +130,11 @@ including mixed text, styled spans, and atomic boxes. `genet.web` remains the
 default. Inline padding and borders now consume horizontal line advance, paint
 vertical overflow without altering line height, and use slice edges across
 wrapped fragments. Each inline group also retains Parley's visual item order
-for bidi paint while prepainting its inline decorations. Clipping and stacking,
-link/scroll/focus semantics, and cross-engine reftest parity remain the gate
-for production selection.
+for bidi paint while prepainting its inline decorations. Block containers now
+wrap descendants in axis-aware padding-box clips for non-visible overflow, with
+nested clips balanced through the neutral paint list. Stacking,
+link/scroll/focus semantics, and cross-engine reftest parity remain the gate for
+production selection.
 
 ## E0 closeout
 
