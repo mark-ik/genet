@@ -23,8 +23,8 @@ Verified on 2026-07-14:
 | `genet-static-dom` | 0.1.0 | crates.io |
 | `genet-scripted-dom` | 0.1.0 | crates.io and sibling path |
 
-The public Cambium stack is `meristem 0.1.0`, `sprigging 0.1.0`,
-`cambium 0.1.0`, `cambium-winit 0.1.0`, and `cambium-nematic 0.1.0`.
+The published Cambium stack is `meristem 0.1.0`, `sprigging 0.1.0`,
+`cambium 0.2.0`, `cambium-winit 0.2.0`, and `cambium-nematic 0.2.0`.
 Cambium Nematic's release boundary is Cambium plus the protocol AST package,
 without Genet's layout or rendering engine.
 
