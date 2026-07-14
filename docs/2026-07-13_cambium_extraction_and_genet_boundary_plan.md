@@ -333,9 +333,9 @@ without a dependency on Pelt.
 compatibility dependency keys now resolve to Cambium and Sprigging, the
 Genet-era type aliases live in Cambium, and
 `cargo test -p pelt-desktop --features tiles` passes 29 tests. Isometry,
-Woodshed, Strophe, and Mere remain. Isometry's package source is staged on
-Cambium, but its lockfile refresh and focused test remain pending after Cargo
-could not acquire the shared package cache.
+Woodshed, Strophe, and Mere now have package-source commits staged on Cambium
+and Sprigging. Their lockfile refreshes, focused tests, and later source-import
+renames remain pending after Cargo could not acquire the shared package cache.
 
 First switch package source while preserving old Rust import names through
 Cargo dependency aliases. Rename source imports to `cambium` and `sprigging`
