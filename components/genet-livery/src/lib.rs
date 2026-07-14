@@ -6,17 +6,20 @@
 
 #![forbid(unsafe_code)]
 
+mod document;
 mod dom;
 mod layout;
 mod paint;
 mod style;
 mod text;
 
+pub use document::LiveryDocument;
 pub use dom::{ElementRef, InteractionStates, SelectorTree};
 pub use layout::{Fragment, FragmentPlane, LayoutError, layout};
 pub use livery::media::Device;
-pub use paint::{LiveryPaintList, emit_paint_list};
+pub use paint::{LiveryPaintList, emit_paint_list, emit_paint_list_with_text_system};
 pub use style::{StylePlane, StyleSet, resolve_styles};
+pub use text::TextSystem;
 
 /// Clean-room UA defaults for the bounded Cambium structural lane.
 ///

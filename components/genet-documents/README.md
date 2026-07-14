@@ -12,6 +12,10 @@ session, take paint frames, scroll, click, settle).
 
 - `LoadedDocument` / `StaticSessionEngine` (`genet.web`): fetched HTML laid
   out by genet's cascade, no scripts.
+- `LiveryDocument` / `LiverySessionEngine` (`livery` feature,
+  `genet.livery`): the opt-in clean-room static implementation. It retains
+  style/layout/text paint state and lowers the neutral PaintList into the same
+  scene contract. Links, scrolling, and focus are still intentionally absent.
 - `ScriptedDocument` sessions / `ScriptedSessionEngine<E, _>` (`scripted`
   feature): a live page whose JS runs on Boa (or Nova on the nova rung),
   with the tick + quiescence seam (`pump` / `settled`).

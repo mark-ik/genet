@@ -31,6 +31,9 @@ impl SurfaceTargetId {
 /// and the id existing per-node pins persist, so it keeps the legacy `genet.web`
 /// value rather than `genet.static`. See [`GenetRung`].
 pub const ENGINE_GENET_WEB: &str = "genet.web";
+/// Opt-in static rung rendered by the clean-room Livery CSS engine. This is a
+/// sibling implementation of [`ENGINE_GENET_WEB`], not the default route.
+pub const ENGINE_GENET_LIVERY: &str = "genet.livery";
 /// The genet HTML rungs above static (the profile ladder; see [`GenetRung`]). A node
 /// pins one of these to escalate capability. Additive, and gated by host registration:
 /// until a rung is registered in the host's `EngineRegistry`, it is not `is_available`,
@@ -156,7 +159,7 @@ impl GenetRung {
 /// HTML rung (a nematic, surface, or marker engine).
 pub fn genet_rung(engine_id: &str) -> Option<GenetRung> {
     match engine_id {
-        ENGINE_GENET_WEB => Some(GenetRung::Static),
+        ENGINE_GENET_WEB | ENGINE_GENET_LIVERY => Some(GenetRung::Static),
         ENGINE_GENET_INTERACTIVE => Some(GenetRung::Interactive),
         ENGINE_GENET_SCRIPTED | ENGINE_GENET_SCRIPTED_NOVA => Some(GenetRung::Scripted),
         ENGINE_GENET_FULLWEB => Some(GenetRung::FullWeb),
@@ -262,20 +265,20 @@ impl EngineRoutePolicy {
 
         // 1. Pinned engine wins over everything else when available. This is
         //    the most explicit user signal ("this node always uses X").
-        if let Some(pin) = request.pinned_engine.as_deref() {
-            if is_available(pin) {
-                return EngineRouteDecision {
-                    engine_id: pin.to_string(),
-                    surface_contract: SurfaceContract {
-                        target: surface_target_for_request(request, scheme),
-                        // Pinned routes don't carry surface mode metadata;
-                        // fall through to a sensible default. CompositedTexture
-                        // is right for visible engines; pinned headless engines
-                        // can override with their own contract layer.
-                        mode: SurfaceContractMode::CompositedTexture,
-                    },
-                };
-            }
+        if let Some(pin) = request.pinned_engine.as_deref()
+            && is_available(pin)
+        {
+            return EngineRouteDecision {
+                engine_id: pin.to_string(),
+                surface_contract: SurfaceContract {
+                    target: surface_target_for_request(request, scheme),
+                    // Pinned routes don't carry surface mode metadata;
+                    // fall through to a sensible default. CompositedTexture
+                    // is right for visible engines; pinned headless engines
+                    // can override with their own contract layer.
+                    mode: SurfaceContractMode::CompositedTexture,
+                },
+            };
         }
 
         // 2. Content-type-positive rules win when the request carries a known

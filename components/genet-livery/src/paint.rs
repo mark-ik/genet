@@ -17,7 +17,11 @@ use paint_list_api::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{Fragment, FragmentPlane, StylePlane, layout::border_width_px, text::TextPainter};
+use crate::{
+    Fragment, FragmentPlane, StylePlane,
+    layout::border_width_px,
+    text::{TextFrame, TextSystem},
+};
 
 /// Genet paint output produced by the Livery CSS/layout path.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -61,10 +65,9 @@ impl PaintList for LiveryPaintList {
     }
 }
 
-/// Emit the backgrounds, physical borders, and independently shaped text nodes
-/// supported by the first Cambium lane. Inline formatting, clipping, and
-/// stacking-context composition remain later E3 work. `generation` is supplied
-/// by the retained document/session owner.
+/// One-shot convenience path. Retained sessions should use
+/// [`emit_paint_list_with_text_system`] so font discovery, shaping scratch
+/// space, and font resources survive between frames.
 pub fn emit_paint_list<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
@@ -76,19 +79,52 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    emit_paint_list_with_text_system(
+        dom,
+        styles,
+        fragments,
+        viewport,
+        generation,
+        &mut TextSystem::new(),
+    )
+}
+
+/// Emit structural boxes and shared inline formatting through a retained text
+/// system. `generation` is supplied by the document/session owner.
+pub fn emit_paint_list_with_text_system<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    viewport: DeviceIntSize,
+    generation: u64,
+    text: &mut TextSystem,
+) -> LiveryPaintList
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
     let mut list = LiveryPaintList::new(viewport, generation);
-    let mut text = TextPainter::new();
+    let mut text_frame = text.begin_frame();
+    let mut text_state = PaintText {
+        system: text,
+        frame: &mut text_frame,
+    };
     emit_node(
         dom,
         styles,
         fragments,
         dom.document(),
         None,
-        &mut text,
+        &mut text_state,
         &mut list,
     );
-    list.fonts = text.into_fonts();
+    list.fonts = text.fonts_for(&text_frame);
     list
+}
+
+struct PaintText<'a, Id> {
+    system: &'a mut TextSystem,
+    frame: &'a mut TextFrame<Id>,
 }
 
 fn emit_node<D>(
@@ -97,7 +133,7 @@ fn emit_node<D>(
     fragments: &FragmentPlane<D::NodeId>,
     id: D::NodeId,
     inherited: Option<&ComputedValues>,
-    text: &mut TextPainter,
+    text: &mut PaintText<'_, D::NodeId>,
     list: &mut LiveryPaintList,
 ) where
     D: LayoutDom,
@@ -118,14 +154,18 @@ fn emit_node<D>(
                 emit_background(list, style, fragment);
                 emit_border(list, style, fragment);
             }
+            text.system
+                .prepare_inline_children(text.frame, dom, styles, fragments, id, style);
             Some(style)
         },
         NodeKind::Text => {
             if let (Some(style), Some(fragment), Some(value)) =
                 (inherited, fragments.get(id), dom.text(id))
                 && paintable_fragment(fragment)
+                && !text.frame.drain(id, &mut list.commands)
             {
-                text.emit(value, style, fragment, &mut list.commands);
+                text.system
+                    .emit_single(text.frame, value, style, fragment, &mut list.commands);
             }
             inherited
         },

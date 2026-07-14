@@ -12,13 +12,13 @@
 
 use std::any::Any;
 
+use genet_layout::ScrollKey;
 use inker::session_engine::{
     DocumentSession, SessionClick, SessionEngine, SessionError, SessionLink, SessionScrollKey,
     SessionSpawnRequest,
 };
 use netrender::Scene;
 use pelt_core::ResourceFetcher;
-use genet_layout::ScrollKey;
 
 use crate::document::{ClickOutcome, LoadedDocument};
 
@@ -102,6 +102,132 @@ impl DocumentSession<Scene> for StaticDocumentSession {
     fn links(&self) -> Vec<SessionLink> {
         Vec::new()
     }
+    fn as_any(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
+// ── Clean-room static lane (genet.livery) ────────────────────────────────
+
+/// Opt-in session engine for the clean-room Livery CSS/layout path.
+#[cfg(feature = "livery")]
+pub struct LiverySessionEngine<Fetch> {
+    fetcher: Fetch,
+    author_css: Vec<String>,
+}
+
+#[cfg(feature = "livery")]
+impl<Fetch> LiverySessionEngine<Fetch> {
+    pub fn new(fetcher: Fetch) -> Self {
+        Self {
+            fetcher,
+            author_css: Vec::new(),
+        }
+    }
+
+    /// Add host-supplied author sheets before the document's own inline
+    /// sheets. This keeps lane policy configurable at registration time.
+    pub fn with_author_css(
+        fetcher: Fetch,
+        sheets: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        Self {
+            fetcher,
+            author_css: sheets.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[cfg(feature = "livery")]
+impl<Fetch: ResourceFetcher + Send + Sync> SessionEngine<Scene> for LiverySessionEngine<Fetch> {
+    fn engine_id(&self) -> &str {
+        inker::routing::ENGINE_GENET_LIVERY
+    }
+
+    fn spawn(
+        &self,
+        request: &SessionSpawnRequest,
+    ) -> Result<Box<dyn DocumentSession<Scene>>, SessionError> {
+        let source = match &request.body {
+            Some(body) => body.clone(),
+            None => {
+                let resource = request
+                    .address
+                    .split_once('#')
+                    .map_or(request.address.as_str(), |(resource, _)| resource);
+                let bytes = self.fetcher.fetch(resource).ok_or_else(|| {
+                    SessionError::SpawnFailed(format!("could not load {resource}"))
+                })?;
+                String::from_utf8_lossy(&bytes).into_owned()
+            },
+        };
+        let dom = genet_static_dom::StaticDocument::parse(&source);
+        let mut sheets = self.author_css.clone();
+        sheets.extend(genet_layout::inline_stylesheets(&dom));
+        let sheet_refs = sheets.iter().map(String::as_str).collect::<Vec<_>>();
+        let (width, height) = request.viewport;
+        let doc = genet_livery::LiveryDocument::new(
+            dom,
+            genet_livery::StyleSet::cambium(&sheet_refs),
+            genet_livery::Device::screen(width as f32, height as f32),
+        );
+        Ok(Box::new(LiveryDocumentSession {
+            doc,
+            last_error: None,
+        }))
+    }
+}
+
+/// Retained Livery document session. Interaction remains deliberately empty
+/// until the Cambium lane owns link, scroll, and focus semantics.
+#[cfg(feature = "livery")]
+pub struct LiveryDocumentSession {
+    doc: genet_livery::LiveryDocument<genet_static_dom::StaticDocument>,
+    last_error: Option<String>,
+}
+
+#[cfg(feature = "livery")]
+impl LiveryDocumentSession {
+    pub fn document(&self) -> &genet_livery::LiveryDocument<genet_static_dom::StaticDocument> {
+        &self.doc
+    }
+
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+}
+
+#[cfg(feature = "livery")]
+impl DocumentSession<Scene> for LiveryDocumentSession {
+    fn frame(&mut self, width: u32, height: u32) -> Scene {
+        match self.doc.frame(width, height) {
+            Ok(list) => {
+                self.last_error = None;
+                paint_list_render::translate_paint_list(&list)
+            },
+            Err(error) => {
+                self.last_error = Some(error.to_string());
+                Scene::new(width, height)
+            },
+        }
+    }
+
+    fn scroll_by(&mut self, _dx: f32, _dy: f32) -> bool {
+        false
+    }
+
+    fn scroll_for_key(&mut self, _key: SessionScrollKey) -> bool {
+        false
+    }
+
+    fn click_at(&mut self, _x: f32, _y: f32) -> SessionClick {
+        SessionClick::Miss
+    }
+
+    fn links(&self) -> Vec<SessionLink> {
+        Vec::new()
+    }
+
     fn as_any(&mut self) -> &mut dyn Any {
         self
     }
@@ -271,13 +397,11 @@ impl<Fetch: ResourceFetcher + Send + Sync> SessionEngine<Scene> for SmolwebSessi
         request: &SessionSpawnRequest,
     ) -> Result<Box<dyn DocumentSession<Scene>>, SessionError> {
         let doc = match &request.body {
-            Some(body) => {
-                crate::SmolwebDocument::parse(&request.address, body, self.theme.clone())
-            }
+            Some(body) => crate::SmolwebDocument::parse(&request.address, body, self.theme.clone()),
             None => {
                 crate::SmolwebDocument::load(&self.fetcher, &request.address, self.theme.clone())
                     .map_err(SessionError::SpawnFailed)?
-            }
+            },
         };
         Ok(Box::new(SmolwebDocumentSession {
             doc,
@@ -394,10 +518,7 @@ mod tests {
     #[test]
     fn static_session_scrolls_long_content() {
         let engine = StaticSessionEngine::new(NoFetch);
-        let body = format!(
-            "<html><body>{}</body></html>",
-            "<p>line</p>".repeat(200)
-        );
+        let body = format!("<html><body>{}</body></html>", "<p>line</p>".repeat(200));
         let request = SessionSpawnRequest::new("https://example.test/")
             .with_body(&body)
             .with_viewport(320, 240);
@@ -408,5 +529,53 @@ mod tests {
             session.scroll_for_key(SessionScrollKey::Home),
             "home returns to the top"
         );
+    }
+
+    #[cfg(feature = "livery")]
+    #[test]
+    fn livery_session_routes_retained_structural_and_text_paint() {
+        let mut registry: SessionRegistry<Scene> = SessionRegistry::new();
+        registry.register(Box::new(LiverySessionEngine::new(NoFetch)));
+        assert!(registry.contains(inker::routing::ENGINE_GENET_LIVERY));
+
+        let request = SessionSpawnRequest::new("https://example.test/")
+            .with_body(
+                r#"<html><head><style>.card { background-color: navy; color: white; width: 120px; }</style></head><body><div class="card">Livery <span>session</span></div></body></html>"#,
+            )
+            .with_viewport(320, 240);
+        let mut session = registry
+            .spawn(inker::routing::ENGINE_GENET_LIVERY, &request)
+            .expect("registered Livery lane spawns from body");
+
+        let first = session.frame(320, 240);
+        assert!(
+            first
+                .ops
+                .iter()
+                .any(|operation| matches!(operation, netrender::SceneOp::Rect(_)))
+        );
+        assert!(
+            first
+                .ops
+                .iter()
+                .any(|operation| matches!(operation, netrender::SceneOp::GlyphRun(_)))
+        );
+        let concrete = session
+            .as_any()
+            .downcast_mut::<LiveryDocumentSession>()
+            .expect("session keeps its concrete Livery owner");
+        let generation = concrete.document().generation();
+        let shape_count = concrete.document().text_system().shape_count();
+        assert_eq!(concrete.last_error(), None);
+
+        let _cached = session.frame(320, 240);
+        let concrete = session
+            .as_any()
+            .downcast_mut::<LiveryDocumentSession>()
+            .expect("session keeps its concrete Livery owner");
+        assert_eq!(concrete.document().generation(), generation);
+        assert_eq!(concrete.document().text_system().shape_count(), shape_count);
+        assert!(!session.scroll_by(0.0, 100.0));
+        assert_eq!(session.click_at(20.0, 20.0), SessionClick::Miss);
     }
 }

@@ -6,12 +6,14 @@ E1 values/codegen, E2 style resolution, and the first E3 integration slice are
 landed. `genet-livery` now adapts `LayoutDom` into Livery's selector and cascade
 path, retains a concrete Livery style plane, lowers the bounded box model into
 a standalone Taffy tree, and emits backgrounds and borders through the neutral
-`PaintList` API. Text nodes now shape directly through MIT/Apache Parley and
-emit positioned glyph runs with a self-contained font side table. Its
-normal/build dependency graph excludes Stylo. Full E3 parity remains open at a
-shared inline formatting context, clipping and stacking, retained text-system
-ownership, and session-engine routing. The first audit invalidated the proposed
-33-accessor full-crate seam.
+`PaintList` API. Consecutive text and inline-element children now shape in one
+Parley context, while a retained `LiveryDocument` owns the text system, stable
+font resources, and cached frame. The opt-in `genet.livery` session route
+lowers that PaintList into `netrender::Scene`; the existing default remains
+`genet.web`. The integration crate's normal/build dependency graph excludes
+Stylo. Full E3 parity remains open at inline-box geometry, bidi paint order,
+clipping and stacking, interaction semantics, and reftest coverage. The first
+audit invalidated the proposed 33-accessor full-crate seam.
 The second chose Cambium structural UI as the bounded first lane.
 Mark's framing: "grow a rust alternative using firefox, chrome, servo,
 blitz, ladybird, and gosub as prior art... think it'd be neat to have two
@@ -210,13 +212,18 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   this path. A cross-engine receipt agrees on explicit/available widths and
   explicit heights for the catalog's structural boxes. The lane now emits box
   backgrounds and physical borders through the neutral `PaintList` API, with
-  Genet engine identity and caller-owned generation IDs. Independently laid-out
-  text nodes shape through Parley and emit positioned glyph runs plus the font
-  resources required for replay. `cargo tree` proves the normal/build graph
-  contains neither `genet-layout` nor Stylo. Remaining: a shared inline
-  formatting context across text and inline elements, clipping and stacking,
-  retained text-system ownership, session-engine registration, full reftest
-  parity, and an apples-to-apples cold-build delta against the 30m35s baseline.
+  Genet engine identity and caller-owned generation IDs. Consecutive text and
+  inline-element children shape in one Parley context, sharing line breaks,
+  baselines, per-span style, and collapsed whitespace. `LiveryDocument` retains
+  the Parley contexts and stable `Arc` font resources, and reuses a complete
+  frame at an unchanged viewport. The `genet-documents` `livery` feature
+  registers this owner under the opt-in `genet.livery` static rung and lowers
+  its PaintList through the shared netrender translator. The default route is
+  unchanged. `cargo tree` proves the `genet-livery` normal/build graph contains
+  neither `genet-layout` nor Stylo. Remaining: full inline-box geometry, bidi
+  paint ordering, clipping and stacking, link/scroll/focus semantics, full
+  reftest parity, and an apples-to-apples cold-build delta against the 30m35s
+  baseline.
 - **E4 — first production lane.** One real lane (host chrome or
   smolweb) ships on Livery by default. Receipt: the lane's
   existing suites green + capture receipts.

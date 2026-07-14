@@ -1,4 +1,8 @@
-use genet_livery::{Device, InteractionStates, StyleSet, emit_paint_list, layout, resolve_styles};
+use std::sync::Arc;
+
+use genet_livery::{
+    Device, InteractionStates, LiveryDocument, StyleSet, emit_paint_list, layout, resolve_styles,
+};
 use genet_static_dom::StaticDocument;
 use paint_list_api::{
     BorderDetails, ColorF, DeviceIntSize, EngineId, PaintCmd, PaintEnvelope, PaintList,
@@ -153,9 +157,35 @@ fn inherited_text_styles_and_font_keys_are_stable() {
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(colors.len(), 2);
-    assert_eq!(colors[0], ColorF::new(1.0, 0.0, 0.0, 1.0));
-    assert_eq!(colors[1], ColorF::new(0.0, 0.0, 1.0, 1.0));
+    let red = ColorF::new(1.0, 0.0, 0.0, 1.0);
+    let blue = ColorF::new(0.0, 0.0, 1.0, 1.0);
+    assert!(colors.contains(&red));
+    assert!(colors.contains(&blue));
+
+    let runs = first
+        .commands()
+        .iter()
+        .filter_map(|command| match command {
+            PaintCmd::DrawText(run) => Some(run),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let red_baseline = runs
+        .iter()
+        .find(|run| run.color == red)
+        .and_then(|run| run.glyphs.first())
+        .unwrap()
+        .point
+        .y;
+    let blue_baseline = runs
+        .iter()
+        .find(|run| run.color == blue)
+        .and_then(|run| run.glyphs.first())
+        .unwrap()
+        .point
+        .y;
+    assert!((red_baseline - blue_baseline).abs() < f32::EPSILON);
+
     assert_eq!(
         first
             .fonts()
@@ -168,4 +198,65 @@ fn inherited_text_styles_and_font_keys_are_stable() {
             .map(|font| font.key)
             .collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn retained_document_reuses_complete_frames_and_font_allocations() {
+    let document = StaticDocument::parse(
+        r#"<html><body><div class="label">retained text</div></body></html>"#,
+    );
+    let mut document = LiveryDocument::new(
+        document,
+        StyleSet::cambium(&[".label { color: navy; font-size: 18px; width: 120px; }"]),
+        Device::screen(320.0, 240.0),
+    );
+
+    let first = document.frame(320, 240).unwrap();
+    let first_generation = document.generation();
+    let first_shape_count = document.text_system().shape_count();
+    let first_font = first.fonts().first().unwrap().data.clone();
+
+    let cached = document.frame(320, 240).unwrap();
+    assert_eq!(document.generation(), first_generation);
+    assert_eq!(document.text_system().shape_count(), first_shape_count);
+    assert!(Arc::ptr_eq(
+        &first_font,
+        &cached.fonts().first().unwrap().data
+    ));
+
+    let resized = document.frame(480, 240).unwrap();
+    assert!(document.generation() > first_generation);
+    assert!(document.text_system().shape_count() > first_shape_count);
+    assert!(Arc::ptr_eq(
+        &first_font,
+        &resized.fonts().first().unwrap().data
+    ));
+    assert_eq!(document.text_system().retained_font_count(), 1);
+}
+
+#[test]
+fn collapsed_whitespace_crosses_inline_element_boundaries() {
+    fn blue_origin(html: &str) -> f32 {
+        render(
+            html,
+            ".label { color: red; font-size: 16px; width: 120px; } span { color: blue; }",
+            1,
+        )
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::DrawText(run) if run.color == ColorF::new(0.0, 0.0, 1.0, 1.0) => {
+                run.glyphs.first().map(|glyph| glyph.point.x)
+            },
+            _ => None,
+        })
+        .unwrap()
+    }
+
+    let joined =
+        blue_origin(r#"<html><body><div class="label">a<span>b</span></div></body></html>"#);
+    let spaced =
+        blue_origin(r#"<html><body><div class="label">a <span>b</span></div></body></html>"#);
+
+    assert!(spaced > joined);
 }

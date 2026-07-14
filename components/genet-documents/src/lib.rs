@@ -36,11 +36,13 @@ pub use genet_scripted::{
 pub mod engines;
 
 pub use document::{ClickOutcome, LoadedDocument, LocalFetcher};
-pub use engines::{StaticSessionEngine, session_click_from_outcome};
+#[cfg(feature = "livery")]
+pub use engines::{LiveryDocumentSession, LiverySessionEngine};
 #[cfg(feature = "scripted")]
 pub use engines::{ScriptedDocumentSession, ScriptedSessionEngine};
 #[cfg(feature = "smolweb")]
 pub use engines::{SmolwebDocumentSession, SmolwebSessionEngine};
+pub use engines::{StaticSessionEngine, session_click_from_outcome};
 pub use href::resolve_href;
 pub use pelt_core::ResourceFetcher;
 

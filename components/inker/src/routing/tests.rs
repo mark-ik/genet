@@ -290,10 +290,8 @@ fn per_host_override_match_is_case_insensitive() {
 fn genet_rungs_classify_and_round_trip() {
     // genet.web is the static rung (the legacy id, kept for pin compatibility).
     assert_eq!(genet_rung(ENGINE_GENET_WEB), Some(GenetRung::Static));
-    assert_eq!(
-        genet_rung(ENGINE_GENET_SCRIPTED),
-        Some(GenetRung::Scripted)
-    );
+    assert_eq!(genet_rung(ENGINE_GENET_LIVERY), Some(GenetRung::Static));
+    assert_eq!(genet_rung(ENGINE_GENET_SCRIPTED), Some(GenetRung::Scripted));
     assert_eq!(
         genet_rung(ENGINE_GENET_SCRIPTED_NOVA),
         Some(GenetRung::Scripted)
@@ -306,6 +304,19 @@ fn genet_rungs_classify_and_round_trip() {
     assert_eq!(genet_rung(ENGINE_SCRYING_WEB), None);
     assert_eq!(genet_rung(ENGINE_NEMATIC_GEMTEXT), None);
     assert!(is_genet_rung(ENGINE_GENET_WEB) && !is_genet_rung(ENGINE_SCRYING_WEB));
+}
+
+#[test]
+fn registered_livery_pin_selects_the_alternate_static_rung() {
+    let mut req = request("https://example.com/");
+    req.pinned_engine = Some(ENGINE_GENET_LIVERY.to_string());
+
+    let decision = EngineRoutePolicy::default().route_filtered(&req, |id| {
+        matches!(id, ENGINE_GENET_WEB | ENGINE_GENET_LIVERY)
+    });
+
+    assert_eq!(decision.engine_id, ENGINE_GENET_LIVERY);
+    assert_eq!(genet_rung(&decision.engine_id), Some(GenetRung::Static));
 }
 
 #[test]

@@ -115,11 +115,15 @@ select the native engine.
 The first integration slice now exists as `components/genet-livery`. It adapts
 the shared `LayoutDom` surface directly, owns a concrete Livery style plane,
 lays the audited box subset out through standalone Taffy, and emits box
-backgrounds and physical borders through the neutral `PaintList` API. Text
-nodes now shape through Parley and emit positioned glyph runs with their font
-resources. It does not yet enter the session registry. A shared inline
-formatting context, clipping and stacking, retained text-system ownership, and
-full cross-engine reftest parity remain the gate for that routing change.
+backgrounds and physical borders through the neutral `PaintList` API. Text and
+nested inline elements now share a Parley formatting context, and retained
+`LiveryDocument` ownership keeps font resources and unchanged frames stable.
+With the `genet-documents` `livery` feature, the path enters the session
+registry as the explicitly pinned `genet.livery` static rung and lowers through
+the shared netrender translator. `genet.web` remains the default. Full
+inline-box geometry, bidi paint ordering, clipping and stacking,
+link/scroll/focus semantics, and cross-engine reftest parity remain the gate
+for production selection.
 
 ## E0 closeout
 
