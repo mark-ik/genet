@@ -395,14 +395,16 @@ The core provider chain is published as `genet-paint-types 0.1.0`,
 `engine-observables-api 0.1.1`, `genet-static-dom 0.1.0`, and
 `genet-scripted-dom 0.1.0`. Cambium's public stack is published as
 `meristem 0.1.0`, `sprigging 0.1.0`, `cambium 0.1.0`, and
-`cambium-winit 0.1.0`. Pelt now consumes the registry Cambium and Sprigging
-packages; Genet's root patch table redirects their DOM and paint protocol
-dependencies to the workspace provider sources so type identity stays unified.
+`cambium-winit 0.1.0`, with `cambium-nematic 0.1.0` published separately after
+its retained-engine dependency closure was removed. Pelt now consumes the
+registry Cambium and Sprigging packages; Genet's root patch table redirects
+their DOM and paint protocol dependencies to the workspace provider sources so
+type identity stays unified.
 
-`cambium-nematic` is now publishable independently. Removing its duplicate
-retained-document adapter eliminated the sibling `genet-layout`, `genet-render`,
-and `netrender` dependency closure; the crate now contains only Cambium views
-over Errand's portable protocol ASTs.
+`cambium-nematic 0.1.0` is published independently. Removing its duplicate
+retained-document adapter eliminated the sibling `genet-layout`,
+`genet-render`, and `netrender` dependency closure; the released crate contains
+only Cambium views over Errand's portable protocol ASTs.
 
 Before removing the originals:
 
