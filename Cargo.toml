@@ -285,7 +285,7 @@ stylo_atoms = { git = "https://github.com/mark-ik/stylo", branch = "main", packa
 stylo_dom = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "genet-stylo-dom" }
 stylo_malloc_size_of = { git = "https://github.com/mark-ik/stylo", branch = "main" }
 stylo_static_prefs = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "genet-stylo-static-prefs" }
-stylo_traits = { git = "https://github.com/mark-ik/stylo", branch = "main" }
+stylo_traits = { git = "https://github.com/mark-ik/stylo", branch = "main", package = "genet-stylo-traits" }
 syn = { version = "2", default-features = false, features = ["clone-impls", "derive", "parsing"] }
 synstructure = "0.13"
 taffy = { version = "0.10.1", default-features = false, features = ["calc", "detailed_layout_info", "grid", "std"] }

@@ -1,16 +1,20 @@
 # Ring 3 unwalling: genet-stylo + genet-taffy, and the taffy ride-out
 
 **Date:** 2026-07-12
-**Status:** **T0, T1, T2, and T3's manifest sweep all landed 2026-07-12.**
+**Status:** **T0, T1, T2, and T3 landed.**
 genet's workspace now builds, tests, and passes all nine WPT baselines
 against: taffy re-vendored to stable 0.12.1 (T0), the renamed stylo fork
 family on branch `mark-ik/genet-publish-names` (T1, commit `efaa436663`),
 a vendored + renamed-dependency `stylo_taffy` (T2), and every internal
-consumer's manifest swept onto the renamed deps (T3's non-publish half).
+consumer's manifest swept onto the renamed deps. On 2026-07-13 the complete
+Stylo type family was published to crates.io at `0.19.0`: `genet-stylo`,
+`genet-stylo-atoms`, `genet-stylo-dom`, `genet-stylo-static-prefs`, and
+`genet-stylo-traits`. The traits rename was added during Cargo's clean-room
+publish verification because registry `stylo_traits` is type-bound to upstream
+`stylo_atoms`.
 **Not done:** the taffy package itself is not yet renamed to `genet-taffy`
 (unnecessary until actual publishing — see T2 below, a scope correction from
-the original plan), and no crate has been published to crates.io — that
-remains Mark's per-crate call. Companion to
+the original plan). Companion to
 `2026-07-11_genet_publish_rings_plan.md` (this is the "ring 3 publishes
 only if the fork family publishes under its own names" trigger, pulled by
 Mark 2026-07-12).
@@ -41,7 +45,8 @@ set is the `servo:`-prefixed commits):
 | `stylo_dom` | +199 | **rename: `genet-stylo-dom`** |
 | `stylo_static_prefs` | +208 | **rename: `genet-stylo-static-prefs`** |
 | `malloc_size_of` | +15/-7 (a `OnceLock` impl) | **ride registry** — checked: the impl came from upstream (#365, lazy `AttrValue` serialization), not the fork; verify the registry release carries it at T3 |
-| `selectors`, `servo_arc`, `style_traits`, `style_derive`, `to_shmem` | metadata/version churn only | **ride registry** (verify each compiles with fork `style` at the pinned versions) |
+| `style_traits` | source is unchanged, but its `SpecifiedValueInfo` impl is bound to its exact atoms crate type | **rename: `genet-stylo-traits`** |
+| `selectors`, `servo_arc`, `style_derive`, `to_shmem` | metadata/version churn only | **ride registry** (verify each compiles with fork `style` at the pinned versions) |
 
 Keep `links = "servo_style_crate"` on genet-stylo: it makes cargo refuse
 any graph that accidentally pulls registry `stylo` alongside it — the
@@ -125,13 +130,14 @@ only forced at actual-publish time (crates.io forbids git/path deps in a
 published manifest), so it's deferred to whenever that's decided, not done
 now.
 
-### T3 — manifest sweep — the non-publish half landed 2026-07-12
+### T3 — manifest sweep and Stylo-family publish — landed 2026-07-13
 
 Every internal consumer swept onto the renamed deps; verified with
 `cargo check --workspace` (exit 0, zero errors) plus the full suite +
-WPT-baseline sweep repeated post-sweep. Publishing itself (the other half of
-T3) remains **entirely Mark's call, per crate**, as with rings 0–2 — nothing
-in this session published anything.
+WPT-baseline sweep repeated post-sweep. Mark approved publication on
+2026-07-13. Cargo's registry-only verification exposed the missing traits
+rename, so `genet-stylo-traits` joined the family before `genet-stylo` itself
+was uploaded. All five Stylo-family crates are published at `0.19.0`.
 
 **The finding that made this take longer than expected: `package =`
 overrides Cargo's extern-name binding, not just its source.** Cargo's rule,
