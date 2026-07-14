@@ -11,8 +11,8 @@
 //! `on_key` exactly as `el` does. `xilem_web` generates a per-tag view per HTML
 //! element; serval has one element type, so these are one-liners over `el`.
 
-use crate::pod::ServalElement;
-use crate::{El, ServalCtx, el};
+use crate::pod::GenetElement;
+use crate::{El, GenetCtx, el};
 use meristem::ViewSequence;
 
 macro_rules! tag_fns {
@@ -23,7 +23,7 @@ macro_rules! tag_fns {
             where
                 State: 'static,
                 Action: 'static,
-                Seq: ViewSequence<State, Action, ServalCtx, ServalElement>,
+                Seq: ViewSequence<State, Action, GenetCtx, GenetElement>,
             {
                 el($tag, children)
             }
@@ -134,7 +134,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ServalAppRunner;
+    use crate::GenetAppRunner;
     use crate::html_qual;
     use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, NodeKind};
     use serval_scripted_dom::ScriptedDom;
@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn tag_helpers_build_named_elements() {
         let dom = Rc::new(RefCell::new(ScriptedDom::new()));
-        let runner = ServalAppRunner::<_, _, _, ()>::new(
+        let runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             |_: &()| div::<_, (), ()>(span::<_, (), ()>("hi")),
             (),
@@ -183,7 +183,7 @@ mod tests {
         use layout_dom_api::{LocalName, Namespace};
         let no_ns = Namespace::from("");
         let dom = Rc::new(RefCell::new(ScriptedDom::new()));
-        let runner = ServalAppRunner::<_, _, _, ()>::new(
+        let runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             |_: &()| external_texture::<(), ()>(7, 320, 240),
             (),
@@ -216,7 +216,7 @@ mod tests {
         use layout_dom_api::{LocalName, Namespace};
         let no_ns = Namespace::from("");
         let dom = Rc::new(RefCell::new(ScriptedDom::new()));
-        let runner = ServalAppRunner::<_, _, _, ()>::new(
+        let runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             |_: &()| custom_leaf::<(), ()>(7, 20, 10),
             (),
@@ -271,7 +271,7 @@ mod tests {
     #[test]
     fn host_pool_retains_host_owned_children_across_rebuilds() {
         let dom = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             pool_demo_view,
             PoolDemo { show_before: false },

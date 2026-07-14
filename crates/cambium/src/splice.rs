@@ -6,7 +6,7 @@
 //! mutations on a serval node.
 //!
 //! Modelled on `xilem_web`'s `DomChildrenSplice`, but:
-//!   * the retained child collection is `Vec<ServalElement>` (no `AnyPod`
+//!   * the retained child collection is `Vec<GenetElement>` (no `AnyPod`
 //!     boxing — the element type is uniform);
 //!   * inserts/removes are applied *eagerly* against the `ScriptedDom`
 //!     (`insert_before` / `remove`), since serval batches at the
@@ -15,7 +15,7 @@
 //!     so `with_scratch` inserts each built child individually (the recorded
 //!     `DomMutation`s are identical to inserting them one by one anyway).
 
-use crate::pod::{ServalElement, ServalElementMut};
+use crate::pod::{GenetElement, GenetElementMut};
 use layout_dom_api::LayoutDomMut;
 use meristem::{AppendVec, ElementSplice, Mut};
 use serval_scripted_dom::NodeId;
@@ -140,9 +140,9 @@ impl<'v, 's, T> VecSplice<'v, 's, T> {
 /// `parent` is the node whose children are being diffed; `dom` is the shared
 /// document handle. The retained children live in `children`; `scratch` is the
 /// `VecSplice`'s reversed-tail scratch space.
-pub struct ServalChildrenSplice<'a, 'b, 'c> {
-    scratch: &'a mut AppendVec<ServalElement>,
-    children: VecSplice<'b, 'c, ServalElement>,
+pub struct GenetChildrenSplice<'a, 'b, 'c> {
+    scratch: &'a mut AppendVec<GenetElement>,
+    children: VecSplice<'b, 'c, GenetElement>,
     ix: usize,
     parent: NodeId,
     dom: crate::DomHandle,
@@ -151,12 +151,12 @@ pub struct ServalChildrenSplice<'a, 'b, 'c> {
     parent_was_removed: bool,
 }
 
-impl<'a, 'b, 'c> ServalChildrenSplice<'a, 'b, 'c> {
+impl<'a, 'b, 'c> GenetChildrenSplice<'a, 'b, 'c> {
     /// Create a splice over `parent`'s children.
     pub fn new(
-        scratch: &'a mut AppendVec<ServalElement>,
-        children: &'b mut Vec<ServalElement>,
-        vec_splice_scratch: &'c mut Vec<ServalElement>,
+        scratch: &'a mut AppendVec<GenetElement>,
+        children: &'b mut Vec<GenetElement>,
+        vec_splice_scratch: &'c mut Vec<GenetElement>,
         parent: NodeId,
         dom: crate::DomHandle,
         parent_was_removed: bool,
@@ -178,15 +178,15 @@ impl<'a, 'b, 'c> ServalChildrenSplice<'a, 'b, 'c> {
     }
 }
 
-impl ElementSplice<ServalElement> for ServalChildrenSplice<'_, '_, '_> {
-    fn with_scratch<R>(&mut self, f: impl FnOnce(&mut AppendVec<ServalElement>) -> R) -> R {
+impl ElementSplice<GenetElement> for GenetChildrenSplice<'_, '_, '_> {
+    fn with_scratch<R>(&mut self, f: impl FnOnce(&mut AppendVec<GenetElement>) -> R) -> R {
         let ret = f(self.scratch);
         if !self.scratch.is_empty() {
             // serval has no DocumentFragment, so insert each built child at the
             // current cursor in order. The reference node is recomputed each
             // time because previously inserted children become preceding
             // siblings, not the reference.
-            let drained: Vec<ServalElement> = self.scratch.drain().collect();
+            let drained: Vec<GenetElement> = self.scratch.drain().collect();
             for element in drained {
                 let reference = self.next_sibling();
                 self.dom
@@ -199,7 +199,7 @@ impl ElementSplice<ServalElement> for ServalChildrenSplice<'_, '_, '_> {
         ret
     }
 
-    fn insert(&mut self, element: ServalElement) {
+    fn insert(&mut self, element: GenetElement) {
         let reference = self.next_sibling();
         self.dom
             .borrow_mut()
@@ -208,11 +208,11 @@ impl ElementSplice<ServalElement> for ServalChildrenSplice<'_, '_, '_> {
         self.children.insert(element);
     }
 
-    fn mutate<R>(&mut self, f: impl FnOnce(Mut<'_, ServalElement>) -> R) -> R {
+    fn mutate<R>(&mut self, f: impl FnOnce(Mut<'_, GenetElement>) -> R) -> R {
         let dom = self.dom.clone();
         let parent = self.parent;
         let child = self.children.mutate();
-        let ret = f(ServalElementMut {
+        let ret = f(GenetElementMut {
             node: &mut child.node,
             dom,
             parent: Some(parent),
@@ -230,12 +230,12 @@ impl ElementSplice<ServalElement> for ServalChildrenSplice<'_, '_, '_> {
         self.ix
     }
 
-    fn delete<R>(&mut self, f: impl FnOnce(Mut<'_, ServalElement>) -> R) -> R {
+    fn delete<R>(&mut self, f: impl FnOnce(Mut<'_, GenetElement>) -> R) -> R {
         let dom = self.dom.clone();
         let parent = self.parent;
         let mut child = self.children.delete_next();
         let node = child.node;
-        let ret = f(ServalElementMut {
+        let ret = f(GenetElementMut {
             node: &mut child.node,
             dom,
             parent: Some(parent),
@@ -272,7 +272,7 @@ impl ElementSplice<ServalElement> for ServalChildrenSplice<'_, '_, '_> {
         true
     }
 
-    fn extract_pending(&mut self) -> Option<ServalElement> {
+    fn extract_pending(&mut self) -> Option<GenetElement> {
         // The element leaves this splice's bookkeeping, but its DOM node stays
         // attached where it is: parking is not removal. The node moves when the
         // element is adopted elsewhere (`adopt_pending` → one `Moved`), or is
@@ -281,7 +281,7 @@ impl ElementSplice<ServalElement> for ServalChildrenSplice<'_, '_, '_> {
         self.children.take_next_pending()
     }
 
-    fn adopt_pending(&mut self, element: ServalElement) -> Result<(), ServalElement> {
+    fn adopt_pending(&mut self, element: GenetElement) -> Result<(), GenetElement> {
         // Move the foreign element's node into place first (before the current
         // front pending, append when none), then queue it as next pending so
         // the caller's ordinary mutate-based rebuild consumes it. The node was

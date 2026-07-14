@@ -22,8 +22,8 @@
 use std::ops::Range;
 
 use crate::controls::{TextInput, edit, edit_multiline};
-use crate::pod::ServalElement;
-use crate::{AnyView, KeyEvent, ServalCtx, el, on_key};
+use crate::pod::GenetElement;
+use crate::{AnyView, GenetCtx, KeyEvent, el, on_key};
 
 /// A styled run over the field text: a byte `range` painted with a CSS `class`
 /// (`"syntax-keyword"`) the host's stylesheet themes. Ranges may overlap and nest
@@ -38,7 +38,7 @@ pub struct StyleRange {
 /// One child of a field element: a text node or a styled `<span>`, type-erased so
 /// the field's children are a uniform `Vec`. Public so the [`TextField`] alias can
 /// name it.
-pub type FieldChild = Box<dyn AnyView<TextInput, (), ServalCtx, ServalElement>>;
+pub type FieldChild = Box<dyn AnyView<TextInput, (), GenetCtx, GenetElement>>;
 
 /// Flatten possibly-overlapping `styles` over `len` bytes into non-overlapping
 /// runs, the innermost (smallest) range winning on overlap. Runs cover `0..len`

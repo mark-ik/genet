@@ -9,15 +9,21 @@
 //! [`lens`](crate::lens) like the other controls; the app scales the fraction to
 //! its own range.
 
-use crate::pod::ServalElement;
-use crate::{PointerEvent, ServalCtx, View, el, on_pointer};
+use crate::pod::GenetElement;
+use crate::{GenetCtx, Key, NamedKey, PointerEvent, View, el, on_key, on_pointer};
 
 /// The state of a [`slider`]: a normalized value in `0.0..=1.0`. Composable via
 /// [`lens`](crate::lens).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Slider {
     /// The value as a fraction of the track (`0.0` = left, `1.0` = right).
     pub value: f32,
+    /// Arrow-key increment in normalized units.
+    pub step: f32,
+    /// Page-key increment in normalized units.
+    pub page_step: f32,
+    /// Accessible name announced for the control.
+    pub label: String,
 }
 
 impl Slider {
@@ -25,7 +31,29 @@ impl Slider {
     pub fn new(value: f32) -> Self {
         Self {
             value: value.clamp(0.0, 1.0),
+            step: 0.01,
+            page_step: 0.1,
+            label: "Value".into(),
         }
+    }
+
+    /// Configure keyboard increments. Values are clamped to `0.0..=1.0`.
+    pub fn with_steps(mut self, step: f32, page_step: f32) -> Self {
+        self.step = step.clamp(0.0, 1.0);
+        self.page_step = page_step.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Set the accessible name announced for the control.
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = label.into();
+        self
+    }
+}
+
+impl Default for Slider {
+    fn default() -> Self {
+        Self::new(0.0)
     }
 }
 
@@ -37,15 +65,22 @@ impl Slider {
 ///
 /// `+ use<>` keeps the opaque type from borrowing `state` (the percentage is
 /// formatted into an owned style string).
-pub fn slider(state: &Slider) -> impl View<Slider, (), ServalCtx, Element = ServalElement> + use<> {
+pub fn slider(state: &Slider) -> impl View<Slider, (), GenetCtx, Element = GenetElement> + use<> {
     let pct = state.value.clamp(0.0, 1.0) * 100.0;
     // The thumb: an absolute box at `left: pct%` of the relative track.
     let thumb = el::<_, Slider, ()>("div", ())
         .attr("class", "slider-thumb")
         .attr("style", format!("position: absolute; left: {pct}%;"));
-    on_pointer(
+    let pointer = on_pointer(
         el::<_, Slider, ()>("div", thumb)
             .attr("class", "slider-track")
+            .attr("role", "slider")
+            .attr("aria-label", state.label.clone())
+            .attr("aria-valuemin", "0")
+            .attr("aria-valuemax", "1")
+            .attr("aria-valuenow", state.value.clamp(0.0, 1.0).to_string())
+            .attr("aria-valuetext", format!("{pct:.0}%"))
+            .attr("tabindex", "0")
             .attr("style", "position: relative;"),
         |s: &mut Slider, e: PointerEvent| {
             // Down / Move / Up all set the value from the pointer fraction, so a
@@ -54,7 +89,39 @@ pub fn slider(state: &Slider) -> impl View<Slider, (), ServalCtx, Element = Serv
                 s.value = (e.local.0 / e.size.0).clamp(0.0, 1.0);
             }
         },
-    )
+    );
+    on_key(pointer, |s: &mut Slider, event| {
+        let handled = match &event.key {
+            Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowDown) => {
+                s.value = (s.value - s.step).clamp(0.0, 1.0);
+                true
+            }
+            Key::Named(NamedKey::ArrowRight | NamedKey::ArrowUp) => {
+                s.value = (s.value + s.step).clamp(0.0, 1.0);
+                true
+            }
+            Key::Named(NamedKey::PageDown) => {
+                s.value = (s.value - s.page_step).clamp(0.0, 1.0);
+                true
+            }
+            Key::Named(NamedKey::PageUp) => {
+                s.value = (s.value + s.page_step).clamp(0.0, 1.0);
+                true
+            }
+            Key::Named(NamedKey::Home) => {
+                s.value = 0.0;
+                true
+            }
+            Key::Named(NamedKey::End) => {
+                s.value = 1.0;
+                true
+            }
+            _ => false,
+        };
+        if handled {
+            event.prevent_default();
+        }
+    })
 }
 
 #[cfg(test)]

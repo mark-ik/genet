@@ -15,10 +15,11 @@
 //! document stylesheet (genet-layout's `inline_stylesheets`).
 
 /// How a smolweb document is colored.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum SmolwebTheme {
     /// Default: a palette derived from the site's host, so each capsule has its
     /// own consistent color identity (the Lagrange approach).
+    #[default]
     Site,
     /// A neutral, un-themed default stylesheet.
     Plain,
@@ -32,12 +33,6 @@ pub enum SmolwebTheme {
     /// Follow the OS light/dark scheme. The host resolves the OS scheme and passes
     /// the matching theme; absent that, this renders light.
     System,
-}
-
-impl Default for SmolwebTheme {
-    fn default() -> Self {
-        Self::Site
-    }
 }
 
 /// A document palette: the colours the smolweb stylesheet is built from. The fixed

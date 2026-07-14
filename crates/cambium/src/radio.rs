@@ -12,21 +12,38 @@
 //! [`lens`](crate::lens), like [`checkbox`](crate::checkbox) /
 //! [`select`](crate::select).
 
-use crate::pod::ServalElement;
-use crate::{ServalCtx, View, el, on_click};
+use crate::pod::GenetElement;
+use crate::{GenetCtx, View, el, focusable_if, on_click};
 
 /// The state of a radio group: the index of the selected option in the
 /// `options` slice passed to [`radio_group`]. Composable via [`lens`](crate::lens).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RadioGroup {
     /// Index of the chosen option. Out of range renders all options unselected.
     pub selected: usize,
+    /// Accessible name announced for the group.
+    pub label: String,
 }
 
 impl RadioGroup {
     /// A group with `selected` chosen.
     pub fn new(selected: usize) -> Self {
-        Self { selected }
+        Self {
+            selected,
+            label: "Options".into(),
+        }
+    }
+
+    /// Set the accessible name announced for the group.
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = label.into();
+        self
+    }
+}
+
+impl Default for RadioGroup {
+    fn default() -> Self {
+        Self::new(0)
     }
 }
 
@@ -41,7 +58,7 @@ impl RadioGroup {
 pub fn radio_group(
     state: &RadioGroup,
     options: &[&str],
-) -> impl View<RadioGroup, (), ServalCtx, Element = ServalElement> + use<> {
+) -> impl View<RadioGroup, (), GenetCtx, Element = GenetElement> + use<> {
     // One clickable row per option. The per-option closures share one type (one
     // closure definition capturing a `usize`), so the `Vec` is homogeneous.
     let items: Vec<_> = options
@@ -50,16 +67,22 @@ pub fn radio_group(
         .map(|(i, label)| {
             let selected = i == state.selected;
             let indicator = if selected { "(o) " } else { "( ) " };
-            on_click(
-                el::<_, RadioGroup, ()>("div", format!("{indicator}{label}"))
-                    .attr("role", "radio")
-                    .attr("aria-checked", if selected { "true" } else { "false" })
-                    .attr("class", if selected { "radio selected" } else { "radio" }),
-                move |s: &mut RadioGroup, _| s.selected = i,
+            focusable_if(
+                on_click(
+                    el::<_, RadioGroup, ()>("div", format!("{indicator}{label}"))
+                        .attr("role", "radio")
+                        .attr("aria-checked", if selected { "true" } else { "false" })
+                        .attr("tabindex", if selected { "0" } else { "-1" })
+                        .attr("class", if selected { "radio selected" } else { "radio" }),
+                    move |s: &mut RadioGroup, _| s.selected = i,
+                ),
+                selected,
             )
         })
         .collect();
-    el::<_, RadioGroup, ()>("div", items).attr("role", "radiogroup")
+    el::<_, RadioGroup, ()>("div", items)
+        .attr("role", "radiogroup")
+        .attr("aria-label", state.label.clone())
 }
 
 #[cfg(test)]
@@ -70,5 +93,6 @@ mod tests {
     fn new_holds_selection() {
         assert_eq!(RadioGroup::new(2).selected, 2);
         assert_eq!(RadioGroup::default().selected, 0);
+        assert_eq!(RadioGroup::default().label, "Options");
     }
 }

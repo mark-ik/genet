@@ -8,7 +8,7 @@
 //! `xilem_web`'s `OnEvent` view (in `crates/xilem/xilem_web/src/events.rs`),
 //! collapsed to *click only* and adapted to serval: there is no browser, so
 //! there is no `addEventListener`. Instead, on build, the view records its
-//! routing path in [`ServalCtx`]'s click registry, keyed by the DOM node it
+//! routing path in [`GenetCtx`]'s click registry, keyed by the DOM node it
 //! wraps. The serval-native runner ([`dispatch_click`]) is the dispatch
 //! engine: it hit-tests a pointer event to a node, walks that node's ancestor
 //! chain, and routes a [`PointerClick`] message down each registered path —
@@ -20,15 +20,15 @@
 //! `ON_CLICK_ID`), then — if the remaining path is empty — `take_message`s the
 //! [`PointerClick`] and calls the handler; otherwise it forwards to the child.
 //!
-//! [`dispatch_click`]: crate::ServalAppRunner::dispatch_click
+//! [`dispatch_click`]: crate::GenetAppRunner::dispatch_click
 
 use core::marker::PhantomData;
 
 use meristem::{MessageCtx, MessageResult, Mut, View, ViewId, ViewMarker, ViewPathTracker};
 use serval_scripted_dom::NodeId;
 
-use crate::pod::ServalElement;
-use crate::{El, ElementView, Focusable, OptionalAction, ServalCtx, focusable};
+use crate::pod::GenetElement;
+use crate::{El, ElementView, Focusable, GenetCtx, OptionalAction, focusable};
 
 // A distinctive number, mirroring `OnEvent`'s `ON_EVENT_VIEW_ID`, so a stray
 // message routed here on a wrong path is caught rather than silently matching.
@@ -83,7 +83,7 @@ impl PointerClick {
 /// Wraps a [`View`] `V` and registers a native click handler on its element.
 ///
 /// Construct with [`on_click`]. The wrapped child must produce a
-/// [`ServalElement`] (so the view has a DOM node to key the registry on).
+/// [`GenetElement`] (so the view has a DOM node to key the registry on).
 ///
 /// Stage 3a's handler returns an [`OptionalAction`] (`OA`): it may mutate app
 /// state and *also* bubble an `Action`. The two ends of that polymorphism are
@@ -142,7 +142,7 @@ impl<Seq, State, Action, F> OnClick<El<Seq, State, Action>, State, Action, F> {
 
 /// Attach a native click handler to `child`.
 ///
-/// `handler` runs when [`dispatch_click`](crate::ServalAppRunner::dispatch_click)
+/// `handler` runs when [`dispatch_click`](crate::GenetAppRunner::dispatch_click)
 /// routes a [`PointerClick`] to this view (directly on `child`'s node, or via
 /// the bubble walk from a descendant). It mutates the app state and may return
 /// an action (anything implementing [`OptionalAction<Action>`] — `()`, an
@@ -153,7 +153,7 @@ pub fn on_click<V, State, Action, OA, F>(child: V, handler: F) -> OnClick<V, Sta
 where
     State: 'static,
     Action: 'static,
-    // `ElementView` (not just `Element = ServalElement`): a click target must be
+    // `ElementView` (not just `Element = GenetElement`): a click target must be
     // an element, so a text view is rejected at compile time.
     V: ElementView<State, Action>,
     OA: OptionalAction<Action>,
@@ -209,7 +209,7 @@ pub struct OnClickState<S> {
 
 impl<V, State, Action, F> ViewMarker for OnClick<V, State, Action, F> {}
 
-impl<V, State, Action, OA, F> View<State, Action, ServalCtx> for OnClick<V, State, Action, F>
+impl<V, State, Action, OA, F> View<State, Action, GenetCtx> for OnClick<V, State, Action, F>
 where
     State: 'static,
     Action: 'static,
@@ -219,13 +219,9 @@ where
 {
     type ViewState = OnClickState<V::ViewState>;
 
-    type Element = ServalElement;
+    type Element = GenetElement;
 
-    fn build(
-        &self,
-        ctx: &mut ServalCtx,
-        app_state: &mut State,
-    ) -> (Self::Element, Self::ViewState) {
+    fn build(&self, ctx: &mut GenetCtx, app_state: &mut State) -> (Self::Element, Self::ViewState) {
         // Push our own id so the captured `view_path()` (and the message path
         // the runner routes) ends in `ON_CLICK_ID` — mirrors `OnEvent::build`.
         ctx.with_id(ON_CLICK_ID, |ctx| {
@@ -251,7 +247,7 @@ where
         &self,
         prev: &Self,
         view_state: &mut Self::ViewState,
-        ctx: &mut ServalCtx,
+        ctx: &mut GenetCtx,
         mut element: Mut<'_, Self::Element>,
         app_state: &mut State,
     ) {
@@ -283,7 +279,7 @@ where
     fn teardown(
         &self,
         view_state: &mut Self::ViewState,
-        ctx: &mut ServalCtx,
+        ctx: &mut GenetCtx,
         element: Mut<'_, Self::Element>,
     ) {
         ctx.with_id(ON_CLICK_ID, |ctx| {
@@ -333,7 +329,7 @@ where
     }
 }
 
-// `OnClick` passes its child's element through (`Element = ServalElement`), so a
+// `OnClick` passes its child's element through (`Element = GenetElement`), so a
 // click-wrapped element is itself an `ElementView` — letting handlers compose,
 // e.g. `on_key(on_click(el(..), ..), ..)` for an element with both.
 impl<V, State, Action, OA, F> ElementView<State, Action> for OnClick<V, State, Action, F>

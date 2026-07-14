@@ -12,8 +12,8 @@
 //! Rows carry the classes `menu-row` and `menu-row-active`, and the container `menu`, so a
 //! host stylesheet themes them.
 
-use crate::pod::ServalElement;
-use crate::{PointerClick, ServalCtx, View, el, on_click, overlay_at};
+use crate::pod::GenetElement;
+use crate::{GenetCtx, PointerClick, View, el, on_click, overlay_at};
 
 /// The container class on the menu overlay.
 pub const MENU_CLASS: &str = "menu";
@@ -34,7 +34,7 @@ pub fn menu<State, F>(
     items: impl IntoIterator<Item = String>,
     selected: usize,
     on_pick: F,
-) -> impl View<State, (), ServalCtx, Element = ServalElement>
+) -> impl View<State, (), GenetCtx, Element = GenetElement>
 where
     State: 'static,
     F: Fn(&mut State, usize) + Clone + 'static,

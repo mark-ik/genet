@@ -29,6 +29,8 @@ pub fn key_event_from_winit(key: &WinitKey, mods: Modifiers) -> Option<KeyEvent>
             WinitNamedKey::Delete => NamedKey::Delete,
             WinitNamedKey::Home => NamedKey::Home,
             WinitNamedKey::End => NamedKey::End,
+            WinitNamedKey::PageUp => NamedKey::PageUp,
+            WinitNamedKey::PageDown => NamedKey::PageDown,
             _ => NamedKey::Other,
         }),
         WinitKey::Dead(_) | WinitKey::Unidentified(_) => return None,

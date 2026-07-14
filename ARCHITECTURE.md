@@ -24,5 +24,6 @@ Genet engine crates -X-> Cambium
 Genet remains independently usable without Cambium. Sprigging is an extension
 of Genet's neutral custom-leaf seam, not a second layout or input engine.
 
-The checkout and published seam crates still use `serval` names. Those are
-current compatibility identifiers, not the product ownership term.
+The published seam crates use Genet package names. Cambium's public backend
+types use `Genet*` names; deprecated `Serval*` aliases are temporary source
+compatibility shims.

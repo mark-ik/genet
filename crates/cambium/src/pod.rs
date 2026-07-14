@@ -8,7 +8,7 @@
 //! `web_sys::Element`/`Text`/`HtmlInputElement` are distinct Rust types. In
 //! serval every DOM node is the *same* type — [`NodeId`] — so there is no type
 //! erasure here: the element type is uniform, the "any" element is the same
-//! type, and the [`SuperElement<Self, ServalCtx>`] impl is the identity.
+//! type, and the [`SuperElement<Self, GenetCtx>`] impl is the identity.
 //!
 //! Unlike `xilem_web`'s `Pod`/`PodMut`, props are applied *eagerly* against the
 //! `ScriptedDom` (each `set_attribute`/`remove_attribute` records a
@@ -17,7 +17,7 @@
 //! machinery (`PodMut::drop`) is unnecessary.
 
 use crate::DomHandle;
-use crate::context::ServalCtx;
+use crate::context::GenetCtx;
 use layout_dom_api::LayoutDomMut;
 use meristem::{AnyElement, Mut, SuperElement, ViewElement};
 use serval_scripted_dom::NodeId;
@@ -26,28 +26,28 @@ use serval_scripted_dom::NodeId;
 /// mutating it. This is the `View::Element` for every serval view, and also the
 /// element type carried by every [`ViewSequence`](meristem::ViewSequence)
 /// over this backend.
-pub struct ServalElement {
+pub struct GenetElement {
     /// The live node in the `ScriptedDom`.
     pub node: NodeId,
     /// Shared handle to the document this node lives in.
     pub dom: DomHandle,
 }
 
-impl ServalElement {
+impl GenetElement {
     /// Wrap a freshly created node together with its document handle.
     pub fn new(node: NodeId, dom: DomHandle) -> Self {
         Self { node, dom }
     }
 }
 
-/// The mutable reference form of [`ServalElement`], handed to
+/// The mutable reference form of [`GenetElement`], handed to
 /// [`View::rebuild`](meristem::View::rebuild) and
 /// [`View::teardown`](meristem::View::teardown).
 ///
 /// It borrows the retained `node` (so a view may, in principle, swap it) and
 /// carries the document handle by shared clone — mutating the DOM only needs
 /// `&mut ScriptedDom` through the `RefCell`, never a borrow of the element.
-pub struct ServalElementMut<'a> {
+pub struct GenetElementMut<'a> {
     /// The live node being edited.
     pub node: &'a mut NodeId,
     /// Shared handle to the document this node lives in.
@@ -60,10 +60,10 @@ pub struct ServalElementMut<'a> {
     pub parent: Option<NodeId>,
 }
 
-impl ServalElementMut<'_> {
+impl GenetElementMut<'_> {
     /// Reborrow this mutable handle for a nested call.
-    pub fn reborrow_mut(&mut self) -> ServalElementMut<'_> {
-        ServalElementMut {
+    pub fn reborrow_mut(&mut self) -> GenetElementMut<'_> {
+        GenetElementMut {
             node: self.node,
             dom: self.dom.clone(),
             parent: self.parent,
@@ -71,15 +71,15 @@ impl ServalElementMut<'_> {
     }
 }
 
-impl ViewElement for ServalElement {
-    type Mut<'a> = ServalElementMut<'a>;
+impl ViewElement for GenetElement {
+    type Mut<'a> = GenetElementMut<'a>;
 }
 
-impl ServalElement {
-    /// Borrow this element as a [`ServalElementMut`] with no known parent
+impl GenetElement {
+    /// Borrow this element as a [`GenetElementMut`] with no known parent
     /// (a detached / standalone borrow — `replace_inner` cannot swap in place).
-    pub fn as_mut(&mut self) -> ServalElementMut<'_> {
-        ServalElementMut {
+    pub fn as_mut(&mut self) -> GenetElementMut<'_> {
+        GenetElementMut {
             node: &mut self.node,
             dom: self.dom.clone(),
             parent: None,
@@ -91,8 +91,8 @@ impl ServalElement {
 // sequence element *is* the child element. `upcast` is a move and the downcast
 // is the identity. (Contrast `xilem_web`, where `AnyPod` boxes the concrete
 // `Pod<N>` and `with_downcast_val` does a real `downcast_mut`.)
-impl SuperElement<Self, ServalCtx> for ServalElement {
-    fn upcast(_ctx: &mut ServalCtx, child: Self) -> Self {
+impl SuperElement<Self, GenetCtx> for GenetElement {
+    fn upcast(_ctx: &mut GenetCtx, child: Self) -> Self {
         child
     }
 
@@ -109,7 +109,7 @@ impl SuperElement<Self, ServalCtx> for ServalElement {
 // a *different* type at rebuild. The element type is still uniform (`NodeId`),
 // so there is no boxing/downcast as in `xilem_web`'s `AnyPod` — but the node in
 // the DOM does change, so `replace_inner` performs the in-place node swap.
-impl AnyElement<Self, ServalCtx> for ServalElement {
+impl AnyElement<Self, GenetCtx> for GenetElement {
     fn replace_inner(this: Self::Mut<'_>, child: Self) -> Self::Mut<'_> {
         // On a type-changing `AnyView` rebuild, the old view was torn down but
         // its node is still attached under `parent`, and `child`'s node was just

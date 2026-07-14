@@ -11,57 +11,57 @@
 //! the thing that turns "state changed" into "diff → DOM mutations" (and, in a
 //! host, "→ relayout → netrender → present").
 //!
-//! [`ServalAppRunner`] is that owner, kept deliberately thin: it depends only
+//! [`GenetAppRunner`] is that owner, kept deliberately thin: it depends only
 //! on `meristem` and this backend, never on serval-layout / netrender. A host
 //! crate (`pelt-live`) drives the render side over the
 //! [`ScriptedDom`](serval_scripted_dom::ScriptedDom) the runner mutates.
 //!
-//! Stage 2b adds native event dispatch: [`ServalAppRunner::dispatch_click`]
+//! Stage 2b adds native event dispatch: [`GenetAppRunner::dispatch_click`]
 //! takes a hit [`NodeId`] (the `point → NodeId` half is the `pelt-live` host's
 //! `hit_test_node`), walks the node's ancestor chain, and routes a
 //! [`PointerClick`] down each registered click handler's path via the faithful
 //! `meristem` message cycle, then rebuilds so handler state changes reach the
-//! DOM. The timer tick that drives [`update`](ServalAppRunner::update) and the
+//! DOM. The timer tick that drives [`update`](GenetAppRunner::update) and the
 //! window event that drives dispatch are the host's concern.
 //!
 //! **One state, N windows** (one-state-N-windows design, step 2): the per-tree
 //! half of the runner — the dom, ctx, retained view, focus, and pointer
 //! capture — lives in the crate-internal [`RunnerTree`], with app state and
-//! the view-producing logic threaded in per call. [`ServalAppRunner`] is one
+//! the view-producing logic threaded in per call. [`GenetAppRunner`] is one
 //! state + one tree (this file, public API unchanged);
-//! [`ServalMultiRunner`](crate::ServalMultiRunner) is one state + N trees,
+//! [`GenetMultiRunner`](crate::GenetMultiRunner) is one state + N trees,
 //! each a projection of the same state into its own `ScriptedDom`.
 
 use core::marker::PhantomData;
 
-use layout_dom_api::{LayoutDom, LayoutDomMut};
+use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace};
 use meristem::{DynMessage, MessageCtx, MessageResult, View, ViewId};
 use serval_scripted_dom::{NodeId, ScriptedDom};
 
 use crate::{
-    DomHandle, Key, KeyEvent, NamedKey, PointerClick, PointerEvent, ServalCtx, ServalElement,
-    ServalElementMut, WheelEvent,
+    DomHandle, GenetCtx, GenetElement, GenetElementMut, Key, KeyEvent, NamedKey, PointerClick,
+    PointerEvent, WheelEvent,
 };
 
-/// The per-tree half of a runner: one `ScriptedDom` target, its [`ServalCtx`]
+/// The per-tree half of a runner: one `ScriptedDom` target, its [`GenetCtx`]
 /// (handler registries are keyed by this dom's `NodeId`s), the retained view
 /// tree, and the per-window interaction state (focus, pointer capture, the
 /// cancellation flag). App state and the view-producing logic are *not* here —
 /// they are threaded into every method, so one state can drive one tree
-/// ([`ServalAppRunner`]) or many ([`ServalMultiRunner`](crate::ServalMultiRunner)).
+/// ([`GenetAppRunner`]) or many ([`GenetMultiRunner`](crate::GenetMultiRunner)).
 pub(crate) struct RunnerTree<State, V, Action>
 where
     State: 'static,
     Action: 'static,
-    V: View<State, Action, ServalCtx, Element = ServalElement>,
+    V: View<State, Action, GenetCtx, Element = GenetElement>,
 {
     dom: DomHandle,
-    ctx: ServalCtx,
+    ctx: GenetCtx,
     view: V,
     view_state: V::ViewState,
     /// The retained root element produced by the current `view`. Its `node`
     /// stays attached under the document root for the tree's lifetime.
-    root: ServalElement,
+    root: GenetElement,
     /// The currently focused node, if any. A click sets this to the nearest
     /// focusable (key-handler-bearing) ancestor of the click target, or clears
     /// it to `None` when the click lands outside any focusable element.
@@ -86,7 +86,7 @@ impl<State, V, Action> RunnerTree<State, V, Action>
 where
     State: 'static,
     Action: 'static,
-    V: View<State, Action, ServalCtx, Element = ServalElement>,
+    V: View<State, Action, GenetCtx, Element = GenetElement>,
 {
     /// Build the initial tree from `state` and attach its root under the
     /// document root of `dom`.
@@ -95,7 +95,7 @@ where
         logic: &mut impl FnMut(&State) -> V,
         state: &mut State,
     ) -> Self {
-        let mut ctx = ServalCtx::new(dom.clone());
+        let mut ctx = GenetCtx::new(dom.clone());
         let view = logic(state);
         let (root, view_state) = view.build(&mut ctx, state);
 
@@ -122,7 +122,7 @@ where
     /// The disjoint-field borrows matter: `rebuild` needs `&prev_view`,
     /// `&mut view_state`, `&mut ctx`, the root `Mut`, and `&mut state` all at
     /// once, so the fields are destructured into separate `&mut`s. The root
-    /// `ServalElementMut` is constructed exactly as `Harness::rebuild` does —
+    /// `GenetElementMut` is constructed exactly as `Harness::rebuild` does —
     /// borrowing `root.node` so a view *could* swap the root node, and cloning
     /// the shared `dom` handle.
     pub(crate) fn rebuild(&mut self, logic: &mut impl FnMut(&State) -> V, state: &mut State) {
@@ -139,7 +139,7 @@ where
             ..
         } = self;
 
-        let mut_ref = ServalElementMut {
+        let mut_ref = GenetElementMut {
             node: &mut root.node,
             dom: dom.clone(),
             // The root is attached under the document, so a type-changing
@@ -171,7 +171,7 @@ where
             dom,
             ..
         } = &mut self;
-        let mut_ref = ServalElementMut {
+        let mut_ref = GenetElementMut {
             node: &mut root.node,
             dom: dom.clone(),
             parent: Some(dom.borrow().document()),
@@ -204,7 +204,7 @@ where
     fn phase_ordered_paths(
         &self,
         chain: &[NodeId],
-        lookup: impl Fn(&ServalCtx, NodeId) -> &[crate::context::Handler],
+        lookup: impl Fn(&GenetCtx, NodeId) -> &[crate::context::Handler],
     ) -> Vec<Vec<ViewId>> {
         let mut paths = Vec::new();
         // Capture pass: root → target (chain reversed), capture listeners only.
@@ -227,7 +227,7 @@ where
     }
 
     /// Dispatch a native pointer click that hit `target`. See
-    /// [`ServalAppRunner::dispatch_click`] for the full contract; this is the
+    /// [`GenetAppRunner::dispatch_click`] for the full contract; this is the
     /// per-tree implementation with state and logic threaded in.
     pub(crate) fn dispatch_click(
         &mut self,
@@ -298,7 +298,7 @@ where
 
             for path in paths {
                 let mut msg = MessageCtx::new(env, path, DynMessage::new(event.clone()));
-                let mut_ref = ServalElementMut {
+                let mut_ref = GenetElementMut {
                     node: &mut root.node,
                     dom: dom.clone(),
                     parent: Some(dom.borrow().document()),
@@ -353,7 +353,7 @@ where
     /// Move focus to the next (`forward`) or previous focusable element in
     /// document order, wrapping. The Tab-traversal default: a document engine has
     /// no built-in tab order, so the runner provides one over the focusable set
-    /// (elements carrying a key handler, per [`ServalCtx::is_focusable`]) in DOM
+    /// (elements carrying a key handler, per [`GenetCtx::is_focusable`]) in DOM
     /// pre-order. With nothing focused, `forward` focuses the first focusable and
     /// backward the last. Rebuilds after (focus may drive `:focus` styling
     /// later). No-op when there are no focusable elements.
@@ -398,7 +398,7 @@ where
 
     /// Dispatch a native key event to the focused node, then apply the
     /// runner-level keyboard defaults (Tab traversal, Enter/Space activation).
-    /// See [`ServalAppRunner::dispatch_key`] for the full contract.
+    /// See [`GenetAppRunner::dispatch_key`] for the full contract.
     pub(crate) fn dispatch_key(
         &mut self,
         logic: &mut impl FnMut(&State) -> V,
@@ -455,7 +455,7 @@ where
 
                 for path in paths {
                     let mut msg = MessageCtx::new(env, path, DynMessage::new(event.clone()));
-                    let mut_ref = ServalElementMut {
+                    let mut_ref = GenetElementMut {
                         node: &mut root.node,
                         dom: dom.clone(),
                         parent: Some(dom.borrow().document()),
@@ -482,6 +482,14 @@ where
         // 3. Runner-level key defaults, each suppressed when a handler prevented it
         //    (the escape hatches, G2.3).
         if !event.prop.default_prevented() {
+            let radio_target = {
+                let dom = self.dom.borrow();
+                radio_navigation_target(&dom, focus, &event.key)
+            };
+            let activates = {
+                let dom = self.dom.borrow();
+                semantic_activation_matches(&dom, focus, &event.key)
+            };
             match event.key {
                 // Tab traverses focus across the focusable set, the runner-level
                 // default a document engine otherwise lacks.
@@ -489,14 +497,35 @@ where
                     self.focus_traverse(logic, state, !event.mods.shift);
                     return actions; // focus_traverse rebuilt
                 }
+                // Radio groups use one Tab stop. Arrow keys move to the next
+                // radio, select it through the same click path as a pointer,
+                // and keep focus on the newly selected item.
+                Key::Named(
+                    NamedKey::ArrowLeft
+                    | NamedKey::ArrowUp
+                    | NamedKey::ArrowRight
+                    | NamedKey::ArrowDown
+                    | NamedKey::Home
+                    | NamedKey::End,
+                ) if radio_target.is_some() && self.ctx.key_handlers_at(focus).is_empty() => {
+                    let target = radio_target.expect("guarded above");
+                    actions.extend(self.dispatch_click(
+                        logic,
+                        state,
+                        target,
+                        PointerClick::at((0.0, 0.0)),
+                    ));
+                    self.focus = Some(target);
+                    self.last_default_prevented = true;
+                    return actions;
+                }
                 // Enter/Space activate a focusable control that has a click handler
-                // but no key handler of its own (a plain button) by synthesizing a
-                // click at the element-local origin. A control with its own
-                // `on_key` owns the key, so it is excluded — a text field's Space
-                // inserts a space, it does not "click".
+                // according to its native tag or ARIA role. Checkbox, switch,
+                // and radio roles use Space; buttons use Enter and Space.
                 Key::Named(NamedKey::Enter | NamedKey::Space)
                     if !self.ctx.click_handlers_at(focus).is_empty()
-                        && self.ctx.key_handlers_at(focus).is_empty() =>
+                        && self.ctx.key_handlers_at(focus).is_empty()
+                        && activates =>
                 {
                     actions.extend(self.dispatch_click(
                         logic,
@@ -524,7 +553,7 @@ where
     }
 
     /// Begin a pointer drag: the press hit `target`. See
-    /// [`ServalAppRunner::dispatch_pointer_down`].
+    /// [`GenetAppRunner::dispatch_pointer_down`].
     pub(crate) fn dispatch_pointer_down(
         &mut self,
         logic: &mut impl FnMut(&State) -> V,
@@ -629,7 +658,7 @@ where
             // Clone into the message: the handler mutates its clone's shared
             // `Propagation` cell, and the original below reads back what it set.
             let mut msg = MessageCtx::new(env, path, DynMessage::new(event.clone()));
-            let mut_ref = ServalElementMut {
+            let mut_ref = GenetElementMut {
                 node: &mut root.node,
                 dom: dom.clone(),
                 parent: Some(dom.borrow().document()),
@@ -716,7 +745,7 @@ where
                 ..
             } = self;
             let mut msg = MessageCtx::new(env, path, DynMessage::new(event.clone()));
-            let mut_ref = ServalElementMut {
+            let mut_ref = GenetElementMut {
                 node: &mut root.node,
                 dom: dom.clone(),
                 parent: Some(dom.borrow().document()),
@@ -749,7 +778,7 @@ where
 /// `Logic: FnMut(&State) -> V` is the app-logic closure (Xilem's `app_logic`,
 /// minus the `&mut State` — Stage 1b has no message handlers mutating state
 /// from inside a view, so the logic only *reads* state). `V` is the root view;
-/// its element is always the uniform [`ServalElement`].
+/// its element is always the uniform [`GenetElement`].
 ///
 /// `Action` is the root view's action type. Stage 2b used `()` exclusively (a
 /// handler mutates state and the runner rebuilds). Stage 3a generalizes it so an
@@ -758,24 +787,24 @@ where
 /// [`MessageResult::Action`] which [`dispatch_click`](Self::dispatch_click)
 /// collects and returns. The common `Action = ()` case is the no-op it was — a
 /// `()` action carries nothing to observe.
-pub struct ServalAppRunner<State, Logic, V, Action = ()>
+pub struct GenetAppRunner<State, Logic, V, Action = ()>
 where
     State: 'static,
     Action: 'static,
     Logic: FnMut(&State) -> V,
-    V: View<State, Action, ServalCtx, Element = ServalElement>,
+    V: View<State, Action, GenetCtx, Element = GenetElement>,
 {
     state: State,
     logic: Logic,
     tree: RunnerTree<State, V, Action>,
 }
 
-impl<State, Logic, V, Action> ServalAppRunner<State, Logic, V, Action>
+impl<State, Logic, V, Action> GenetAppRunner<State, Logic, V, Action>
 where
     State: 'static,
     Action: 'static,
     Logic: FnMut(&State) -> V,
-    V: View<State, Action, ServalCtx, Element = ServalElement>,
+    V: View<State, Action, GenetCtx, Element = GenetElement>,
 {
     /// Build the initial tree from `state` and attach its root under the
     /// document root.
@@ -945,14 +974,56 @@ where
 }
 
 /// Append `node`'s focusable descendants (including itself), in document
-/// pre-order, to `out`. Focusable = carries a key handler ([`ServalCtx::is_focusable`]).
-fn collect_focusables(dom: &ScriptedDom, ctx: &ServalCtx, node: NodeId, out: &mut Vec<NodeId>) {
+/// pre-order, to `out`. Focusable = carries a key handler ([`GenetCtx::is_focusable`]).
+fn collect_focusables(dom: &ScriptedDom, ctx: &GenetCtx, node: NodeId, out: &mut Vec<NodeId>) {
     if ctx.is_focusable(node) {
         out.push(node);
     }
     for child in dom.dom_children(node) {
         collect_focusables(dom, ctx, child, out);
     }
+}
+
+fn attr<'a>(dom: &'a ScriptedDom, node: NodeId, name: &str) -> Option<&'a str> {
+    dom.attribute(node, &Namespace::from(""), &LocalName::from(name))
+}
+
+fn semantic_activation_matches(dom: &ScriptedDom, node: NodeId, key: &Key) -> bool {
+    let role = attr(dom, node, "role");
+    match (role, key) {
+        (Some("checkbox" | "switch" | "radio"), Key::Named(NamedKey::Space)) => true,
+        (Some("button"), Key::Named(NamedKey::Enter | NamedKey::Space)) => true,
+        (None, Key::Named(NamedKey::Enter | NamedKey::Space)) => {
+            dom.element_name(node)
+                .is_some_and(|name| name.local.as_ref() == "button")
+                || !dom
+                    .element_name(node)
+                    .is_some_and(|name| matches!(name.local.as_ref(), "input" | "textarea"))
+        }
+        _ => false,
+    }
+}
+
+fn radio_navigation_target(dom: &ScriptedDom, focus: NodeId, key: &Key) -> Option<NodeId> {
+    if attr(dom, focus, "role") != Some("radio") {
+        return None;
+    }
+    let parent = dom.parent(focus)?;
+    let radios: Vec<_> = dom
+        .dom_children(parent)
+        .filter(|&node| attr(dom, node, "role") == Some("radio"))
+        .collect();
+    let current = radios.iter().position(|&node| node == focus)?;
+    let target = match key {
+        Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowUp) => {
+            (current + radios.len() - 1) % radios.len()
+        }
+        Key::Named(NamedKey::ArrowRight | NamedKey::ArrowDown) => (current + 1) % radios.len(),
+        Key::Named(NamedKey::Home) => 0,
+        Key::Named(NamedKey::End) => radios.len() - 1,
+        _ => return None,
+    };
+    radios.get(target).copied()
 }
 
 #[cfg(test)]
@@ -965,7 +1036,7 @@ mod tests {
 
     use crate::{DomHandle, El, el};
 
-    use super::ServalAppRunner;
+    use super::GenetAppRunner;
 
     /// A counter: the canonical Stage 1b app state.
     struct Counter {
@@ -973,7 +1044,7 @@ mod tests {
     }
 
     /// The app logic: a `<div>` holding the count as text. The element type is
-    /// the uniform `ServalElement`, so the view type is concrete (no boxing).
+    /// the uniform `GenetElement`, so the view type is concrete (no boxing).
     fn counter_view(s: &Counter) -> El<String, Counter, ()> {
         el::<_, Counter, ()>("div", s.count.to_string())
     }
@@ -994,7 +1065,7 @@ mod tests {
     #[test]
     fn counter_ticks_through_runner() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::new(dom.clone(), counter_view, Counter { count: 0 });
+        let mut runner = GenetAppRunner::new(dom.clone(), counter_view, Counter { count: 0 });
 
         // The initial tree: a <div> under the document root holding "0".
         let root = runner.root();

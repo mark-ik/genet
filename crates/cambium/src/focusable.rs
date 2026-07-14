@@ -10,11 +10,11 @@
 //! control — a [`button`](crate::button) or [`checkbox`](crate::checkbox), which
 //! carry only an [`on_click`](crate::on_click) — keyboard-unreachable: it cannot be
 //! Tab-focused and a screen-reader / keyboard user cannot activate it. Wrapping it
-//! in [`focusable`] registers the node in [`ServalCtx`]'s explicit focusable set
+//! in [`focusable`] registers the node in [`GenetCtx`]'s explicit focusable set
 //! (the keyboard-model escape hatch, grab-bag G2.3), so it joins the Tab order and
 //! the runner activates it on Enter/Space by synthesizing a click (the keyboard
 //! equivalent of a pointer click — see
-//! [`dispatch_key`](crate::ServalAppRunner::dispatch_key)).
+//! [`dispatch_key`](crate::GenetAppRunner::dispatch_key)).
 //!
 //! The view is a transparent wrapper, structured like [`OnKey`](crate::OnKey) minus
 //! the handler: it pushes its own [`ON_FOCUSABLE_ID`] so its routing position is
@@ -29,8 +29,8 @@ use core::marker::PhantomData;
 use meristem::{MessageCtx, MessageResult, Mut, View, ViewId, ViewMarker, ViewPathTracker};
 use serval_scripted_dom::NodeId;
 
-use crate::pod::ServalElement;
-use crate::{ElementView, ServalCtx};
+use crate::pod::GenetElement;
+use crate::{El, ElementView, GenetCtx, OnClick};
 
 // A distinctive number, mirroring [`OnKey`](crate::OnKey)'s `ON_KEY_ID`, so a
 // stray message routed here on a wrong path is caught rather than silently
@@ -45,6 +45,7 @@ const ON_FOCUSABLE_ID: ViewId = ViewId::new(0x46C5_2A63);
 /// constructor needs no turbofish.
 pub struct Focusable<V> {
     child: V,
+    enabled: bool,
 }
 
 /// Retained state for a [`Focusable`].
@@ -53,6 +54,7 @@ pub struct FocusableState<S> {
     /// The wrapped child's DOM node, so teardown can unregister and rebuild can
     /// detect a node swap and re-key the focusable set.
     node: NodeId,
+    enabled: bool,
     phantom: PhantomData<()>,
 }
 
@@ -65,12 +67,29 @@ pub struct FocusableState<S> {
 /// [`on_key`](crate::on_key) is focusable without this. Composes over any element
 /// view: `focusable(button("Go", go))` is a keyboard-operable button.
 pub fn focusable<V>(child: V) -> Focusable<V> {
-    Focusable { child }
+    focusable_if(child, true)
+}
+
+/// Mark `child` focusable only while `enabled` is true.
+///
+/// This supports roving focus patterns such as radio groups and action lists,
+/// where one item participates in Tab traversal while arrow keys move the
+/// active item.
+pub fn focusable_if<V>(child: V, enabled: bool) -> Focusable<V> {
+    Focusable { child, enabled }
+}
+
+impl<Seq, State, Action, F> Focusable<OnClick<El<Seq, State, Action>, State, Action, F>> {
+    /// Set an attribute on the wrapped clickable element.
+    pub fn attr(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.child = self.child.attr(name, value);
+        self
+    }
 }
 
 impl<V> ViewMarker for Focusable<V> {}
 
-impl<V, State, Action> View<State, Action, ServalCtx> for Focusable<V>
+impl<V, State, Action> View<State, Action, GenetCtx> for Focusable<V>
 where
     State: 'static,
     Action: 'static,
@@ -78,24 +97,23 @@ where
 {
     type ViewState = FocusableState<V::ViewState>;
 
-    type Element = ServalElement;
+    type Element = GenetElement;
 
-    fn build(
-        &self,
-        ctx: &mut ServalCtx,
-        app_state: &mut State,
-    ) -> (Self::Element, Self::ViewState) {
+    fn build(&self, ctx: &mut GenetCtx, app_state: &mut State) -> (Self::Element, Self::ViewState) {
         // Push our own id so the captured routing position (and any descendant
         // handler's path) is well-formed — mirrors `OnKey::build`.
         ctx.with_id(ON_FOCUSABLE_ID, |ctx| {
             let (element, child_state) = self.child.build(ctx, app_state);
             let node = element.node;
-            ctx.register_focusable(node);
+            if self.enabled {
+                ctx.register_focusable(node);
+            }
             (
                 element,
                 FocusableState {
                     child_state,
                     node,
+                    enabled: self.enabled,
                     phantom: PhantomData,
                 },
             )
@@ -106,7 +124,7 @@ where
         &self,
         prev: &Self,
         view_state: &mut Self::ViewState,
-        ctx: &mut ServalCtx,
+        ctx: &mut GenetCtx,
         mut element: Mut<'_, Self::Element>,
         app_state: &mut State,
     ) {
@@ -122,10 +140,15 @@ where
             // The child may have swapped its node; if so, move the focusable mark
             // to the new node (the mark is just node membership, nothing to carry).
             let node = *element.node;
-            if node != prev_node {
-                ctx.unregister_focusable(prev_node);
-                ctx.register_focusable(node);
+            if node != prev_node || self.enabled != view_state.enabled {
+                if view_state.enabled {
+                    ctx.unregister_focusable(prev_node);
+                }
+                if self.enabled {
+                    ctx.register_focusable(node);
+                }
                 view_state.node = node;
+                view_state.enabled = self.enabled;
             }
         });
     }
@@ -133,11 +156,13 @@ where
     fn teardown(
         &self,
         view_state: &mut Self::ViewState,
-        ctx: &mut ServalCtx,
+        ctx: &mut GenetCtx,
         element: Mut<'_, Self::Element>,
     ) {
         ctx.with_id(ON_FOCUSABLE_ID, |ctx| {
-            ctx.unregister_focusable(view_state.node);
+            if view_state.enabled {
+                ctx.unregister_focusable(view_state.node);
+            }
             self.child
                 .teardown(&mut view_state.child_state, ctx, element);
         });

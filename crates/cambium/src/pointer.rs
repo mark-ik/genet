@@ -7,13 +7,13 @@
 //! The drag foundation under sliders (and, later, scrollbar-thumb dragging,
 //! resize handles, drag-tab-out). It is the [`on_click`](crate::on_click)
 //! pattern for a *press → move → release* cycle: the view records its routing
-//! path in [`ServalCtx`]'s pointer registry keyed by its DOM node, and the
+//! path in [`GenetCtx`]'s pointer registry keyed by its DOM node, and the
 //! runner's `dispatch_pointer_*` routes a [`PointerEvent`] down that path.
 //!
 //! Unlike click, a drag has **capture**: the element that received the
 //! `Down` keeps receiving `Move`/`Up` until release, even if the cursor leaves
 //! it. The runner owns that capture state (see
-//! [`ServalAppRunner`](crate::ServalAppRunner)); a single registered handler per
+//! [`GenetAppRunner`](crate::GenetAppRunner)); a single registered handler per
 //! node receives all three phases (no capture/bubble split — drag routes
 //! straight to the captured target).
 
@@ -22,8 +22,8 @@ use core::marker::PhantomData;
 use meristem::{MessageCtx, MessageResult, Mut, View, ViewId, ViewMarker, ViewPathTracker};
 use serval_scripted_dom::NodeId;
 
-use crate::pod::ServalElement;
-use crate::{ElementView, OptionalAction, Propagation, ServalCtx};
+use crate::pod::GenetElement;
+use crate::{ElementView, GenetCtx, OptionalAction, Propagation};
 
 // Distinctive marker id (randomly generated) so a stray message on a wrong path
 // is caught rather than silently matching. 0x504F_494E == "POIN".
@@ -59,7 +59,7 @@ pub struct PointerEvent {
     /// pass; the runner records it into [`default_prevented`] after routing, per
     /// event — never the stale click/key value. See [`Propagation`].
     ///
-    /// [`default_prevented`]: crate::ServalAppRunner::default_prevented
+    /// [`default_prevented`]: crate::GenetAppRunner::default_prevented
     pub prop: Propagation,
 }
 
@@ -115,7 +115,7 @@ pub struct OnPointerState<S> {
 
 impl<V, State, Action, F> ViewMarker for OnPointer<V, State, Action, F> {}
 
-impl<V, State, Action, OA, F> View<State, Action, ServalCtx> for OnPointer<V, State, Action, F>
+impl<V, State, Action, OA, F> View<State, Action, GenetCtx> for OnPointer<V, State, Action, F>
 where
     State: 'static,
     Action: 'static,
@@ -124,13 +124,9 @@ where
     F: Fn(&mut State, PointerEvent) -> OA + 'static,
 {
     type ViewState = OnPointerState<V::ViewState>;
-    type Element = ServalElement;
+    type Element = GenetElement;
 
-    fn build(
-        &self,
-        ctx: &mut ServalCtx,
-        app_state: &mut State,
-    ) -> (Self::Element, Self::ViewState) {
+    fn build(&self, ctx: &mut GenetCtx, app_state: &mut State) -> (Self::Element, Self::ViewState) {
         ctx.with_id(ON_POINTER_ID, |ctx| {
             let (element, child_state) = self.child.build(ctx, app_state);
             let node = element.node;
@@ -151,7 +147,7 @@ where
         &self,
         prev: &Self,
         view_state: &mut Self::ViewState,
-        ctx: &mut ServalCtx,
+        ctx: &mut GenetCtx,
         mut element: Mut<'_, Self::Element>,
         app_state: &mut State,
     ) {
@@ -180,7 +176,7 @@ where
     fn teardown(
         &self,
         view_state: &mut Self::ViewState,
-        ctx: &mut ServalCtx,
+        ctx: &mut GenetCtx,
         element: Mut<'_, Self::Element>,
     ) {
         ctx.with_id(ON_POINTER_ID, |ctx| {
@@ -234,7 +230,7 @@ where
 mod tests {
     use super::*;
     use crate::tags::custom_leaf;
-    use crate::{AnyView, DomHandle, ServalAppRunner, ServalCtx, ServalElement};
+    use crate::{AnyView, DomHandle, GenetAppRunner, GenetCtx, GenetElement};
     use layout_dom_api::LayoutDom;
     use serval_scripted_dom::ScriptedDom;
     use sprigging::{Knob, Size};
@@ -248,7 +244,7 @@ mod tests {
         knob: Knob,
     }
 
-    type KnobView = Box<dyn AnyView<KnobState, (), ServalCtx, ServalElement>>;
+    type KnobView = Box<dyn AnyView<KnobState, (), GenetCtx, GenetElement>>;
 
     /// The catalog's composition rule 2 made concrete: `on_pointer` wraps the
     /// leaf, the drag delta maps to a value **here in the view layer**, and the
@@ -273,7 +269,7 @@ mod tests {
     #[test]
     fn dragging_a_pointer_wrapped_leaf_drives_the_knob_from_the_view_layer() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             knob_view,
             KnobState {

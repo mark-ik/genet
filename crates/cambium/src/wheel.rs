@@ -7,8 +7,8 @@
 //! The scroll foundation under scrollable content (and, later, the orrery's
 //! wheel-pan / Ctrl-zoom). It is the [`on_pointer`](crate::on_pointer) pattern
 //! for a discrete scroll notch: the view records its routing path in
-//! [`ServalCtx`]'s wheel registry keyed by its DOM node, and the runner's
-//! [`dispatch_wheel`](crate::ServalAppRunner::dispatch_wheel) routes a
+//! [`GenetCtx`]'s wheel registry keyed by its DOM node, and the runner's
+//! [`dispatch_wheel`](crate::GenetAppRunner::dispatch_wheel) routes a
 //! [`WheelEvent`] down that path.
 //!
 //! Unlike pointer there is no **capture**: a wheel notch is one-shot, so each
@@ -22,8 +22,8 @@ use core::marker::PhantomData;
 use meristem::{MessageCtx, MessageResult, Mut, View, ViewId, ViewMarker, ViewPathTracker};
 use serval_scripted_dom::NodeId;
 
-use crate::pod::ServalElement;
-use crate::{ElementView, OptionalAction, Propagation, ServalCtx};
+use crate::pod::GenetElement;
+use crate::{ElementView, GenetCtx, OptionalAction, Propagation};
 
 // Distinctive marker id (randomly generated) so a stray message on a wrong path
 // is caught rather than silently matching. 0x5748_4C45 == "WHLE".
@@ -103,7 +103,7 @@ pub struct OnWheelState<S> {
 
 impl<V, State, Action, F> ViewMarker for OnWheel<V, State, Action, F> {}
 
-impl<V, State, Action, OA, F> View<State, Action, ServalCtx> for OnWheel<V, State, Action, F>
+impl<V, State, Action, OA, F> View<State, Action, GenetCtx> for OnWheel<V, State, Action, F>
 where
     State: 'static,
     Action: 'static,
@@ -112,13 +112,9 @@ where
     F: Fn(&mut State, WheelEvent) -> OA + 'static,
 {
     type ViewState = OnWheelState<V::ViewState>;
-    type Element = ServalElement;
+    type Element = GenetElement;
 
-    fn build(
-        &self,
-        ctx: &mut ServalCtx,
-        app_state: &mut State,
-    ) -> (Self::Element, Self::ViewState) {
+    fn build(&self, ctx: &mut GenetCtx, app_state: &mut State) -> (Self::Element, Self::ViewState) {
         ctx.with_id(ON_WHEEL_ID, |ctx| {
             let (element, child_state) = self.child.build(ctx, app_state);
             let node = element.node;
@@ -139,7 +135,7 @@ where
         &self,
         prev: &Self,
         view_state: &mut Self::ViewState,
-        ctx: &mut ServalCtx,
+        ctx: &mut GenetCtx,
         mut element: Mut<'_, Self::Element>,
         app_state: &mut State,
     ) {
@@ -168,7 +164,7 @@ where
     fn teardown(
         &self,
         view_state: &mut Self::ViewState,
-        ctx: &mut ServalCtx,
+        ctx: &mut GenetCtx,
         element: Mut<'_, Self::Element>,
     ) {
         ctx.with_id(ON_WHEEL_ID, |ctx| {

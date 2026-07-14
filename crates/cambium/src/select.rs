@@ -18,19 +18,21 @@
 //! above a *later positioned* sibling, give the open list (or the select) a higher
 //! `z-index`; the old "place the select last" workaround is no longer required.
 
-use crate::pod::ServalElement;
-use crate::{ServalCtx, View, el, on_click};
+use crate::pod::GenetElement;
+use crate::{GenetCtx, Key, NamedKey, View, el, on_click, on_key};
 
 /// The state of a [`select`]: which option is chosen, and whether the option
 /// list is open. Composes onto an app field via [`lens`](crate::lens), like the
 /// other controls' state.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SelectState {
     /// Index of the chosen option in the `options` slice passed to [`select`].
     /// Out of range (e.g. empty options) renders an empty box.
     pub selected: usize,
     /// Whether the option list is showing.
     pub open: bool,
+    /// Accessible name announced for the control.
+    pub label: String,
 }
 
 impl SelectState {
@@ -39,12 +41,25 @@ impl SelectState {
         Self {
             selected,
             open: false,
+            label: "Options".into(),
         }
+    }
+
+    /// Set the accessible name announced for the control.
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = label.into();
+        self
     }
 
     /// The chosen option's label from `options`, or `""` if out of range.
     pub fn label<'a>(&self, options: &[&'a str]) -> &'a str {
         options.get(self.selected).copied().unwrap_or("")
+    }
+}
+
+impl Default for SelectState {
+    fn default() -> Self {
+        Self::new(0)
     }
 }
 
@@ -63,7 +78,7 @@ impl SelectState {
 pub fn select(
     state: &SelectState,
     options: &[&str],
-) -> impl View<SelectState, (), ServalCtx, Element = ServalElement> + use<> {
+) -> impl View<SelectState, (), GenetCtx, Element = GenetElement> + use<> {
     // The closed box: the selected label; clicking toggles the list.
     let toggle: fn(&mut SelectState, crate::PointerClick) = |s, _| s.open = !s.open;
     let box_view = on_click(
@@ -85,7 +100,11 @@ pub fn select(
                 on_click(
                     el::<_, SelectState, ()>("div", label.to_string())
                         .attr("class", "select-option")
-                        .attr("role", "option"),
+                        .attr("role", "option")
+                        .attr(
+                            "aria-selected",
+                            if i == state.selected { "true" } else { "false" },
+                        ),
                     move |s: &mut SelectState, _| {
                         s.selected = i;
                         s.open = false;
@@ -95,13 +114,56 @@ pub fn select(
             .collect();
         el::<_, SelectState, ()>("div", items)
             .attr("class", "select-list")
+            .attr("role", "listbox")
             .attr("style", "position: absolute; top: 100%; left: 0;")
     });
 
-    el::<_, SelectState, ()>("div", (box_view, list))
-        .attr("class", "select")
-        .attr("role", "listbox")
-        .attr("style", "position: relative;")
+    let len = options.len();
+    on_key(
+        el::<_, SelectState, ()>("div", (box_view, list))
+            .attr("class", "select")
+            .attr("role", "combobox")
+            .attr("aria-label", state.label.clone())
+            .attr("aria-expanded", if state.open { "true" } else { "false" })
+            .attr("tabindex", "0")
+            .attr("style", "position: relative;"),
+        move |s: &mut SelectState, event| {
+            let handled = match &event.key {
+                Key::Named(NamedKey::ArrowDown) if len > 0 => {
+                    s.selected = (s.selected + 1).min(len - 1);
+                    s.open = true;
+                    true
+                }
+                Key::Named(NamedKey::ArrowUp) if len > 0 => {
+                    s.selected = s.selected.saturating_sub(1).min(len - 1);
+                    s.open = true;
+                    true
+                }
+                Key::Named(NamedKey::Home) if len > 0 => {
+                    s.selected = 0;
+                    s.open = true;
+                    true
+                }
+                Key::Named(NamedKey::End) if len > 0 => {
+                    s.selected = len - 1;
+                    s.open = true;
+                    true
+                }
+                Key::Named(NamedKey::Enter | NamedKey::Space) => {
+                    s.open = !s.open;
+                    true
+                }
+                Key::Named(NamedKey::Escape) if s.open => {
+                    s.open = false;
+                    true
+                }
+                _ => false,
+            };
+            if handled {
+                event.prevent_default();
+            }
+        },
+    )
 }
 
 #[cfg(test)]

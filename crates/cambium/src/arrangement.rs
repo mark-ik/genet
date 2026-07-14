@@ -19,8 +19,8 @@
 use meristem::ViewSequence;
 use sprigging::Placement;
 
-use crate::pod::ServalElement;
-use crate::{El, ServalCtx, el};
+use crate::pod::GenetElement;
+use crate::{El, GenetCtx, el};
 
 /// Wrap `child` absolutely at `placement` (the arranged-child primitive).
 /// The child sizes itself; the wrapper owns position + stacking only.
@@ -28,7 +28,7 @@ pub fn placed<State, Action, Seq>(placement: Placement, child: Seq) -> El<Seq, S
 where
     State: 'static,
     Action: 'static,
-    Seq: ViewSequence<State, Action, ServalCtx, ServalElement>,
+    Seq: ViewSequence<State, Action, GenetCtx, GenetElement>,
 {
     el("div", child)
         .attr("class", "arranged")
@@ -46,7 +46,7 @@ pub fn placed_with<State, Action, Seq>(
 where
     State: 'static,
     Action: 'static,
-    Seq: ViewSequence<State, Action, ServalCtx, ServalElement>,
+    Seq: ViewSequence<State, Action, GenetCtx, GenetElement>,
 {
     el("div", child).attr("class", "arranged").attr(
         "style",
@@ -67,7 +67,7 @@ pub fn arrangement<State, Action, Seq>(
 where
     State: 'static,
     Action: 'static,
-    Seq: ViewSequence<State, Action, ServalCtx, ServalElement>,
+    Seq: ViewSequence<State, Action, GenetCtx, GenetElement>,
 {
     el("div", children).attr("class", "arrangement").attr(
         "style",
@@ -78,7 +78,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ServalAppRunner;
+    use crate::GenetAppRunner;
     use layout_dom_api::{LayoutDom, LocalName, Namespace};
     use serval_scripted_dom::ScriptedDom;
     use sprigging::VirtualWindow;
@@ -117,7 +117,7 @@ mod tests {
     fn ten_thousand_rows_materialize_only_the_window() {
         let dom = Rc::new(RefCell::new(ScriptedDom::new()));
         let mut runner =
-            ServalAppRunner::<_, _, _, ()>::new(dom.clone(), list_view, ListState { scroll: 0.0 });
+            GenetAppRunner::<_, _, _, ()>::new(dom.clone(), list_view, ListState { scroll: 0.0 });
         let root = runner.root();
         {
             let d = dom.borrow();
@@ -167,7 +167,7 @@ mod tests {
     #[test]
     fn dragging_a_card_moves_and_raises_the_same_retained_node() {
         let dom = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
             dom.clone(),
             cards_view,
             Cards {

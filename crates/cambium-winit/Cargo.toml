@@ -1,6 +1,6 @@
 [package]
 name = "cambium-winit"
-version.workspace = true
+version = "0.2.0"
 description = "winit input translation for Cambium applications"
 edition.workspace = true
 rust-version.workspace = true
@@ -9,5 +9,5 @@ repository.workspace = true
 publish = true
 
 [dependencies]
-cambium = { version = "0.1.0", path = "../cambium" }
+cambium = { version = "0.2.0", path = "../cambium" }
 winit = "0.30.13"

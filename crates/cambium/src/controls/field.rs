@@ -11,11 +11,11 @@
 //! makes that element focusable and routes typed keys to an edit handler that
 //! mutates the [`TextInput`]. The host (`pelt-live`) maps winit key events to
 //! the native [`KeyEvent`]; the runner's focus + dispatch
-//! ([`dispatch_key`](crate::ServalAppRunner::dispatch_key)) deliver them here.
+//! ([`dispatch_key`](crate::GenetAppRunner::dispatch_key)) deliver them here.
 
 use super::text_input::TextInput;
-use crate::pod::ServalElement;
-use crate::{El, Key, KeyEvent, NamedKey, OnKey, ServalCtx, View, el, on_key};
+use crate::pod::GenetElement;
+use crate::{El, GenetCtx, Key, KeyEvent, NamedKey, OnKey, View, el, on_key};
 
 /// The edit handler for [`text_field`]: apply one [`KeyEvent`] to the
 /// [`TextInput`].
@@ -163,7 +163,7 @@ fn build_text_field(input: &TextInput) -> TextField {
 /// rebuild.
 pub fn text_field(
     input: &TextInput,
-) -> impl View<TextInput, (), ServalCtx, Element = ServalElement> + use<> {
+) -> impl View<TextInput, (), GenetCtx, Element = GenetElement> + use<> {
     build_text_field(input)
 }
 
@@ -198,7 +198,7 @@ fn build_textarea(input: &TextInput) -> TextField {
 /// separate `serval_layout::caret_byte_vertical` path a host can wire instead.)
 pub fn textarea(
     input: &TextInput,
-) -> impl View<TextInput, (), ServalCtx, Element = ServalElement> + use<> {
+) -> impl View<TextInput, (), GenetCtx, Element = GenetElement> + use<> {
     build_textarea(input)
 }
 

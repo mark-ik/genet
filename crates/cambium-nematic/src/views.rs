@@ -17,8 +17,8 @@
 //! v1 ships [`gemtext_view`]; gopher and feed views follow.
 
 use cambium::{
-    AnyView, ElementView, PointerClick, ServalCtx, ServalElement, a, clickable, div, el, h1, h2,
-    h3, li, p, span, text, ul,
+    AnyView, ElementView, GenetCtx, GenetElement, PointerClick, a, clickable, div, el, h1, h2, h3,
+    li, p, span, text, ul,
 };
 use errand::parse::feed::{Feed, FeedEntry};
 use errand::parse::gemtext::GemLine;
@@ -32,7 +32,7 @@ pub use theme::{SmolwebPalette, SmolwebTheme, stylesheet};
 /// concrete view type (so a document's heterogeneous line elements share one child
 /// sequence) and, as the return type, keeps the view from capturing the input
 /// `&[…]` lifetime — the `chrome.rs` / `tile_surface.rs` `*View` pattern.
-pub type SmolwebView<State, Action> = Box<dyn AnyView<State, Action, ServalCtx, ServalElement>>;
+pub type SmolwebView<State, Action> = Box<dyn AnyView<State, Action, GenetCtx, GenetElement>>;
 
 fn boxed<State, Action>(
     view: impl ElementView<State, Action> + 'static,
@@ -406,7 +406,7 @@ fn kind_marker(kind: &GopherKind) -> (&'static str, &'static str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cambium::ServalAppRunner;
+    use cambium::GenetAppRunner;
     use errand::parse::gemtext::parse as parse_gemtext;
     use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
     use serval_scripted_dom::ScriptedDom;
@@ -425,7 +425,7 @@ mod tests {
         let lines =
             parse_gemtext("# Title\n\nHello world.\n=> gemini://x.test/ A link\n* one\n* two\n");
         let dom = Rc::new(RefCell::new(ScriptedDom::new()));
-        let runner = ServalAppRunner::<(), _, _, Nav>::new(
+        let runner = GenetAppRunner::<(), _, _, Nav>::new(
             dom.clone(),
             move |_: &()| gemtext_view::<(), Nav, _>(&lines, |url| Nav(url.to_string())),
             (),
@@ -464,7 +464,7 @@ mod tests {
         let body = "iWelcome\t\texample.test\t70\r\nito the hole\t\texample.test\t70\r\n1Files\t/files\texample.test\t70\r\n";
         let items = parse_gopher(body);
         let dom = Rc::new(RefCell::new(ScriptedDom::new()));
-        let runner = ServalAppRunner::<(), _, _, Nav>::new(
+        let runner = GenetAppRunner::<(), _, _, Nav>::new(
             dom.clone(),
             move |_: &()| gopher_view::<(), Nav, _>(&items, |url| Nav(url.to_string())),
             (),
@@ -524,7 +524,7 @@ mod tests {
             ..Feed::default()
         };
         let dom = Rc::new(RefCell::new(ScriptedDom::new()));
-        let runner = ServalAppRunner::<(), _, _, Nav>::new(
+        let runner = GenetAppRunner::<(), _, _, Nav>::new(
             dom.clone(),
             move |_: &()| feed_view::<(), Nav, _>(&feed, |url| Nav(url.to_string())),
             (),
@@ -559,7 +559,7 @@ mod tests {
     fn link_line_anchor_carries_href() {
         let lines = parse_gemtext("=> gemini://example.test/page  Example\n");
         let dom = Rc::new(RefCell::new(ScriptedDom::new()));
-        let runner = ServalAppRunner::<(), _, _, Nav>::new(
+        let runner = GenetAppRunner::<(), _, _, Nav>::new(
             dom.clone(),
             move |_: &()| gemtext_view::<(), Nav, _>(&lines, |url| Nav(url.to_string())),
             (),
@@ -593,7 +593,7 @@ mod tests {
             },
         ];
         let dom = Rc::new(RefCell::new(ScriptedDom::new()));
-        let runner = ServalAppRunner::<(), _, _, Nav>::new(
+        let runner = GenetAppRunner::<(), _, _, Nav>::new(
             dom.clone(),
             move |_: &()| {
                 nex_view::<(), Nav, _>("nex://example.test/", &entries, |url| Nav(url.to_string()))

@@ -36,8 +36,8 @@
 //!    equal `z` (the later sibling wins). The old "must be last sibling" rule is
 //!    obsolete.
 
-use crate::pod::ServalElement;
-use crate::{El, ServalCtx, el};
+use crate::pod::GenetElement;
+use crate::{El, GenetCtx, el};
 use meristem::ViewSequence;
 
 /// An overlay box: `content` in a `position: absolute` element at `(x, y)`
@@ -50,7 +50,7 @@ pub fn overlay_at<Seq, State, Action>(x: f32, y: f32, content: Seq) -> El<Seq, S
 where
     State: 'static,
     Action: 'static,
-    Seq: ViewSequence<State, Action, ServalCtx, ServalElement>,
+    Seq: ViewSequence<State, Action, GenetCtx, GenetElement>,
 {
     el::<_, State, Action>("div", content).attr(
         "style",
@@ -77,7 +77,7 @@ pub fn overlay_rect<Seq, State, Action>(
 where
     State: 'static,
     Action: 'static,
-    Seq: ViewSequence<State, Action, ServalCtx, ServalElement>,
+    Seq: ViewSequence<State, Action, GenetCtx, GenetElement>,
 {
     el::<_, State, Action>("div", content).attr(
         "style",

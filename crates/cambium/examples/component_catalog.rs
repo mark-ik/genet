@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use cambium::{
-    DomHandle, PointerClick, RadioGroup, SelectState, ServalAppRunner, ServalCtx, ServalElement,
+    DomHandle, GenetAppRunner, GenetCtx, GenetElement, PointerClick, RadioGroup, SelectState,
     Slider, TextInput, View, button, checkbox, el, lens, radio_group, select, slider, text_field,
     toggle,
 };
@@ -30,7 +30,7 @@ struct CatalogState {
 
 fn catalog(
     _state: &CatalogState,
-) -> impl View<CatalogState, (), ServalCtx, Element = ServalElement> + use<> {
+) -> impl View<CatalogState, (), GenetCtx, Element = GenetElement> + use<> {
     let choices = ["Quiet", "Balanced", "Detailed"];
     let controls = el::<_, CatalogState, ()>(
         "section",
@@ -105,7 +105,7 @@ fn catalog(
 
 fn main() {
     let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-    let runner = ServalAppRunner::<_, _, _, ()>::new(dom.clone(), catalog, CatalogState::default());
+    let runner = GenetAppRunner::<_, _, _, ()>::new(dom.clone(), catalog, CatalogState::default());
     let root = runner.root();
     let dom = dom.borrow();
 

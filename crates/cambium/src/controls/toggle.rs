@@ -4,8 +4,7 @@
 
 //! [`checkbox`] / [`toggle`]: a `bool`-backed control flipped on click.
 
-use crate::pod::ServalElement;
-use crate::{El, OnClick, PointerClick, ServalCtx, View, el, on_click};
+use crate::{El, Focusable, OnClick, PointerClick, clickable, el};
 
 /// The toggle handler for [`checkbox`] / [`toggle`]: flip the bool on click.
 fn flip(checked: &mut bool, _: PointerClick) {
@@ -14,7 +13,8 @@ fn flip(checked: &mut bool, _: PointerClick) {
 
 /// The concrete view type a checkbox / toggle produces: an `on_click`-wrapped
 /// element reflecting the checked state.
-pub type Checkbox = OnClick<El<&'static str, bool, ()>, bool, (), fn(&mut bool, PointerClick)>;
+pub type Checkbox =
+    Focusable<OnClick<El<&'static str, bool, ()>, bool, (), fn(&mut bool, PointerClick)>>;
 
 /// Build a checkbox-style control with the given `kind` class (`"checkbox"` /
 /// `"toggle"`), reflecting `checked` as a textual indicator, an ARIA state, and
@@ -25,10 +25,21 @@ fn build_check(kind: &'static str, checked: bool) -> Checkbox {
     let indicator = if checked { "[x]" } else { "[ ]" };
     let class = if checked { kind_checked(kind) } else { kind };
     let aria = if checked { "true" } else { "false" };
+    let role = if kind == "toggle" {
+        "switch"
+    } else {
+        "checkbox"
+    };
+    let label = if kind == "toggle" {
+        "Toggle"
+    } else {
+        "Checkbox"
+    };
     let handler: fn(&mut bool, PointerClick) = flip;
-    on_click(
+    clickable(
         el::<_, bool, ()>("span", indicator)
-            .attr("role", "checkbox")
+            .attr("role", role)
+            .attr("aria-label", label)
             .attr("aria-checked", aria)
             .attr("class", class),
         handler,
@@ -50,7 +61,7 @@ fn kind_checked(kind: &'static str) -> &'static str {
 /// ASCII `[x]` / `[ ]` fallback indicator. Composes onto an app's bool field via
 /// [`lens`](crate::lens), like [`text_field`](crate::text_field) onto a
 /// [`TextInput`](crate::TextInput).
-pub fn checkbox(checked: bool) -> impl View<bool, (), ServalCtx, Element = ServalElement> + use<> {
+pub fn checkbox(checked: bool) -> Checkbox {
     build_check("checkbox", checked)
 }
 
@@ -63,6 +74,6 @@ pub fn checkbox_typed(checked: bool) -> Checkbox {
 
 /// A toggle switch — behaviourally a [`checkbox`] (a `bool`, flipped on click),
 /// distinguished only by a `toggle` class so the host styles it as a switch.
-pub fn toggle(checked: bool) -> impl View<bool, (), ServalCtx, Element = ServalElement> + use<> {
+pub fn toggle(checked: bool) -> Checkbox {
     build_check("toggle", checked)
 }

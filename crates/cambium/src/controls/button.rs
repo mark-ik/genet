@@ -5,7 +5,9 @@
 //! [`button`]: a `<button>` view with a click handler, and [`button_with`], the
 //! same over an arbitrary child view (a custom leaf, an icon, a row).
 
-use crate::{El, OnClick, OptionalAction, PointerClick, ServalCtx, ServalElement, el, on_click};
+use crate::{
+    El, Focusable, GenetCtx, GenetElement, OnClick, OptionalAction, PointerClick, clickable, el,
+};
 use meristem::ViewSequence;
 
 /// A `<button>` view: `label` text plus an `on_click` handler — the ergonomic
@@ -17,14 +19,14 @@ use meristem::ViewSequence;
 pub fn button<State, Action, OA, F>(
     label: impl Into<String>,
     handler: F,
-) -> OnClick<El<String, State, Action>, State, Action, F>
+) -> Focusable<OnClick<El<String, State, Action>, State, Action, F>>
 where
     State: 'static,
     Action: 'static,
     OA: OptionalAction<Action>,
     F: Fn(&mut State, PointerClick) -> OA + 'static,
 {
-    on_click(el::<_, State, Action>("button", label.into()), handler)
+    clickable(el::<_, State, Action>("button", label.into()), handler)
 }
 
 /// A `<button>` view over an arbitrary child sequence rather than a text label:
@@ -43,22 +45,22 @@ where
 pub fn button_with<Seq, State, Action, OA, F>(
     child: Seq,
     handler: F,
-) -> OnClick<El<Seq, State, Action>, State, Action, F>
+) -> Focusable<OnClick<El<Seq, State, Action>, State, Action, F>>
 where
     State: 'static,
     Action: 'static,
     OA: OptionalAction<Action>,
     F: Fn(&mut State, PointerClick) -> OA + 'static,
-    Seq: ViewSequence<State, Action, ServalCtx, ServalElement>,
+    Seq: ViewSequence<State, Action, GenetCtx, GenetElement>,
 {
-    on_click(el::<_, State, Action>("button", child), handler)
+    clickable(el::<_, State, Action>("button", child), handler)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tags::custom_leaf;
-    use crate::{AnyView, DomHandle, ServalAppRunner};
+    use crate::{AnyView, DomHandle, GenetAppRunner};
     use layout_dom_api::{LayoutDom, LocalName, Namespace};
     use serval_scripted_dom::{NodeId, ScriptedDom};
     use std::cell::RefCell;
@@ -66,7 +68,7 @@ mod tests {
 
     const GLYPH_KEY: u64 = 7;
 
-    type BtnView = Box<dyn AnyView<u32, (), ServalCtx, ServalElement>>;
+    type BtnView = Box<dyn AnyView<u32, (), GenetCtx, GenetElement>>;
 
     /// The catalog's tier-1 + tier-2 composition: a native `<button>` whose only
     /// content is a `GraphGlyph` custom leaf. The leaf paints; the button owns the
@@ -90,7 +92,7 @@ mod tests {
     #[test]
     fn graph_glyph_leaf_draws_inside_a_native_button_and_the_button_owns_the_click() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-        let mut runner = ServalAppRunner::<_, _, _, ()>::new(dom.clone(), glyph_button, 0u32);
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(dom.clone(), glyph_button, 0u32);
         let root = runner.root();
 
         {
