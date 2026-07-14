@@ -150,24 +150,7 @@ fn emit_node<D>(
             text.system
                 .prepare_inline_children(text.frame, dom, styles, fragments, id, style);
             if matches!(style.display, Display::Inline | Display::InlineBlock) {
-                if let Some(inline_fragments) = text.frame.inline_fragments(id) {
-                    let paintable = inline_fragments
-                        .iter()
-                        .filter(|fragment| paintable_fragment(fragment))
-                        .collect::<Vec<_>>();
-                    let last = paintable.len().saturating_sub(1);
-                    for (index, fragment) in paintable.into_iter().enumerate() {
-                        emit_background(list, style, fragment);
-                        emit_inline_border(list, style, fragment, index == 0, index == last);
-                    }
-                } else if style.display == Display::InlineBlock
-                    && let Some(fragment) = fragments
-                        .get(id)
-                        .filter(|fragment| paintable_fragment(fragment))
-                {
-                    emit_background(list, style, fragment);
-                    emit_border(list, style, fragment);
-                }
+                emit_inline_element_decoration(text.frame, fragments, id, style, list);
             } else if let Some(fragment) = fragments
                 .get(id)
                 .filter(|fragment| paintable_fragment(fragment))
@@ -191,8 +174,123 @@ fn emit_node<D>(
         _ => inherited,
     };
 
-    for child in dom.dom_children(id) {
+    let child_ids = dom.dom_children(id).collect::<Vec<_>>();
+    let mut inline_group = Vec::new();
+    for child in child_ids {
+        if is_inline_node(dom, styles, child) {
+            inline_group.push(child);
+            continue;
+        }
+        emit_inline_group(dom, styles, fragments, &inline_group, inherited, text, list);
+        inline_group.clear();
         emit_node(dom, styles, fragments, child, inherited, text, list);
+    }
+    emit_inline_group(dom, styles, fragments, &inline_group, inherited, text, list);
+}
+
+fn emit_inline_group<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    roots: &[D::NodeId],
+    inherited: Option<&ComputedValues>,
+    text: &mut PaintText<'_, D::NodeId>,
+    list: &mut LiveryPaintList,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    if roots.is_empty() {
+        return;
+    }
+    for root in roots {
+        emit_inline_descendant_decorations(dom, styles, fragments, *root, text.frame, list);
+    }
+    for root in roots {
+        emit_node(dom, styles, fragments, *root, inherited, text, list);
+    }
+}
+
+fn emit_inline_descendant_decorations<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    id: D::NodeId,
+    frame: &mut TextFrame<D::NodeId>,
+    list: &mut LiveryPaintList,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let NodeKind::Element = dom.kind(id) else {
+        return;
+    };
+    let Some(style) = styles.get(id) else {
+        return;
+    };
+    if style.display == Display::None {
+        return;
+    }
+    emit_inline_element_decoration(frame, fragments, id, style, list);
+    if style.display == Display::Inline {
+        for child in dom.dom_children(id) {
+            if is_inline_node(dom, styles, child) {
+                emit_inline_descendant_decorations(dom, styles, fragments, child, frame, list);
+            }
+        }
+    }
+}
+
+fn emit_inline_element_decoration<Id>(
+    frame: &mut TextFrame<Id>,
+    fragments: &FragmentPlane<Id>,
+    id: Id,
+    style: &ComputedValues,
+    list: &mut LiveryPaintList,
+) where
+    Id: Copy + Eq + Hash,
+{
+    let paintable = frame
+        .inline_fragments(id)
+        .map(|inline_fragments| {
+            inline_fragments
+                .iter()
+                .copied()
+                .filter(paintable_fragment)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if !paintable.is_empty() {
+        if !frame.mark_decoration_painted(id) {
+            return;
+        }
+        let last = paintable.len().saturating_sub(1);
+        for (index, fragment) in paintable.iter().enumerate() {
+            emit_background(list, style, fragment);
+            emit_inline_border(list, style, fragment, index == 0, index == last);
+        }
+    } else if style.display == Display::InlineBlock
+        && let Some(fragment) = fragments
+            .get(id)
+            .filter(|fragment| paintable_fragment(fragment))
+        && frame.mark_decoration_painted(id)
+    {
+        emit_background(list, style, fragment);
+        emit_border(list, style, fragment);
+    }
+}
+
+fn is_inline_node<D>(dom: &D, styles: &StylePlane<D::NodeId>, id: D::NodeId) -> bool
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    match dom.kind(id) {
+        NodeKind::Text => true,
+        NodeKind::Element => styles
+            .get(id)
+            .is_some_and(|style| matches!(style.display, Display::Inline | Display::InlineBlock)),
+        _ => false,
     }
 }
 

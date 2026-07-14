@@ -344,6 +344,49 @@ fn collapsed_whitespace_crosses_inline_element_boundaries() {
 }
 
 #[test]
+fn bidi_runs_paint_in_parley_visual_order() {
+    let list = render(
+        r#"<html><body><div class="label"><span>אב</span><em>גד</em></div></body></html>"#,
+        ".label { width: 200px; font-size: 18px; } \
+         span { color: red; background-color: lime; } \
+         em { color: blue; background-color: #ffff00; }",
+        1,
+    );
+    let runs = list
+        .commands()
+        .iter()
+        .filter_map(|command| match command {
+            PaintCmd::DrawText(run)
+                if run.color == ColorF::new(1.0, 0.0, 0.0, 1.0)
+                    || run.color == ColorF::new(0.0, 0.0, 1.0, 1.0) =>
+            {
+                Some((run.color, run.glyphs.first().unwrap().point.x))
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[0].0, ColorF::new(0.0, 0.0, 1.0, 1.0));
+    assert_eq!(runs[1].0, ColorF::new(1.0, 0.0, 0.0, 1.0));
+    assert!(runs[0].1 < runs[1].1);
+
+    let last_background = list
+        .commands()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, command)| matches!(command, PaintCmd::DrawRect(_)).then_some(index))
+        .max()
+        .expect("both inline backgrounds paint");
+    let first_text = list
+        .commands()
+        .iter()
+        .position(|command| matches!(command, PaintCmd::DrawText(_)))
+        .expect("visual text stream paints");
+    assert!(last_background < first_text);
+}
+
+#[test]
 fn inline_background_uses_the_shaped_line_fragment() {
     let list = render(
         r#"<html><body><div class="label">before <span>inside</span> after</div></body></html>"#,

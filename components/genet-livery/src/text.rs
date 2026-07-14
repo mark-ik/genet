@@ -282,6 +282,8 @@ impl TextSystem {
             .map_or((parent_fragment.x, parent_fragment.y), |fragment| {
                 (fragment.x, fragment.y)
             });
+        let mut visual_commands = Vec::new();
+        let mut prepared_sources = Vec::new();
         for item in self.shape(
             &text,
             &mut spans,
@@ -322,8 +324,10 @@ impl TextSystem {
                         options: TextOptions::default(),
                     });
                     frame.used_fonts.insert(run.font_instance);
-                    frame.prepared_sources.insert(source);
-                    frame.prepared.entry(source).or_default().push(command);
+                    if frame.prepared_sources.insert(source) {
+                        prepared_sources.push(source);
+                    }
+                    visual_commands.push(command);
                 },
                 ShapedItem::InlineBox {
                     source,
@@ -363,6 +367,7 @@ impl TextSystem {
                 },
             }
         }
+        frame.record_prepared_group(prepared_sources, visual_commands);
     }
 
     fn shape<Id>(
@@ -495,20 +500,24 @@ impl TextSystem {
 }
 
 pub(crate) struct TextFrame<Id> {
-    prepared: HashMap<Id, Vec<PaintCmd>>,
+    prepared_groups: Vec<Option<Vec<PaintCmd>>>,
+    source_groups: HashMap<Id, usize>,
     prepared_sources: HashSet<Id>,
     inline_fragments: HashMap<Id, Vec<Fragment>>,
     inline_line_keys: HashMap<Id, Vec<f32>>,
+    painted_decorations: HashSet<Id>,
     used_fonts: HashSet<FontInstanceKey>,
 }
 
 impl<Id> Default for TextFrame<Id> {
     fn default() -> Self {
         Self {
-            prepared: HashMap::new(),
+            prepared_groups: Vec::new(),
+            source_groups: HashMap::new(),
             prepared_sources: HashSet::new(),
             inline_fragments: HashMap::new(),
             inline_line_keys: HashMap::new(),
+            painted_decorations: HashSet::new(),
             used_fonts: HashSet::new(),
         }
     }
@@ -520,10 +529,27 @@ where
 {
     pub(crate) fn drain(&mut self, source: Id, commands: &mut Vec<PaintCmd>) -> bool {
         let prepared = self.prepared_sources.contains(&source);
-        if let Some(mut source_commands) = self.prepared.remove(&source) {
-            commands.append(&mut source_commands);
+        if let Some(group) = self.source_groups.get(&source).copied()
+            && let Some(mut visual_commands) = self.prepared_groups[group].take()
+        {
+            commands.append(&mut visual_commands);
         }
         prepared
+    }
+
+    fn record_prepared_group(&mut self, sources: Vec<Id>, commands: Vec<PaintCmd>) {
+        if sources.is_empty() {
+            return;
+        }
+        let group = self.prepared_groups.len();
+        self.prepared_groups.push(Some(commands));
+        for source in sources {
+            self.source_groups.insert(source, group);
+        }
+    }
+
+    pub(crate) fn mark_decoration_painted(&mut self, source: Id) -> bool {
+        self.painted_decorations.insert(source)
     }
 
     pub(crate) fn inline_fragments(&self, source: Id) -> Option<&[Fragment]> {
