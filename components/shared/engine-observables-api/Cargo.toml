@@ -1,6 +1,6 @@
 [package]
 name = "engine-observables-api"
-version = "0.1.0"
+version = "0.1.1"
 repository = "https://github.com/mark-ik/genet"
 publish = true
 authors.workspace = true
