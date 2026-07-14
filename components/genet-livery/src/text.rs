@@ -22,12 +22,16 @@ use paint_list_api::{
 };
 use parley::{
     Alignment, AlignmentOptions, FontContext, FontFamily, FontStyle, FontWeight, GenericFamily,
-    LayoutContext, PositionedLayoutItem, StyleProperty,
+    InlineBox, InlineBoxKind, LayoutContext, PositionedLayoutItem, StyleProperty,
 };
 
 use crate::{Fragment, FragmentPlane, StylePlane, paint::resolve_color};
 
-type Brush = [f32; 4];
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Brush {
+    color: [f32; 4],
+    source_index: usize,
+}
 
 /// Retained font discovery, shaping scratch space, and font resources for one
 /// Livery document session.
@@ -96,7 +100,12 @@ impl TextSystem {
         D: LayoutDom,
         D::NodeId: Copy + Eq + Hash,
     {
-        let Some(parent_fragment) = fragments.get(parent) else {
+        let Some(parent_fragment) = frame
+            .inline_fragments(parent)
+            .and_then(|fragments| fragments.first())
+            .or_else(|| fragments.get(parent))
+            .copied()
+        else {
             return;
         };
         let mut group = Vec::new();
@@ -110,7 +119,7 @@ impl TextSystem {
                     styles,
                     fragments,
                     &group,
-                    (parent_fragment, parent_style),
+                    (&parent_fragment, parent_style),
                 );
                 group.clear();
             }
@@ -121,7 +130,7 @@ impl TextSystem {
             styles,
             fragments,
             &group,
-            (parent_fragment, parent_style),
+            (&parent_fragment, parent_style),
         );
     }
 
@@ -141,10 +150,14 @@ impl TextSystem {
         }
         let mut spans = vec![SourceSpan::<Id> {
             source: None,
+            owners: Vec::new(),
             style: style.clone(),
             range: 0..text.len(),
         }];
-        for mut run in self.shape(text.as_ref(), &mut spans, fragment.width, style) {
+        for item in self.shape(text.as_ref(), &mut spans, &[], fragment.width, style) {
+            let ShapedItem::Text(mut run) = item else {
+                continue;
+            };
             for glyph in &mut run.glyphs {
                 glyph.point.x += fragment.x;
                 glyph.point.y += fragment.y;
@@ -179,18 +192,24 @@ impl TextSystem {
         let (parent_fragment, parent_style) = parent;
         let mut text = String::new();
         let mut spans = Vec::new();
-        for root in roots {
-            flatten_inline(
+        let mut inline_boxes = Vec::new();
+        let mut owners = Vec::new();
+        {
+            let mut collector = InlineCollector {
                 dom,
                 styles,
-                *root,
-                parent_style,
-                &frame.prepared_sources,
-                &mut text,
-                &mut spans,
-            );
+                fragments,
+                already_prepared: &frame.prepared_sources,
+                owners: &mut owners,
+                text: &mut text,
+                spans: &mut spans,
+                inline_boxes: &mut inline_boxes,
+            };
+            for root in roots {
+                collector.collect(*root, parent_style);
+            }
         }
-        if spans.is_empty() || text.is_empty() {
+        if spans.is_empty() && inline_boxes.is_empty() {
             return;
         }
 
@@ -198,28 +217,55 @@ impl TextSystem {
             .iter()
             .filter_map(|span| span.source.and_then(|id| fragments.get(id)))
             .next()
+            .or_else(|| roots.iter().find_map(|id| fragments.get(*id)))
             .map_or((parent_fragment.x, parent_fragment.y), |fragment| {
                 (fragment.x, fragment.y)
             });
-        for mut run in self.shape(&text, &mut spans, parent_fragment.width, parent_style) {
-            let Some(source) = run.source else {
-                continue;
-            };
-            for glyph in &mut run.glyphs {
-                glyph.point.x += origin.0;
-                glyph.point.y += origin.1;
+        for item in self.shape(
+            &text,
+            &mut spans,
+            &inline_boxes,
+            parent_fragment.width,
+            parent_style,
+        ) {
+            match item {
+                ShapedItem::Text(mut run) => {
+                    let Some(source) = run.source else {
+                        continue;
+                    };
+                    translate_fragment(&mut run.fragment, origin);
+                    for glyph in &mut run.glyphs {
+                        glyph.point.x += origin.0;
+                        glyph.point.y += origin.1;
+                    }
+                    frame.record_inline_fragment(source, run.fragment);
+                    for owner in run.owners {
+                        frame.record_inline_fragment(owner, run.fragment);
+                    }
+                    let command = PaintCmd::DrawText(TextRunItem {
+                        placement: CommonPlacement::new(super::paint::bounds(parent_fragment)),
+                        font_instance: run.font_instance,
+                        font_size: run.font_size,
+                        color: run.color,
+                        glyphs: run.glyphs,
+                        options: TextOptions::default(),
+                    });
+                    frame.used_fonts.insert(run.font_instance);
+                    frame.prepared_sources.insert(source);
+                    frame.prepared.entry(source).or_default().push(command);
+                },
+                ShapedItem::InlineBox {
+                    source,
+                    owners,
+                    mut fragment,
+                } => {
+                    translate_fragment(&mut fragment, origin);
+                    frame.record_inline_fragment(source, fragment);
+                    for owner in owners {
+                        frame.record_inline_fragment(owner, fragment);
+                    }
+                },
             }
-            let command = PaintCmd::DrawText(TextRunItem {
-                placement: CommonPlacement::new(super::paint::bounds(parent_fragment)),
-                font_instance: run.font_instance,
-                font_size: run.font_size,
-                color: run.color,
-                glyphs: run.glyphs,
-                options: TextOptions::default(),
-            });
-            frame.used_fonts.insert(run.font_instance);
-            frame.prepared_sources.insert(source);
-            frame.prepared.entry(source).or_default().push(command);
         }
     }
 
@@ -227,9 +273,10 @@ impl TextSystem {
         &mut self,
         text: &str,
         spans: &mut [SourceSpan<Id>],
+        inline_boxes: &[InlineAtom<Id>],
         width: f32,
         root_style: &ComputedValues,
-    ) -> Vec<ShapedRun<Id>>
+    ) -> Vec<ShapedItem<Id>>
     where
         Id: Copy,
     {
@@ -237,11 +284,21 @@ impl TextSystem {
         let mut builder =
             self.layout_context
                 .ranged_builder(&mut self.font_context, text, 1.0, true);
-        if let Some(first) = spans.first() {
-            push_defaults(&mut builder, &first.style);
+        push_defaults(
+            &mut builder,
+            spans.first().map_or(root_style, |span| &span.style),
+        );
+        for (source_index, span) in spans.iter().enumerate() {
+            push_span(&mut builder, &span.style, span.range.clone(), source_index);
         }
-        for span in spans.iter() {
-            push_span(&mut builder, &span.style, span.range.clone());
+        for (index, inline_box) in inline_boxes.iter().enumerate() {
+            builder.push_inline_box(InlineBox {
+                id: u64::try_from(index).unwrap_or(u64::MAX),
+                kind: InlineBoxKind::InFlow,
+                index: inline_box.index,
+                width: inline_box.fragment.width,
+                height: inline_box.fragment.height,
+            });
         }
         let mut layout = builder.build(text);
         let wrap_width = (root_style.text_wrap_mode == TextWrapMode::Wrap)
@@ -252,34 +309,59 @@ impl TextSystem {
 
         let mut result = Vec::new();
         for line in layout.lines() {
+            let metrics = *line.metrics();
             for item in line.items() {
-                let PositionedLayoutItem::GlyphRun(run) = item else {
-                    continue;
-                };
-                let parley_run = run.run();
-                let source = spans
-                    .iter()
-                    .find(|span| span.range.contains(&parley_run.text_range().start))
-                    .and_then(|span| span.source);
-                let font_instance = self.intern_font(parley_run.font());
-                let glyphs = run
-                    .positioned_glyphs()
-                    .map(|glyph| GlyphInstance {
-                        index: glyph.id,
-                        point: LayoutPoint::new(glyph.x, glyph.y),
-                    })
-                    .collect::<Vec<_>>();
-                if glyphs.is_empty() {
-                    continue;
+                match item {
+                    PositionedLayoutItem::GlyphRun(run) => {
+                        let parley_run = run.run();
+                        let brush = &run.style().brush;
+                        let span = spans.get(brush.source_index);
+                        let glyphs = run
+                            .positioned_glyphs()
+                            .map(|glyph| GlyphInstance {
+                                index: glyph.id,
+                                point: LayoutPoint::new(glyph.x, glyph.y),
+                            })
+                            .collect::<Vec<_>>();
+                        if glyphs.is_empty() {
+                            continue;
+                        }
+                        let [red, green, blue, alpha] = brush.color;
+                        result.push(ShapedItem::Text(ShapedRun {
+                            source: span.and_then(|span| span.source),
+                            owners: span.map_or_else(Vec::new, |span| span.owners.clone()),
+                            fragment: Fragment {
+                                x: run.offset(),
+                                y: metrics.block_min_coord,
+                                width: run.advance().max(0.0),
+                                height: (metrics.block_max_coord - metrics.block_min_coord)
+                                    .max(0.0),
+                            },
+                            font_instance: self.intern_font(parley_run.font()),
+                            font_size: parley_run.font_size(),
+                            color: ColorF::new(red, green, blue, alpha),
+                            glyphs,
+                        }));
+                    },
+                    PositionedLayoutItem::InlineBox(positioned) => {
+                        let Some(inline_box) = usize::try_from(positioned.id)
+                            .ok()
+                            .and_then(|index| inline_boxes.get(index))
+                        else {
+                            continue;
+                        };
+                        result.push(ShapedItem::InlineBox {
+                            source: inline_box.source,
+                            owners: inline_box.owners.clone(),
+                            fragment: Fragment {
+                                x: positioned.x,
+                                y: positioned.y,
+                                width: positioned.width,
+                                height: positioned.height,
+                            },
+                        });
+                    },
                 }
-                let [red, green, blue, alpha] = run.style().brush;
-                result.push(ShapedRun {
-                    source,
-                    font_instance,
-                    font_size: parley_run.font_size(),
-                    color: ColorF::new(red, green, blue, alpha),
-                    glyphs,
-                });
             }
         }
         result
@@ -305,6 +387,7 @@ impl TextSystem {
 pub(crate) struct TextFrame<Id> {
     prepared: HashMap<Id, Vec<PaintCmd>>,
     prepared_sources: HashSet<Id>,
+    inline_fragments: HashMap<Id, Vec<Fragment>>,
     used_fonts: HashSet<FontInstanceKey>,
 }
 
@@ -313,6 +396,7 @@ impl<Id> Default for TextFrame<Id> {
         Self {
             prepared: HashMap::new(),
             prepared_sources: HashSet::new(),
+            inline_fragments: HashMap::new(),
             used_fonts: HashSet::new(),
         }
     }
@@ -329,20 +413,69 @@ where
         }
         prepared
     }
+
+    pub(crate) fn inline_fragments(&self, source: Id) -> Option<&[Fragment]> {
+        self.inline_fragments.get(&source).map(Vec::as_slice)
+    }
+
+    fn record_inline_fragment(&mut self, source: Id, fragment: Fragment) {
+        let fragments = self.inline_fragments.entry(source).or_default();
+        if let Some(previous) = fragments.last_mut()
+            && same_line(previous, &fragment)
+            && fragment.x <= previous.x + previous.width + 0.5
+        {
+            let right = (previous.x + previous.width).max(fragment.x + fragment.width);
+            previous.x = previous.x.min(fragment.x);
+            previous.width = right - previous.x;
+            previous.y = previous.y.min(fragment.y);
+            previous.height = previous.height.max(fragment.height);
+            return;
+        }
+        fragments.push(fragment);
+    }
 }
 
 struct SourceSpan<Id> {
     source: Option<Id>,
+    owners: Vec<Id>,
     style: ComputedValues,
     range: Range<usize>,
 }
 
+struct InlineAtom<Id> {
+    source: Id,
+    owners: Vec<Id>,
+    index: usize,
+    fragment: Fragment,
+}
+
+enum ShapedItem<Id> {
+    Text(ShapedRun<Id>),
+    InlineBox {
+        source: Id,
+        owners: Vec<Id>,
+        fragment: Fragment,
+    },
+}
+
 struct ShapedRun<Id> {
     source: Option<Id>,
+    owners: Vec<Id>,
+    fragment: Fragment,
     font_instance: FontInstanceKey,
     font_size: f32,
     color: ColorF,
     glyphs: Vec<GlyphInstance>,
+}
+
+fn translate_fragment(fragment: &mut Fragment, origin: (f32, f32)) {
+    fragment.x += origin.0;
+    fragment.y += origin.1;
+}
+
+fn same_line(left: &Fragment, right: &Fragment) -> bool {
+    let overlap = (left.y + left.height).min(right.y + right.height) - left.y.max(right.y);
+    overlap > left.height.min(right.height) * 0.5
 }
 
 fn is_inline<D>(dom: &D, styles: &StylePlane<D::NodeId>, id: D::NodeId) -> bool
@@ -359,48 +492,71 @@ where
     }
 }
 
-fn flatten_inline<D>(
-    dom: &D,
-    styles: &StylePlane<D::NodeId>,
-    id: D::NodeId,
-    inherited: &ComputedValues,
-    already_prepared: &HashSet<D::NodeId>,
-    text: &mut String,
-    spans: &mut Vec<SourceSpan<D::NodeId>>,
-) where
+struct InlineCollector<'a, D>
+where
+    D: LayoutDom,
+{
+    dom: &'a D,
+    styles: &'a StylePlane<D::NodeId>,
+    fragments: &'a FragmentPlane<D::NodeId>,
+    already_prepared: &'a HashSet<D::NodeId>,
+    owners: &'a mut Vec<D::NodeId>,
+    text: &'a mut String,
+    spans: &'a mut Vec<SourceSpan<D::NodeId>>,
+    inline_boxes: &'a mut Vec<InlineAtom<D::NodeId>>,
+}
+
+impl<D> InlineCollector<'_, D>
+where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    match dom.kind(id) {
-        NodeKind::Text => {
-            if already_prepared.contains(&id) {
-                return;
-            }
-            let start = text.len();
-            append_inline_text(text, dom.text(id).unwrap_or(""), inherited);
-            if text.len() == start {
-                return;
-            }
-            spans.push(SourceSpan {
-                source: Some(id),
-                style: inherited.clone(),
-                range: start..text.len(),
-            });
-        },
-        NodeKind::Element => {
-            let Some(style) = styles.get(id) else {
-                return;
-            };
-            if style.display == Display::None {
-                return;
-            }
-            for child in dom.dom_children(id) {
-                if is_inline(dom, styles, child) {
-                    flatten_inline(dom, styles, child, style, already_prepared, text, spans);
+    fn collect(&mut self, id: D::NodeId, inherited: &ComputedValues) {
+        match self.dom.kind(id) {
+            NodeKind::Text => {
+                if self.already_prepared.contains(&id) {
+                    return;
                 }
-            }
-        },
-        _ => {},
+                let start = self.text.len();
+                append_inline_text(self.text, self.dom.text(id).unwrap_or(""), inherited);
+                if self.text.len() == start {
+                    return;
+                }
+                self.spans.push(SourceSpan {
+                    source: Some(id),
+                    owners: self.owners.clone(),
+                    style: inherited.clone(),
+                    range: start..self.text.len(),
+                });
+            },
+            NodeKind::Element => {
+                let Some(style) = self.styles.get(id).cloned() else {
+                    return;
+                };
+                if style.display == Display::None {
+                    return;
+                }
+                if style.display == Display::InlineBlock {
+                    if let Some(fragment) = self.fragments.get(id).copied() {
+                        self.inline_boxes.push(InlineAtom {
+                            source: id,
+                            owners: self.owners.clone(),
+                            index: self.text.len(),
+                            fragment,
+                        });
+                    }
+                    return;
+                }
+                self.owners.push(id);
+                for child in self.dom.dom_children(id) {
+                    if is_inline(self.dom, self.styles, child) {
+                        self.collect(child, &style);
+                    }
+                }
+                self.owners.pop();
+            },
+            _ => {},
+        }
     }
 }
 
@@ -450,7 +606,7 @@ fn push_defaults(builder: &mut parley::RangedBuilder<'_, Brush>, style: &Compute
         style,
     ))));
     builder.push_default(StyleProperty::FontStyle(font_style(style)));
-    builder.push_default(StyleProperty::Brush(brush(style)));
+    builder.push_default(StyleProperty::Brush(brush(style, 0)));
     builder.push_default(line_height(style));
 }
 
@@ -458,6 +614,7 @@ fn push_span(
     builder: &mut parley::RangedBuilder<'_, Brush>,
     style: &ComputedValues,
     range: Range<usize>,
+    source_index: usize,
 ) {
     builder.push(
         StyleProperty::FontSize(super::paint::used_font_size(style)),
@@ -469,13 +626,19 @@ fn push_span(
         range.clone(),
     );
     builder.push(StyleProperty::FontStyle(font_style(style)), range.clone());
-    builder.push(StyleProperty::Brush(brush(style)), range.clone());
+    builder.push(
+        StyleProperty::Brush(brush(style, source_index)),
+        range.clone(),
+    );
     builder.push(line_height(style), range);
 }
 
-fn brush(style: &ComputedValues) -> Brush {
+fn brush(style: &ComputedValues, source_index: usize) -> Brush {
     let color = resolve_color(style.color, ColorF::BLACK);
-    [color.r, color.g, color.b, color.a]
+    Brush {
+        color: [color.r, color.g, color.b, color.a],
+        source_index,
+    }
 }
 
 fn font_family(style: &ComputedValues) -> StyleProperty<'_, Brush> {

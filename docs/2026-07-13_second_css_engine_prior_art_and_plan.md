@@ -11,9 +11,11 @@ Parley context, while a retained `LiveryDocument` owns the text system, stable
 font resources, and cached frame. The opt-in `genet.livery` session route
 lowers that PaintList into `netrender::Scene`; the existing default remains
 `genet.web`. The integration crate's normal/build dependency graph excludes
-Stylo. Full E3 parity remains open at inline-box geometry, bidi paint order,
-clipping and stacking, interaction semantics, and reftest coverage. The first
-audit invalidated the proposed 33-accessor full-crate seam.
+Stylo. Parley's positioned lines now supply multi-fragment span paint geometry
+and atomic `inline-block` placement. Full E3 parity remains open at feeding
+shaped height into parent block flow, inline box-edge decoration, bidi paint
+order, clipping and stacking, interaction semantics, and reftest coverage. The
+first audit invalidated the proposed 33-accessor full-crate seam.
 The second chose Cambium structural UI as the bounded first lane.
 Mark's framing: "grow a rust alternative using firefox, chrome, servo,
 blitz, ladybird, and gosub as prior art... think it'd be neat to have two
@@ -219,11 +221,13 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   frame at an unchanged viewport. The `genet-documents` `livery` feature
   registers this owner under the opt-in `genet.livery` static rung and lowers
   its PaintList through the shared netrender translator. The default route is
-  unchanged. `cargo tree` proves the `genet-livery` normal/build graph contains
-  neither `genet-layout` nor Stylo. Remaining: full inline-box geometry, bidi
-  paint ordering, clipping and stacking, link/scroll/focus semantics, full
-  reftest parity, and an apples-to-apples cold-build delta against the 30m35s
-  baseline.
+  unchanged. Parley's positioned output now gives wrapped inline elements one
+  paint fragment per line and places `inline-block` children atomically in the
+  shared line. `cargo tree` proves the `genet-livery` normal/build graph
+  contains neither `genet-layout` nor Stylo. Remaining: shaped-height feedback
+  into Taffy's parent block flow, inline box-edge decoration, bidi paint
+  ordering, clipping and stacking, link/scroll/focus semantics, full reftest
+  parity, and an apples-to-apples cold-build delta against the 30m35s baseline.
 - **E4 — first production lane.** One real lane (host chrome or
   smolweb) ships on Livery by default. Receipt: the lane's
   existing suites green + capture receipts.

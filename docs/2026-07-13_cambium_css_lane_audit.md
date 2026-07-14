@@ -120,8 +120,11 @@ nested inline elements now share a Parley formatting context, and retained
 `LiveryDocument` ownership keeps font resources and unchanged frames stable.
 With the `genet-documents` `livery` feature, the path enters the session
 registry as the explicitly pinned `genet.livery` static rung and lowers through
-the shared netrender translator. `genet.web` remains the default. Full
-inline-box geometry, bidi paint ordering, clipping and stacking,
+the shared netrender translator. Parley's positioned output now replaces the
+placeholder block boxes for inline paint: wrapped spans emit one fragment per
+line, and `inline-block` children take atomic space in the shared line.
+`genet.web` remains the default. Shaped-height feedback into parent block flow,
+inline box-edge decoration, bidi paint ordering, clipping and stacking,
 link/scroll/focus semantics, and cross-engine reftest parity remain the gate
 for production selection.
 

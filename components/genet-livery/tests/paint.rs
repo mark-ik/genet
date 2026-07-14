@@ -260,3 +260,110 @@ fn collapsed_whitespace_crosses_inline_element_boundaries() {
 
     assert!(spaced > joined);
 }
+
+#[test]
+fn inline_background_uses_the_shaped_line_fragment() {
+    let list = render(
+        r#"<html><body><div class="label">before <span>inside</span> after</div></body></html>"#,
+        ".label { width: 240px; font-size: 18px; } span { color: blue; background-color: lime; }",
+        1,
+    );
+    let background = list
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::DrawRect(rect) if rect.color == ColorF::new(0.0, 1.0, 0.0, 1.0) => {
+                Some(rect.placement.bounds)
+            },
+            _ => None,
+        })
+        .expect("the inline span paints its shaped fragment");
+    let glyph = list
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::DrawText(run) if run.color == ColorF::new(0.0, 0.0, 1.0, 1.0) => {
+                run.glyphs.first()
+            },
+            _ => None,
+        })
+        .expect("the inline span emits its text");
+    let background_index = list
+        .commands()
+        .iter()
+        .position(|command| {
+            matches!(
+                command,
+                PaintCmd::DrawRect(rect) if rect.color == ColorF::new(0.0, 1.0, 0.0, 1.0)
+            )
+        })
+        .unwrap();
+    let text_index = list
+        .commands()
+        .iter()
+        .position(|command| {
+            matches!(
+                command,
+                PaintCmd::DrawText(run) if run.color == ColorF::new(0.0, 0.0, 1.0, 1.0)
+            )
+        })
+        .unwrap();
+
+    assert!(background.min.x <= glyph.point.x && glyph.point.x <= background.max.x);
+    assert!(background.min.y <= glyph.point.y && glyph.point.y <= background.max.y);
+    assert!(background_index < text_index);
+}
+
+#[test]
+fn wrapped_inline_spans_paint_one_fragment_per_line() {
+    let list = render(
+        r#"<html><body><div class="label"><span>one two three four five</span></div></body></html>"#,
+        ".label { width: 48px; font-size: 16px; } span { background-color: lime; }",
+        1,
+    );
+    let fragments = list
+        .commands()
+        .iter()
+        .filter(|command| {
+            matches!(
+                command,
+                PaintCmd::DrawRect(rect) if rect.color == ColorF::new(0.0, 1.0, 0.0, 1.0)
+            )
+        })
+        .count();
+
+    assert!(
+        fragments >= 2,
+        "wrapped span should paint multiple line boxes"
+    );
+}
+
+#[test]
+fn inline_blocks_occupy_atomic_space_in_the_text_line() {
+    fn trailing_text_origin(badge_width: u32) -> f32 {
+        let css = format!(
+            ".label {{ width: 200px; font-size: 16px; }} \
+             .badge {{ display: inline-block; width: {badge_width}px; height: 10px; \
+             background-color: lime; }} em {{ color: blue; }}"
+        );
+        render(
+            r#"<html><body><div class="label">a<span class="badge"></span><em>b</em></div></body></html>"#,
+            &css,
+            1,
+        )
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::DrawText(run) if run.color == ColorF::new(0.0, 0.0, 1.0, 1.0) => {
+                run.glyphs.first().map(|glyph| glyph.point.x)
+            },
+            _ => None,
+        })
+        .expect("trailing inline text is painted")
+    }
+
+    let without_badge = trailing_text_origin(0);
+    let with_badge = trailing_text_origin(30);
+
+    assert!(with_badge - without_badge > 29.0);
+}

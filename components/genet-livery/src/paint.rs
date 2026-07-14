@@ -147,15 +147,32 @@ fn emit_node<D>(
             if style.display == Display::None {
                 return;
             }
-            if let Some(fragment) = fragments
+            text.system
+                .prepare_inline_children(text.frame, dom, styles, fragments, id, style);
+            if matches!(style.display, Display::Inline | Display::InlineBlock) {
+                if let Some(inline_fragments) = text.frame.inline_fragments(id) {
+                    for fragment in inline_fragments
+                        .iter()
+                        .filter(|fragment| paintable_fragment(fragment))
+                    {
+                        emit_background(list, style, fragment);
+                        emit_border(list, style, fragment);
+                    }
+                } else if style.display == Display::InlineBlock
+                    && let Some(fragment) = fragments
+                        .get(id)
+                        .filter(|fragment| paintable_fragment(fragment))
+                {
+                    emit_background(list, style, fragment);
+                    emit_border(list, style, fragment);
+                }
+            } else if let Some(fragment) = fragments
                 .get(id)
                 .filter(|fragment| paintable_fragment(fragment))
             {
                 emit_background(list, style, fragment);
                 emit_border(list, style, fragment);
             }
-            text.system
-                .prepare_inline_children(text.frame, dom, styles, fragments, id, style);
             Some(style)
         },
         NodeKind::Text => {
