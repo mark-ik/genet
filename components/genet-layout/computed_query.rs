@@ -14,7 +14,7 @@
 
 use std::hash::Hash;
 
-use style_traits::ToCss;
+use style_traits::values::ToCss;
 
 use crate::style::StylePlane;
 
