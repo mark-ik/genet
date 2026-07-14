@@ -8,11 +8,13 @@
 
 mod dom;
 mod layout;
+mod paint;
 mod style;
 
 pub use dom::{ElementRef, InteractionStates, SelectorTree};
 pub use layout::{Fragment, FragmentPlane, LayoutError, layout};
 pub use livery::media::Device;
+pub use paint::{LiveryPaintList, emit_paint_list};
 pub use style::{StylePlane, StyleSet, resolve_styles};
 
 /// Clean-room UA defaults for the bounded Cambium structural lane.

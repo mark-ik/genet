@@ -419,17 +419,21 @@ fn absolute_length(length: Length, em: f32, rem: f32) -> f32 {
         }
 }
 
-fn border(style: BorderStyle, width: BorderWidth, em: f32) -> LengthPercentage {
-    if style == BorderStyle::None {
-        return LengthPercentage::length(0.0);
+pub(crate) fn border_width_px(style: BorderStyle, width: BorderWidth, em: f32) -> f32 {
+    if matches!(style, BorderStyle::None | BorderStyle::Hidden) {
+        return 0.0;
     }
-    let width = match width {
+    match width {
         BorderWidth::Thin => 1.0,
         BorderWidth::Medium => 3.0,
         BorderWidth::Thick => 5.0,
         BorderWidth::Length(length) => absolute_length(length, em, 16.0),
-    };
-    LengthPercentage::length(width.max(0.0))
+    }
+    .max(0.0)
+}
+
+fn border(style: BorderStyle, width: BorderWidth, em: f32) -> LengthPercentage {
+    LengthPercentage::length(border_width_px(style, width, em))
 }
 
 fn overflow(value: CssOverflow) -> Overflow {

@@ -113,10 +113,12 @@ needs both engines available so fullweb can keep Stylo while Cambium documents
 select the native engine.
 
 The first integration slice now exists as `components/genet-livery`. It adapts
-the shared `LayoutDom` surface directly, owns a concrete Livery style plane, and
-lays the audited box subset out through standalone Taffy. It does not yet enter
-the session registry or paint path; inline formatting, shaped text, and full
-cross-engine reftest parity remain the gate for that routing change.
+the shared `LayoutDom` surface directly, owns a concrete Livery style plane,
+lays the audited box subset out through standalone Taffy, and emits box
+backgrounds and physical borders through the neutral `PaintList` API. It does
+not yet enter the session registry. Inline formatting, shaped text and glyph
+paint, clipping and stacking, and full cross-engine reftest parity remain the
+gate for that routing change.
 
 ## E0 closeout
 
