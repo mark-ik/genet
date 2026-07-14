@@ -378,6 +378,153 @@ impl fmt::Display for Opacity {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum Transform {
+    None,
+    Functions(Vec<TransformFunction>),
+}
+
+impl Transform {
+    pub fn functions(&self) -> Option<&[TransformFunction]> {
+        match self {
+            Self::None => None,
+            Self::Functions(functions) => Some(functions),
+        }
+    }
+
+    pub const fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TransformFunction {
+    Translate(Length, Length),
+    Scale(f32, f32),
+    Rotate(f32),
+}
+
+impl FromStr for Transform {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let mut input = input.trim();
+        if input.eq_ignore_ascii_case("none") {
+            return Ok(Self::None);
+        }
+
+        let mut functions = Vec::new();
+        while !input.is_empty() {
+            let open = input
+                .find('(')
+                .ok_or_else(|| ParseError::expected("a supported 2D transform function"))?;
+            let name = input[..open].trim().to_ascii_lowercase();
+            if name.is_empty() || name.split_ascii_whitespace().count() != 1 {
+                return Err(ParseError::expected("a supported 2D transform function"));
+            }
+            let tail = &input[open + 1..];
+            let close = tail
+                .find(')')
+                .ok_or_else(|| ParseError::expected("a closed 2D transform function"))?;
+            let arguments = tail[..close]
+                .split(|ch: char| ch == ',' || ch.is_ascii_whitespace())
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>();
+            functions.push(parse_transform_function(&name, &arguments)?);
+            input = tail[close + 1..].trim_start();
+        }
+        if functions.is_empty() {
+            Err(ParseError::expected("none or a 2D transform list"))
+        } else {
+            Ok(Self::Functions(functions))
+        }
+    }
+}
+
+fn parse_transform_function(
+    name: &str,
+    arguments: &[&str],
+) -> Result<TransformFunction, ParseError> {
+    let length = |value: &str| value.parse::<Length>();
+    let number = |value: &str| {
+        value
+            .parse::<f32>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| ParseError::expected("a finite transform number"))
+    };
+    match (name, arguments) {
+        ("translate", [x]) => Ok(TransformFunction::Translate(length(x)?, Length::ZERO)),
+        ("translate", [x, y]) => Ok(TransformFunction::Translate(length(x)?, length(y)?)),
+        ("translatex", [x]) => Ok(TransformFunction::Translate(length(x)?, Length::ZERO)),
+        ("translatey", [y]) => Ok(TransformFunction::Translate(Length::ZERO, length(y)?)),
+        ("scale", [both]) => {
+            let both = number(both)?;
+            Ok(TransformFunction::Scale(both, both))
+        },
+        ("scale", [x, y]) => Ok(TransformFunction::Scale(number(x)?, number(y)?)),
+        ("scalex", [x]) => Ok(TransformFunction::Scale(number(x)?, 1.0)),
+        ("scaley", [y]) => Ok(TransformFunction::Scale(1.0, number(y)?)),
+        ("rotate", [angle]) => Ok(TransformFunction::Rotate(parse_angle(angle)?)),
+        _ => Err(ParseError::expected(
+            "translate, translateX, translateY, scale, scaleX, scaleY, or rotate",
+        )),
+    }
+}
+
+fn parse_angle(input: &str) -> Result<f32, ParseError> {
+    let lower = input.trim().to_ascii_lowercase();
+    let (number, factor) = if let Some(value) = lower.strip_suffix("deg") {
+        (value, std::f32::consts::PI / 180.0)
+    } else if let Some(value) = lower.strip_suffix("rad") {
+        (value, 1.0)
+    } else if let Some(value) = lower.strip_suffix("turn") {
+        (value, std::f32::consts::TAU)
+    } else if lower == "0" || lower == "+0" || lower == "-0" {
+        ("0", 1.0)
+    } else {
+        return Err(ParseError::expected("a deg, rad, or turn angle"));
+    };
+    number
+        .parse::<f32>()
+        .ok()
+        .filter(|value| value.is_finite())
+        .map(|value| value * factor)
+        .ok_or_else(|| ParseError::expected("a finite angle"))
+}
+
+impl fmt::Display for Transform {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => formatter.write_str("none"),
+            Self::Functions(functions) => {
+                for (index, function) in functions.iter().enumerate() {
+                    if index > 0 {
+                        formatter.write_str(" ")?;
+                    }
+                    function.fmt(formatter)?;
+                }
+                Ok(())
+            },
+        }
+    }
+}
+
+impl fmt::Display for TransformFunction {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Translate(x, y) => write!(formatter, "translate({x}, {y})"),
+            Self::Scale(x, y) => write!(
+                formatter,
+                "scale({}, {})",
+                format_number(*x),
+                format_number(*y)
+            ),
+            Self::Rotate(radians) => write!(formatter, "rotate({}rad)", format_number(*radians)),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Padding(pub LengthPercentage);
 

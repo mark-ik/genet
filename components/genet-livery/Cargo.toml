@@ -8,6 +8,7 @@ description = "Genet integration for the clean-room Livery CSS engine."
 readme = "README.md"
 
 [dependencies]
+euclid.workspace = true
 layout-dom-api = { version = "0.1.0", path = "../shared/layout-dom" }
 livery = { version = "0.0.2", path = "../livery" }
 paint_list_api.workspace = true

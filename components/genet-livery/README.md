@@ -39,6 +39,10 @@ overflow clips around the extracted subtree. Shaped inline commands retain
 their ownership so positioned spans and atomic inline-blocks reorder without
 losing shared line geometry or bidi visual order. Opacity values below one
 establish an atomic level-zero context and wrap the whole subtree in a neutral
-compositing layer. Transform-created contexts remain open,
-along with links, scrolling, and focus. `genet.livery` therefore stays an
-explicit pin rather than the default static route.
+compositing layer. Non-`none` transforms on block and inline-block boxes also
+establish an atomic level-zero context and emit a neutral coordinate-space
+scope around the subtree. The first transform grammar supports 2D translate,
+scale, and rotate functions composed around the default center origin; ordinary
+inline spans remain non-transformable. Links, scrolling, and focus remain open.
+`genet.livery` therefore stays an explicit pin rather than the default static
+route.

@@ -3,7 +3,8 @@ use std::fmt::Debug;
 use livery::values::{
     BorderStyle, BorderWidth, Color, CssValue, Display, FontFamily, FontSize, FontStyle,
     FontWeight, Inset, LengthPercentage, LineHeight, ListStyleType, Margin, Opacity, Overflow,
-    Padding, Position, Size, TextDecorationLine, TextWrapMode, WhiteSpaceCollapse, ZIndex,
+    Padding, Position, Size, TextDecorationLine, TextWrapMode, Transform, WhiteSpaceCollapse,
+    ZIndex,
 };
 
 fn assert_round_trip<T>(css: &str)
@@ -65,6 +66,7 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<Margin>("auto");
     assert_round_trip::<Margin>("0.5rem");
     assert_round_trip::<Opacity>("50%");
+    assert_round_trip::<Transform>("translate(12px, 4px) scale(1.5) rotate(30deg)");
     assert_round_trip::<Overflow>("hidden");
     assert_round_trip::<Padding>("0.75rem");
     assert_round_trip::<Position>("absolute");
@@ -84,6 +86,7 @@ fn invalid_seed_values_are_rejected() {
     assert!("calc(100% 1px)".parse::<LengthPercentage>().is_err());
     assert!("rgb(300, 0, 0)".parse::<Color>().is_err());
     assert!("NaN".parse::<Opacity>().is_err());
+    assert!("perspective(20px)".parse::<Transform>().is_err());
     assert_eq!("120%".parse::<Opacity>().unwrap().value(), 1.0);
     assert_eq!("-0.5".parse::<Opacity>().unwrap().value(), 0.0);
 }

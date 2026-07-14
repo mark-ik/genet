@@ -6,7 +6,7 @@ from a declarative property catalog and licensed under MIT or Apache-2.0.
 The first lane is Cambium structural UI. Fullweb documents continue to use
 Genet Stylo.
 
-The 41-property native lane catalog generates concrete property metadata and a
+The 42-property native lane catalog generates concrete property metadata and a
 typed `ComputedValues`. The seed value layer covers the audited Cambium and UA
 stylesheet values, including lengths, percentages, linear `calc()`, colors,
 and the lane's keyword families. The bounded E2 resolver adds declaration and

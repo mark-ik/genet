@@ -40,6 +40,9 @@ url = "https://www.w3.org/TR/css-text-decor-4/#text-decoration-line-property"
 [sources.css_text_4]
 url = "https://www.w3.org/TR/css-text-4/"
 
+[sources.css_transforms_1]
+url = "https://www.w3.org/TR/css-transforms-1/#transform-property"
+
 [shorthands.margin]
 longhands = ["margin-top", "margin-right", "margin-bottom", "margin-left"]
 grammar = "<length-percentage> | auto, one to four values"
@@ -448,6 +451,16 @@ grammar = "auto | <length-percentage>"
 seed_values = ["auto", "px", "percentage"]
 animation = "by-computed-value"
 source = "css_position_3"
+
+[[property]]
+name = "transform"
+value_type = "transform"
+inherited = false
+initial = "none"
+grammar = "none | <transform-list>"
+seed_values = ["translate()", "scale()", "rotate()"]
+animation = "by-computed-value"
+source = "css_transforms_1"
 
 [[property]]
 name = "white-space-collapse"

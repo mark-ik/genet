@@ -98,6 +98,7 @@ fn value_type_path(value_type: &str) -> &'static str {
         "size" => "crate::values::Size",
         "text-decoration-line" => "crate::values::TextDecorationLine",
         "text-wrap-mode" => "crate::values::TextWrapMode",
+        "transform" => "crate::values::Transform",
         "white-space-collapse" => "crate::values::WhiteSpaceCollapse",
         "z-index" => "crate::values::ZIndex",
         _ => panic!("unsupported value_type {value_type}"),
@@ -105,7 +106,7 @@ fn value_type_path(value_type: &str) -> &'static str {
 }
 
 fn value_type_is_copy(value_type: &str) -> bool {
-    value_type != "font-family"
+    !matches!(value_type, "font-family" | "transform")
 }
 
 fn initial_expression(property: &Property) -> &'static str {
@@ -131,6 +132,7 @@ fn initial_expression(property: &Property) -> &'static str {
         ("size", "auto") => "crate::values::Size::Auto",
         ("text-decoration-line", "none") => "crate::values::TextDecorationLine::NONE",
         ("text-wrap-mode", "wrap") => "crate::values::TextWrapMode::Wrap",
+        ("transform", "none") => "crate::values::Transform::None",
         ("white-space-collapse", "collapse") => "crate::values::WhiteSpaceCollapse::Collapse",
         ("z-index", "auto") => "crate::values::ZIndex::Auto",
         _ => panic!(
@@ -144,8 +146,8 @@ fn validate(db: &Database) {
     assert_eq!(db.schema, 1, "unsupported properties.toml schema");
     assert_eq!(
         db.property.len(),
-        41,
-        "the native Cambium lane must contain exactly 41 properties"
+        42,
+        "the native Cambium lane must contain exactly 42 properties"
     );
 
     let mut names = BTreeSet::new();

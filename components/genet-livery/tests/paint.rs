@@ -281,6 +281,93 @@ fn opacity_creates_an_atomic_level_zero_context_and_compositing_layer() {
 }
 
 #[test]
+fn transform_creates_an_atomic_level_zero_coordinate_space() {
+    let list = render(
+        r#"<html><body><div class="stage"><div class="moved"><div class="escape"></div></div><div class="middle"></div></div></body></html>"#,
+        r#"
+        .stage { position: relative; z-index: 0; width: 100px; height: 100px; }
+        .moved {
+            transform: translate(12px, 4px) rotate(0deg);
+            width: 20px; height: 20px; background-color: red;
+        }
+        .escape {
+            position: absolute; z-index: 999;
+            width: 5px; height: 5px; background-color: #ff00ff;
+        }
+        .middle {
+            position: absolute; z-index: 2;
+            width: 10px; height: 10px; background-color: blue;
+        }
+        "#,
+        1,
+    );
+    let push = list
+        .commands()
+        .iter()
+        .position(|command| matches!(command, PaintCmd::PushTransform(_)))
+        .expect("transform opens a coordinate space");
+    let moved = list
+        .commands()
+        .iter()
+        .position(
+            |command| matches!(command, PaintCmd::DrawRect(rect) if rect.color == ColorF::new(1.0, 0.0, 0.0, 1.0)),
+        )
+        .expect("transformed context paints its background");
+    let escape = list
+        .commands()
+        .iter()
+        .position(
+            |command| matches!(command, PaintCmd::DrawRect(rect) if rect.color == ColorF::new(1.0, 0.0, 1.0, 1.0)),
+        )
+        .expect("high descendant remains inside transform context");
+    let pop = list
+        .commands()
+        .iter()
+        .position(|command| matches!(command, PaintCmd::PopTransform))
+        .expect("transform closes its coordinate space");
+    let middle = list
+        .commands()
+        .iter()
+        .position(
+            |command| matches!(command, PaintCmd::DrawRect(rect) if rect.color == ColorF::new(0.0, 0.0, 1.0, 1.0)),
+        )
+        .expect("positive sibling context paints");
+
+    assert!(push < moved && moved < escape && escape < pop && pop < middle);
+    assert!(
+        !list
+            .commands()
+            .iter()
+            .any(|command| matches!(command, PaintCmd::PushLayer(_))),
+        "a transform changes coordinates without allocating an opacity layer"
+    );
+    let PaintCmd::PushTransform(spec) = &list.commands()[push] else {
+        unreachable!()
+    };
+    assert!((spec.origin.x + spec.transform.m41 - 12.0).abs() < 0.001);
+    assert!((spec.origin.y + spec.transform.m42 - 4.0).abs() < 0.001);
+}
+
+#[test]
+fn transform_wraps_opacity_layer_in_coordinate_space() {
+    let list = render(
+        r#"<html><body><div class="box"></div></body></html>"#,
+        r#"
+        .box {
+            opacity: 0.5; transform: scale(1.25);
+            width: 20px; height: 20px; background-color: red;
+        }
+        "#,
+        1,
+    );
+    assert!(matches!(list.commands()[0], PaintCmd::PushTransform(_)));
+    assert!(matches!(list.commands()[1], PaintCmd::PushLayer(_)));
+    assert!(matches!(list.commands()[2], PaintCmd::DrawRect(_)));
+    assert!(matches!(list.commands()[3], PaintCmd::PopLayer));
+    assert!(matches!(list.commands()[4], PaintCmd::PopTransform));
+}
+
+#[test]
 fn overflow_clips_wrap_descendants_and_nest() {
     let list = render(
         r#"<html><body><div class="outer"><div class="inner"><div class="grand"></div></div></div></body></html>"#,

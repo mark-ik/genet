@@ -4,8 +4,8 @@
 **Status:** E0b lane choice, themed catalog fixture, and original 40-property
 clean-room database landed. The E1 handoff into Livery and the first E3
 `genet-livery` integration slice have also landed. The native capability
-ratchet now contains 41 properties with `opacity`. Source hashes are recorded
-below.
+ratchet now contains 42 properties with `opacity` and `transform`. Source
+hashes are recorded below.
 
 Audited revisions: Cambium `a7c4603c` for the live catalog and Genet
 `c00daa92308` for the database, snapshot, and executable guard. The local
@@ -103,7 +103,7 @@ normative property shape it grows toward.
 
 ## Boundary consequence
 
-This is not a 41-accessor swap inside the current `genet-layout` crate. That
+This is not a 42-accessor swap inside the current `genet-layout` crate. That
 crate still has the 126-longhand Stylo contract and broad Stylo lifecycle types.
 The first integration must provide a separate concrete style/layout path for
 Cambium documents behind Genet's document-facing runtime boundary. Computed
@@ -142,9 +142,11 @@ intervening ancestors into the nearest context, carrying ancestor overflow
 clips with them. Ownership retained on shaped inline commands lets positioned
 spans and atomic inline-blocks reorder without losing shared line geometry or
 bidi visual order. Opacity below one now creates an atomic level-zero context
-and a neutral compositing layer around the subtree. Future transform context
-triggers, link/scroll/focus semantics, and cross-engine reftest parity remain
-the gate for production selection.
+and a neutral compositing layer around the subtree. Transform context triggers
+have also landed for transformable block and inline-block boxes. The
+bounded transform list supports 2D translate, scale, and rotate functions
+around the default center origin. Link/scroll/focus semantics and cross-engine
+reftest parity remain the gate for production selection.
 
 ## E0 closeout
 
@@ -157,12 +159,13 @@ computed values, and guard.
 
 The original 40-property set is the catalog contract, not a promise about every
 future Merecat theme declaration. Capability-driven rows may join it with their
-own executable paint proof; `opacity` is the first such ratchet row.
+own executable paint proof; `opacity` and `transform` are the first two ratchet
+rows.
 
 ## Done condition
 
 This audit is complete when the checked-in names cover Cambium and Sprigging's
 production-generated declarations, Genet's baseline UA sheet, and the catalog
 theme after shorthand expansion; `properties.toml` must preserve those 40 rows
-plus explicitly tested capability-ratchet rows, currently one. The executable
+plus explicitly tested capability-ratchet rows, currently two. The executable
 guard and independent TOML check satisfy that condition.

@@ -2,18 +2,20 @@
 
 use std::{collections::HashSet, hash::Hash};
 
+use euclid::Angle;
 use layout_dom_api::{LayoutDom, NodeKind};
 use livery::{
     ComputedValues,
     values::{
         BorderStyle as CssBorderStyle, Color, Display, FontSize, Length, LengthPercentage,
-        LengthUnit, Overflow as CssOverflow, Position, ZIndex,
+        LengthUnit, Overflow as CssOverflow, Position, TransformFunction, ZIndex,
     },
 };
 use paint_list_api::{
     BorderDetails, BorderItem, BorderRadius, BorderSide, BorderStyle, ClipKind, ClipSpec, ColorF,
     CommonPlacement, DeviceIntSize, EngineId, FontResource, LayerSpec, LayoutPoint, LayoutRect,
-    LayoutSideOffsets, NormalBorder, PaintCmd, PaintList, RectItem,
+    LayoutSideOffsets, LayoutTransform, NormalBorder, PaintCmd, PaintList, RectItem, TransformKind,
+    TransformSpec,
 };
 use serde::{Deserialize, Serialize};
 
@@ -139,6 +141,18 @@ fn emit_node<D>(
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    let transform = styles
+        .get(id)
+        .filter(|style| style.display != Display::None)
+        .and_then(|style| {
+            fragments
+                .get(id)
+                .and_then(|fragment| transform_spec(style, fragment))
+        });
+    if let Some(transform) = &transform {
+        list.commands
+            .push(PaintCmd::PushTransform(transform.clone()));
+    }
     let opacity = styles
         .get(id)
         .filter(|style| style.display != Display::None)
@@ -171,6 +185,9 @@ fn emit_node<D>(
     }
     if opacity.is_some() {
         list.commands.push(PaintCmd::PopLayer);
+    }
+    if transform.is_some() {
+        list.commands.push(PaintCmd::PopTransform);
     }
 }
 
@@ -463,7 +480,51 @@ where
     {
         return Some(level);
     }
-    (style.opacity.value() < 1.0).then_some(0)
+    (style.opacity.value() < 1.0 || establishes_transform_context(style)).then_some(0)
+}
+
+fn establishes_transform_context(style: &ComputedValues) -> bool {
+    style.display != Display::Inline && !style.transform.is_none()
+}
+
+fn transform_spec(style: &ComputedValues, fragment: &Fragment) -> Option<TransformSpec> {
+    if !establishes_transform_context(style) {
+        return None;
+    }
+    let functions = style.transform.functions()?;
+    let em = used_font_size(style);
+    let mut authored = LayoutTransform::identity();
+    for function in functions {
+        let next = match *function {
+            TransformFunction::Translate(x, y) => {
+                LayoutTransform::translation(transform_length(x, em), transform_length(y, em), 0.0)
+            },
+            TransformFunction::Scale(x, y) => LayoutTransform::scale(x, y, 1.0),
+            TransformFunction::Rotate(radians) => {
+                LayoutTransform::rotation(0.0, 0.0, 1.0, Angle::radians(radians))
+            },
+        };
+        authored = authored.then(&next);
+    }
+
+    let origin = LayoutPoint::new(
+        fragment.x + fragment.width / 2.0,
+        fragment.y + fragment.height / 2.0,
+    );
+    let transform = LayoutTransform::translation(-origin.x, -origin.y, 0.0).then(&authored);
+    Some(TransformSpec {
+        origin,
+        transform,
+        kind: TransformKind::Standard,
+    })
+}
+
+fn transform_length(length: Length, em: f32) -> f32 {
+    match length.unit {
+        LengthUnit::Px => length.value,
+        LengthUnit::Em => length.value * em,
+        LengthUnit::Rem => length.value * 16.0,
+    }
 }
 
 fn descendant_clip(
