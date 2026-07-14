@@ -97,3 +97,75 @@ fn paint_output_crosses_the_neutral_envelope() {
     assert_eq!(envelope.generation_id(), 42);
     assert_eq!(envelope.commands().len(), 1);
 }
+
+#[test]
+fn text_nodes_emit_positioned_glyphs_with_font_resources() {
+    let list = render(
+        r#"<html><body><div class="label">Livery</div></body></html>"#,
+        ".label { color: #123456; font-size: 20px; font-weight: 700; width: 120px; }",
+        9,
+    );
+    let runs = list
+        .commands()
+        .iter()
+        .filter_map(|command| match command {
+            PaintCmd::DrawText(run) => Some(run),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(!runs.is_empty());
+    assert!(runs.iter().all(|run| !run.glyphs.is_empty()));
+    assert!(runs.iter().all(|run| run.font_size == 20.0));
+    assert!(runs.iter().all(|run| {
+        run.color
+            == ColorF::new(
+                f32::from(0x12_u8) / 255.0,
+                f32::from(0x34_u8) / 255.0,
+                f32::from(0x56_u8) / 255.0,
+                1.0,
+            )
+    }));
+    assert!(!list.fonts().is_empty());
+    assert!(list.fonts().iter().all(|font| !font.data.is_empty()));
+    assert!(runs.iter().all(|run| {
+        list.fonts()
+            .iter()
+            .any(|font| font.key == run.font_instance)
+    }));
+
+    let envelope = PaintEnvelope::from_list(&list);
+    assert_eq!(envelope.fonts.len(), list.fonts().len());
+}
+
+#[test]
+fn inherited_text_styles_and_font_keys_are_stable() {
+    let html = r#"<html><body><div class="parent">red<span>blue</span></div></body></html>"#;
+    let css = ".parent { color: red; font-size: 16px; } span { color: blue; }";
+    let first = render(html, css, 1);
+    let second = render(html, css, 2);
+    let colors = first
+        .commands()
+        .iter()
+        .filter_map(|command| match command {
+            PaintCmd::DrawText(run) => Some(run.color),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(colors.len(), 2);
+    assert_eq!(colors[0], ColorF::new(1.0, 0.0, 0.0, 1.0));
+    assert_eq!(colors[1], ColorF::new(0.0, 0.0, 1.0, 1.0));
+    assert_eq!(
+        first
+            .fonts()
+            .iter()
+            .map(|font| font.key)
+            .collect::<Vec<_>>(),
+        second
+            .fonts()
+            .iter()
+            .map(|font| font.key)
+            .collect::<Vec<_>>()
+    );
+}

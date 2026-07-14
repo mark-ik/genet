@@ -11,6 +11,7 @@ readme = "README.md"
 layout-dom-api = { version = "0.1.0", path = "../shared/layout-dom" }
 livery = { version = "0.0.2", path = "../livery" }
 paint_list_api.workspace = true
+parley.workspace = true
 selectors = "0.39"
 serde.workspace = true
 taffy = { version = "0.12.1", default-features = false, features = ["std", "taffy_tree", "block_layout", "calc"] }

@@ -12,12 +12,12 @@ use livery::{
 };
 use paint_list_api::{
     BorderDetails, BorderItem, BorderRadius, BorderSide, BorderStyle, ColorF, CommonPlacement,
-    DeviceIntSize, EngineId, LayoutPoint, LayoutRect, LayoutSideOffsets, NormalBorder, PaintCmd,
-    PaintList, RectItem,
+    DeviceIntSize, EngineId, FontResource, LayoutPoint, LayoutRect, LayoutSideOffsets,
+    NormalBorder, PaintCmd, PaintList, RectItem,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{Fragment, FragmentPlane, StylePlane, layout::border_width_px};
+use crate::{Fragment, FragmentPlane, StylePlane, layout::border_width_px, text::TextPainter};
 
 /// Genet paint output produced by the Livery CSS/layout path.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -25,6 +25,7 @@ pub struct LiveryPaintList {
     viewport: DeviceIntSize,
     generation: u64,
     commands: Vec<PaintCmd>,
+    fonts: Vec<FontResource>,
 }
 
 impl LiveryPaintList {
@@ -33,6 +34,7 @@ impl LiveryPaintList {
             viewport,
             generation,
             commands: Vec::new(),
+            fonts: Vec::new(),
         }
     }
 }
@@ -53,11 +55,16 @@ impl PaintList for LiveryPaintList {
     fn commands(&self) -> &[PaintCmd] {
         &self.commands
     }
+
+    fn fonts(&self) -> &[FontResource] {
+        &self.fonts
+    }
 }
 
-/// Emit the backgrounds and physical borders supported by the first Cambium
-/// lane. Text, clipping, and stacking-context composition remain later E3
-/// work. `generation` is supplied by the retained document/session owner.
+/// Emit the backgrounds, physical borders, and independently shaped text nodes
+/// supported by the first Cambium lane. Inline formatting, clipping, and
+/// stacking-context composition remain later E3 work. `generation` is supplied
+/// by the retained document/session owner.
 pub fn emit_paint_list<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
@@ -70,7 +77,17 @@ where
     D::NodeId: Copy + Eq + Hash,
 {
     let mut list = LiveryPaintList::new(viewport, generation);
-    emit_node(dom, styles, fragments, dom.document(), &mut list);
+    let mut text = TextPainter::new();
+    emit_node(
+        dom,
+        styles,
+        fragments,
+        dom.document(),
+        None,
+        &mut text,
+        &mut list,
+    );
+    list.fonts = text.into_fonts();
     list
 }
 
@@ -79,35 +96,55 @@ fn emit_node<D>(
     styles: &StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
     id: D::NodeId,
+    inherited: Option<&ComputedValues>,
+    text: &mut TextPainter,
     list: &mut LiveryPaintList,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    if dom.kind(id) == NodeKind::Element {
-        let Some(style) = styles.get(id) else {
-            return;
-        };
-        if style.display == Display::None {
-            return;
-        }
-        if let Some(fragment) = fragments.get(id).filter(|fragment| {
-            fragment.width.is_finite()
-                && fragment.height.is_finite()
-                && fragment.width > 0.0
-                && fragment.height > 0.0
-        }) {
-            emit_background(list, style, fragment);
-            emit_border(list, style, fragment);
-        }
-    }
+    let inherited = match dom.kind(id) {
+        NodeKind::Element => {
+            let Some(style) = styles.get(id) else {
+                return;
+            };
+            if style.display == Display::None {
+                return;
+            }
+            if let Some(fragment) = fragments
+                .get(id)
+                .filter(|fragment| paintable_fragment(fragment))
+            {
+                emit_background(list, style, fragment);
+                emit_border(list, style, fragment);
+            }
+            Some(style)
+        },
+        NodeKind::Text => {
+            if let (Some(style), Some(fragment), Some(value)) =
+                (inherited, fragments.get(id), dom.text(id))
+                && paintable_fragment(fragment)
+            {
+                text.emit(value, style, fragment, &mut list.commands);
+            }
+            inherited
+        },
+        _ => inherited,
+    };
 
     for child in dom.dom_children(id) {
-        emit_node(dom, styles, fragments, child, list);
+        emit_node(dom, styles, fragments, child, inherited, text, list);
     }
 }
 
-fn bounds(fragment: &Fragment) -> LayoutRect {
+fn paintable_fragment(fragment: &Fragment) -> bool {
+    fragment.width.is_finite()
+        && fragment.height.is_finite()
+        && fragment.width > 0.0
+        && fragment.height > 0.0
+}
+
+pub(crate) fn bounds(fragment: &Fragment) -> LayoutRect {
     LayoutRect::new(
         LayoutPoint::new(fragment.x, fragment.y),
         LayoutPoint::new(fragment.x + fragment.width, fragment.y + fragment.height),
@@ -177,7 +214,7 @@ fn used_text_color(style: &ComputedValues) -> ColorF {
     resolve_color(style.color, ColorF::BLACK)
 }
 
-fn resolve_color(color: Color, current: ColorF) -> ColorF {
+pub(crate) fn resolve_color(color: Color, current: ColorF) -> ColorF {
     match color {
         Color::Transparent => ColorF::TRANSPARENT,
         Color::CurrentColor => current,
@@ -196,7 +233,7 @@ fn resolve_color(color: Color, current: ColorF) -> ColorF {
     }
 }
 
-fn used_font_size(style: &ComputedValues) -> f32 {
+pub(crate) fn used_font_size(style: &ComputedValues) -> f32 {
     match style.font_size {
         FontSize::Value(LengthPercentage::Length(Length {
             value,

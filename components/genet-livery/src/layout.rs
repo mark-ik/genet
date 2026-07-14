@@ -348,7 +348,7 @@ fn font_size_px(size: &FontSize, parent: f32) -> f32 {
     .max(0.0)
 }
 
-fn line_height_px(height: &LineHeight, font_size: f32) -> f32 {
+pub(crate) fn line_height_px(height: &LineHeight, font_size: f32) -> f32 {
     match height {
         LineHeight::Normal => font_size * 1.2,
         LineHeight::Number(value) => font_size * value,

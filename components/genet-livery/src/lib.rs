@@ -10,6 +10,7 @@ mod dom;
 mod layout;
 mod paint;
 mod style;
+mod text;
 
 pub use dom::{ElementRef, InteractionStates, SelectorTree};
 pub use layout::{Fragment, FragmentPlane, LayoutError, layout};
