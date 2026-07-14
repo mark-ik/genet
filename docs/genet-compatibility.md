@@ -1,7 +1,8 @@
 # Genet compatibility
 
-Cambium consumes Genet through versioned seam packages. During extraction,
-unpublished provider packages still resolve from a sibling Genet checkout.
+Cambium's public core consumes Genet through registry seam packages. The
+unpublished `cambium-nematic` retained-document adapter still resolves its
+optional layout and render providers from a sibling Genet checkout.
 
 ## Current verified set
 
@@ -11,21 +12,24 @@ Verified on 2026-07-14:
 - `layout-dom-api = 0.1.0`
 - optional document adapter: `errand = 0.1.3`, `genet-layout = 0.2.0`,
   and `genet-render = 0.2.0`
-- verified provider revision:
-  `d1f31bf6ad171ee89d35ff91ff95494e020f0332`
+- core provider release commit:
+  `2e462fe8975`
 
 | Package | Version | Current source |
 | --- | --- | --- |
 | `layout-dom-api` | 0.1.0 | crates.io and sibling path |
 | `errand` | 0.1.3 | crates.io and sibling path |
-| `genet-scripted-dom` | 0.1.0 | sibling path; publication pending |
+| `genet-paint-types` | 0.1.0 | crates.io |
+| `engine-observables-api` | 0.1.1 | crates.io |
+| `genet-static-dom` | 0.1.0 | crates.io |
+| `genet-scripted-dom` | 0.1.0 | crates.io and sibling path |
 | `genet-layout` | 0.2.0 | optional sibling path; publication pending |
 | `genet-render` | 0.2.0 | optional sibling path; publication pending |
 
-An exact Git pin to the full Genet repository was rejected after a bounded
-clean-source check spent five minutes in Cargo resolution without reaching
-compilation. C5 remains partial until the unpublished seams have a narrow
-provider source or registry releases.
+The public Cambium stack is `meristem 0.1.0`, `sprigging 0.1.0`,
+`cambium 0.1.0`, and `cambium-winit 0.1.0`. `cambium-nematic` remains a local
+adapter until the two broad engine providers above have a deliberate release
+boundary.
 
 ## Custom-leaf protocol
 
