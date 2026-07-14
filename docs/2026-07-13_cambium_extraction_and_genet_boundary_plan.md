@@ -1,9 +1,9 @@
 # Cambium extraction and Genet boundary plan
 
 **Date:** 2026-07-13
-**Status:** in progress; extraction and native Cambium/Sprigging source naming
-have landed across all five consumers. Three C4 verification walls pass; the
-Woodshed and Strophe walls remain in Cargo dependency resolution.
+**Status:** in progress; extraction and C4 consumer migration are complete
+locally. C5 publication or revision pinning and removal of the old Genet copies
+remain.
 
 ## Decision
 
@@ -329,24 +329,25 @@ without a dependency on Pelt.
 
 ### C4 - Migrate consumers without a source flag day
 
-**Status (2026-07-14): in progress, source migration complete.** Pelt,
+**Status (2026-07-14): complete locally.** Pelt,
 Isometry, Woodshed, Strophe, and Mere now name Cambium and Sprigging in their
 manifests and Rust imports. Pelt passes all 29 tile tests, Isometry passes all 20
-`isometry-views` tests, and `scripts/check-meerkat.ps1` passes. The Meerkat wall
-also moved winit key translation to `cambium-winit` and exposed two source
-identity bugs: Sprigging's `paint_list_api` now follows Netrender's git source,
-while Mere and Cambium share the published `tinct` package.
+`isometry-views` tests, Woodshed passes all 39 `woodshed-core` tests and checks
+`woodshed-genet`, Strophe passes all 9 `strophe-genet` tests, and
+`scripts/check-meerkat.ps1` passes.
 
-Woodshed and Strophe both parse after the rename, but their focused tests still
-enter prolonged CPU-bound Cargo dependency resolution before compilation. A
-fresh Strophe lock and a current Mere lock used as a donor produce the same
-result, so stale lock content is not the sufficient cause. Isometry's refreshed
-lock also contains its concurrent Stylo realignment and remains uncommitted;
-the migration commits were isolated from that work.
+Three dependency-identity corrections were required. Sprigging's
+`paint_list_api` follows Netrender's git source, Mere and Cambium share the
+published `tinct` package, and Woodshed/Strophe patch Genet's `stylo_taffy`,
+Taffy, and IPC forks by direct sibling path. The last correction matters:
+pointing `[patch.crates-io]` at the large Genet Git repository drove Cargo into
+CPU-bound resolution even for a model-only workspace. Direct paths restore
+fresh lock generation in seconds. Woodshed and Strophe now pin Rust 1.96 with
+resolver 3 and freshly generated locks containing one published
+`genet-stylo 0.19.0`.
 
-First switch package source while preserving old Rust import names through
-Cargo dependency aliases. Rename source imports to `cambium` and `sprigging`
-in a separate commit per consumer.
+Isometry's refreshed lock still contains its concurrent Stylo realignment and
+remains uncommitted; the migration commits were isolated from that work.
 
 Order:
 
@@ -383,6 +384,15 @@ in the migration commit rather than weakening the verification wall.
 
 Publishing is separately authorized external work. Until then, consumers may
 pin a Cambium git commit or branch.
+
+**Status (2026-07-14):** the last in-tree consumer of the moved directories is
+gone. `examples/genet_web_smoke` (a standalone non-member workspace) was
+ported off its `xilem-serval` path dep onto the sibling `repos/cambium`
+checkout, and its stale patch table was re-mirrored (vendored
+`stylo_taffy`/`taffy`, netrender git deps matching the workspace source).
+Receipt: wasm32 build + wasm-bindgen + headless-Edge run flip the title to
+SMOKE PASS. Removal now waits only on the C4 consumer done-conditions and the
+checklist below.
 
 Before removing the originals:
 
