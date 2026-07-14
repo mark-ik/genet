@@ -329,6 +329,12 @@ without a dependency on Pelt.
 
 ### C4 - Migrate consumers without a source flag day
 
+**Status (2026-07-13): in progress.** Pelt is migrated locally: its
+compatibility dependency keys now resolve to Cambium and Sprigging, the
+Genet-era type aliases live in Cambium, and
+`cargo test -p pelt-desktop --features tiles` passes 29 tests. Isometry,
+Woodshed, Strophe, and Mere remain.
+
 First switch package source while preserving old Rust import names through
 Cargo dependency aliases. Rename source imports to `cambium` and `sprigging`
 in a separate commit per consumer.

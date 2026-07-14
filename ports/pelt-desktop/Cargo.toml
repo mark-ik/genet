@@ -55,7 +55,7 @@ scripted = [
 # alongside wgpu — build it on Linux/macOS, or Windows without the present stack.
 scripted-nova = ["scripted", "dep:script-engine-nova"]
 # The chrome profile (V2): browser chrome (omnibar + back/forward) built as
-# xilem-serval views over a second `ScriptedDom`, rendered GPU-free through
+# Cambium views over a second `ScriptedDom`, rendered GPU-free through
 # genet-render. No JS engine — the chrome is view-driven, not script-driven (a
 # sanctioned mod tier is a later lane). The windowed two-root shell additionally
 # needs `viewer` for the present stack + the content document.
@@ -64,7 +64,7 @@ chrome = [
     "dep:layout-dom-api", "dep:xilem-serval", "dep:arboard",
 ]
 # The windowed tile-tree demo (V5): the GPU-free `tile-surface` lib plus the windowed
-# shell (`tile_viewer`). `chrome` for the xilem-serval render path it shares, `viewer`
+# shell (`tile_viewer`). `chrome` for the Cambium render path it shares, `viewer`
 # for the present stack. The GPU-free surface itself is `tile-surface` (what meerkat
 # consumes); this adds the standalone winit window over it.
 tiles = ["tile-surface", "chrome", "viewer"]
@@ -149,9 +149,9 @@ genet-layout = { path = "../../components/genet-layout", optional = true }
 # (the headless-scripted-DOM scrape path for SPAs). Depends only on layout-dom-api.
 genet-extract = { path = "../../components/genet-extract", optional = true }
 genet-winit-host = { path = "../../components/genet-winit-host", optional = true }
-# Chisel widget leaves (png-reftest feature): the first-pixels smoke renders
+# Sprigging widget leaves (png-reftest feature): the first-pixels smoke renders
 # Knob/Meter/GraphGlyph leaves through the session leaf path to an offscreen PNG.
-chisel = { package = "serval-chisel", version = "0.1.0", path = "../../components/chisel", optional = true }
+chisel = { package = "sprigging", version = "0.1.0", path = "../../../cambium/crates/sprigging", optional = true }
 # The tile surface projects its laid-out frame DOM (chisel leaf interiors
 # included) into an AccessKit tree; the windowed viewer pushes it to the OS
 # through `genet_winit_host::AccessKitBridge`.
@@ -168,8 +168,8 @@ url = { workspace = true, optional = true }
 # Smolweb document loading (behind the `smolweb` feature): the errand transport
 # (sibling repo) for gemini/gopher/nex/finger/spartan/guppy, bridged onto the sync
 # `ResourceFetcher` through the shared tokio runtime. Brings its own tokio + rustls.
-# The native smolweb views (gemtext / gopher / feed) + theming. errand parses, these
-# render to a ScriptedDom; pelt composes the result the same way it does the chrome.
+# Native smolweb documents lower through Nematic, `EngineDocument`, and
+# `document-canvas`; Pelt consumes the resulting engine-native session.
 
 # Scripted profile (behind the `scripted` feature): the browser host surface, the
 # live mutable DOM, and the JS engines. `script-engine-api` supplies the
@@ -189,9 +189,9 @@ layout-dom-api = { path = "../../components/shared/layout-dom", optional = true 
 encoding_rs = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
-# Chrome profile (behind the `chrome` feature): the xilem-serval reactive toolkit the
+# Chrome profile (behind the `chrome` feature): the Cambium reactive toolkit the
 # omnibar + back/forward views are built with, over a ScriptedDom the runner drives.
-xilem-serval = { package = "serval-xilem", version = "0.1.0", path = "../../components/xilem-serval", optional = true }
+xilem-serval = { package = "cambium", version = "0.1.0", path = "../../../cambium/crates/cambium", optional = true }
 # OS clipboard access for the omnibar's Ctrl/Cmd+V paste (chrome feature). Reads only;
 # a failed open (e.g. a headless host) degrades to a no-op paste.
 arboard = { workspace = true, optional = true }
