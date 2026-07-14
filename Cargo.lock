@@ -893,7 +893,7 @@ dependencies = [
 
 [[package]]
 name = "engine-observables-api"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "genet-paint-types",
  "malloc_size_of_derive",
