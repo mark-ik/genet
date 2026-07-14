@@ -132,12 +132,15 @@ vertical overflow without altering line height, and use slice edges across
 wrapped fragments. Each inline group also retains Parley's visual item order
 for bidi paint while prepainting its inline decorations. Block containers now
 wrap descendants in axis-aware padding-box clips for non-visible overflow, with
-nested clips balanced through the neutral paint list. Direct non-inline
-positioned children with numeric `z-index` now paint in stable negative,
-normal-flow, then nonnegative order, with reordered subtrees kept atomic.
-Flattened descendant stacking and future opacity/transform context triggers,
-link/scroll/focus semantics, and cross-engine reftest parity remain the gate for
-production selection.
+nested clips balanced through the neutral paint list. Within each numeric or
+document stacking context, non-inline positioned children with numeric
+`z-index` now paint in stable negative, normal-flow, then nonnegative order,
+with reordered subtrees kept atomic. Numeric roots also flatten through
+intervening block ancestors into the nearest context, carrying ancestor
+overflow clips with them.
+Inline-level stacking, future opacity/transform context triggers,
+link/scroll/focus semantics, and cross-engine reftest parity remain the gate
+for production selection.
 
 ## E0 closeout
 

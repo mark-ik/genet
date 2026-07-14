@@ -82,7 +82,7 @@ fn positioned_children_paint_in_stable_z_index_order() {
     let list = render(
         r#"<html><body><div class="stage"><div class="high"></div><div class="normal"></div><div class="low"><div class="escape"></div></div><div class="negative"></div><div class="tie"></div></div></body></html>"#,
         r#"
-        .stage { position: relative; width: 100px; height: 100px; background-color: black; }
+        .stage { position: relative; z-index: 0; width: 100px; height: 100px; background-color: black; }
         .stage > div { width: 20px; height: 20px; }
         .high { position: absolute; z-index: 2; background-color: blue; }
         .normal { z-index: 100; background-color: #ffff00; }
@@ -114,6 +114,76 @@ fn positioned_children_paint_in_stable_z_index_order() {
             ColorF::new(0.0, 1.0, 1.0, 1.0),
         ]
     );
+}
+
+#[test]
+fn positioned_descendants_flatten_into_the_nearest_stacking_context() {
+    let list = render(
+        r#"<html><body><div class="stage"><div class="wrapper"><div class="highest"></div><div class="negative"></div></div><div class="middle"></div></div></body></html>"#,
+        r#"
+        .stage { position: relative; z-index: 0; width: 100px; height: 100px; background-color: black; }
+        .wrapper { width: 40px; height: 40px; background-color: #ffff00; }
+        .highest { position: absolute; z-index: 5; width: 10px; height: 10px; background-color: #ff00ff; }
+        .negative { position: absolute; z-index: -2; width: 10px; height: 10px; background-color: lime; }
+        .middle { position: absolute; z-index: 2; width: 10px; height: 10px; background-color: blue; }
+        "#,
+        1,
+    );
+    let colors = list
+        .commands()
+        .iter()
+        .filter_map(|command| match command {
+            PaintCmd::DrawRect(rect) => Some(rect.color),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        colors,
+        vec![
+            ColorF::new(0.0, 0.0, 0.0, 1.0),
+            ColorF::new(0.0, 1.0, 0.0, 1.0),
+            ColorF::new(1.0, 1.0, 0.0, 1.0),
+            ColorF::new(0.0, 0.0, 1.0, 1.0),
+            ColorF::new(1.0, 0.0, 1.0, 1.0),
+        ]
+    );
+}
+
+#[test]
+fn flattened_positioned_descendants_replay_ancestor_clips() {
+    let list = render(
+        r#"<html><body><div class="stage"><div class="clipper"><div class="raised"></div></div><div class="middle"></div></div></body></html>"#,
+        r#"
+        .stage { position: relative; z-index: 0; width: 100px; height: 100px; }
+        .clipper {
+            width: 20px; height: 20px;
+            overflow-x: hidden; overflow-y: hidden;
+            background-color: #ffff00;
+        }
+        .raised { position: absolute; z-index: 5; width: 40px; height: 40px; background-color: #ff00ff; }
+        .middle { position: absolute; z-index: 2; width: 10px; height: 10px; background-color: blue; }
+        "#,
+        1,
+    );
+    let raised = list
+        .commands()
+        .iter()
+        .position(
+            |command| matches!(command, PaintCmd::DrawRect(rect) if rect.color == ColorF::new(1.0, 0.0, 1.0, 1.0)),
+        )
+        .expect("flattened descendant paints");
+    let middle = list
+        .commands()
+        .iter()
+        .position(
+            |command| matches!(command, PaintCmd::DrawRect(rect) if rect.color == ColorF::new(0.0, 0.0, 1.0, 1.0)),
+        )
+        .expect("middle stacking item paints");
+
+    assert!(middle < raised);
+    assert!(matches!(list.commands()[raised - 1], PaintCmd::PushClip(_)));
+    assert!(matches!(list.commands()[raised + 1], PaintCmd::PopClip));
 }
 
 #[test]
