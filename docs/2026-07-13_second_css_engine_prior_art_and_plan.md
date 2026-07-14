@@ -2,12 +2,13 @@
 
 **Date:** 2026-07-13
 **Status:** E0a full-path audit, E0b Cambium lane choice/40-property catalog,
-E1 values/codegen, and the bounded E2 style resolver are landed. Livery parses
-the lane's declarations and shorthands, matches selectors through `selectors`,
-orders the cascade by origin, layer, importance, specificity, and source order,
-applies CSS-wide keywords and inheritance, and evaluates media queries against
-a Genet-shaped `Device`. The first audit invalidated the proposed 33-accessor
-full-crate seam.
+E1 values/codegen, E2 style resolution, and the first E3 integration slice are
+landed. `genet-livery` now adapts `LayoutDom` into Livery's selector and cascade
+path, retains a concrete Livery style plane, and lowers the bounded box model
+into a standalone Taffy tree. Its normal/build dependency graph excludes
+Stylo. Full E3 parity remains open at inline formatting, shaped text, paint
+emission, and session-engine routing. The first audit invalidated the proposed
+33-accessor full-crate seam.
 The second chose Cambium structural UI as the bounded first lane.
 Mark's framing: "grow a rust alternative using firefox, chrome, servo,
 blitz, ladybird, and gosub as prior art... think it'd be neat to have two
@@ -198,11 +199,17 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   viewport, input, accessibility, display, scripting, and color features on a
   Genet-shaped `Device`. Receipt: the hand-built style-resolution corpus is
   green, including an integrated selector + media + cascade rule.
-- **E3 - lane integration.** The selected lane's concrete style/layout
-  implementation lands behind the document-facing engine boundary; its
-  reftest corpus passes identically under both paths. Receipt: reftest parity
-  plus the cold-build delta with Stylo absent from that lane's build graph,
-  compared with the 30m35s baseline.
+- **E3 - lane integration: partial.** The `genet-livery` integration crate now
+  adapts any `LayoutDom` to Livery selectors, combines clean-room UA rules,
+  author sheets, inline declarations, media, and host interaction state into a
+  concrete style plane, and lowers the 40-property box subset into standalone
+  Taffy fragments. The audited Cambium catalog resolves and lays out through
+  this path. A cross-engine receipt agrees on explicit/available widths and
+  explicit heights for the catalog's structural boxes, and `cargo tree` proves
+  the normal/build graph contains neither `genet-layout` nor Stylo. Remaining:
+  real inline formatting and shaped text, paint emission, session-engine
+  registration, full reftest parity, and an apples-to-apples cold-build delta
+  against the 30m35s baseline.
 - **E4 — first production lane.** One real lane (host chrome or
   smolweb) ships on Livery by default. Receipt: the lane's
   existing suites green + capture receipts.

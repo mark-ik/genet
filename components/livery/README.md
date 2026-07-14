@@ -12,4 +12,5 @@ stylesheet values, including lengths, percentages, linear `calc()`, colors,
 and the lane's keyword families. The bounded E2 resolver adds declaration and
 shorthand parsing, selector matching, cascade ordering and inheritance, and
 media evaluation on a Genet-shaped `Device`. Cambium lane integration is the
-next stage.
+next stage. Its first slice lives in the separate `genet-livery` crate: a
+`LayoutDom` adapter, concrete style plane, and standalone Taffy box path.

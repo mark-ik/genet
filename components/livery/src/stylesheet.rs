@@ -9,6 +9,50 @@ use crate::cascade::{
 use crate::media::{Device, MediaParseError, MediaQueryList};
 use crate::selector::{Element, SelectorList, SelectorParseError};
 
+/// A recoverable stylesheet parse diagnostic. Invalid rules are dropped while
+/// later rules continue parsing, matching CSS's rule-level recovery model.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StylesheetDiagnostic {
+    pub prelude: String,
+    pub message: String,
+}
+
+/// A parsed rule sheet for the bounded Livery lane.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Stylesheet {
+    rules: Vec<StyleRule>,
+    diagnostics: Vec<StylesheetDiagnostic>,
+}
+
+impl Stylesheet {
+    /// Parse style rules and top-level `@media` groups. Other at-rules are
+    /// skipped as unsupported lane input and retained as diagnostics.
+    pub fn parse(input: &str, origin: Origin) -> Self {
+        Self::parse_with_offset(input, origin, 0)
+    }
+
+    /// Parse a sheet whose first rule follows `source_order` rules already
+    /// loaded at the same origin.
+    pub fn parse_with_offset(input: &str, origin: Origin, source_order: u64) -> Self {
+        let clean = without_comments(input);
+        let mut sheet = Self::default();
+        parse_rule_list(&clean, origin, None, source_order, &mut sheet);
+        sheet
+    }
+
+    pub fn rules(&self) -> &[StyleRule] {
+        &self.rules
+    }
+
+    pub fn diagnostics(&self) -> &[StylesheetDiagnostic] {
+        &self.diagnostics
+    }
+
+    pub fn into_rules(self) -> Vec<StyleRule> {
+        self.rules
+    }
+}
+
 #[derive(Debug)]
 pub enum StyleRuleError {
     Selector(SelectorParseError),
@@ -112,4 +156,164 @@ where
             .iter()
             .flat_map(|rule| rule.matched_declarations(element, device)),
     )
+}
+
+fn without_comments(css: &str) -> String {
+    let mut clean = String::with_capacity(css.len());
+    let mut chars = css.chars().peekable();
+    let mut in_comment = false;
+    while let Some(ch) = chars.next() {
+        if in_comment {
+            if ch == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                in_comment = false;
+            }
+        } else if ch == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            in_comment = true;
+        } else {
+            clean.push(ch);
+        }
+    }
+    clean
+}
+
+fn find_open_brace(input: &str, start: usize) -> Option<usize> {
+    let mut quote = None;
+    let mut escaped = false;
+    for (offset, ch) in input[start..].char_indices() {
+        if let Some(active_quote) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == active_quote {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '{' => return Some(start + offset),
+            ';' => return None,
+            _ => {},
+        }
+    }
+    None
+}
+
+fn find_close_brace(input: &str, open: usize) -> Option<usize> {
+    let mut depth = 1_u32;
+    let mut quote = None;
+    let mut escaped = false;
+    for (offset, ch) in input[open + 1..].char_indices() {
+        if let Some(active_quote) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == active_quote {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(open + 1 + offset);
+                }
+            },
+            _ => {},
+        }
+    }
+    None
+}
+
+fn parse_rule_list(
+    input: &str,
+    origin: Origin,
+    media: Option<&str>,
+    source_order_offset: u64,
+    sheet: &mut Stylesheet,
+) {
+    let mut cursor = 0;
+    while cursor < input.len() {
+        let Some(non_space) = input[cursor..]
+            .char_indices()
+            .find(|(_, ch)| !ch.is_whitespace())
+            .map(|(offset, _)| cursor + offset)
+        else {
+            break;
+        };
+        cursor = non_space;
+
+        let Some(open) = find_open_brace(input, cursor) else {
+            let tail = input[cursor..].trim();
+            if !tail.is_empty() {
+                sheet.diagnostics.push(StylesheetDiagnostic {
+                    prelude: tail.to_owned(),
+                    message: "expected a rule block".to_owned(),
+                });
+            }
+            break;
+        };
+        let prelude = input[cursor..open].trim();
+        let Some(close) = find_close_brace(input, open) else {
+            sheet.diagnostics.push(StylesheetDiagnostic {
+                prelude: prelude.to_owned(),
+                message: "unclosed rule block".to_owned(),
+            });
+            break;
+        };
+        let body = &input[open + 1..close];
+
+        if let Some(condition) = prelude
+            .get(..6)
+            .filter(|prefix| prefix.eq_ignore_ascii_case("@media"))
+            .and_then(|_| prelude.get(6..))
+            .filter(|rest| {
+                rest.is_empty() || rest.starts_with(char::is_whitespace) || rest.starts_with('(')
+            })
+            .map(str::trim)
+        {
+            if media.is_some() {
+                sheet.diagnostics.push(StylesheetDiagnostic {
+                    prelude: prelude.to_owned(),
+                    message: "nested media groups are outside the first lane".to_owned(),
+                });
+            } else if condition.is_empty() {
+                sheet.diagnostics.push(StylesheetDiagnostic {
+                    prelude: prelude.to_owned(),
+                    message: "empty media query".to_owned(),
+                });
+            } else {
+                parse_rule_list(body, origin, Some(condition), source_order_offset, sheet);
+            }
+        } else if prelude.starts_with('@') {
+            sheet.diagnostics.push(StylesheetDiagnostic {
+                prelude: prelude.to_owned(),
+                message: "unsupported at-rule".to_owned(),
+            });
+        } else {
+            let source_order = source_order_offset.saturating_add(sheet.rules.len() as u64);
+            match StyleRule::parse(
+                prelude,
+                body,
+                media,
+                origin,
+                CascadeLayer::Unlayered,
+                source_order,
+            ) {
+                Ok(rule) => sheet.rules.push(rule),
+                Err(error) => sheet.diagnostics.push(StylesheetDiagnostic {
+                    prelude: prelude.to_owned(),
+                    message: error.to_string(),
+                }),
+            }
+        }
+        cursor = close + 1;
+    }
 }

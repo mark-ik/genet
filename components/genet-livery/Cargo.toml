@@ -1,0 +1,17 @@
+[package]
+name = "genet-livery"
+version = "0.0.2"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mark-ik/genet"
+description = "Genet integration for the clean-room Livery CSS engine."
+readme = "README.md"
+
+[dependencies]
+layout-dom-api = { version = "0.1.0", path = "../shared/layout-dom" }
+livery = { version = "0.0.2", path = "../livery" }
+selectors = "0.39"
+taffy = { version = "0.12.1", default-features = false, features = ["std", "taffy_tree", "block_layout", "calc"] }
+
+[dev-dependencies]
+genet-static-dom = { version = "0.1.0", path = "../genet-static-dom" }

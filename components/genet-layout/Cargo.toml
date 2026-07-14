@@ -80,6 +80,7 @@ web-time = "1"
 [dev-dependencies]
 base64 = { workspace = true }
 serde_json = { workspace = true }
+genet-livery = { path = "../genet-livery" }
 genet-static-dom = { path = "../genet-static-dom" }
 # Mutable DOM provider — drives the snapshot-builder tests (set_attribute →
 # DomMutation → build_snapshot_map). No cycle: genet-scripted-dom depends

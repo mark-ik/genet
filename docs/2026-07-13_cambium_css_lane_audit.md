@@ -2,8 +2,8 @@
 
 **Date:** 2026-07-13
 **Status:** E0b lane choice, themed catalog fixture, and 40-property clean-room
-database landed. The E1 handoff into Livery has also landed. Source hashes are
-recorded below.
+database landed. The E1 handoff into Livery and the first E3 `genet-livery`
+integration slice have also landed. Source hashes are recorded below.
 
 Audited revisions: Cambium `a7c4603c` for the live catalog and Genet
 `c00daa92308` for the database, snapshot, and executable guard. The local
@@ -111,6 +111,12 @@ The engine selector belongs in Genet's document/session construction. A Cargo
 feature may omit one engine for a constrained build, but the default product
 needs both engines available so fullweb can keep Stylo while Cambium documents
 select the native engine.
+
+The first integration slice now exists as `components/genet-livery`. It adapts
+the shared `LayoutDom` surface directly, owns a concrete Livery style plane, and
+lays the audited box subset out through standalone Taffy. It does not yet enter
+the session registry or paint path; inline formatting, shaped text, and full
+cross-engine reftest parity remain the gate for that routing change.
 
 ## E0 closeout
 
