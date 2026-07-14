@@ -329,15 +329,17 @@ without a dependency on Pelt.
 
 ### C4 - Migrate consumers without a source flag day
 
-**Status (2026-07-13): in progress.** Pelt now names Cambium and Sprigging in
-both its manifest and Rust imports. Its 29 tile tests passed before the import
-rename; the post-rename compile is pending shared Cargo access. Isometry's
-package-source migration passes all 20 `isometry-views` tests and its refreshed
-lock resolves Cambium and Sprigging, though that lock also contains a concurrent
-Stylo patch refresh and remains uncommitted. Woodshed's clean source migration
-is blocked in dependency resolution by another process holding Cargo's shared
-Genet checkout. Strophe and Mere still await lock refreshes, focused tests, and
-source-import renames.
+**Status (2026-07-14): in progress.** Pelt now names Cambium and Sprigging in
+both its manifest and Rust imports, and all 29 tile tests pass after the rename.
+Genet also follows the published `stylo_traits` crate name, and Cambium builds
+against the renamed local `repos/genet` checkout. Isometry's package-source
+migration passes all 20 `isometry-views` tests and its refreshed lock resolves
+Cambium and Sprigging, though that lock also contains a concurrent Stylo patch
+refresh and remains uncommitted. Woodshed's source and local override paths are
+migrated, but its stale lock still drives Cargo into prolonged dependency
+resolution. Strophe now names Cambium and Sprigging in source and its manifest
+parses; its focused test remains. Mere still awaits lock refresh, focused tests,
+and source-import renaming.
 
 First switch package source while preserving old Rust import names through
 Cargo dependency aliases. Rename source imports to `cambium` and `sprigging`
