@@ -78,6 +78,45 @@ fn backgrounds_and_borders_follow_dom_paint_order() {
 }
 
 #[test]
+fn positioned_children_paint_in_stable_z_index_order() {
+    let list = render(
+        r#"<html><body><div class="stage"><div class="high"></div><div class="normal"></div><div class="low"><div class="escape"></div></div><div class="negative"></div><div class="tie"></div></div></body></html>"#,
+        r#"
+        .stage { position: relative; width: 100px; height: 100px; background-color: black; }
+        .stage > div { width: 20px; height: 20px; }
+        .high { position: absolute; z-index: 2; background-color: blue; }
+        .normal { z-index: 100; background-color: #ffff00; }
+        .low { position: absolute; z-index: 1; background-color: red; }
+        .escape { position: absolute; z-index: 999; width: 5px; height: 5px; background-color: #ff00ff; }
+        .negative { position: absolute; z-index: -1; background-color: lime; }
+        .tie { position: absolute; z-index: 2; background-color: #00ffff; }
+        "#,
+        1,
+    );
+    let colors = list
+        .commands()
+        .iter()
+        .filter_map(|command| match command {
+            PaintCmd::DrawRect(rect) => Some(rect.color),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        colors,
+        vec![
+            ColorF::new(0.0, 0.0, 0.0, 1.0),
+            ColorF::new(0.0, 1.0, 0.0, 1.0),
+            ColorF::new(1.0, 1.0, 0.0, 1.0),
+            ColorF::new(1.0, 0.0, 0.0, 1.0),
+            ColorF::new(1.0, 0.0, 1.0, 1.0),
+            ColorF::new(0.0, 0.0, 1.0, 1.0),
+            ColorF::new(0.0, 1.0, 1.0, 1.0),
+        ]
+    );
+}
+
+#[test]
 fn overflow_clips_wrap_descendants_and_nest() {
     let list = render(
         r#"<html><body><div class="outer"><div class="inner"><div class="grand"></div></div></div></body></html>"#,

@@ -7,7 +7,7 @@ use livery::{
     ComputedValues,
     values::{
         BorderStyle as CssBorderStyle, Color, Display, FontSize, Length, LengthPercentage,
-        LengthUnit, Overflow as CssOverflow,
+        LengthUnit, Overflow as CssOverflow, Position, ZIndex,
     },
 };
 use paint_list_api::{
@@ -182,9 +182,55 @@ fn emit_node<D>(
         _ => inherited,
     };
 
-    let child_ids = dom.dom_children(id).collect::<Vec<_>>();
+    emit_children_in_stacking_order(dom, styles, fragments, id, inherited, text, list);
+    if clips_descendants {
+        list.commands.push(PaintCmd::PopClip);
+    }
+}
+
+fn emit_children_in_stacking_order<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    parent: D::NodeId,
+    inherited: Option<&ComputedValues>,
+    text: &mut PaintText<'_, D::NodeId>,
+    list: &mut LiveryPaintList,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let child_ids = dom.dom_children(parent).collect::<Vec<_>>();
+    let mut negative = child_ids
+        .iter()
+        .copied()
+        .filter_map(|id| {
+            stacking_level(styles, id)
+                .filter(|level| *level < 0)
+                .map(|level| (level, id))
+        })
+        .collect::<Vec<_>>();
+    let mut nonnegative = child_ids
+        .iter()
+        .copied()
+        .filter_map(|id| {
+            stacking_level(styles, id)
+                .filter(|level| *level >= 0)
+                .map(|level| (level, id))
+        })
+        .collect::<Vec<_>>();
+    negative.sort_by_key(|(level, _)| *level);
+    nonnegative.sort_by_key(|(level, _)| *level);
+
+    for (_, child) in negative {
+        emit_node(dom, styles, fragments, child, inherited, text, list);
+    }
+
     let mut inline_group = Vec::new();
     for child in child_ids {
+        if stacking_level(styles, child).is_some() {
+            continue;
+        }
         if is_inline_node(dom, styles, child) {
             inline_group.push(child);
             continue;
@@ -194,8 +240,23 @@ fn emit_node<D>(
         emit_node(dom, styles, fragments, child, inherited, text, list);
     }
     emit_inline_group(dom, styles, fragments, &inline_group, inherited, text, list);
-    if clips_descendants {
-        list.commands.push(PaintCmd::PopClip);
+
+    for (_, child) in nonnegative {
+        emit_node(dom, styles, fragments, child, inherited, text, list);
+    }
+}
+
+fn stacking_level<Id>(styles: &StylePlane<Id>, id: Id) -> Option<i32>
+where
+    Id: Copy + Eq + Hash,
+{
+    let style = styles.get(id)?;
+    if style.display == Display::Inline || style.position == Position::Static {
+        return None;
+    }
+    match style.z_index {
+        ZIndex::Integer(level) => Some(level),
+        ZIndex::Auto => None,
     }
 }
 
