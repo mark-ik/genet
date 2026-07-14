@@ -386,20 +386,26 @@ in the migration commit rather than weakening the verification wall.
 Publishing is separately authorized external work. Until then, consumers may
 pin a Cambium git commit or branch.
 
-**Status (2026-07-14): partial, source removal landed locally.** The three moved
+**Status (2026-07-14): partial, core publication landed.** The three moved
 directories are gone from Genet and from its workspace membership. The reduced
 workspace resolves, and `cargo test -p pelt-desktop --features tiles` passes all
 29 tests. `examples/genet_web_smoke` (a standalone non-member workspace) was
 also ported to the sibling Cambium checkout; its wasm32 build, wasm-bindgen
 output, and headless Edge run reach SMOKE PASS.
 
-Cambium's compatibility table now records the exact package versions and Genet
-revision. `layout-dom-api 0.1.0` and `errand 0.1.3` are published. The remaining
-provider packages are not: `genet-scripted-dom 0.1.0`, `genet-layout 0.2.0`,
-and `genet-render 0.2.0`. An exact pin to the full Genet Git repository was
-tested and rejected after five CPU-bound minutes in Cargo resolution without
-reaching compilation. The remaining C5 work is a narrow provider source or
-registry releases, followed by clean-checkout verification and doc cleanup.
+The core provider chain is published as `genet-paint-types 0.1.0`,
+`engine-observables-api 0.1.1`, `genet-static-dom 0.1.0`, and
+`genet-scripted-dom 0.1.0`. Cambium's public stack is published as
+`meristem 0.1.0`, `sprigging 0.1.0`, `cambium 0.1.0`, and
+`cambium-winit 0.1.0`. Pelt now consumes the registry Cambium and Sprigging
+packages; Genet's root patch table redirects their DOM and paint protocol
+dependencies to the workspace provider sources so type identity stays unified.
+
+`cambium-nematic` remains unpublished. Its optional retained-document adapter
+still uses sibling `genet-layout 0.2.0` and `genet-render 0.2.0` paths, whose
+publication closure includes much of the engine. That adapter is the remaining
+C5 clean-checkout gap and should be released separately rather than broadening
+the core toolkit release.
 
 Before removing the originals:
 

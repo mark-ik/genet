@@ -151,7 +151,7 @@ genet-extract = { path = "../../components/genet-extract", optional = true }
 genet-winit-host = { path = "../../components/genet-winit-host", optional = true }
 # Sprigging widget leaves (png-reftest feature): the first-pixels smoke renders
 # Knob/Meter/GraphGlyph leaves through the session leaf path to an offscreen PNG.
-sprigging = { version = "0.1.0", path = "../../../cambium/crates/sprigging", optional = true }
+sprigging = { version = "0.1.0", optional = true }
 # The tile surface projects its laid-out frame DOM (chisel leaf interiors
 # included) into an AccessKit tree; the windowed viewer pushes it to the OS
 # through `genet_winit_host::AccessKitBridge`.
@@ -191,7 +191,7 @@ sha2 = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 # Chrome profile (behind the `chrome` feature): the Cambium reactive toolkit the
 # omnibar + back/forward views are built with, over a ScriptedDom the runner drives.
-cambium = { version = "0.1.0", path = "../../../cambium/crates/cambium", optional = true }
+cambium = { version = "0.1.0", optional = true }
 # OS clipboard access for the omnibar's Ctrl/Cmd+V paste (chrome feature). Reads only;
 # a failed open (e.g. a headless host) degrades to a no-op paste.
 arboard = { workspace = true, optional = true }

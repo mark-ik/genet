@@ -470,6 +470,18 @@ lto = "thin"
 codegen-units = 1
 
 [patch.crates-io]
+# Pelt consumes the published Cambium stack, whose registry packages depend on
+# these published Genet seams. Redirect them to the workspace copies so the
+# host and toolkit share one set of DOM and observable types during Genet work.
+engine-observables-api = { path = "components/shared/engine-observables-api" }
+genet-paint-types = { path = "components/shared/paint-types" }
+genet-scripted-dom = { path = "components/genet-scripted-dom" }
+genet-static-dom = { path = "components/genet-static-dom" }
+layout-dom-api = { path = "components/shared/layout-dom" }
+# Sprigging's published manifest resolves paint_list_api from crates.io. Genet
+# develops against Netrender main, so redirect that registry edge to the same
+# source as the workspace dependency and keep PaintCommand identity unified.
+paint_list_api = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
 # If you need to temporarily test Servo with a local fork of some upstream
 # crate, add that here. Use the form:
 #
