@@ -6,7 +6,7 @@
 //! separate roots composited in one window.
 //!
 //! Two `ScriptedDom`s that never reference each other: the [`Chrome`] (omnibar +
-//! back/forward, a xilem-serval view tree) and the content [`LoadedDocument`]. Each
+//! back/forward, a Cambium view tree) and the content [`LoadedDocument`]. Each
 //! renders to its own `netrender::Scene`; the shell rasterizes both and composites
 //! them as layers (`compose_external_texture` per layer) onto the window backbuffer.
 //! Input routes by region: a press/keystroke in the strip drives the chrome, elsewhere
@@ -58,20 +58,19 @@ pub fn run_smolweb_browser(
 pub(crate) mod windowed {
     use std::sync::Arc;
 
-    use netrender::external_texture::ExternalTexturePlacement;
-    use netrender::{ColorLoad, NetrenderOptions};
+    use cambium::{
+        Key as CambiumKey, KeyEvent, Modifiers, NamedKey as CambiumNamedKey, PointerClick,
+    };
     use genet_layout::ScrollKey;
     use genet_winit_host::{SurfaceHost, wheel_delta_from_winit};
+    use netrender::external_texture::ExternalTexturePlacement;
+    use netrender::{ColorLoad, NetrenderOptions};
     use winit::application::ApplicationHandler;
     use winit::dpi::PhysicalSize;
     use winit::event::{ElementState, MouseButton, WindowEvent};
     use winit::event_loop::{ActiveEventLoop, EventLoop};
     use winit::keyboard::{Key, ModifiersState, NamedKey};
     use winit::window::{Window, WindowId};
-    use xilem_serval::{
-        Key as CambiumKey, KeyEvent, Modifiers, NamedKey as CambiumNamedKey, PointerClick,
-    };
-
     use super::{StaticViewerConfig, StaticViewerOutcome};
     use crate::chrome::{Chrome, ChromeIntent, StripSide};
     use crate::document::{ClickOutcome, LoadedDocument, LocalFetcher};

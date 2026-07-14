@@ -10,10 +10,12 @@
 //! `docs/2026-07-08_chisel_widget_catalog.md` (build-order step 2's on-screen
 //! half) and `docs/2026-07-07_chisel_widget_leaf_design.md`.
 
-use chisel::{ColorF, GraphGlyph, GraphGlyphNode, Knob, LeafRegistry, Meter, RenderedLeaves, Size};
-use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, QualName};
 use genet_layout::IncrementalLayout;
 use genet_scripted_dom::ScriptedDom;
+use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, QualName};
+use sprigging::{
+    ColorF, GraphGlyph, GraphGlyphNode, Knob, LeafRegistry, Meter, RenderedLeaves, Size,
+};
 
 use crate::tile_surface::scene_from_session_dom_with_leaves;
 

@@ -26,8 +26,8 @@ default = ["viewer"]
 tile-surface = [
     "dep:genet-documents",
     "dep:netrender", "dep:genet-render", "dep:genet-static-dom", "dep:genet-layout",
-    "dep:genet-scripted-dom", "dep:layout-dom-api", "dep:xilem-serval",
-    "dep:chisel", "dep:accesskit", "dep:paint_list_api", "dep:paint_list_render",
+    "dep:genet-scripted-dom", "dep:layout-dom-api", "dep:cambium",
+    "dep:sprigging", "dep:accesskit", "dep:paint_list_api", "dep:paint_list_render",
 ]
 # The on-screen static-document viewer (V1): the GPU-free `tile-surface` lib plus the
 # windowed present stack (`genet-winit-host` + `wgpu`). Default-on so `pelt --engine
@@ -61,7 +61,7 @@ scripted-nova = ["scripted", "dep:script-engine-nova"]
 # needs `viewer` for the present stack + the content document.
 chrome = [
     "dep:netrender", "dep:genet-render", "dep:genet-layout", "dep:genet-scripted-dom",
-    "dep:layout-dom-api", "dep:xilem-serval", "dep:arboard",
+    "dep:layout-dom-api", "dep:cambium", "dep:arboard",
 ]
 # The windowed tile-tree demo (V5): the GPU-free `tile-surface` lib plus the windowed
 # shell (`tile_viewer`). `chrome` for the Cambium render path it shares, `viewer`
@@ -91,7 +91,7 @@ netrender = ["dep:netrender", "dep:webgl_wgpu", "dep:wgpu"]
 # with a fuzz threshold. GPU-required, so opt-in; the scene-snapshot lane stays
 # GPU-free. `viewer` already brings the netrender + wgpu crates (via
 # `tile-surface`); this just adds the PNG encoder.
-png-reftest = ["viewer", "dep:image", "dep:chisel"]
+png-reftest = ["viewer", "dep:image", "dep:sprigging"]
 # Headed presentation through genet's `WindowsDxgiBackend`. Drives
 # the netrender renderer through the C4 DCOMP composition swapchain
 # attached to a winit window's HWND. Windows-only at runtime; the
@@ -151,7 +151,7 @@ genet-extract = { path = "../../components/genet-extract", optional = true }
 genet-winit-host = { path = "../../components/genet-winit-host", optional = true }
 # Sprigging widget leaves (png-reftest feature): the first-pixels smoke renders
 # Knob/Meter/GraphGlyph leaves through the session leaf path to an offscreen PNG.
-chisel = { package = "sprigging", version = "0.1.0", path = "../../../cambium/crates/sprigging", optional = true }
+sprigging = { version = "0.1.0", path = "../../../cambium/crates/sprigging", optional = true }
 # The tile surface projects its laid-out frame DOM (chisel leaf interiors
 # included) into an AccessKit tree; the windowed viewer pushes it to the OS
 # through `genet_winit_host::AccessKitBridge`.
@@ -191,7 +191,7 @@ sha2 = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 # Chrome profile (behind the `chrome` feature): the Cambium reactive toolkit the
 # omnibar + back/forward views are built with, over a ScriptedDom the runner drives.
-xilem-serval = { package = "cambium", version = "0.1.0", path = "../../../cambium/crates/cambium", optional = true }
+cambium = { version = "0.1.0", path = "../../../cambium/crates/cambium", optional = true }
 # OS clipboard access for the omnibar's Ctrl/Cmd+V paste (chrome feature). Reads only;
 # a failed open (e.g. a headless host) degrades to a no-op paste.
 arboard = { workspace = true, optional = true }

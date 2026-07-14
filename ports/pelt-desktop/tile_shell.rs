@@ -14,10 +14,10 @@
 //! gesture can be verified without a human at the screen.
 
 use accesskit::{NodeId as AccessNodeId, TreeUpdate};
-use pelt_core::tile::{DropTarget, Edge, TileEvent, TileId, TilePath, TileTree};
+use cambium::{PointerClick, Propagation};
 use genet_render::ContentReport;
 use genet_scripted_dom::NodeId;
-use xilem_serval::{PointerClick, Propagation};
+use pelt_core::tile::{DropTarget, Edge, TileEvent, TileId, TilePath, TileTree};
 
 use crate::tile_surface::{GhostLayer, TileFrame, TileSurface};
 

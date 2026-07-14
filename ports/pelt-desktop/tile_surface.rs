@@ -5,7 +5,7 @@
 //! The tile-tree surface (V5): splits + tab-stacks of live documents.
 //!
 //! V2's two-root compositing, scaled from "one strip + one document" to "one tile
-//! frame + N documents." The [`pelt_core::tile::TileTree`] is mapped to xilem-serval
+//! frame + N documents." The [`pelt_core::tile::TileTree`] is mapped to Cambium
 //! flex DOM (the *frame*: splits become flex rows/columns, tab-stacks become a tab bar
 //! over a content-area placeholder), and each active tile's [`LoadedDocument`] is
 //! composited into its content-area's laid-out rect (`fragments().rect_of`). That
@@ -21,6 +21,14 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use accesskit::{NodeId as AccessNodeId, Tree, TreeId, TreeUpdate};
+use cambium::{
+    AnyView, DomHandle, GenetAppRunner, GenetCtx, GenetElement, PointerClick, custom_leaf, el,
+    on_click,
+};
+use genet_layout::{IncrementalLayout, LeafPaintSource, ScrollOffsets};
+use genet_render::{ContentReport, scene_from_session_dom};
+use genet_scripted_dom::{NodeId, ScriptedDom};
 use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, QualName};
 use netrender::Scene;
 use paint_list_api::PaintCmd;
@@ -28,15 +36,7 @@ use pelt_core::tile::{
     ContentSource, DocumentRef, DropTarget, SplitAxis, TabStack, TileEvent, TileId, TilePath,
     TileTree,
 };
-use accesskit::{NodeId as AccessNodeId, Tree, TreeId, TreeUpdate};
-use chisel::{ColorF, GraphGlyph, GraphGlyphNode, LeafRegistry, Meter, RenderedLeaves, Size};
-use genet_layout::{IncrementalLayout, LeafPaintSource, ScrollOffsets};
-use genet_render::{ContentReport, scene_from_session_dom};
-use genet_scripted_dom::{NodeId, ScriptedDom};
-use xilem_serval::{
-    AnyView, DomHandle, PointerClick, GenetAppRunner, GenetCtx, GenetElement, custom_leaf, el,
-    on_click,
-};
+use sprigging::{ColorF, GraphGlyph, GraphGlyphNode, LeafRegistry, Meter, RenderedLeaves, Size};
 
 use crate::document::{ClickOutcome, LoadedDocument, LocalFetcher};
 use crate::href::resolve_href;

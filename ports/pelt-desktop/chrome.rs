@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Browser chrome as xilem-serval views (V2): an omnibar + back/forward toolbar over
+//! Browser chrome as Cambium views (V2): an omnibar + back/forward toolbar over
 //! a **second** `ScriptedDom`, separate from the content document.
 //!
 //! The chrome is a styled, view-driven `ScriptedDom` rendered through the same
@@ -21,14 +21,14 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use netrender::Scene;
+use cambium::{
+    AnyView, DomHandle, GenetAppRunner, GenetCtx, GenetElement, KeyEvent, PointerClick, TextField,
+    TextInput, el, lens, on_click, text_field_typed,
+};
 use genet_layout::{IncrementalLayout, ScrollOffsets};
 use genet_render::scene_from_scripted_dom;
 use genet_scripted_dom::{NodeId, ScriptedDom};
-use xilem_serval::{
-    AnyView, DomHandle, KeyEvent, PointerClick, GenetAppRunner, GenetCtx, GenetElement,
-    TextField, TextInput, el, lens, on_click, text_field_typed,
-};
+use netrender::Scene;
 
 /// Which side of the window the chrome strip occupies. A horizontal strip (top/bottom)
 /// is the full window width by its thickness; a vertical strip (left/right) is its
