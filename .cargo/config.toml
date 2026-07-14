@@ -16,7 +16,6 @@
 paths = [
     "C:/Users/mark_/Code/repos/netrender",
     "C:/Users/mark_/Code/repos/netfetcher",
-    "C:/Users/mark_/Code/crates/nova",
     "C:/Users/mark_/Code/crates/boa",
     "C:/Users/mark_/Code/crates/piccolo",
 ]
