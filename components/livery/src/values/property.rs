@@ -345,6 +345,40 @@ impl fmt::Display for LineHeight {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Opacity(f32);
+
+impl Opacity {
+    pub const ONE: Self = Self(1.0);
+
+    pub const fn value(self) -> f32 {
+        self.0
+    }
+}
+
+impl FromStr for Opacity {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let input = input.trim();
+        let value = if let Some(percentage) = input.strip_suffix('%') {
+            percentage.trim().parse::<f32>().map(|value| value / 100.0)
+        } else {
+            input.parse::<f32>()
+        }
+        .ok()
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| ParseError::expected("a finite opacity number or percentage"))?;
+        Ok(Self(value.clamp(0.0, 1.0)))
+    }
+}
+
+impl fmt::Display for Opacity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&format_number(self.0))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Padding(pub LengthPercentage);
 
 impl Padding {

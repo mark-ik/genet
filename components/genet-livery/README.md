@@ -37,7 +37,8 @@ each reordered subtree stays atomic. Numeric stacking roots flatten through
 intervening ancestors into their nearest context, replaying any ancestor
 overflow clips around the extracted subtree. Shaped inline commands retain
 their ownership so positioned spans and atomic inline-blocks reorder without
-losing shared line geometry or bidi visual order. Context triggers such as
-opacity and transforms remain open, along with links, scrolling, and focus.
-`genet.livery` therefore stays an explicit pin rather than the default static
-route.
+losing shared line geometry or bidi visual order. Opacity values below one
+establish an atomic level-zero context and wrap the whole subtree in a neutral
+compositing layer. Transform-created contexts remain open,
+along with links, scrolling, and focus. `genet.livery` therefore stays an
+explicit pin rather than the default static route.

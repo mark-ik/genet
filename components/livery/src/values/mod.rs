@@ -10,8 +10,8 @@ pub use color::Color;
 pub use length::{CalcLengthPercentage, Length, LengthPercentage, LengthUnit};
 pub use property::{
     BorderStyle, BorderWidth, Display, FontFamily, FontSize, FontStyle, FontWeight, Inset,
-    LineHeight, ListStyleType, Margin, Overflow, Padding, Position, Size, TextDecorationLine,
-    TextWrapMode, WhiteSpaceCollapse, ZIndex,
+    LineHeight, ListStyleType, Margin, Opacity, Overflow, Padding, Position, Size,
+    TextDecorationLine, TextWrapMode, WhiteSpaceCollapse, ZIndex,
 };
 
 /// A rejected CSS value from Livery's bounded first-lane grammar.

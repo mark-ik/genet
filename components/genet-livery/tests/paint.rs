@@ -224,6 +224,63 @@ fn inline_positioned_contexts_retain_shaping_and_compete_by_z_index() {
 }
 
 #[test]
+fn opacity_creates_an_atomic_level_zero_context_and_compositing_layer() {
+    let list = render(
+        r#"<html><body><div class="stage"><div class="faded"><div class="escape"></div></div><div class="middle"></div></div></body></html>"#,
+        r#"
+        .stage { position: relative; z-index: 0; width: 100px; height: 100px; }
+        .faded { opacity: 0.5; width: 20px; height: 20px; background-color: red; }
+        .escape {
+            position: absolute; z-index: 999;
+            width: 5px; height: 5px; background-color: #ff00ff;
+        }
+        .middle {
+            position: absolute; z-index: 2;
+            width: 10px; height: 10px; background-color: blue;
+        }
+        "#,
+        1,
+    );
+    let push = list
+        .commands()
+        .iter()
+        .position(|command| matches!(command, PaintCmd::PushLayer(_)))
+        .expect("opacity opens a compositing layer");
+    let faded = list
+        .commands()
+        .iter()
+        .position(
+            |command| matches!(command, PaintCmd::DrawRect(rect) if rect.color == ColorF::new(1.0, 0.0, 0.0, 1.0)),
+        )
+        .expect("opacity context paints its background");
+    let escape = list
+        .commands()
+        .iter()
+        .position(
+            |command| matches!(command, PaintCmd::DrawRect(rect) if rect.color == ColorF::new(1.0, 0.0, 1.0, 1.0)),
+        )
+        .expect("high descendant remains inside opacity context");
+    let pop = list
+        .commands()
+        .iter()
+        .position(|command| matches!(command, PaintCmd::PopLayer))
+        .expect("opacity closes its compositing layer");
+    let middle = list
+        .commands()
+        .iter()
+        .position(
+            |command| matches!(command, PaintCmd::DrawRect(rect) if rect.color == ColorF::new(0.0, 0.0, 1.0, 1.0)),
+        )
+        .expect("positive sibling context paints");
+
+    assert!(push < faded && faded < escape && escape < pop && pop < middle);
+    let PaintCmd::PushLayer(layer) = &list.commands()[push] else {
+        unreachable!()
+    };
+    assert_eq!(layer.opacity, 0.5);
+}
+
+#[test]
 fn overflow_clips_wrap_descendants_and_nest() {
     let list = render(
         r#"<html><body><div class="outer"><div class="inner"><div class="grand"></div></div></div></body></html>"#,

@@ -1,4 +1,4 @@
-use livery::values::{Color, FontWeight, Length, LengthPercentage, Size};
+use livery::values::{Color, FontWeight, Length, LengthPercentage, Opacity, Size};
 use livery::{ComputedValues, PropertyId, ValueType};
 
 #[test]
@@ -10,6 +10,7 @@ fn generated_initial_values_match_the_catalog() {
     assert_eq!(values.width, Size::Auto);
     assert_eq!(values.height, Size::Auto);
     assert_eq!(values.font_weight, FontWeight::Normal);
+    assert_eq!(values.opacity, Opacity::ONE);
     assert_eq!(values.z_index.to_string(), "auto");
 }
 

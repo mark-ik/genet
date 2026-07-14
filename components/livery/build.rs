@@ -91,6 +91,7 @@ fn value_type_path(value_type: &str) -> &'static str {
         "line-height" => "crate::values::LineHeight",
         "list-style-type" => "crate::values::ListStyleType",
         "margin" => "crate::values::Margin",
+        "opacity" => "crate::values::Opacity",
         "overflow" => "crate::values::Overflow",
         "padding" => "crate::values::Padding",
         "position" => "crate::values::Position",
@@ -123,6 +124,7 @@ fn initial_expression(property: &Property) -> &'static str {
         ("line-height", "normal") => "crate::values::LineHeight::Normal",
         ("list-style-type", "disc") => "crate::values::ListStyleType::Disc",
         ("margin", "0") => "crate::values::Margin::Value(crate::values::LengthPercentage::ZERO)",
+        ("opacity", "1") => "crate::values::Opacity::ONE",
         ("overflow", "visible") => "crate::values::Overflow::Visible",
         ("padding", "0") => "crate::values::Padding::ZERO",
         ("position", "static") => "crate::values::Position::Static",
@@ -142,8 +144,8 @@ fn validate(db: &Database) {
     assert_eq!(db.schema, 1, "unsupported properties.toml schema");
     assert_eq!(
         db.property.len(),
-        40,
-        "the audited Cambium catalog must contain exactly 40 properties"
+        41,
+        "the native Cambium lane must contain exactly 41 properties"
     );
 
     let mut names = BTreeSet::new();

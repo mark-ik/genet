@@ -1,9 +1,11 @@
 # Cambium CSS lane audit
 
 **Date:** 2026-07-13
-**Status:** E0b lane choice, themed catalog fixture, and 40-property clean-room
-database landed. The E1 handoff into Livery and the first E3 `genet-livery`
-integration slice have also landed. Source hashes are recorded below.
+**Status:** E0b lane choice, themed catalog fixture, and original 40-property
+clean-room database landed. The E1 handoff into Livery and the first E3
+`genet-livery` integration slice have also landed. The native capability
+ratchet now contains 41 properties with `opacity`. Source hashes are recorded
+below.
 
 Audited revisions: Cambium `a7c4603c` for the live catalog and Genet
 `c00daa92308` for the database, snapshot, and executable guard. The local
@@ -101,7 +103,7 @@ normative property shape it grows toward.
 
 ## Boundary consequence
 
-This is not a 40-accessor swap inside the current `genet-layout` crate. That
+This is not a 41-accessor swap inside the current `genet-layout` crate. That
 crate still has the 126-longhand Stylo contract and broad Stylo lifecycle types.
 The first integration must provide a separate concrete style/layout path for
 Cambium documents behind Genet's document-facing runtime boundary. Computed
@@ -139,9 +141,10 @@ order, with reordered subtrees kept atomic. Numeric roots also flatten through
 intervening ancestors into the nearest context, carrying ancestor overflow
 clips with them. Ownership retained on shaped inline commands lets positioned
 spans and atomic inline-blocks reorder without losing shared line geometry or
-bidi visual order. Future opacity/transform context triggers,
-link/scroll/focus semantics, and cross-engine reftest parity remain the gate
-for production selection.
+bidi visual order. Opacity below one now creates an atomic level-zero context
+and a neutral compositing layer around the subtree. Future transform context
+triggers, link/scroll/focus semantics, and cross-engine reftest parity remain
+the gate for production selection.
 
 ## E0 closeout
 
@@ -152,14 +155,14 @@ and fails if a required longhand is absent. This completes the audit's E1
 handoff: the named engine crate owns the database, fixture, generator, typed
 computed values, and guard.
 
-The 40-property set is the catalog contract, not a promise about every future
-Merecat theme declaration. New declarations enter through the same failing
-fixture before the database grows.
+The original 40-property set is the catalog contract, not a promise about every
+future Merecat theme declaration. Capability-driven rows may join it with their
+own executable paint proof; `opacity` is the first such ratchet row.
 
 ## Done condition
 
 This audit is complete when the checked-in names cover Cambium and Sprigging's
 production-generated declarations, Genet's baseline UA sheet, and the catalog
-theme after shorthand expansion; `properties.toml` must parse with exactly 40
-unique property rows. The executable guard and independent TOML check satisfy
-that condition.
+theme after shorthand expansion; `properties.toml` must preserve those 40 rows
+plus explicitly tested capability-ratchet rows, currently one. The executable
+guard and independent TOML check satisfy that condition.

@@ -340,6 +340,16 @@ animation = "by-computed-value"
 source = "css_box_4"
 
 [[property]]
+name = "opacity"
+value_type = "opacity"
+inherited = false
+initial = "1"
+grammar = "<opacity-value>"
+seed_values = ["number", "percentage"]
+animation = "by-computed-value"
+source = "css_color_4"
+
+[[property]]
 name = "overflow-x"
 value_type = "overflow"
 inherited = false

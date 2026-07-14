@@ -12,7 +12,7 @@ use livery::{
 };
 use paint_list_api::{
     BorderDetails, BorderItem, BorderRadius, BorderSide, BorderStyle, ClipKind, ClipSpec, ColorF,
-    CommonPlacement, DeviceIntSize, EngineId, FontResource, LayoutPoint, LayoutRect,
+    CommonPlacement, DeviceIntSize, EngineId, FontResource, LayerSpec, LayoutPoint, LayoutRect,
     LayoutSideOffsets, NormalBorder, PaintCmd, PaintList, RectItem,
 };
 use serde::{Deserialize, Serialize};
@@ -139,6 +139,17 @@ fn emit_node<D>(
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    let opacity = styles
+        .get(id)
+        .filter(|style| style.display != Display::None)
+        .map(|style| style.opacity.value())
+        .filter(|opacity| *opacity < 1.0);
+    if let Some(opacity) = opacity {
+        list.commands.push(PaintCmd::PushLayer(LayerSpec {
+            opacity,
+            ..LayerSpec::default()
+        }));
+    }
     let Some((inherited, clips_descendants)) = begin_node(
         dom,
         styles,
@@ -157,6 +168,9 @@ fn emit_node<D>(
     emit_children_in_stacking_order(dom, styles, fragments, id, inherited, text, list);
     if clips_descendants {
         list.commands.push(PaintCmd::PopClip);
+    }
+    if opacity.is_some() {
+        list.commands.push(PaintCmd::PopLayer);
     }
 }
 
@@ -444,13 +458,12 @@ where
     Id: Copy + Eq + Hash,
 {
     let style = styles.get(id)?;
-    if style.position == Position::Static {
-        return None;
+    if style.position != Position::Static
+        && let ZIndex::Integer(level) = style.z_index
+    {
+        return Some(level);
     }
-    match style.z_index {
-        ZIndex::Integer(level) => Some(level),
-        ZIndex::Auto => None,
-    }
+    (style.opacity.value() < 1.0).then_some(0)
 }
 
 fn descendant_clip(
