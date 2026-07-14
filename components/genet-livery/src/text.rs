@@ -303,12 +303,12 @@ impl TextSystem {
                         glyph.point.y += origin.1;
                     }
                     frame.record_inline_fragment(source, run.fragment, line_y);
-                    for owner in run.owners {
+                    for owner in &run.owners {
                         frame.record_inline_fragment(
-                            owner,
+                            *owner,
                             decorated_inline_fragment(
                                 styles,
-                                owner,
+                                *owner,
                                 run.fragment,
                                 parent_fragment.width,
                             ),
@@ -327,7 +327,10 @@ impl TextSystem {
                     if frame.prepared_sources.insert(source) {
                         prepared_sources.push(source);
                     }
-                    visual_commands.push(command);
+                    visual_commands.push(PreparedCommand {
+                        owners: run.owners,
+                        command,
+                    });
                 },
                 ShapedItem::InlineBox {
                     source,
@@ -500,7 +503,7 @@ impl TextSystem {
 }
 
 pub(crate) struct TextFrame<Id> {
-    prepared_groups: Vec<Option<Vec<PaintCmd>>>,
+    prepared_groups: Vec<Vec<PreparedCommand<Id>>>,
     source_groups: HashMap<Id, usize>,
     prepared_sources: HashSet<Id>,
     inline_fragments: HashMap<Id, Vec<Fragment>>,
@@ -527,22 +530,38 @@ impl<Id> TextFrame<Id>
 where
     Id: Copy + Eq + Hash,
 {
-    pub(crate) fn drain(&mut self, source: Id, commands: &mut Vec<PaintCmd>) -> bool {
+    pub(crate) fn drain(
+        &mut self,
+        source: Id,
+        inline_owner: Option<Id>,
+        excluded_roots: Option<&HashSet<Id>>,
+        commands: &mut Vec<PaintCmd>,
+    ) -> bool {
         let prepared = self.prepared_sources.contains(&source);
-        if let Some(group) = self.source_groups.get(&source).copied()
-            && let Some(mut visual_commands) = self.prepared_groups[group].take()
-        {
-            commands.append(&mut visual_commands);
+        if let Some(group) = self.source_groups.get(&source).copied() {
+            let mut retained = Vec::new();
+            for prepared in std::mem::take(&mut self.prepared_groups[group]) {
+                let belongs_to_owner =
+                    inline_owner.is_none_or(|owner| prepared.owners.contains(&owner));
+                let belongs_to_child_context = excluded_roots
+                    .is_some_and(|roots| prepared.owners.iter().any(|owner| roots.contains(owner)));
+                if belongs_to_owner && !belongs_to_child_context {
+                    commands.push(prepared.command);
+                } else {
+                    retained.push(prepared);
+                }
+            }
+            self.prepared_groups[group] = retained;
         }
         prepared
     }
 
-    fn record_prepared_group(&mut self, sources: Vec<Id>, commands: Vec<PaintCmd>) {
+    fn record_prepared_group(&mut self, sources: Vec<Id>, commands: Vec<PreparedCommand<Id>>) {
         if sources.is_empty() {
             return;
         }
         let group = self.prepared_groups.len();
-        self.prepared_groups.push(Some(commands));
+        self.prepared_groups.push(commands);
         for source in sources {
             self.source_groups.insert(source, group);
         }
@@ -576,6 +595,11 @@ where
         fragments.push(fragment);
         line_keys.push(line_y);
     }
+}
+
+struct PreparedCommand<Id> {
+    owners: Vec<Id>,
+    command: PaintCmd,
 }
 
 struct SourceSpan<Id> {

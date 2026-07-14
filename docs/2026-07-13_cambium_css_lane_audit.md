@@ -133,12 +133,13 @@ wrapped fragments. Each inline group also retains Parley's visual item order
 for bidi paint while prepainting its inline decorations. Block containers now
 wrap descendants in axis-aware padding-box clips for non-visible overflow, with
 nested clips balanced through the neutral paint list. Within each numeric or
-document stacking context, non-inline positioned children with numeric
-`z-index` now paint in stable negative, normal-flow, then nonnegative order,
-with reordered subtrees kept atomic. Numeric roots also flatten through
-intervening block ancestors into the nearest context, carrying ancestor
-overflow clips with them.
-Inline-level stacking, future opacity/transform context triggers,
+document stacking context, positioned block and inline-level elements with
+numeric `z-index` now paint in stable negative, normal-flow, then nonnegative
+order, with reordered subtrees kept atomic. Numeric roots also flatten through
+intervening ancestors into the nearest context, carrying ancestor overflow
+clips with them. Ownership retained on shaped inline commands lets positioned
+spans and atomic inline-blocks reorder without losing shared line geometry or
+bidi visual order. Future opacity/transform context triggers,
 link/scroll/focus semantics, and cross-engine reftest parity remain the gate
 for production selection.
 

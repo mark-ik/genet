@@ -139,9 +139,19 @@ fn emit_node<D>(
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    let Some((inherited, clips_descendants)) =
-        begin_node(dom, styles, fragments, id, inherited, text, list)
-    else {
+    let Some((inherited, clips_descendants)) = begin_node(
+        dom,
+        styles,
+        fragments,
+        id,
+        PaintScope {
+            inherited,
+            stacking_roots: None,
+            inline_owner: None,
+        },
+        text,
+        list,
+    ) else {
         return;
     };
     emit_children_in_stacking_order(dom, styles, fragments, id, inherited, text, list);
@@ -155,7 +165,7 @@ fn begin_node<'a, D>(
     styles: &'a StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
     id: D::NodeId,
-    inherited: Option<&'a ComputedValues>,
+    scope: PaintScope<'a, D::NodeId>,
     text: &mut PaintText<'_, D::NodeId>,
     list: &mut LiveryPaintList,
 ) -> Option<(Option<&'a ComputedValues>, bool)>
@@ -191,17 +201,22 @@ where
             Some(style)
         },
         NodeKind::Text => {
-            if let (Some(style), Some(value)) = (inherited, dom.text(id))
-                && !text.frame.drain(id, &mut list.commands)
+            if let (Some(style), Some(value)) = (scope.inherited, dom.text(id))
+                && !text.frame.drain(
+                    id,
+                    scope.inline_owner,
+                    scope.stacking_roots,
+                    &mut list.commands,
+                )
                 && let Some(fragment) = fragments.get(id)
                 && paintable_fragment(fragment)
             {
                 text.system
                     .emit_single(text.frame, value, style, fragment, &mut list.commands);
             }
-            inherited
+            scope.inherited
         },
-        _ => inherited,
+        _ => scope.inherited,
     };
     Some((inherited, clips_descendants))
 }
@@ -215,9 +230,10 @@ struct StackingItem<Id> {
 }
 
 #[derive(Clone, Copy)]
-struct NormalFlow<'a, Id> {
+struct PaintScope<'a, Id> {
     inherited: Option<&'a ComputedValues>,
-    stacking_roots: &'a HashSet<Id>,
+    stacking_roots: Option<&'a HashSet<Id>>,
+    inline_owner: Option<Id>,
 }
 
 fn emit_children_in_stacking_order<D>(
@@ -254,9 +270,13 @@ fn emit_children_in_stacking_order<D>(
         styles,
         fragments,
         parent,
-        NormalFlow {
+        PaintScope {
             inherited,
-            stacking_roots: &roots,
+            stacking_roots: Some(&roots),
+            inline_owner: styles
+                .get(parent)
+                .filter(|style| style.display == Display::Inline)
+                .map(|_| parent),
         },
         text,
         list,
@@ -296,15 +316,16 @@ fn collect_stacking_items<D>(
                 let Some(style) = styles.get(child) else {
                     continue;
                 };
-                if style.display == Display::None
-                    || matches!(style.display, Display::Inline | Display::InlineBlock)
-                {
-                    // Inline formatting owns its own paint stream for now.
+                if style.display == Display::None {
                     continue;
                 }
-                fragments
-                    .get(child)
-                    .and_then(|fragment| descendant_clip(style, fragment, viewport))
+                if matches!(style.display, Display::Inline | Display::InlineBlock) {
+                    None
+                } else {
+                    fragments
+                        .get(child)
+                        .and_then(|fragment| descendant_clip(style, fragment, viewport))
+                }
             },
             NodeKind::Text => continue,
             _ => None,
@@ -353,18 +374,21 @@ fn emit_normal_node<'a, D>(
     styles: &'a StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
     id: D::NodeId,
-    flow: NormalFlow<'a, D::NodeId>,
+    scope: PaintScope<'a, D::NodeId>,
     text: &mut PaintText<'_, D::NodeId>,
     list: &mut LiveryPaintList,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    if flow.stacking_roots.contains(&id) {
+    if scope
+        .stacking_roots
+        .is_some_and(|roots| roots.contains(&id))
+    {
         return;
     }
     let Some((inherited, clips_descendants)) =
-        begin_node(dom, styles, fragments, id, flow.inherited, text, list)
+        begin_node(dom, styles, fragments, id, scope, text, list)
     else {
         return;
     };
@@ -373,10 +397,7 @@ fn emit_normal_node<'a, D>(
         styles,
         fragments,
         id,
-        NormalFlow {
-            inherited,
-            stacking_roots: flow.stacking_roots,
-        },
+        PaintScope { inherited, ..scope },
         text,
         list,
     );
@@ -390,7 +411,7 @@ fn emit_normal_children<'a, D>(
     styles: &'a StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
     parent: D::NodeId,
-    flow: NormalFlow<'a, D::NodeId>,
+    scope: PaintScope<'a, D::NodeId>,
     text: &mut PaintText<'_, D::NodeId>,
     list: &mut LiveryPaintList,
 ) where
@@ -401,18 +422,21 @@ fn emit_normal_children<'a, D>(
 
     let mut inline_group = Vec::new();
     for child in child_ids {
-        if flow.stacking_roots.contains(&child) {
+        if scope
+            .stacking_roots
+            .is_some_and(|roots| roots.contains(&child))
+        {
             continue;
         }
         if is_inline_node(dom, styles, child) {
             inline_group.push(child);
             continue;
         }
-        emit_inline_group(dom, styles, fragments, &inline_group, flow, text, list);
+        emit_inline_group(dom, styles, fragments, &inline_group, scope, text, list);
         inline_group.clear();
-        emit_normal_node(dom, styles, fragments, child, flow, text, list);
+        emit_normal_node(dom, styles, fragments, child, scope, text, list);
     }
-    emit_inline_group(dom, styles, fragments, &inline_group, flow, text, list);
+    emit_inline_group(dom, styles, fragments, &inline_group, scope, text, list);
 }
 
 fn stacking_level<Id>(styles: &StylePlane<Id>, id: Id) -> Option<i32>
@@ -420,9 +444,7 @@ where
     Id: Copy + Eq + Hash,
 {
     let style = styles.get(id)?;
-    if matches!(style.display, Display::Inline | Display::InlineBlock)
-        || style.position == Position::Static
-    {
+    if style.position == Position::Static {
         return None;
     }
     match style.z_index {
@@ -475,7 +497,7 @@ fn emit_inline_group<'a, D>(
     styles: &'a StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
     roots: &[D::NodeId],
-    flow: NormalFlow<'a, D::NodeId>,
+    scope: PaintScope<'a, D::NodeId>,
     text: &mut PaintText<'_, D::NodeId>,
     list: &mut LiveryPaintList,
 ) where
@@ -486,10 +508,18 @@ fn emit_inline_group<'a, D>(
         return;
     }
     for root in roots {
-        emit_inline_descendant_decorations(dom, styles, fragments, *root, text.frame, list);
+        emit_inline_descendant_decorations(
+            dom,
+            styles,
+            fragments,
+            *root,
+            scope.stacking_roots,
+            text.frame,
+            list,
+        );
     }
     for root in roots {
-        emit_normal_node(dom, styles, fragments, *root, flow, text, list);
+        emit_normal_node(dom, styles, fragments, *root, scope, text, list);
     }
 }
 
@@ -498,12 +528,16 @@ fn emit_inline_descendant_decorations<D>(
     styles: &StylePlane<D::NodeId>,
     fragments: &FragmentPlane<D::NodeId>,
     id: D::NodeId,
+    stacking_roots: Option<&HashSet<D::NodeId>>,
     frame: &mut TextFrame<D::NodeId>,
     list: &mut LiveryPaintList,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    if stacking_roots.is_some_and(|roots| roots.contains(&id)) {
+        return;
+    }
     let NodeKind::Element = dom.kind(id) else {
         return;
     };
@@ -517,7 +551,15 @@ fn emit_inline_descendant_decorations<D>(
     if style.display == Display::Inline {
         for child in dom.dom_children(id) {
             if is_inline_node(dom, styles, child) {
-                emit_inline_descendant_decorations(dom, styles, fragments, child, frame, list);
+                emit_inline_descendant_decorations(
+                    dom,
+                    styles,
+                    fragments,
+                    child,
+                    stacking_roots,
+                    frame,
+                    list,
+                );
             }
         }
     }

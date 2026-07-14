@@ -187,6 +187,43 @@ fn flattened_positioned_descendants_replay_ancestor_clips() {
 }
 
 #[test]
+fn inline_positioned_contexts_retain_shaping_and_compete_by_z_index() {
+    let list = render(
+        r#"<html><body><div class="stage"><span class="wrapper"><span class="high">H</span><span class="normal">N</span><span class="atom"></span></span><div class="middle"></div></div></body></html>"#,
+        r#"
+        .stage { position: relative; z-index: 0; width: 100px; height: 100px; }
+        .high { position: relative; z-index: 5; color: #ff00ff; }
+        .normal { color: #010101; }
+        .atom {
+            display: inline-block; position: relative; z-index: 1;
+            width: 8px; height: 8px; background-color: red;
+        }
+        .middle {
+            position: absolute; z-index: 2;
+            width: 10px; height: 10px; background-color: blue;
+        }
+        "#,
+        1,
+    );
+    let command_index =
+        |predicate: &dyn Fn(&PaintCmd) -> bool| list.commands().iter().position(predicate).unwrap();
+    let normal = command_index(
+        &|command| matches!(command, PaintCmd::DrawText(run) if run.color == ColorF::new(1.0 / 255.0, 1.0 / 255.0, 1.0 / 255.0, 1.0)),
+    );
+    let atom = command_index(
+        &|command| matches!(command, PaintCmd::DrawRect(rect) if rect.color == ColorF::new(1.0, 0.0, 0.0, 1.0)),
+    );
+    let middle = command_index(
+        &|command| matches!(command, PaintCmd::DrawRect(rect) if rect.color == ColorF::new(0.0, 0.0, 1.0, 1.0)),
+    );
+    let high = command_index(
+        &|command| matches!(command, PaintCmd::DrawText(run) if run.color == ColorF::new(1.0, 0.0, 1.0, 1.0)),
+    );
+
+    assert!(normal < atom && atom < middle && middle < high);
+}
+
+#[test]
 fn overflow_clips_wrap_descendants_and_nest() {
     let list = render(
         r#"<html><body><div class="outer"><div class="inner"><div class="grand"></div></div></div></body></html>"#,

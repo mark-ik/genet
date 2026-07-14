@@ -31,11 +31,13 @@ one paint stream per inline group, including bidi runs, while the group's
 decorations paint first. Block containers with non-visible overflow emit
 axis-aware padding-box clips around their descendants; nested clips balance and
 intersect through the neutral paint-list stack. Within each numeric or document
-stacking context, non-inline positioned children with numeric `z-index` paint
-in stable negative, normal-flow, then nonnegative order while each reordered
-subtree stays atomic. Numeric stacking roots flatten through intervening block
-ancestors into their nearest context, replaying any ancestor overflow clips
-around the extracted subtree. Inline-level stacking and context triggers such
-as opacity and transforms remain open, along with links, scrolling, and focus.
+stacking context, positioned block and inline-level elements with numeric
+`z-index` paint in stable negative, normal-flow, then nonnegative order while
+each reordered subtree stays atomic. Numeric stacking roots flatten through
+intervening ancestors into their nearest context, replaying any ancestor
+overflow clips around the extracted subtree. Shaped inline commands retain
+their ownership so positioned spans and atomic inline-blocks reorder without
+losing shared line geometry or bidi visual order. Context triggers such as
+opacity and transforms remain open, along with links, scrolling, and focus.
 `genet.livery` therefore stays an explicit pin rather than the default static
 route.
