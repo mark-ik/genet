@@ -16,7 +16,7 @@ use taffy::{
     style::{BoxSizing, Display, Overflow, Position, Style},
 };
 
-use crate::StylePlane;
+use crate::{StylePlane, TextSystem};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Fragment {
@@ -68,6 +68,8 @@ impl Error for LayoutError {}
 struct TextMeasure {
     width: f32,
     height: f32,
+    text: String,
+    style: ComputedValues,
 }
 
 struct BuildState<'a, D: LayoutDom> {
@@ -79,15 +81,42 @@ struct BuildState<'a, D: LayoutDom> {
 
 /// Lay out a Livery style plane through a standalone Taffy tree.
 ///
-/// This first Cambium lane maps block, inline-block, and inline boxes onto
-/// Taffy's block algorithm. Text uses a deterministic metric estimate so the
-/// path remains font-system-independent; shaped text and inline formatting are
-/// explicit later E3 work.
+/// This stateless entry point uses deterministic text estimates. Retained
+/// Livery sessions call [`layout_with_text_system`] so Parley's shaped line
+/// height participates in parent block flow.
 pub fn layout<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
     viewport_width: f32,
     viewport_height: f32,
+) -> Result<FragmentPlane<D::NodeId>, LayoutError>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    layout_impl(dom, styles, viewport_width, viewport_height, None)
+}
+
+pub(crate) fn layout_with_text_system<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    viewport_width: f32,
+    viewport_height: f32,
+    text: &mut TextSystem,
+) -> Result<FragmentPlane<D::NodeId>, LayoutError>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    layout_impl(dom, styles, viewport_width, viewport_height, Some(text))
+}
+
+fn layout_impl<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    viewport_width: f32,
+    viewport_height: f32,
+    mut text: Option<&mut TextSystem>,
 ) -> Result<FragmentPlane<D::NodeId>, LayoutError>
 where
     D: LayoutDom,
@@ -133,11 +162,20 @@ where
                     AvailableSpace::MinContent => 0.0,
                     AvailableSpace::MaxContent => context.width,
                 };
+                let (measured_width, measured_height) =
+                    text.as_deref_mut()
+                        .map_or((context.width, context.height), |text| {
+                            text.measure_single(
+                                &context.text,
+                                &context.style,
+                                known.width.unwrap_or(available_width),
+                            )
+                        });
                 Size {
                     width: known
                         .width
-                        .unwrap_or(context.width.min(available_width.max(0.0))),
-                    height: known.height.unwrap_or(context.height),
+                        .unwrap_or(measured_width.min(available_width.max(0.0))),
+                    height: known.height.unwrap_or(measured_height),
                 }
             },
         )
@@ -234,7 +272,12 @@ where
                             display: Display::Block,
                             ..Style::default()
                         },
-                        TextMeasure { width, height },
+                        TextMeasure {
+                            width,
+                            height,
+                            text: text.to_owned(),
+                            style: inherited.cloned().unwrap_or_default(),
+                        },
                     )
                     .map_err(taffy_error)?;
                 self.sources.insert(node, id);

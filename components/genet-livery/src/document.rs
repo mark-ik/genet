@@ -8,7 +8,7 @@ use paint_list_api::DeviceIntSize;
 
 use crate::{
     InteractionStates, LayoutError, LiveryPaintList, StyleSet, TextSystem,
-    emit_paint_list_with_text_system, layout, resolve_styles,
+    emit_paint_list_with_text_system, layout::layout_with_text_system, resolve_styles,
 };
 
 /// A static DOM plus the Livery state that should survive between frames.
@@ -78,7 +78,13 @@ where
         self.device.viewport_width = width as f32;
         self.device.viewport_height = height as f32;
         let styles = resolve_styles(&self.dom, &self.style_set, &self.device, &self.interactions);
-        let fragments = layout(&self.dom, &styles, width as f32, height as f32)?;
+        let fragments = layout_with_text_system(
+            &self.dom,
+            &styles,
+            width as f32,
+            height as f32,
+            &mut self.text,
+        )?;
         self.generation = self.generation.saturating_add(1);
         let list = emit_paint_list_with_text_system(
             &self.dom,

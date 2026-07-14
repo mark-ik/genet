@@ -68,6 +68,44 @@ impl TextSystem {
         self.fonts.len()
     }
 
+    /// Measure a text leaf with the same Parley styles and line breaking used
+    /// by paint. Retained sessions pass this result back through Taffy's leaf
+    /// callback so wrapped text contributes its real block height.
+    pub(crate) fn measure_single(
+        &mut self,
+        source: &str,
+        style: &ComputedValues,
+        width: f32,
+    ) -> (f32, f32) {
+        let text = normalized_text(source, style);
+        if text.is_empty() {
+            return (0.0, 0.0);
+        }
+        let mut spans = vec![SourceSpan::<()> {
+            source: None,
+            owners: Vec::new(),
+            style: style.clone(),
+            range: 0..text.len(),
+        }];
+        let items = self.shape(text.as_ref(), &mut spans, &[], width, style);
+        let mut right = 0.0_f32;
+        let mut top = f32::INFINITY;
+        let mut bottom = f32::NEG_INFINITY;
+        for item in items {
+            let ShapedItem::Text(run) = item else {
+                continue;
+            };
+            right = right.max(run.fragment.x + run.fragment.width);
+            top = top.min(run.fragment.y);
+            bottom = bottom.max(run.fragment.y + run.fragment.height);
+        }
+        if top.is_finite() && bottom.is_finite() {
+            (right.max(0.0), (bottom - top).max(0.0))
+        } else {
+            (0.0, 0.0)
+        }
+    }
+
     pub(crate) fn begin_frame<Id>(&self) -> TextFrame<Id> {
         TextFrame::default()
     }

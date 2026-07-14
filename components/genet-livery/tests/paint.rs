@@ -235,6 +235,44 @@ fn retained_document_reuses_complete_frames_and_font_allocations() {
 }
 
 #[test]
+fn shaped_text_height_moves_the_following_block() {
+    fn following_block_y(label_width: u32) -> f32 {
+        let document = StaticDocument::parse(
+            r#"<html><body><div class="label">one two three four five six seven eight</div><div class="after"></div></body></html>"#,
+        );
+        let css = format!(
+            ".label {{ width: {label_width}px; font-size: 16px; line-height: 20px; }} \
+             .after {{ width: 10px; height: 10px; background-color: lime; }}"
+        );
+        let mut document = LiveryDocument::new(
+            document,
+            StyleSet::cambium(&[&css]),
+            Device::screen(320.0, 240.0),
+        );
+        document
+            .frame(320, 240)
+            .unwrap()
+            .commands()
+            .iter()
+            .find_map(|command| match command {
+                PaintCmd::DrawRect(rect) if rect.color == ColorF::new(0.0, 1.0, 0.0, 1.0) => {
+                    Some(rect.placement.bounds.min.y)
+                },
+                _ => None,
+            })
+            .expect("following block paints")
+    }
+
+    let wide = following_block_y(240);
+    let narrow = following_block_y(48);
+
+    assert!(
+        narrow >= wide + 40.0,
+        "wrapped Parley lines must increase Taffy's parent height: wide={wide}, narrow={narrow}"
+    );
+}
+
+#[test]
 fn collapsed_whitespace_crosses_inline_element_boundaries() {
     fn blue_origin(html: &str) -> f32 {
         render(
