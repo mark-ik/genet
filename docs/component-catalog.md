@@ -22,6 +22,7 @@ The ordered expansion and promotion rules live in
 | Data grid | Grid/row/header/cell semantics, keyboard-sortable headers, and bounded DOM rows for a 10,000-row model |
 | Graph-canvas swatch | Shared graph paint path, native node targets, click/hover routing, selected/focus state, expand action |
 | Sprigging leaves | Five catalog leaf elements, retained registry entries, paint commands, clean repaint gate |
+| Retained lifecycle | Self-replacing focused and pointer-captured controls retire stale handles before the next dispatch |
 
 The companion CSS is application-owned and uses custom properties. It includes
 visible focus, disabled, selected, editor, menu, grid, and leaf states so a

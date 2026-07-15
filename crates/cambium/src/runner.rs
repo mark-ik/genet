@@ -153,6 +153,27 @@ where
         // own dom: a cross-dom adoption is impossible by construction.
         // (moveBefore plan S5.)
         self.ctx.drain_nursery();
+
+        // Focus and pointer capture are retained NodeIds, so a rebuild that
+        // replaces or removes their element can retire either handle. The DOM
+        // dangle contract makes `is_live` the only safe read in that state.
+        // Clear them at the publication boundary before the host can ask for
+        // the next dispatch target or captured-element rect.
+        self.scrub_dead_interaction_handles();
+    }
+
+    fn node_is_live(&self, node: NodeId) -> bool {
+        self.dom.borrow().is_live(node)
+    }
+
+    fn scrub_dead_interaction_handles(&mut self) {
+        let dom = self.dom.borrow();
+        if self.focus.is_some_and(|node| !dom.is_live(node)) {
+            self.focus = None;
+        }
+        if self.pointer_capture.is_some_and(|node| !dom.is_live(node)) {
+            self.pointer_capture = None;
+        }
     }
 
     /// Tear the whole tree down (a projection being removed): run the retained
@@ -231,6 +252,11 @@ where
         target: NodeId,
         event: PointerClick,
     ) -> Vec<Action> {
+        if !self.node_is_live(target) {
+            self.last_default_prevented = false;
+            return Vec::new();
+        }
+
         // 1. Collect the ancestor chain (target → … → document) once, and — in
         //    the same walk — find the nearest focusable (key-handler-bearing)
         //    ancestor for click-to-focus. Done under a short-lived shared borrow
@@ -342,7 +368,7 @@ where
     }
 
     pub(crate) fn set_focus(&mut self, node: Option<NodeId>) {
-        self.focus = node;
+        self.focus = node.filter(|&node| self.node_is_live(node));
     }
 
     /// Move focus to the next (`forward`) or previous focusable element in
@@ -403,6 +429,7 @@ where
         // A fresh pass: the routing tail records the real cancellation value; a
         // pass that routes nothing leaves it false.
         self.last_default_prevented = false;
+        self.scrub_dead_interaction_handles();
 
         // With nothing focused, the only key carrying a runner default is Tab,
         // which enters the focusable set (no element to route to). Everything else
@@ -559,6 +586,9 @@ where
         // A fresh pass: reset the cancellation flag; route_pointer records the
         // real value when a handler runs, and a no-capture press leaves it false.
         self.last_default_prevented = false;
+        if !self.node_is_live(target) {
+            return Vec::new();
+        }
         let captured = {
             let dom = self.dom.borrow();
             let mut current = Some(target);
@@ -587,6 +617,7 @@ where
         event: PointerEvent,
     ) -> Vec<Action> {
         self.last_default_prevented = false;
+        self.scrub_dead_interaction_handles();
         match self.pointer_capture {
             Some(node) => self.route_pointer(logic, state, node, event),
             None => Vec::new(),
@@ -601,6 +632,7 @@ where
         event: PointerEvent,
     ) -> Vec<Action> {
         self.last_default_prevented = false;
+        self.scrub_dead_interaction_handles();
         match self.pointer_capture.take() {
             Some(node) => self.route_pointer(logic, state, node, event),
             None => Vec::new(),
@@ -614,6 +646,9 @@ where
     /// The nearest ancestor of `hit` (including itself) carrying an
     /// [`on_pointer`](crate::on_pointer) handler.
     pub(crate) fn pointer_target(&self, hit: NodeId) -> Option<NodeId> {
+        if !self.node_is_live(hit) {
+            return None;
+        }
         let dom = self.dom.borrow();
         let mut current = Some(hit);
         while let Some(node) = current {
@@ -635,6 +670,9 @@ where
         event: HoverEvent,
     ) -> Vec<Action> {
         self.last_default_prevented = false;
+        if !self.node_is_live(target) {
+            return Vec::new();
+        }
         match self.hover_target(target) {
             Some(node) => self.route_hover(logic, state, node, event),
             None => Vec::new(),
@@ -644,6 +682,9 @@ where
     /// The nearest ancestor of `hit` (including itself) carrying a hover
     /// handler.
     pub(crate) fn hover_target(&self, hit: NodeId) -> Option<NodeId> {
+        if !self.node_is_live(hit) {
+            return None;
+        }
         let dom = self.dom.borrow();
         let mut current = Some(hit);
         while let Some(node) = current {
@@ -752,6 +793,9 @@ where
         event: WheelEvent,
     ) -> Vec<Action> {
         self.last_default_prevented = false;
+        if !self.node_is_live(target) {
+            return Vec::new();
+        }
         let resolved = {
             let dom = self.dom.borrow();
             let mut current = Some(target);
@@ -774,6 +818,9 @@ where
     /// The nearest ancestor of `hit` (including itself) carrying an
     /// [`on_wheel`](crate::on_wheel) handler.
     pub(crate) fn wheel_target(&self, hit: NodeId) -> Option<NodeId> {
+        if !self.node_is_live(hit) {
+            return None;
+        }
         let dom = self.dom.borrow();
         let mut current = Some(hit);
         while let Some(node) = current {
@@ -934,9 +981,10 @@ where
     /// Set (or clear, with `None`) the focused node directly.
     ///
     /// The keyboard counterpart of a programmatic `element.focus()`. No
-    /// validation that `node` is focusable: a test (or a host) may aim focus at
-    /// any node, and [`dispatch_key`](Self::dispatch_key) simply finds no key
-    /// handler to route to if it is not focusable.
+    /// validation that a live `node` is focusable: a test (or a host) may aim
+    /// focus at any live node, and [`dispatch_key`](Self::dispatch_key) simply
+    /// finds no key handler to route to if it is not focusable. A retired node
+    /// clears focus under the DOM dangle contract.
     pub fn set_focus(&mut self, node: Option<NodeId>) {
         self.tree.set_focus(node);
     }

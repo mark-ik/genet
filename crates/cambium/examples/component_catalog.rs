@@ -12,9 +12,10 @@ use cambium::{
     ActionItem, ActionListEvent, ActionListState, AnyView, DomHandle, GenetAppRunner, GenetCtx,
     GenetElement, GraphCanvasEdge, GraphCanvasNode, GraphCanvasSubgraph, GraphCanvasSwatch,
     GridColumn, GridSpec, GridView, HoverEvent, HoverPhase, Key, KeyEvent, NamedKey, PointerClick,
-    RadioGroup, SelectState, Slider, StyleRange, TextInput, action_list, button, button_with,
-    checkbox, custom_leaf, data_grid, el, graph_canvas_swatch, lens, map_action, menu, on_hover,
-    radio_group, select, slider, styled_textarea, text_field_typed, textarea_typed, toggle,
+    PointerEvent, PointerPhase, RadioGroup, SelectState, Slider, StyleRange, TextInput,
+    action_list, button, button_with, checkbox, custom_leaf, data_grid, el, graph_canvas_swatch,
+    lens, map_action, menu, on_hover, on_pointer, radio_group, select, slider, styled_textarea,
+    text_field_typed, textarea_typed, toggle,
 };
 use genet_scripted_dom::{NodeId, ScriptedDom};
 use layout_dom_api::{LayoutDom, LocalName, Namespace};
@@ -846,6 +847,72 @@ fn assert_leaf_pipeline() {
     assert_eq!(registry.render_into(size, &mut rendered), 0);
 }
 
+fn assert_retained_lifecycle_wall() {
+    #[derive(Default)]
+    struct LifecycleState {
+        replaced: bool,
+    }
+
+    type LifecycleView = Box<dyn AnyView<LifecycleState, (), GenetCtx, GenetElement>>;
+
+    fn focus_view(state: &LifecycleState) -> LifecycleView {
+        if state.replaced {
+            Box::new(el::<_, LifecycleState, ()>("span", ("replacement", "!")))
+        } else {
+            Box::new(button(
+                "replace",
+                |state: &mut LifecycleState, _: PointerClick| state.replaced = true,
+            ))
+        }
+    }
+
+    fn capture_view(state: &LifecycleState) -> LifecycleView {
+        if state.replaced {
+            Box::new(el::<_, LifecycleState, ()>("span", ("replacement", "!")))
+        } else {
+            Box::new(on_pointer(
+                el::<_, LifecycleState, ()>("div", "drag target"),
+                |state: &mut LifecycleState, event: PointerEvent| {
+                    if event.phase == PointerPhase::Down {
+                        state.replaced = true;
+                    }
+                },
+            ))
+        }
+    }
+
+    let focus_dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+    let mut focus_runner = GenetAppRunner::<_, _, _, ()>::new(
+        focus_dom.clone(),
+        focus_view,
+        LifecycleState::default(),
+    );
+    let retired_focus = focus_runner.root();
+    focus_runner.set_focus(Some(retired_focus));
+    focus_runner.dispatch_click(retired_focus, PointerClick::at((2.0, 2.0)));
+    assert!(!focus_dom.borrow().is_live(retired_focus));
+    assert_eq!(focus_runner.focus(), None);
+    assert!(
+        focus_runner
+            .dispatch_click(retired_focus, PointerClick::at((2.0, 2.0)))
+            .is_empty()
+    );
+
+    let capture_dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+    let mut capture_runner = GenetAppRunner::<_, _, _, ()>::new(
+        capture_dom.clone(),
+        capture_view,
+        LifecycleState::default(),
+    );
+    let retired_capture = capture_runner.root();
+    capture_runner.dispatch_pointer_down(
+        retired_capture,
+        PointerEvent::new(PointerPhase::Down, (4.0, 4.0), (40.0, 20.0)),
+    );
+    assert!(!capture_dom.borrow().is_live(retired_capture));
+    assert_eq!(capture_runner.pointer_capture(), None);
+}
+
 fn run_acceptance() {
     let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
     let mut runner = CatalogRunner::new(
@@ -856,6 +923,7 @@ fn run_acceptance() {
     assert_initial_surface(&dom.borrow(), runner.root());
     run_interactions(&mut runner);
     assert_leaf_pipeline();
+    assert_retained_lifecycle_wall();
 }
 
 fn main() {

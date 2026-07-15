@@ -2310,6 +2310,100 @@ mod controls {
         assert_eq!(t.caret(), 6, "end: end of 'de' (offset 6)");
     }
 
+    /// A focused control may replace itself from its click handler. The old
+    /// NodeId is retired during the dispatch-tail rebuild, so the runner must
+    /// clear focus before the next key or host hit can read through it.
+    #[test]
+    fn self_replacing_focused_control_retires_interaction_handles() {
+        #[derive(Default)]
+        struct ReplaceState {
+            replaced: bool,
+        }
+
+        fn view(
+            state: &ReplaceState,
+        ) -> Box<dyn AnyView<ReplaceState, (), GenetCtx, GenetElement>> {
+            if state.replaced {
+                Box::new(el::<_, ReplaceState, ()>("span", ("replacement", "!")))
+            } else {
+                Box::new(button(
+                    "replace",
+                    |state: &mut ReplaceState, _: PointerClick| state.replaced = true,
+                ))
+            }
+        }
+
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner =
+            GenetAppRunner::<_, _, _, ()>::new(dom.clone(), view, ReplaceState::default());
+        let retired = runner.root();
+        runner.set_focus(Some(retired));
+
+        runner.dispatch_click(retired, PointerClick::at((2.0, 2.0)));
+
+        assert!(runner.state().replaced);
+        assert!(!dom.borrow().is_live(retired), "the old button was dropped");
+        assert_eq!(runner.focus(), None, "dead focus is cleared after rebuild");
+        assert_eq!(runner.pointer_target(retired), None);
+        assert_eq!(runner.hover_target(retired), None);
+        assert_eq!(runner.wheel_target(retired), None);
+        assert!(
+            runner
+                .dispatch_click(retired, PointerClick::at((2.0, 2.0)))
+                .is_empty(),
+            "a host-delivered stale hit is safely ignored",
+        );
+    }
+
+    /// The Down handler itself can remove the node that just captured the
+    /// pointer. Capture must be cleared by that same dispatch's rebuild rather
+    /// than surviving until a Move reads the retired node.
+    #[test]
+    fn self_replacing_drag_target_clears_capture() {
+        #[derive(Default)]
+        struct ReplaceState {
+            replaced: bool,
+        }
+
+        fn view(
+            state: &ReplaceState,
+        ) -> Box<dyn AnyView<ReplaceState, (), GenetCtx, GenetElement>> {
+            if state.replaced {
+                Box::new(el::<_, ReplaceState, ()>("span", ("replacement", "!")))
+            } else {
+                Box::new(on_pointer(
+                    el::<_, ReplaceState, ()>("div", "drag target"),
+                    |state: &mut ReplaceState, event: PointerEvent| {
+                        if event.phase == PointerPhase::Down {
+                            state.replaced = true;
+                        }
+                    },
+                ))
+            }
+        }
+
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner =
+            GenetAppRunner::<_, _, _, ()>::new(dom.clone(), view, ReplaceState::default());
+        let retired = runner.root();
+        runner.dispatch_pointer_down(
+            retired,
+            PointerEvent::new(PointerPhase::Down, (5.0, 5.0), (40.0, 20.0)),
+        );
+
+        assert!(!dom.borrow().is_live(retired));
+        assert_eq!(runner.pointer_capture(), None);
+        assert!(
+            runner
+                .dispatch_pointer_move(PointerEvent::new(
+                    PointerPhase::Move,
+                    (10.0, 5.0),
+                    (40.0, 20.0),
+                ))
+                .is_empty(),
+        );
+    }
+
     /// Pointer drag: `down` captures the element and routes a `Down`, `move`
     /// routes to the captured element (cursor wherever), `up` routes `Up` and
     /// clears capture — the foundation under sliders / scrollbar-drag.

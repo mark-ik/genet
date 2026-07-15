@@ -37,6 +37,12 @@ independently.
 
 ### C0. Retained lifecycle wall
 
+**Landed 2026-07-15.** Genet's retained hit-test boundary rejects retired
+nodes before publishing a result. Cambium clears dead focus and pointer capture
+after every rebuild, ignores stale host targets at every public dispatch seam,
+and exercises focused and captured self-replacement in both runner tests and the
+executable component catalog.
+
 Close the stale `NodeId` path in Genet before adding more transient and dragged
 surfaces. Add an executable catalog guard that removes, replaces, and reorders
 focused, hovered, and pointer-captured children without dispatching through a
@@ -124,4 +130,3 @@ the summary body is reused by two applications.
   application-owned until their second consumer fixes a smaller shared shape.
 - Badge, progress, and sync indicators should use native DOM/CSS unless their
   geometry or update rate proves a Sprigging leaf is warranted.
-
