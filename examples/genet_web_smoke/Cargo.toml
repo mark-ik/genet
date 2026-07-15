@@ -6,7 +6,7 @@ publish = false
 
 # Standalone project — intentionally NOT a genet workspace member
 # (same pattern as ../netrender_smoke). Proves the genet engine core
-# renders in a browser: xilem-serval view tree -> ScriptedDom ->
+# renders in a browser: cambium view tree -> ScriptedDom ->
 # genet-layout -> PaintList -> paint_list_render -> netrender ->
 # WebGPU canvas surface. No Servo shell, no winit, no JS engine.
 #
@@ -17,9 +17,9 @@ publish = false
 #   python -m http.server -d examples/genet_web_smoke 8000
 # then open http://localhost:8000 in a WebGPU browser (Chrome/Edge).
 #
-# netrender crates are direct path deps into the sibling checkout for
-# this first receipt; convert to git deps (mark-ik/netrender) once the
-# per-target-webgpu commit is pushed, per the netrender_smoke pattern.
+# netrender crates come from mark-ik/netrender git (converted from the
+# first receipt's sibling path deps once the per-target-webgpu commit
+# landed on main, per the netrender_smoke pattern).
 
 [lib]
 name = "genet_web_smoke"
@@ -29,17 +29,25 @@ path = "src/lib.rs"
 [workspace]
 
 [dependencies]
+# View layer (sibling cambium checkout — the extracted successor to the
+# in-genet xilem-serval; same sibling-path pattern as netrender below).
+# Cambium currently declares genet-scripted-dom by version. Patch that
+# registry edge back to this checkout so the ScriptedDom and observable
+# contracts unify with genet-layout's graph.
+cambium = { path = "../../../cambium/crates/cambium" }
+
 # genet engine core (path deps resolve workspace-inherited fields
 # against the genet workspace root).
-xilem-serval = { path = "../../components/xilem-serval" }
 genet-scripted-dom = { path = "../../components/genet-scripted-dom" }
 genet-layout = { path = "../../components/genet-layout" }
 
-# rasterizer stack (sibling netrender checkout).
-netrender = { path = "../../../netrender/netrender" }
-netrender_device = { path = "../../../netrender/netrender_device" }
-paint_list_api = { path = "../../../netrender/paint_list_api" }
-paint_list_render = { path = "../../../netrender/paint_list_render" }
+# rasterizer stack — git deps matching the genet workspace's own
+# netrender source, so paint_list_api unifies with genet-layout's copy
+# (the per-target-webgpu commit is on main; the netrender_smoke pattern).
+netrender = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
+netrender_device = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
+paint_list_api = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
+paint_list_render = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
 
 wgpu = { version = "29", default-features = false, features = ["std", "wgsl", "webgpu"] }
 
@@ -59,11 +67,15 @@ console_error_panic_hook = "0.1"
 # graph needs (patches are per-workspace-root, and this example is its
 # own workspace). Same rationale comments as genet/Cargo.toml.
 [patch.crates-io]
-# Unify stylo_taffy's crates.io stylo/stylo_atoms ^0.18 with genet's git
-# rev (the v0.18.0 tag) — `links = "servo_style_crate"` allows one Stylo.
-stylo = { git = "https://github.com/servo/stylo", rev = "8bde0e96db888b7f188830bea261e72b2006fd73" }
-stylo_atoms = { git = "https://github.com/servo/stylo", rev = "8bde0e96db888b7f188830bea261e72b2006fd73" }
-# taffy float-slot width fix carried by genet.
+# Cambium's version-only edge otherwise pulls the published 0.1.0 graph,
+# which still selects the old Stylo 0.16 links crate beside genet-stylo 0.19.
+genet-scripted-dom = { path = "../../components/genet-scripted-dom" }
+layout-dom-api = { path = "../../components/shared/layout-dom" }
+# stylo_taffy fork vendored at 0.3.0-beta.1, re-targeted at the
+# genet-stylo fork surface (the old stylo/stylo_atoms git redirect is
+# gone — genet-stylo 0.19 is the one `links = "servo_style_crate"`).
+stylo_taffy = { path = "../../support/patches/stylo_taffy" }
+# taffy fork re-vendored on 0.12.1 (float fixes + flex `order`).
 taffy = { path = "../../support/patches/taffy" }
 # ahash runtime-rng/getrandom-0.3 drop for the wasm graph.
 sonic-rs = { path = "../../support/patches/sonic-rs-0.5.8" }

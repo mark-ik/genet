@@ -7,7 +7,7 @@
 //! Receipt shape:
 //! - Register a bundled font (`genet_layout::register_host_font`; wasm has
 //!   no system font registry)
-//! - Build a woodshed-flavored view tree through `xilem_serval::GenetAppRunner`
+//! - Build a woodshed-flavored view tree through `cambium::GenetAppRunner`
 //!   into a `ScriptedDom`
 //! - `genet_layout::lay_out_content` + `emit_band` -> `PaintList`
 //! - `paint_list_render::translate_paint_cmd_stream` -> `netrender::Scene`
@@ -17,24 +17,37 @@
 //! On success the page title flips to "SMOKE PASS" (automation hook) and the
 //! scene is visible on the canvas.
 
+#[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
+#[cfg(target_arch = "wasm32")]
 use std::rc::Rc;
 
-use wasm_bindgen::prelude::*;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
 
-use netrender::{create_netrender_instance, ColorLoad, NetrenderOptions};
-use paint_list_api::PaintList as _;
+#[cfg(target_arch = "wasm32")]
+use cambium::{AnyView, GenetAppRunner, GenetCtx, GenetElement, View, el, text};
+#[cfg(target_arch = "wasm32")]
 use genet_layout::{NoImageLoader, ScrollOffsets};
+#[cfg(target_arch = "wasm32")]
 use genet_scripted_dom::ScriptedDom;
-use xilem_serval::{el, text, AnyView, GenetAppRunner, GenetCtx, GenetElement, View};
+#[cfg(target_arch = "wasm32")]
+use netrender::{ColorLoad, NetrenderOptions, create_netrender_instance};
+#[cfg(target_arch = "wasm32")]
+use paint_list_api::PaintList as _;
 
 /// Boxed heterogeneous child view (the `NoteChild` pattern from meerkat).
+#[cfg(target_arch = "wasm32")]
 type Child = Box<dyn AnyView<(), (), GenetCtx, GenetElement>>;
 
+#[cfg(target_arch = "wasm32")]
 const W: u32 = 900;
+#[cfg(target_arch = "wasm32")]
 const H: u32 = 600;
 
+#[cfg(target_arch = "wasm32")]
 const SHEET: &str = r#"
 .root { width: 900px; height: 600px; background-color: #171a21; color: #d7dae0;
         font-family: sans-serif; font-size: 14px; padding: 16px; }
@@ -56,51 +69,68 @@ const SHEET: &str = r#"
 "#;
 
 /// A minor-pentatonic-ish scatter: (string, fret, is_root) per dot.
+#[cfg(target_arch = "wasm32")]
 const DOTS: &[(usize, usize, bool)] = &[
-    (0, 0, false), (0, 3, false), (1, 0, false), (1, 3, true),
-    (2, 0, false), (2, 2, true), (3, 0, false), (3, 2, false),
-    (4, 0, true), (4, 3, false), (5, 0, false), (5, 3, false),
+    (0, 0, false),
+    (0, 3, false),
+    (1, 0, false),
+    (1, 3, true),
+    (2, 0, false),
+    (2, 2, true),
+    (3, 0, false),
+    (3, 2, false),
+    (4, 0, true),
+    (4, 3, false),
+    (5, 0, false),
+    (5, 3, false),
 ];
 
+#[cfg(target_arch = "wasm32")]
 fn string_row(string: usize) -> Child {
-    let frets: Vec<Child> = (0..6)
-        .map(|fret| {
-            let dot = DOTS
-                .iter()
-                .find(|(s, f, _)| *s == string && *f == fret);
-            match dot {
-                Some((_, _, is_root)) => {
-                    let class = if *is_root { "dot root-dot" } else { "dot" };
-                    Box::new(
-                        el(
-                            "div",
-                            (el("div", text(if *is_root { "R" } else { "" }))
-                                .attr("class", class),),
-                        )
-                        .attr("class", "fret"),
-                    ) as Child
+    let frets: Vec<Child> =
+        (0..6)
+            .map(|fret| {
+                let dot = DOTS.iter().find(|(s, f, _)| *s == string && *f == fret);
+                match dot {
+                    Some((_, _, is_root)) => {
+                        let class = if *is_root { "dot root-dot" } else { "dot" };
+                        Box::new(
+                            el(
+                                "div",
+                                (el("div", text(if *is_root { "R" } else { "" }))
+                                    .attr("class", class),),
+                            )
+                            .attr("class", "fret"),
+                        ) as Child
+                    },
+                    None => Box::new(el("div", ()).attr("class", "fret")) as Child,
                 }
-                None => Box::new(el("div", ()).attr("class", "fret")) as Child,
-            }
-        })
-        .collect();
+            })
+            .collect();
     Box::new(el("div", frets).attr("class", "string"))
 }
 
+#[cfg(target_arch = "wasm32")]
 fn pill(label: &str, active: bool) -> Child {
-    Box::new(el("span", text(label.to_string())).attr(
-        "class",
-        if active { "pill pill-active" } else { "pill" },
-    ))
+    Box::new(
+        el("span", text(label.to_string()))
+            .attr("class", if active { "pill pill-active" } else { "pill" }),
+    )
 }
 
+#[cfg(target_arch = "wasm32")]
 fn side_item(label: &str, active: bool) -> Child {
     Box::new(el("div", text(label.to_string())).attr(
         "class",
-        if active { "side-item side-active" } else { "side-item" },
+        if active {
+            "side-item side-active"
+        } else {
+            "side-item"
+        },
     ))
 }
 
+#[cfg(target_arch = "wasm32")]
 fn view() -> impl View<(), (), GenetCtx, Element = GenetElement> {
     el(
         "div",
@@ -147,7 +177,7 @@ fn view() -> impl View<(), (), GenetCtx, Element = GenetElement> {
             .attr("class", "body"),
             el(
                 "div",
-                text("xilem-serval → genet-layout → paint list → netrender → WebGPU"),
+                text("cambium → genet-layout → paint list → netrender → WebGPU"),
             )
             .attr("class", "caption"),
         ),
@@ -155,12 +185,14 @@ fn view() -> impl View<(), (), GenetCtx, Element = GenetElement> {
     .attr("class", "root")
 }
 
+#[cfg(target_arch = "wasm32")]
 fn set_title(t: &str) {
     if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
         doc.set_title(t);
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(start)]
 pub fn start() {
     console_error_panic_hook::set_once();
@@ -169,23 +201,22 @@ pub fn start() {
             Ok(()) => {
                 web_sys::console::log_1(&"genet web smoke: PASS".into());
                 set_title("SMOKE PASS");
-            }
+            },
             Err(e) => {
                 web_sys::console::error_1(&format!("genet web smoke FAIL: {e:?}").into());
                 set_title("SMOKE FAIL");
-            }
+            },
         }
     });
 }
 
+#[cfg(target_arch = "wasm32")]
 async fn run() -> Result<(), String> {
     // Stage breadcrumbs go to the title so external automation can see
     // where a hang happens without CDP access.
     set_title("stage: fonts");
     // Fonts: wasm has no system registry; supply Roboto as the sans-serif face.
-    genet_layout::register_host_font(
-        include_bytes!("../assets/Roboto-Regular.ttf").to_vec(),
-    );
+    genet_layout::register_host_font(include_bytes!("../assets/Roboto-Regular.ttf").to_vec());
 
     // View tree -> ScriptedDom.
     set_title("stage: dom");
