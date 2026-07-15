@@ -4,6 +4,9 @@
 an executable acceptance test. It is the first place a new Cambium component
 should appear.
 
+The ordered expansion and promotion rules live in
+[`2026-07-15_component_catalog_growth_plan.md`](2026-07-15_component_catalog_growth_plan.md).
+
 ## Covered contracts
 
 | Family | Acceptance evidence |
