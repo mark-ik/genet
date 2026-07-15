@@ -150,17 +150,18 @@ bounded transform list supports 2D translate, scale, and rotate functions
 around the default center origin. The retained Livery session now routes
 viewport scroll, pointer-events hit testing, links, fragment navigation, and
 focus state. A host-driven opacity clock, bounded CSS transition metadata for
-opacity and background-color, and a native reftest-style paint pair are
+opacity, background-color, and color, and a native reftest-style paint pair are
 covered by package receipts. Nested scroll containers route wheel deltas into retained offsets and
 chain to the viewport at their boundary. Raster `data:` background URLs reach
 the neutral image side-table, and host-resolved local image bytes now use the
 same side-table seam. Bounded intrinsic tiling and position/repeat modes now
-paint through that seam. The bounded `all` and explicit `opacity, background-color`
-transition paths now sample opacity and background-color together. Replaced
+paint through that seam. The bounded `all` and explicit two- and three-property
+transition paths now sample opacity, background-color, and color together. Replaced
 `<img>` elements now use intrinsic data/local dimensions and preserve their
 aspect ratio under a bounded CSS width or height. Host-supplied remote-looking
-URLs use the same image seam; actual remote fetching remains open, along with full WPT
-reftest parity. Bounded
+URLs use the same image seam. The Livery session now asks the host fetcher for
+remote image bytes and paints them through that seam; full WPT reftest parity
+remains open. Bounded
 opacity-only `@keyframes` declarations
 with linear, ease, ease-in, ease-out, and ease-in-out timing functions now run
 on the retained clock. The WPT command surface now accepts
@@ -168,13 +169,16 @@ on the retained clock. The WPT command surface now accepts
 stylesheets, local image URLs, and raster `data:` backgrounds. Stylo remains the default, and
 the route is a comparison seam rather than a full-corpus parity receipt.
 
-The 2026-07-15 gate pass adds a host-supplied remote-looking URL receipt and a
-bounded explicit `opacity, background-color` transition receipt. The producer
-helper tests and `css/CSS2/box/ltr-basic.xht` pass on both routes. A first
+The 2026-07-15 gate pass adds a host-supplied remote-looking URL receipt, a
+session-level remote image fetch receipt, and bounded explicit two- and
+three-property transition receipts, including text color. The producer helper
+tests and `css/CSS2/box/ltr-basic.xht` pass on both routes. Focused
+`background-image-001.html` and `background-color-clip.html` reftests also pass
+on both routes. A first
 `css/css-backgrounds` probe reports 7 passes, 582 failures, 360 skips, and no
 runner errors. That is a capability map rather than a parity receipt: the
 failures cluster around background features outside the bounded lane and
-crash-path coverage. Actual remote fetching remains host-owned.
+crash-path coverage. Remote URL policy and caching remain host-owned.
 
 ## E0 closeout
 

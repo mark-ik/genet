@@ -16,15 +16,16 @@ and atomic `inline-block` placement. The retained interaction path now covers
 viewport scroll, pointer-events hit testing, link rectangles, fragment
 navigation, focus state, rounded fills, and two-stop gradient layering. A
 host-driven opacity clock supplies intermediate frames, and bounded
-`transition-property`/`transition-duration` metadata starts opacity and
-background-color transitions on that same clock, so `transition: all` and the
-bounded explicit `opacity, background-color` list can paint both changes in one
-retained tick. Nested scroll containers now route wheel deltas
+`transition-property`/`transition-duration` metadata starts opacity,
+background-color, and text-color transitions on that same clock, so
+`transition: all` and the bounded explicit two- and three-property lists can
+paint those changes in one retained tick. Nested scroll containers now route wheel deltas
 into retained offsets, chain at their boundary to the viewport, and replay
 descendant paint through transforms. Bounded opacity-only `@keyframes` and
-named timing functions now run on the retained clock. Remaining E3 work is
-remote resource fetching, full WPT reftest parity, additional transition-property
-lists and interpolation beyond the bounded opacity/background-color paths, and the cold-build
+named timing functions now run on the retained clock. Host-owned remote image
+fetching now feeds the same resource seam. Remaining E3 work is full WPT
+reftest parity, additional transition-property lists and interpolation beyond
+the bounded opacity/background-color/color paths, and the cold-build
 comparison. The
 first audit invalidated the proposed 33-accessor full-crate seam.
 The second chose Cambium structural UI as the bounded first lane.
@@ -243,22 +244,21 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   Rounded backgrounds are clipped through the neutral paint stack. Two-stop
   linear-gradient backgrounds paint as an ordered neutral layer over the color
   fill under that clip. The retained session also has a host-driven opacity
-  clock and bounded CSS opacity/background-color transitions, with
+  clock and bounded CSS opacity/background-color/color transitions, with
   intermediate-frame receipts proving `transition: all` and the explicit
-  `opacity, background-color` list update both paint properties from the same
+  two- and three-property lists update their paint properties from the same
   clock.
   Raster `data:` background URLs now lower into the neutral image side-table.
-  Host-resolved local image bytes now feed the same neutral image side-table,
+  Host-resolved local and remote image bytes now feed the same neutral image side-table,
   and the WPT command surface accepts `--renderer livery`, routing bounded
   inline and local linked stylesheet cases plus local image URLs and raster
   `data:` backgrounds through the clean-room producer. Stylo remains the
   default. Bounded opacity-only `@keyframes` declarations and linear, ease,
   ease-in, ease-out, and ease-in-out timing functions run on the retained
   clock. Bounded intrinsic tiling and position/repeat modes now have paint-list
-  receipts. Remaining: remote resource fetching, additional transition-property
-  lists and interpolation beyond the bounded opacity/background-color paths, full reftest parity, and
-  an apples-to-apples
-  cold-build delta against the 30m35s baseline.
+  receipts. Remaining: additional transition-property lists and interpolation
+  beyond the bounded opacity/background-color/color paths, full reftest parity,
+  and an apples-to-apples cold-build delta against the 30m35s baseline.
 - **E4 — first production lane.** One real lane (host chrome or
   smolweb) ships on Livery by default. Receipt: the lane's
   existing suites green + capture receipts.
@@ -284,40 +284,49 @@ and focus routing through genet-documents. Rounded background clipping is
 covered by the paint-list receipt. The gradient receipt and opacity clock are
   covered by the paint-list, cascade, and interaction suites. The keyframe
   parser and retained opacity animation receipt cover named timing functions.
-  Resource-backed images, additional transition-property lists and
-  interpolation, full reftest parity, and the cold-build comparison remain
-  explicit next gates. The image receipt covers raster `data:` URLs,
-  host-resolved local and remote-looking bytes, intrinsic `<img>` sizing, and
-  aspect-ratio preservation; actual remote loading still belongs to the host
-  fetch/cache seam.
+  Additional transition-property lists and interpolation beyond the new color
+  lane, full reftest parity, and the cold-build comparison remain explicit next
+  gates. The image receipt covers raster `data:` URLs, host-resolved local and
+  remote-looking bytes, intrinsic `<img>` sizing, and aspect-ratio preservation;
+  the session now exercises the host fetcher for a remote image while keeping
+  URL policy and caching host-owned.
 
 ### 2026-07-15 remaining-gate receipt
 
-The bounded explicit `opacity, background-color` transition list now has
-cascade, value round-trip, and retained mid-frame receipts. The image seam also
-accepts host-supplied bytes for an `https` URL, which keeps URL scheme handling
-inside Livery while leaving fetch, cache, and policy with the host.
+The bounded explicit `opacity, background-color` and
+`opacity, background-color, color` transition lists now have cascade, value
+round-trip, and retained mid-frame receipts. A standalone `color` transition
+also paints an interpolated Parley text run through the same retained clock.
+The Livery session now resolves a CSS/DOM image URL against the document
+address, asks the host `ResourceFetcher` for bytes, and paints the returned
+remote image; URL policy and caching remain host-owned.
 
-The WPT producer helper tests pass, and the representative
-`css/CSS2/box/ltr-basic.xht` reftest passes through both `--renderer livery`
-and the default Stylo route. A first `css/css-backgrounds` probe reports 7
-passes, 582 failures, 360 skips, and no runner errors. That is a capability
-map rather than a parity receipt: the failures cluster around background
-features outside the bounded lane and crash-path coverage.
+The focused Livery/genet-livery clippy wall passes with `-D warnings`.
+`genet-documents` strict clippy remains blocked by the existing `pelt-core`
+`clippy::derivable_impls` error, outside this slice.
+
+The WPT producer helper tests pass. `css/CSS2/box/ltr-basic.xht`,
+`css/css-backgrounds/background-image-001.html`, and
+`css/css-backgrounds/background-color-clip.html` each pass through both
+`--renderer livery` and the default Stylo route; the `.htm` border-box probe is
+skipped by the runner. A first `css/css-backgrounds` probe reports 7 passes,
+582 failures, 360 skips, and no runner errors. That is a capability map rather
+than a parity receipt: the failures cluster around background features outside
+the bounded lane and crash-path coverage.
 The full `genet-wpt` unit wall is 18 passed, 1 failed, and 3 ignored; its sole
 failure is the existing WebGL `gl_clear` harness panic (`JsError: not a callable
-function`), outside the Livery route. A clean package-only
-`cargo check -p genet-livery` measured 4.9 seconds on this checkout. That is
-useful local telemetry, not an apples-to-apples replacement for the 30m35s
-whole-workspace cold-build baseline.
+function`), outside the Livery route. After removing 17.9 GiB of targeted
+Livery/document artifacts, `cargo check -p genet-documents --features livery`
+completed in 57.1 seconds. That is useful package-graph telemetry, not an
+apples-to-apples replacement for the 30m35s whole-workspace cold-build
+baseline.
 
-Actual remote fetching, full WPT reftest parity, broader transition lists and
-interpolation, and the E4 default production-lane switch remain open. The
-standalone Cambium WebGPU smoke is also blocked before compilation by its
-separate-workspace dependency graph: Cambium requests the crates.io
-`genet-scripted-dom` line while the smoke directly pins the local package, and
-Cargo then selects Stylo 0.16 alongside `genet-stylo` 0.19. That is a smoke
-manifest/dependency-unification fix, outside the Livery engine itself.
+Full WPT reftest parity, broader transition lists and interpolation beyond
+color, and the E4 default production-lane switch remain open. The standalone
+Cambium WebGPU smoke now passes a native `cargo check` after local
+`genet-scripted-dom` and `layout-dom-api` patching; the checkout does not have
+the `wasm32-unknown-unknown` target installed, so that target remains
+unverified.
 
 ## The destination, named
 
