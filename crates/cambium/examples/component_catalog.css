@@ -243,6 +243,34 @@ textarea {
     min-height: 5rem;
 }
 
+.catalog-graph-swatch-card {
+    grid-column: span 2;
+}
+
+.graph-canvas-swatch {
+    background-color: var(--catalog-bg);
+    border: 1px solid var(--catalog-border);
+    border-radius: 7px;
+}
+
+.graph-canvas-swatch-node {
+    background-color: transparent;
+    border: 0;
+    border-radius: 999px;
+    cursor: pointer;
+    padding: 0;
+}
+
+.graph-canvas-swatch-expand {
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-border);
+    border-radius: 4px;
+    color: var(--catalog-muted);
+    cursor: pointer;
+    font-size: 10px;
+    padding: 2px 5px;
+}
+
 custom-leaf {
     display: inline-block;
 }

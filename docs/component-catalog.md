@@ -17,7 +17,8 @@ should appear.
 | Action list | Combobox/listbox linkage, disabled-item skipping, action routing |
 | Overlay menu | Positioned menu rendering and pointer selection |
 | Data grid | Grid/row/header/cell semantics, keyboard-sortable headers, and bounded DOM rows for a 10,000-row model |
-| Sprigging leaves | Four catalog leaf elements, retained registry entries, paint commands, clean repaint gate |
+| Graph-canvas swatch | Shared graph paint path, native node targets, click/hover routing, selected/focus state, expand action |
+| Sprigging leaves | Five catalog leaf elements, retained registry entries, paint commands, clean repaint gate |
 
 The companion CSS is application-owned and uses custom properties. It includes
 visible focus, disabled, selected, editor, menu, grid, and leaf states so a

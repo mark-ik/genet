@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! First catalog leaves (tier-2 Path-A glyphs from the widget catalog,
-//! `docs/history/2026-07-08_chisel_widget_catalog.md`): [`GraphGlyph`], [`Meter`],
+//! `docs/history/2026-07-08_chisel_widget_catalog.md`): [`GraphCanvas`], [`Meter`],
 //! [`Knob`]. Pure geometry: data in, `PaintCmd`s out. Labels/values belong in
-//! DOM siblings, interaction in the view layer (`on_pointer` around the leaf).
+//! DOM siblings, interaction in the view layer over the leaf.
 
 use paint_list_api::ColorF;
 
 use crate::path::Path;
 use crate::{Leaf, PaintCx, Size, SizeHint, round_stroke};
 
-/// One node of a [`GraphGlyph`], in normalized `0..1` coordinates (scaled to
+/// One node of a [`GraphCanvas`], in normalized `0..1` coordinates (scaled to
 /// the leaf's box at paint time).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GraphGlyphNode {
@@ -19,22 +19,59 @@ pub struct GraphGlyphNode {
     pub color: ColorF,
 }
 
-/// A miniature node-link graph: the "button with the graph on it" glyph, also
-/// link previews, breadcrumb thumbnails, hover cards. Layout is
-/// caller-precomputed (the leaf stays dumb); node coordinates are normalized
-/// `0..1` and scaled to the box.
-pub struct GraphGlyph {
+/// Pane-local camera for a [`GraphCanvas`]. Pan is expressed in normalized
+/// scene coordinates; zoom is centred on `(0.5, 0.5)`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GraphViewport {
+    pub pan: (f32, f32),
+    pub zoom: f32,
+}
+
+impl Default for GraphViewport {
+    fn default() -> Self {
+        Self {
+            pan: (0.0, 0.0),
+            zoom: 1.0,
+        }
+    }
+}
+
+impl GraphViewport {
+    /// Project one normalized scene point into a leaf-local box. View-layer hit
+    /// targets use this same function, keeping paint and interaction aligned.
+    pub fn project(self, point: (f32, f32), size: Size, inset: f32) -> (f32, f32) {
+        let zoom = self.zoom.max(0.01);
+        let x = (point.0 - 0.5) * zoom + 0.5 + self.pan.0;
+        let y = (point.1 - 0.5) * zoom + 0.5 + self.pan.1;
+        let width = (size.width - 2.0 * inset).max(0.0);
+        let height = (size.height - 2.0 * inset).max(0.0);
+        (inset + x * width, inset + y * height)
+    }
+}
+
+/// A node-link canvas shared by full panes and bounded glyphs such as link
+/// previews, breadcrumb thumbnails, and hover cards. Layout is caller-computed;
+/// normalized node coordinates are projected through a pane-local viewport.
+pub struct GraphCanvas {
     nodes: Vec<GraphGlyphNode>,
     /// Index pairs into `nodes`; out-of-range pairs are skipped.
     edges: Vec<(u16, u16)>,
     pub node_radius: f32,
     pub edge_width: f32,
     pub edge_color: ColorF,
+    /// Ring around the selected node.
+    pub selection_color: ColorF,
+    /// Outer ring around the keyboard-focused node.
+    pub focus_color: ColorF,
+    viewport: GraphViewport,
+    selected: Option<u16>,
+    focus: Option<u16>,
+    hovered: Option<u16>,
     intrinsic: Size,
     dirty: bool,
 }
 
-impl GraphGlyph {
+impl GraphCanvas {
     pub fn new(nodes: Vec<GraphGlyphNode>, edges: Vec<(u16, u16)>, intrinsic: Size) -> Self {
         Self {
             nodes,
@@ -47,6 +84,22 @@ impl GraphGlyph {
                 b: 0.55,
                 a: 1.0,
             },
+            selection_color: ColorF {
+                r: 0.95,
+                g: 0.72,
+                b: 0.25,
+                a: 1.0,
+            },
+            focus_color: ColorF {
+                r: 0.30,
+                g: 0.58,
+                b: 0.95,
+                a: 1.0,
+            },
+            viewport: GraphViewport::default(),
+            selected: None,
+            focus: None,
+            hovered: None,
             intrinsic,
             dirty: true,
         }
@@ -58,9 +111,46 @@ impl GraphGlyph {
         self.edges = edges;
         self.dirty = true;
     }
+
+    /// Change the pane-local camera. A bounded swatch and a full canvas use the
+    /// same projection; only their viewport and measured box differ.
+    pub fn set_viewport(&mut self, viewport: GraphViewport) {
+        if self.viewport != viewport {
+            self.viewport = viewport;
+            self.dirty = true;
+        }
+    }
+
+    pub fn viewport(&self) -> GraphViewport {
+        self.viewport
+    }
+
+    /// Set transient and durable emphasis by node index.
+    pub fn set_emphasis(
+        &mut self,
+        selected: Option<u16>,
+        focus: Option<u16>,
+        hovered: Option<u16>,
+    ) {
+        if (self.selected, self.focus, self.hovered) != (selected, focus, hovered) {
+            self.selected = selected;
+            self.focus = focus;
+            self.hovered = hovered;
+            self.dirty = true;
+        }
+    }
+
+    /// Project a node through the exact camera and inset used by [`Leaf::paint`].
+    pub fn node_local_position(&self, index: usize, size: Size) -> Option<(f32, f32)> {
+        let node = self.nodes.get(index)?;
+        Some(
+            self.viewport
+                .project((node.x, node.y), size, self.node_radius + self.edge_width),
+        )
+    }
 }
 
-impl Leaf for GraphGlyph {
+impl Leaf for GraphCanvas {
     /// A node-link glyph announces as a graphics object. Its interior structure
     /// (which node, which link) is not reachable through a single AccessKit node;
     /// publishing the nodes as semantic children is the leaf-publication work the
@@ -90,11 +180,7 @@ impl Leaf for GraphGlyph {
         let s = cx.size();
         // Inset so node circles at 0/1 coordinates stay inside the box.
         let inset = self.node_radius + self.edge_width;
-        let (w, h) = (
-            (s.width - 2.0 * inset).max(0.0),
-            (s.height - 2.0 * inset).max(0.0),
-        );
-        let place = |n: &GraphGlyphNode| (inset + n.x * w, inset + n.y * h);
+        let place = |n: &GraphGlyphNode| self.viewport.project((n.x, n.y), s, inset);
         // Edges under nodes.
         for &(a, b) in &self.edges {
             let (Some(na), Some(nb)) = (self.nodes.get(a as usize), self.nodes.get(b as usize))
@@ -108,8 +194,25 @@ impl Leaf for GraphGlyph {
                 round_stroke(self.edge_color, self.edge_width),
             );
         }
-        for n in &self.nodes {
+        for (index, n) in self.nodes.iter().enumerate() {
             let (x, y) = place(n);
+            if self.hovered == u16::try_from(index).ok() {
+                let mut wash = n.color;
+                wash.a *= 0.24;
+                cx.fill_path(Path::circle(x, y, self.node_radius * 1.9), wash);
+            }
+            if self.selected == u16::try_from(index).ok() {
+                cx.stroke_path(
+                    Path::circle(x, y, self.node_radius + 2.0),
+                    round_stroke(self.selection_color, 1.5),
+                );
+            }
+            if self.focus == u16::try_from(index).ok() {
+                cx.stroke_path(
+                    Path::circle(x, y, self.node_radius + 4.0),
+                    round_stroke(self.focus_color, 1.0),
+                );
+            }
             cx.fill_path(Path::circle(x, y, self.node_radius), n.color);
         }
         self.dirty = false;
@@ -119,6 +222,11 @@ impl Leaf for GraphGlyph {
         self.dirty
     }
 }
+
+/// Compatibility name for the original miniature-only graph leaf. `GraphGlyph`
+/// and `GraphCanvas` are the same renderer; the latter names its use for both
+/// bounded swatches and full canvas panes.
+pub type GraphGlyph = GraphCanvas;
 
 /// A level meter bar: track + proportional fill + optional peak tick.
 /// Vertical fills bottom-up, horizontal left-to-right. Value/peak are `0..=1`.
@@ -410,6 +518,44 @@ mod tests {
         // Painter order: edges first.
         assert!(matches!(&cmds[0], PaintCmd::DrawPath(p) if p.stroke.is_some()));
         assert!(!g.paint_dirty());
+    }
+
+    #[test]
+    fn graph_canvas_camera_and_emphasis_share_one_paint_path() {
+        let mut canvas = GraphCanvas::new(
+            vec![GraphGlyphNode {
+                x: 0.25,
+                y: 0.5,
+                color: white(),
+            }],
+            Vec::new(),
+            Size {
+                width: 100.0,
+                height: 60.0,
+            },
+        );
+        canvas.set_viewport(GraphViewport {
+            pan: (0.1, 0.0),
+            zoom: 2.0,
+        });
+        canvas.set_emphasis(Some(0), Some(0), Some(0));
+        let local = canvas
+            .node_local_position(
+                0,
+                Size {
+                    width: 100.0,
+                    height: 60.0,
+                },
+            )
+            .expect("projected node");
+        assert!(local.0 < 50.0, "zoom and pan project through the camera");
+
+        let cmds = paint_of(&mut canvas, 100.0, 60.0);
+        assert_eq!(
+            count(&cmds, |cmd| matches!(cmd, PaintCmd::DrawPath(_))),
+            4,
+            "hover wash + selection ring + focus ring + node"
+        );
     }
 
     #[test]

@@ -34,6 +34,7 @@ mod editor;
 mod element;
 mod event;
 mod focusable;
+mod graph_canvas;
 mod grid;
 #[cfg(feature = "highlight")]
 mod highlight;
@@ -65,6 +66,10 @@ pub use action_list::{ActionItem, ActionListEvent, ActionListState, action_list}
 pub use arrangement::{arrangement, placed, placed_with};
 pub use context::GenetCtx;
 pub use editor::{EditHistory, pair_close, wrap_selection};
+pub use graph_canvas::{
+    GRAPH_CANVAS_SWATCH_CSS, GraphCanvasEdge, GraphCanvasNode, GraphCanvasSubgraph,
+    GraphCanvasSwatch, graph_canvas_swatch,
+};
 pub use grid::{GridView, data_grid};
 pub use menu::{MENU_CLASS, MENU_ROW_ACTIVE_CLASS, MENU_ROW_CLASS, menu};
 // Re-export the grid's spec types from Sprigging so a host building a `data_grid`
@@ -97,7 +102,7 @@ pub use runner::GenetAppRunner;
 pub use select::{SelectState, select};
 pub use slider::{Slider, slider};
 pub use splice::GenetChildrenSplice;
-pub use sprigging::{GridColumn, GridSpec};
+pub use sprigging::{GraphCanvas, GraphViewport, GridColumn, GridSpec};
 pub use styled_field::{FieldChild, StyleRange, styled_text_field, styled_textarea};
 // Per-tag element-view helpers: `div`, `span`, `p`, `input`, `label`, `a`,
 // `h1`/`h2`/`h3`, `ul`/`ol`/`li`. (No `button` here — `controls::button` is the

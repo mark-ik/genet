@@ -10,9 +10,10 @@ use std::rc::Rc;
 
 use cambium::{
     ActionItem, ActionListEvent, ActionListState, AnyView, DomHandle, GenetAppRunner, GenetCtx,
-    GenetElement, GridColumn, GridSpec, GridView, HoverEvent, HoverPhase, Key, KeyEvent, NamedKey,
-    PointerClick, RadioGroup, SelectState, Slider, StyleRange, TextInput, action_list, button,
-    button_with, checkbox, custom_leaf, data_grid, el, lens, map_action, menu, on_hover,
+    GenetElement, GraphCanvasEdge, GraphCanvasNode, GraphCanvasSubgraph, GraphCanvasSwatch,
+    GridColumn, GridSpec, GridView, HoverEvent, HoverPhase, Key, KeyEvent, NamedKey, PointerClick,
+    RadioGroup, SelectState, Slider, StyleRange, TextInput, action_list, button, button_with,
+    checkbox, custom_leaf, data_grid, el, graph_canvas_swatch, lens, map_action, menu, on_hover,
     radio_group, select, slider, styled_textarea, text_field_typed, textarea_typed, toggle,
 };
 use genet_scripted_dom::{NodeId, ScriptedDom};
@@ -27,6 +28,7 @@ const SWATCH_KEY: u64 = 101;
 const GRAPH_KEY: u64 = 102;
 const METER_KEY: u64 = 103;
 const KNOB_KEY: u64 = 104;
+const GRAPH_SWATCH_KEY: u64 = 105;
 
 type CatalogView = Box<dyn AnyView<CatalogState, (), GenetCtx, GenetElement>>;
 type CatalogLogic = fn(&CatalogState) -> CatalogView;
@@ -51,6 +53,9 @@ struct CatalogState {
     graph_presses: usize,
     hovered: bool,
     hover_moves: usize,
+    graph_swatch_selected: u8,
+    graph_swatch_hovered: Option<u8>,
+    graph_swatch_expanded: bool,
 }
 
 impl Default for CatalogState {
@@ -76,7 +81,57 @@ impl Default for CatalogState {
             graph_presses: 0,
             hovered: false,
             hover_moves: 0,
+            graph_swatch_selected: 1,
+            graph_swatch_hovered: None,
+            graph_swatch_expanded: false,
         }
+    }
+}
+
+fn graph_swatch(selected: u8, hovered: Option<u8>) -> GraphCanvasSwatch<u8, &'static str> {
+    let mut swatch = GraphCanvasSwatch::new(
+        GRAPH_SWATCH_KEY,
+        GraphCanvasSubgraph {
+            nodes: vec![
+                GraphCanvasNode {
+                    id: 1,
+                    kind: "document",
+                    position: (0.12, 0.52),
+                    label: "Selected document".into(),
+                },
+                GraphCanvasNode {
+                    id: 2,
+                    kind: "person",
+                    position: (0.53, 0.18),
+                    label: "Related person".into(),
+                },
+                GraphCanvasNode {
+                    id: 3,
+                    kind: "place",
+                    position: (0.88, 0.70),
+                    label: "Related place".into(),
+                },
+            ],
+            edges: vec![
+                GraphCanvasEdge { from: 1, to: 2 },
+                GraphCanvasEdge { from: 2, to: 3 },
+                GraphCanvasEdge { from: 1, to: 3 },
+            ],
+        },
+    )
+    .with_size(260, 128)
+    .with_label("Related nodes");
+    swatch.selected = Some(selected);
+    swatch.focus = Some(selected);
+    swatch.hovered = hovered;
+    swatch
+}
+
+fn graph_kind_color(kind: &&str) -> ColorF {
+    match *kind {
+        "document" => color(0.22, 0.41, 0.72),
+        "person" => color(0.65, 0.35, 0.72),
+        _ => color(0.25, 0.65, 0.45),
     }
 }
 
@@ -331,6 +386,17 @@ fn catalog(state: &CatalogState) -> CatalogView {
             .attr("aria-label", "Open graph"),
             el(
                 "div",
+                graph_canvas_swatch(
+                    &graph_swatch(state.graph_swatch_selected, state.graph_swatch_hovered),
+                    |state: &mut CatalogState, id| state.graph_swatch_selected = id,
+                    |state: &mut CatalogState, id| state.graph_swatch_hovered = id,
+                    |state: &mut CatalogState| state.graph_swatch_expanded = true,
+                ),
+            )
+            .attr("id", "catalog-graph-swatch")
+            .attr("class", "catalog-graph-swatch-card"),
+            el(
+                "div",
                 custom_leaf::<CatalogState, ()>(METER_KEY, 96, 18).attr("aria-label", "Level"),
             )
             .attr("class", "catalog-leaf-card"),
@@ -408,6 +474,10 @@ fn catalog_leaves() -> LeafRegistry<u64> {
                 height: 32.0,
             },
         )),
+    );
+    registry.insert(
+        GRAPH_SWATCH_KEY,
+        Box::new(graph_swatch(1, None).paint_leaf(graph_kind_color)),
     );
     let mut meter = Meter::new(
         false,
@@ -596,7 +666,7 @@ fn assert_initial_surface(dom: &ScriptedDom, root: NodeId) {
         "custom-leaf",
         &mut leaves,
     );
-    assert_eq!(leaves.len(), 4);
+    assert_eq!(leaves.len(), 5);
     assert!(THEME.contains("--catalog-accent"));
     assert!(THEME.contains(":focus-visible"));
 }
@@ -679,6 +749,25 @@ fn run_interactions(runner: &mut CatalogRunner) {
     runner.dispatch_click(graph_button, PointerClick::at((4.0, 4.0)));
     assert_eq!(runner.state().graph_presses, 1);
 
+    let graph_swatch = find_id(&runner.dom().borrow(), root, "catalog-graph-swatch");
+    let related_person = find_where(&runner.dom().borrow(), graph_swatch, &|dom, node| {
+        attr(dom, node, "aria-label") == Some("Related person")
+    })
+    .expect("interactive graph node");
+    runner.dispatch_hover(
+        related_person,
+        HoverEvent::new(HoverPhase::Enter, (4.0, 4.0), (20.0, 20.0)),
+    );
+    assert_eq!(runner.state().graph_swatch_hovered, Some(2));
+    runner.dispatch_click(related_person, PointerClick::at((4.0, 4.0)));
+    assert_eq!(runner.state().graph_swatch_selected, 2);
+    let expand = find_where(&runner.dom().borrow(), graph_swatch, &|dom, node| {
+        attr(dom, node, "aria-label") == Some("Expand graph")
+    })
+    .expect("graph expand affordance");
+    runner.dispatch_click(expand, PointerClick::at((4.0, 4.0)));
+    assert!(runner.state().graph_swatch_expanded);
+
     let hover = find_id(&runner.dom().borrow(), root, "catalog-hover");
     runner.dispatch_hover(
         hover,
@@ -731,19 +820,23 @@ fn assert_leaf_pipeline() {
                 width: 48.0,
                 height: 48.0,
             }),
+            GRAPH_SWATCH_KEY => Some(Size {
+                width: 260.0,
+                height: 128.0,
+            }),
             _ => None,
         }
     }
 
     let mut registry = catalog_leaves();
-    for key in [SWATCH_KEY, GRAPH_KEY, METER_KEY, KNOB_KEY] {
+    for key in [SWATCH_KEY, GRAPH_KEY, METER_KEY, KNOB_KEY, GRAPH_SWATCH_KEY] {
         assert!(registry.contains(&key));
     }
     let mut rendered = RenderedLeaves::new();
     let painted = registry.render_into(size, &mut rendered);
-    assert_eq!(painted, 4);
-    assert_eq!(rendered.len(), 4);
-    for key in [SWATCH_KEY, GRAPH_KEY, METER_KEY, KNOB_KEY] {
+    assert_eq!(painted, 5);
+    assert_eq!(rendered.len(), 5);
+    for key in [SWATCH_KEY, GRAPH_KEY, METER_KEY, KNOB_KEY, GRAPH_SWATCH_KEY] {
         assert!(
             rendered
                 .get(key)
