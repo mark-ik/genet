@@ -160,6 +160,43 @@ fn linear_gradient_background_reaches_neutral_primitive() {
 }
 
 #[test]
+fn data_uri_background_image_reaches_neutral_image_side_table() {
+    use base64::Engine as _;
+
+    let blue = image::RgbaImage::from_pixel(2, 3, image::Rgba([0, 0, 255, 255]));
+    let mut png = Vec::new();
+    blue.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("encode test PNG");
+    let data_uri = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png)
+    );
+    let css = format!(".card {{ width: 80px; height: 40px; background-image: url({data_uri}); }}");
+    let list = render(
+        r#"<html><body><div class="card"></div></body></html>"#,
+        &css,
+        1,
+    );
+    let PaintCmd::DrawImage(image) = list
+        .commands()
+        .iter()
+        .find(|command| matches!(command, PaintCmd::DrawImage(_)))
+        .expect("data URI background lowers to an image primitive")
+    else {
+        unreachable!();
+    };
+    let resource = list
+        .images()
+        .iter()
+        .find(|resource| resource.key == image.image_key)
+        .expect("image command resolves through the paint side table");
+    assert_eq!((resource.width, resource.height), (2, 3));
+    assert_eq!(resource.data.len(), 2 * 3 * 4);
+    assert_eq!(image.placement.bounds.size().width, 80.0);
+    assert_eq!(image.placement.bounds.size().height, 40.0);
+}
+
+#[test]
 fn retained_opacity_clock_samples_and_settles() {
     let document = StaticDocument::parse(r#"<html><body><div class="card"></div></body></html>"#);
     let card = document

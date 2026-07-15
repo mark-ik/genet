@@ -6,6 +6,7 @@ use super::{Color, Length, LengthPercentage, ParseError, format_number, keyword_
 pub enum BackgroundImage {
     None,
     LinearGradient { from: Color, to: Color },
+    Url(Box<str>),
 }
 
 impl FromStr for BackgroundImage {
@@ -16,11 +17,28 @@ impl FromStr for BackgroundImage {
         if input.eq_ignore_ascii_case("none") {
             return Ok(Self::None);
         }
+        if input.len() > 5 && input[..4].eq_ignore_ascii_case("url(") && input.ends_with(')') {
+            let raw = input[4..input.len() - 1].trim();
+            let url = raw
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .or_else(|| {
+                    raw.strip_prefix('\'')
+                        .and_then(|value| value.strip_suffix('\''))
+                })
+                .unwrap_or(raw)
+                .trim();
+            if !url.is_empty() {
+                return Ok(Self::Url(url.into()));
+            }
+        }
         let Some(arguments) = input
             .strip_prefix("linear-gradient(")
             .and_then(|value| value.strip_suffix(')'))
         else {
-            return Err(ParseError::expected("none or a two-stop linear-gradient"));
+            return Err(ParseError::expected(
+                "none, url(<image>), or a two-stop linear-gradient",
+            ));
         };
         let mut colors = arguments.split(',').map(str::trim);
         let from = colors
@@ -45,6 +63,7 @@ impl fmt::Display for BackgroundImage {
             Self::LinearGradient { from, to } => {
                 write!(formatter, "linear-gradient({from}, {to})")
             },
+            Self::Url(url) => write!(formatter, "url({url})"),
         }
     }
 }

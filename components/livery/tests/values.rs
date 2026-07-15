@@ -59,6 +59,7 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<BoxSizing>("border-box");
     assert_round_trip::<BoxShadow>("0 2px 4px #00000055");
     assert_round_trip::<BackgroundImage>("linear-gradient(red, blue)");
+    assert_round_trip::<BackgroundImage>("url(data:image/png;base64,seed)");
     assert_round_trip::<Duration>("100ms");
     assert_round_trip::<TransitionProperty>("opacity");
     assert_round_trip::<Alignment>("space-between");

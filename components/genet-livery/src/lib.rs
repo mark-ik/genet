@@ -15,8 +15,10 @@ mod text;
 
 pub use document::{ClickOutcome, LinkTarget, LiveryDocument};
 pub use dom::{ElementRef, InteractionStates, SelectorTree};
+pub(crate) use layout::hit_test_with_scroll;
 pub use layout::{Fragment, FragmentPlane, LayoutError, hit_test, layout};
 pub use livery::media::Device;
+pub(crate) use paint::emit_paint_list_with_text_system_scrolled;
 pub use paint::{LiveryPaintList, emit_paint_list, emit_paint_list_with_text_system};
 pub use style::{StylePlane, StyleSet, resolve_styles};
 pub use text::TextSystem;

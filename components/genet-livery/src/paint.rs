@@ -1,6 +1,9 @@
 //! Paint-list emission for Livery's bounded structural lane.
 
-use std::{collections::HashSet, hash::Hash};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
+};
 
 use euclid::Angle;
 use layout_dom_api::{LayoutDom, NodeKind};
@@ -13,11 +16,12 @@ use livery::{
     },
 };
 use paint_list_api::{
-    BorderDetails, BorderItem, BorderRadius, BorderSide, BorderStyle, BoxShadowClipMode, ClipKind,
-    ClipSpec, ColorF, CommonPlacement, DeviceIntSize, EngineId, ExtendMode, FontResource,
-    GradientStop, LayerSpec, LayoutPoint, LayoutRect, LayoutSideOffsets, LayoutSize,
-    LayoutTransform, LayoutVector2D, LinearGradientItem, LinearGradientPayload, NormalBorder,
-    PaintCmd, PaintList, RectItem, ShadowItem, TransformKind, TransformSpec,
+    AlphaType, BorderDetails, BorderItem, BorderRadius, BorderSide, BorderStyle, BoxShadowClipMode,
+    ClipKind, ClipSpec, ColorF, CommonPlacement, DeviceIntSize, EngineId, ExtendMode, FontResource,
+    GradientStop, IdNamespace, ImageItem, ImageKey, ImageRendering, ImageResource, LayerSpec,
+    LayoutPoint, LayoutRect, LayoutSideOffsets, LayoutSize, LayoutTransform, LayoutVector2D,
+    LinearGradientItem, LinearGradientPayload, NormalBorder, PaintCmd, PaintList, RectItem,
+    ShadowItem, TransformKind, TransformSpec,
 };
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +38,9 @@ pub struct LiveryPaintList {
     generation: u64,
     commands: Vec<PaintCmd>,
     fonts: Vec<FontResource>,
+    images: Vec<ImageResource>,
+    #[serde(skip)]
+    image_keys: HashMap<String, ImageKey>,
 }
 
 impl LiveryPaintList {
@@ -43,7 +50,28 @@ impl LiveryPaintList {
             generation,
             commands: Vec::new(),
             fonts: Vec::new(),
+            images: Vec::new(),
+            image_keys: HashMap::new(),
         }
+    }
+
+    fn image_key_for(&mut self, url: &str) -> Option<ImageKey> {
+        if let Some(key) = self.image_keys.get(url) {
+            return Some(*key);
+        }
+        let data_url = data_url::DataUrl::process(url).ok()?;
+        let (bytes, _) = data_url.decode_to_vec().ok()?;
+        let rgba = image::load_from_memory(&bytes).ok()?.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        let key = ImageKey::new(IdNamespace(0), self.images.len() as u32 + 1);
+        self.images.push(ImageResource {
+            key,
+            width,
+            height,
+            data: rgba.into_raw(),
+        });
+        self.image_keys.insert(url.to_owned(), key);
+        Some(key)
     }
 
     pub(crate) fn translated(mut self, x: f32, y: f32) -> Self {
@@ -80,6 +108,10 @@ impl PaintList for LiveryPaintList {
 
     fn fonts(&self) -> &[FontResource] {
         &self.fonts
+    }
+
+    fn images(&self) -> &[ImageResource] {
+        &self.images
     }
 }
 
@@ -121,6 +153,33 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    emit_paint_list_with_text_system_scrolled(
+        dom,
+        styles,
+        fragments,
+        viewport,
+        generation,
+        text,
+        &HashMap::new(),
+    )
+}
+
+/// Emit a retained frame with per-element scroll offsets applied to descendant
+/// paint. The public convenience path keeps this map empty; retained sessions
+/// supply their wheel-owned offsets here.
+pub(crate) fn emit_paint_list_with_text_system_scrolled<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    viewport: DeviceIntSize,
+    generation: u64,
+    text: &mut TextSystem,
+    scroll_offsets: &HashMap<D::NodeId, (f32, f32)>,
+) -> LiveryPaintList
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
     let mut list = LiveryPaintList::new(viewport, generation);
     let mut text_frame = text.begin_frame();
     let mut text_state = PaintText {
@@ -135,6 +194,7 @@ where
         None,
         &mut text_state,
         &mut list,
+        scroll_offsets,
     );
     list.fonts = text.fonts_for(&text_frame);
     list
@@ -145,6 +205,7 @@ struct PaintText<'a, Id> {
     frame: &'a mut TextFrame<Id>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_node<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
@@ -153,6 +214,7 @@ fn emit_node<D>(
     inherited: Option<&ComputedValues>,
     text: &mut PaintText<'_, D::NodeId>,
     list: &mut LiveryPaintList,
+    scroll_offsets: &HashMap<D::NodeId, (f32, f32)>,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -195,7 +257,24 @@ fn emit_node<D>(
     ) else {
         return;
     };
-    emit_children_in_stacking_order(dom, styles, fragments, id, inherited, text, list);
+    let scroll_transform = scroll_offsets.get(&id).copied().and_then(scroll_spec);
+    if let Some(transform) = &scroll_transform {
+        list.commands
+            .push(PaintCmd::PushTransform(transform.clone()));
+    }
+    emit_children_in_stacking_order(
+        dom,
+        styles,
+        fragments,
+        id,
+        inherited,
+        text,
+        list,
+        scroll_offsets,
+    );
+    if scroll_transform.is_some() {
+        list.commands.push(PaintCmd::PopTransform);
+    }
     if clips_descendants {
         list.commands.push(PaintCmd::PopClip);
     }
@@ -284,6 +363,7 @@ struct PaintScope<'a, Id> {
     inline_owner: Option<Id>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_children_in_stacking_order<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
@@ -292,6 +372,7 @@ fn emit_children_in_stacking_order<D>(
     inherited: Option<&ComputedValues>,
     text: &mut PaintText<'_, D::NodeId>,
     list: &mut LiveryPaintList,
+    scroll_offsets: &HashMap<D::NodeId, (f32, f32)>,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -310,7 +391,7 @@ fn emit_children_in_stacking_order<D>(
     let roots = items.iter().map(|item| item.id).collect::<HashSet<_>>();
 
     for item in items.iter().filter(|item| item.level < 0) {
-        emit_stacking_item(dom, styles, fragments, item, text, list);
+        emit_stacking_item(dom, styles, fragments, item, text, list, scroll_offsets);
     }
 
     emit_normal_children(
@@ -328,10 +409,11 @@ fn emit_children_in_stacking_order<D>(
         },
         text,
         list,
+        scroll_offsets,
     );
 
     for item in items.iter().filter(|item| item.level >= 0) {
-        emit_stacking_item(dom, styles, fragments, item, text, list);
+        emit_stacking_item(dom, styles, fragments, item, text, list, scroll_offsets);
     }
 }
 
@@ -404,6 +486,7 @@ fn emit_stacking_item<D>(
     item: &StackingItem<D::NodeId>,
     text: &mut PaintText<'_, D::NodeId>,
     list: &mut LiveryPaintList,
+    scroll_offsets: &HashMap<D::NodeId, (f32, f32)>,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -411,12 +494,22 @@ fn emit_stacking_item<D>(
     for clip in &item.ancestor_clips {
         list.commands.push(PaintCmd::PushClip(clip.clone()));
     }
-    emit_node(dom, styles, fragments, item.id, None, text, list);
+    emit_node(
+        dom,
+        styles,
+        fragments,
+        item.id,
+        None,
+        text,
+        list,
+        scroll_offsets,
+    );
     for _ in &item.ancestor_clips {
         list.commands.push(PaintCmd::PopClip);
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_normal_node<'a, D>(
     dom: &D,
     styles: &'a StylePlane<D::NodeId>,
@@ -425,6 +518,7 @@ fn emit_normal_node<'a, D>(
     scope: PaintScope<'a, D::NodeId>,
     text: &mut PaintText<'_, D::NodeId>,
     list: &mut LiveryPaintList,
+    scroll_offsets: &HashMap<D::NodeId, (f32, f32)>,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -440,6 +534,11 @@ fn emit_normal_node<'a, D>(
     else {
         return;
     };
+    let scroll_transform = scroll_offsets.get(&id).copied().and_then(scroll_spec);
+    if let Some(transform) = &scroll_transform {
+        list.commands
+            .push(PaintCmd::PushTransform(transform.clone()));
+    }
     emit_normal_children(
         dom,
         styles,
@@ -448,12 +547,17 @@ fn emit_normal_node<'a, D>(
         PaintScope { inherited, ..scope },
         text,
         list,
+        scroll_offsets,
     );
+    if scroll_transform.is_some() {
+        list.commands.push(PaintCmd::PopTransform);
+    }
     if clips_descendants {
         list.commands.push(PaintCmd::PopClip);
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_normal_children<'a, D>(
     dom: &D,
     styles: &'a StylePlane<D::NodeId>,
@@ -462,6 +566,7 @@ fn emit_normal_children<'a, D>(
     scope: PaintScope<'a, D::NodeId>,
     text: &mut PaintText<'_, D::NodeId>,
     list: &mut LiveryPaintList,
+    scroll_offsets: &HashMap<D::NodeId, (f32, f32)>,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -480,11 +585,38 @@ fn emit_normal_children<'a, D>(
             inline_group.push(child);
             continue;
         }
-        emit_inline_group(dom, styles, fragments, &inline_group, scope, text, list);
+        emit_inline_group(
+            dom,
+            styles,
+            fragments,
+            &inline_group,
+            scope,
+            text,
+            list,
+            scroll_offsets,
+        );
         inline_group.clear();
-        emit_normal_node(dom, styles, fragments, child, scope, text, list);
+        emit_normal_node(
+            dom,
+            styles,
+            fragments,
+            child,
+            scope,
+            text,
+            list,
+            scroll_offsets,
+        );
     }
-    emit_inline_group(dom, styles, fragments, &inline_group, scope, text, list);
+    emit_inline_group(
+        dom,
+        styles,
+        fragments,
+        &inline_group,
+        scope,
+        text,
+        list,
+        scroll_offsets,
+    );
 }
 
 fn stacking_level<Id>(styles: &StylePlane<Id>, id: Id) -> Option<i32>
@@ -502,6 +634,17 @@ where
 
 fn establishes_transform_context(style: &ComputedValues) -> bool {
     style.display != Display::Inline && !style.transform.is_none()
+}
+
+fn scroll_spec(offset: (f32, f32)) -> Option<TransformSpec> {
+    if offset.0 == 0.0 && offset.1 == 0.0 {
+        return None;
+    }
+    Some(TransformSpec {
+        origin: LayoutPoint::new(0.0, 0.0),
+        transform: LayoutTransform::translation(-offset.0, -offset.1, 0.0),
+        kind: TransformKind::Standard,
+    })
 }
 
 fn transform_spec(style: &ComputedValues, fragment: &Fragment) -> Option<TransformSpec> {
@@ -583,6 +726,7 @@ fn clips_overflow(overflow: CssOverflow) -> bool {
     overflow != CssOverflow::Visible
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_inline_group<'a, D>(
     dom: &D,
     styles: &'a StylePlane<D::NodeId>,
@@ -591,6 +735,7 @@ fn emit_inline_group<'a, D>(
     scope: PaintScope<'a, D::NodeId>,
     text: &mut PaintText<'_, D::NodeId>,
     list: &mut LiveryPaintList,
+    scroll_offsets: &HashMap<D::NodeId, (f32, f32)>,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -610,7 +755,16 @@ fn emit_inline_group<'a, D>(
         );
     }
     for root in roots {
-        emit_normal_node(dom, styles, fragments, *root, scope, text, list);
+        emit_normal_node(
+            dom,
+            styles,
+            fragments,
+            *root,
+            scope,
+            text,
+            list,
+            scroll_offsets,
+        );
     }
 }
 
@@ -754,33 +908,47 @@ fn emit_background(list: &mut LiveryPaintList, style: &ComputedValues, fragment:
 }
 
 fn emit_background_image(list: &mut LiveryPaintList, style: &ComputedValues, fragment: &Fragment) {
-    let BackgroundImage::LinearGradient { from, to } = &style.background_image else {
-        return;
-    };
     let rect = bounds(fragment);
-    let start_point = LayoutPoint::new((rect.min.x + rect.max.x) * 0.5, rect.min.y);
-    let end_point = LayoutPoint::new((rect.min.x + rect.max.x) * 0.5, rect.max.y);
-    list.commands
-        .push(PaintCmd::DrawLinearGradient(LinearGradientItem {
-            placement: CommonPlacement::new(rect),
-            gradient: LinearGradientPayload {
-                start_point,
-                end_point,
-                extend_mode: ExtendMode::Clamp,
-                stops: vec![
-                    GradientStop {
-                        offset: 0.0,
-                        color: resolve_color(*from, used_text_color(style)),
+    match &style.background_image {
+        BackgroundImage::None => {},
+        BackgroundImage::LinearGradient { from, to } => {
+            let start_point = LayoutPoint::new((rect.min.x + rect.max.x) * 0.5, rect.min.y);
+            let end_point = LayoutPoint::new((rect.min.x + rect.max.x) * 0.5, rect.max.y);
+            list.commands
+                .push(PaintCmd::DrawLinearGradient(LinearGradientItem {
+                    placement: CommonPlacement::new(rect),
+                    gradient: LinearGradientPayload {
+                        start_point,
+                        end_point,
+                        extend_mode: ExtendMode::Clamp,
+                        stops: vec![
+                            GradientStop {
+                                offset: 0.0,
+                                color: resolve_color(*from, used_text_color(style)),
+                            },
+                            GradientStop {
+                                offset: 1.0,
+                                color: resolve_color(*to, used_text_color(style)),
+                            },
+                        ],
                     },
-                    GradientStop {
-                        offset: 1.0,
-                        color: resolve_color(*to, used_text_color(style)),
-                    },
-                ],
-            },
-            tile_size: LayoutSize::new(fragment.width, fragment.height),
-            tile_spacing: LayoutSize::zero(),
-        }));
+                    tile_size: LayoutSize::new(fragment.width, fragment.height),
+                    tile_spacing: LayoutSize::zero(),
+                }));
+        },
+        BackgroundImage::Url(url) => {
+            let Some(image_key) = list.image_key_for(url) else {
+                return;
+            };
+            list.commands.push(PaintCmd::DrawImage(ImageItem {
+                placement: CommonPlacement::new(rect),
+                image_key,
+                image_rendering: ImageRendering::Auto,
+                alpha_type: AlphaType::Alpha,
+                color: ColorF::WHITE,
+            }));
+        },
+    }
 }
 
 fn emit_shadow(list: &mut LiveryPaintList, style: &ComputedValues, fragment: &Fragment) {

@@ -17,9 +17,11 @@ viewport scroll, pointer-events hit testing, link rectangles, fragment
 navigation, focus state, rounded fills, and two-stop gradient layering. A
 host-driven opacity clock supplies intermediate frames, and bounded
 `transition-property`/`transition-duration` metadata starts opacity
-transitions on that same clock. Remaining E3 work is nested scroll chaining,
-resource-backed images, keyframe declarations, full WPT reftest routing, and
-the cold-build comparison. The
+transitions on that same clock. Nested scroll containers now route wheel deltas
+into retained offsets, chain at their boundary to the viewport, and replay
+descendant paint through transforms. Remaining E3 work is external resource
+images/background positioning, keyframe declarations, full WPT reftest routing,
+and the cold-build comparison. The
 first audit invalidated the proposed 33-accessor full-crate seam.
 The second chose Cambium structural UI as the bounded first lane.
 Mark's framing: "grow a rust alternative using firefox, chrome, servo,
@@ -238,10 +240,10 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   linear-gradient backgrounds paint as an ordered neutral layer over the color
   fill under that clip. The retained session also has a host-driven opacity
   clock and bounded CSS opacity transitions, with intermediate-frame receipts.
-  Remaining: nested scroll chaining, resource-backed images/background
-  positioning, CSS keyframes, timing functions, multi-property transitions,
-  full reftest parity, and an apples-to-apples cold-build delta against the
-  30m35s baseline.
+  Raster `data:` background URLs now lower into the neutral image side-table.
+  Remaining: external resource images/background positioning and repeat, CSS keyframes, timing functions, multi-property
+  transitions, full reftest parity, and an apples-to-apples cold-build delta
+  against the 30m35s baseline.
 - **E4 — first production lane.** One real lane (host chrome or
   smolweb) ships on Livery by default. Receipt: the lane's
   existing suites green + capture receipts.
@@ -266,9 +268,11 @@ scrolling, link rectangles, pointer-events hit testing, fragment navigation,
 and focus routing through genet-documents. Rounded background clipping is
 covered by the paint-list receipt. The gradient receipt and opacity clock are
   covered by the paint-list, cascade, and interaction suites. Resource-backed
-  images/background positioning, CSS keyframes, timing functions,
+  images/background positioning and repeat, CSS keyframes, timing functions,
   multi-property transitions, full reftest parity, and the cold-build
-  comparison remain explicit next gates.
+  comparison remain explicit next gates. The image receipt is limited to
+  raster `data:` URLs; external resource loading still belongs to the host
+  fetch/cache seam.
 
 ## The destination, named
 

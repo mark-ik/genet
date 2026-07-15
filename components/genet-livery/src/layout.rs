@@ -68,17 +68,6 @@ impl<Id: Eq + Hash> FragmentPlane<Id> {
     pub fn is_empty(&self) -> bool {
         self.fragments.is_empty()
     }
-
-    pub(crate) fn content_extent(&self) -> (f32, f32) {
-        self.fragments
-            .values()
-            .fold((0.0, 0.0), |(right, bottom), fragment| {
-                (
-                    right.max(fragment.x + fragment.width),
-                    bottom.max(fragment.y + fragment.height),
-                )
-            })
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -635,17 +624,36 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    hit_test_with_scroll(dom, styles, fragments, &HashMap::new(), x, y)
+}
+
+/// Hit-test a retained fragment plane after applying per-element scroll
+/// offsets to descendants. The ordinary [`hit_test`] path keeps the map empty;
+/// retained sessions use this variant for wheel-scrolled containers.
+pub(crate) fn hit_test_with_scroll<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    scroll_offsets: &HashMap<D::NodeId, (f32, f32)>,
+    x: f32,
+    y: f32,
+) -> Option<D::NodeId>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
     let mut state = HitTestState {
         dom,
         styles,
         fragments,
+        scroll_offsets,
         x,
         y,
         clips: Vec::new(),
         order: 0,
         candidates: Vec::new(),
     };
-    collect_hit_candidates(&mut state, dom.document());
+    collect_hit_candidates(&mut state, dom.document(), (0.0, 0.0));
     state
         .candidates
         .into_iter()
@@ -667,6 +675,7 @@ where
     dom: &'a D,
     styles: &'a StylePlane<D::NodeId>,
     fragments: &'a FragmentPlane<D::NodeId>,
+    scroll_offsets: &'a HashMap<D::NodeId, (f32, f32)>,
     x: f32,
     y: f32,
     clips: Vec<(f32, f32, f32, f32)>,
@@ -674,18 +683,26 @@ where
     candidates: Vec<HitCandidate<D::NodeId>>,
 }
 
-fn collect_hit_candidates<D>(state: &mut HitTestState<'_, D>, id: D::NodeId)
-where
+fn collect_hit_candidates<D>(
+    state: &mut HitTestState<'_, D>,
+    id: D::NodeId,
+    ancestor_scroll: (f32, f32),
+) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
     let style = state.styles.get(id);
     let fragment = state.fragments.get(id);
+    let visible_fragment = fragment.map(|fragment| Fragment {
+        x: fragment.x - ancestor_scroll.0,
+        y: fragment.y - ancestor_scroll.1,
+        ..*fragment
+    });
     let inside_clips = state.clips.iter().all(|(left, top, right, bottom)| {
         state.x >= *left && state.x <= *right && state.y >= *top && state.y <= *bottom
     });
     if state.dom.kind(id) == NodeKind::Element
-        && let (Some(style), Some(fragment)) = (style, fragment)
+        && let (Some(style), Some(fragment)) = (style, visible_fragment)
         && style.display != CssDisplay::None
         && style.visibility == livery::values::Visibility::Visible
         && style.pointer_events == livery::values::PointerEvents::Auto
@@ -708,7 +725,7 @@ where
     state.order = state.order.saturating_add(1);
 
     let pushed_clip = style
-        .zip(fragment)
+        .zip(visible_fragment)
         .filter(|(style, _)| {
             style.overflow_x != CssOverflow::Visible || style.overflow_y != CssOverflow::Visible
         })
@@ -724,8 +741,15 @@ where
         state.clips.push(*clip);
     }
     let children = state.dom.dom_children(id).collect::<Vec<_>>();
+    let next_scroll = state
+        .scroll_offsets
+        .get(&id)
+        .copied()
+        .map_or(ancestor_scroll, |offset| {
+            (ancestor_scroll.0 + offset.0, ancestor_scroll.1 + offset.1)
+        });
     for child in children {
-        collect_hit_candidates(state, child);
+        collect_hit_candidates(state, child, next_scroll);
     }
     if pushed_clip.is_some() {
         state.clips.pop();

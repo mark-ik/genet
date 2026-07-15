@@ -175,3 +175,58 @@ fn css_transition_opacity_uses_the_retained_clock() {
             .any(|command| matches!(command, PaintCmd::PushLayer(_)))
     );
 }
+
+#[test]
+fn nested_scroll_chains_into_paint_and_then_the_viewport() {
+    let document = StaticDocument::parse(
+        r#"<html><body>
+            <div class="scroller"><div class="top">top</div><div class="bottom">bottom</div></div>
+            <div class="tail">tail</div>
+        </body></html>"#,
+    );
+    let scroller = document
+        .first_with_class(document.document(), "scroller")
+        .unwrap();
+    let top = document
+        .first_with_class(document.document(), "top")
+        .unwrap();
+    let bottom = document
+        .first_with_class(document.document(), "bottom")
+        .unwrap();
+    let styles = StyleSet::cambium(&[r#"
+        html, body { display: block; margin: 0; padding: 0; }
+        .scroller { display: block; width: 100px; height: 100px;
+                    overflow-x: scroll; overflow-y: scroll; }
+        .top, .bottom { display: block; width: 100px; height: 250px; }
+        .tail { display: block; width: 100px; height: 500px; }
+    "#]);
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(200.0, 200.0));
+    retained.frame(200, 200).unwrap();
+    assert_eq!(retained.hit_test(50.0, 50.0), Some(top));
+
+    assert!(retained.scroll_at(50.0, 50.0, 0.0, 300.0));
+    assert_eq!(
+        retained.element_scroll().get(&scroller),
+        Some(&(0.0, 300.0))
+    );
+    assert_eq!(retained.scroll(), (0.0, 0.0));
+    assert_eq!(retained.hit_test(50.0, 50.0), Some(bottom));
+    let frame = retained.frame(200, 200).unwrap();
+    assert!(frame.commands().iter().any(|command| {
+        matches!(command, PaintCmd::PushTransform(spec)
+            if spec.origin.x == 0.0
+                && spec.origin.y == 0.0
+                && (spec.transform.m41 + 0.0).abs() < 0.01
+                && (spec.transform.m42 + 300.0).abs() < 0.01)
+    }));
+
+    assert!(retained.scroll_at(50.0, 50.0, 0.0, 1_000.0));
+    assert!(
+        retained
+            .element_scroll()
+            .get(&scroller)
+            .is_some_and(|offset| offset.1 > 399.0)
+    );
+    assert!(retained.scroll_at(50.0, 50.0, 0.0, 300.0));
+    assert!(retained.scroll().1 > 0.0);
+}

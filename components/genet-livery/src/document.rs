@@ -1,6 +1,6 @@
 //! Retained Livery document ownership.
 
-use std::hash::Hash;
+use std::{collections::HashMap, hash::Hash};
 
 use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
 use livery::media::Device;
@@ -12,8 +12,8 @@ use paint_list_api::DeviceIntSize;
 
 use crate::{
     FragmentPlane, InteractionStates, LayoutError, LiveryPaintList, StylePlane, StyleSet,
-    TextSystem, emit_paint_list_with_text_system, hit_test, layout::layout_with_text_system,
-    resolve_styles,
+    TextSystem, emit_paint_list_with_text_system_scrolled, hit_test_with_scroll,
+    layout::layout_with_text_system, resolve_styles,
 };
 
 /// What a Livery click resolved to.
@@ -73,6 +73,7 @@ where
     focused_chain: Vec<D::NodeId>,
     clock_ms: f64,
     opacity_transition: Option<OpacityTransition<D::NodeId>>,
+    nested_scroll: HashMap<D::NodeId, (f32, f32)>,
 }
 
 impl<D> LiveryDocument<D>
@@ -99,6 +100,7 @@ where
             focused_chain: Vec::new(),
             clock_ms: 0.0,
             opacity_transition: None,
+            nested_scroll: HashMap::new(),
         }
     }
 
@@ -146,7 +148,7 @@ where
             height as f32,
             &mut self.text,
         )?;
-        let (content_width, content_height) = fragments.content_extent();
+        let (content_width, content_height) = self.document_content_extent(&styles, &fragments);
         self.layout = Some(LayoutState {
             viewport: (width, height),
             styles: styles.clone(),
@@ -155,14 +157,16 @@ where
             content_height,
         });
         self.clamp_scroll();
+        self.clamp_nested_scroll();
         self.generation = self.generation.saturating_add(1);
-        let list = emit_paint_list_with_text_system(
+        let list = emit_paint_list_with_text_system_scrolled(
             &self.dom,
             &styles,
             &fragments,
             DeviceIntSize::new(width as i32, height as i32),
             self.generation,
             &mut self.text,
+            &self.nested_scroll,
         );
         self.cached = Some(((width, height), list.clone()));
         Ok(list.translated(-self.scroll.0, -self.scroll.1))
@@ -226,8 +230,8 @@ where
             .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms)
     }
 
-    /// Scroll the viewport by device pixels. Nested scroll containers are not
-    /// routed yet, so this is deliberately the document viewport only.
+    /// Scroll the document viewport by device pixels. Wheel deltas that need
+    /// position-aware nested routing go through [`Self::scroll_at`].
     pub fn scroll_by(&mut self, dx: f32, dy: f32) -> bool {
         let before = self.scroll;
         self.scroll.0 += dx;
@@ -236,7 +240,26 @@ where
         before != self.scroll
     }
 
-    pub fn scroll_at(&mut self, _x: f32, _y: f32, dx: f32, dy: f32) -> bool {
+    pub fn scroll_at(&mut self, x: f32, y: f32, dx: f32, dy: f32) -> bool {
+        let Some(layout) = self.layout.as_ref() else {
+            return false;
+        };
+        let mut node = hit_test_with_scroll(
+            &self.dom,
+            &layout.styles,
+            &layout.fragments,
+            &self.nested_scroll,
+            x + self.scroll.0,
+            y + self.scroll.1,
+        );
+        while let Some(candidate) = node {
+            if let Some(next) = self.scroll_step(layout, candidate, dx, dy) {
+                self.nested_scroll.insert(candidate, next);
+                self.cached = None;
+                return true;
+            }
+            node = self.dom.parent(candidate);
+        }
         self.scroll_by(dx, dy)
     }
 
@@ -260,12 +283,19 @@ where
             .map_or(fallback, |layout| layout.content_height.ceil() as u32)
     }
 
+    /// Retained per-element scroll offsets for hosts that draw their own
+    /// scrollbar or accessibility overlay.
+    pub fn element_scroll(&self) -> &HashMap<D::NodeId, (f32, f32)> {
+        &self.nested_scroll
+    }
+
     pub fn hit_test(&self, x: f32, y: f32) -> Option<D::NodeId> {
         let layout = self.layout.as_ref()?;
-        hit_test(
+        hit_test_with_scroll(
             &self.dom,
             &layout.styles,
             &layout.fragments,
+            &self.nested_scroll,
             x + self.scroll.0,
             y + self.scroll.1,
         )
@@ -322,6 +352,152 @@ where
         };
         self.scroll.0 = self.scroll.0.clamp(0.0, max_x);
         self.scroll.1 = self.scroll.1.clamp(0.0, max_y);
+    }
+
+    fn document_content_extent(
+        &self,
+        styles: &StylePlane<D::NodeId>,
+        fragments: &FragmentPlane<D::NodeId>,
+    ) -> (f32, f32) {
+        let mut extent = (0.0, 0.0);
+        for child in self.dom.dom_children(self.dom.document()) {
+            self.extend_content_extent(child, styles, fragments, &mut extent, false);
+        }
+        extent
+    }
+
+    fn extend_content_extent(
+        &self,
+        id: D::NodeId,
+        styles: &StylePlane<D::NodeId>,
+        fragments: &FragmentPlane<D::NodeId>,
+        extent: &mut (f32, f32),
+        nested: bool,
+    ) {
+        let Some(style) = styles.get(id) else {
+            return;
+        };
+        if style.display == livery::values::Display::None {
+            return;
+        }
+        if let Some(fragment) = fragments.get(id) {
+            extent.0 = extent.0.max(fragment.x + fragment.width);
+            extent.1 = extent.1.max(fragment.y + fragment.height);
+        }
+        if nested && self.clips_content(style) {
+            return;
+        }
+        for child in self.dom.dom_children(id) {
+            self.extend_content_extent(child, styles, fragments, extent, true);
+        }
+    }
+
+    fn clamp_nested_scroll(&mut self) {
+        let Some(layout) = self.layout.as_ref() else {
+            self.nested_scroll.clear();
+            return;
+        };
+        let keys = self.nested_scroll.keys().copied().collect::<Vec<_>>();
+        for node in keys {
+            let Some(style) = layout.styles.get(node) else {
+                self.nested_scroll.remove(&node);
+                continue;
+            };
+            if !self.is_scroll_container(style) {
+                self.nested_scroll.remove(&node);
+                continue;
+            }
+            let (max_x, max_y) = self.scroll_extent(layout, node);
+            if let Some(offset) = self.nested_scroll.get_mut(&node) {
+                offset.0 = offset.0.clamp(0.0, max_x);
+                offset.1 = offset.1.clamp(0.0, max_y);
+            }
+        }
+    }
+
+    fn scroll_step(
+        &self,
+        layout: &LayoutState<D::NodeId>,
+        node: D::NodeId,
+        dx: f32,
+        dy: f32,
+    ) -> Option<(f32, f32)> {
+        let style = layout.styles.get(node)?;
+        if !self.is_scroll_container(style) {
+            return None;
+        }
+        let (max_x, max_y) = self.scroll_extent(layout, node);
+        let current = self.nested_scroll.get(&node).copied().unwrap_or((0.0, 0.0));
+        let next = (
+            if self.scrolls_x(style) {
+                (current.0 + dx).clamp(0.0, max_x)
+            } else {
+                current.0
+            },
+            if self.scrolls_y(style) {
+                (current.1 + dy).clamp(0.0, max_y)
+            } else {
+                current.1
+            },
+        );
+        if next == current { None } else { Some(next) }
+    }
+
+    fn scroll_extent(&self, layout: &LayoutState<D::NodeId>, node: D::NodeId) -> (f32, f32) {
+        let Some(container) = layout.fragments.get(node) else {
+            return (0.0, 0.0);
+        };
+        let mut extent = (0.0, 0.0);
+        for child in self.dom.dom_children(node) {
+            self.extend_nested_extent(child, node, layout, &mut extent);
+        }
+        (
+            (extent.0 - container.width).max(0.0),
+            (extent.1 - container.height).max(0.0),
+        )
+    }
+
+    fn extend_nested_extent(
+        &self,
+        id: D::NodeId,
+        container: D::NodeId,
+        layout: &LayoutState<D::NodeId>,
+        extent: &mut (f32, f32),
+    ) {
+        let Some(style) = layout.styles.get(id) else {
+            return;
+        };
+        if style.display == livery::values::Display::None {
+            return;
+        }
+        if let (Some(container), Some(fragment)) =
+            (layout.fragments.get(container), layout.fragments.get(id))
+        {
+            extent.0 = extent.0.max(fragment.x + fragment.width - container.x);
+            extent.1 = extent.1.max(fragment.y + fragment.height - container.y);
+        }
+        if self.clips_content(style) {
+            return;
+        }
+        for child in self.dom.dom_children(id) {
+            self.extend_nested_extent(child, container, layout, extent);
+        }
+    }
+
+    fn is_scroll_container(&self, style: &livery::ComputedValues) -> bool {
+        self.scrolls_x(style) || self.scrolls_y(style)
+    }
+
+    fn clips_content(&self, style: &livery::ComputedValues) -> bool {
+        style.overflow_x != Overflow::Visible || style.overflow_y != Overflow::Visible
+    }
+
+    fn scrolls_x(&self, style: &livery::ComputedValues) -> bool {
+        matches!(style.overflow_x, Overflow::Auto | Overflow::Scroll)
+    }
+
+    fn scrolls_y(&self, style: &livery::ComputedValues) -> bool {
+        matches!(style.overflow_y, Overflow::Auto | Overflow::Scroll)
     }
 
     fn apply_opacity_transition(&self, styles: &mut StylePlane<D::NodeId>) {
@@ -505,11 +681,12 @@ where
             && style.visibility == livery::values::Visibility::Visible
             && style.pointer_events == livery::values::PointerEvents::Auto
         {
+            let (nested_x, nested_y) = self.ancestor_scroll(id);
             links.push(LinkTarget {
                 url: href.to_owned(),
                 rect: [
-                    fragment.x - self.scroll.0,
-                    fragment.y - self.scroll.1,
+                    fragment.x - self.scroll.0 - nested_x,
+                    fragment.y - self.scroll.1 - nested_y,
                     fragment.width,
                     fragment.height,
                 ],
@@ -518,6 +695,19 @@ where
         for child in self.dom.dom_children(id) {
             self.collect_links(child, layout, links);
         }
+    }
+
+    fn ancestor_scroll(&self, id: D::NodeId) -> (f32, f32) {
+        let mut offset = (0.0, 0.0);
+        let mut parent = self.dom.parent(id);
+        while let Some(ancestor) = parent {
+            if let Some(scroll) = self.nested_scroll.get(&ancestor) {
+                offset.0 += scroll.0;
+                offset.1 += scroll.1;
+            }
+            parent = self.dom.parent(ancestor);
+        }
+        offset
     }
 
     fn attribute(&self, id: D::NodeId, local: &str) -> Option<&str> {

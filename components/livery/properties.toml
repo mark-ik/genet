@@ -134,8 +134,8 @@ name = "background-image"
 value_type = "background-image"
 inherited = false
 initial = "none"
-grammar = "none | linear-gradient(<color>, <color>)"
-seed_values = ["none", "linear-gradient(red, blue)"]
+grammar = "none | linear-gradient(<color>, <color>) | url(<image>)"
+seed_values = ["none", "linear-gradient(red, blue)", "url(data:image/png;base64,seed)"]
 animation = "discrete"
 source = "css_backgrounds_3"
 

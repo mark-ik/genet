@@ -151,9 +151,11 @@ around the default center origin. The retained Livery session now routes
 viewport scroll, pointer-events hit testing, links, fragment navigation, and
 focus state. A host-driven opacity clock, bounded CSS opacity transition
 metadata, and a native reftest-style paint pair are covered by package
-receipts. Resource-backed images, CSS keyframes, timing functions,
-multi-property transitions, nested scroll chaining, and full WPT reftest
-parity remain the gate for production selection.
+receipts. Nested scroll containers route wheel deltas into retained offsets and
+chain to the viewport at their boundary. Raster `data:` background URLs reach
+the neutral image side-table; external resource URLs and positioning remain
+open alongside CSS keyframes, timing functions, multi-property transitions,
+and full WPT reftest parity.
 
 ## E0 closeout
 

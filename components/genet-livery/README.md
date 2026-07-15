@@ -55,8 +55,12 @@ host-driven opacity clock can invalidate and repaint intermediate frames through
 the same retained session. Bounded `transition-property`/`transition-duration`
 metadata also starts opacity transitions from that clock. Two-stop
 linear-gradient backgrounds paint as an ordered neutral layer over the color
-fill and share the rounded clip. Nested scroll chaining, resource-backed
-images/background positioning, CSS keyframes, timing functions, and
-multi-property transitions remain outside this first interaction gate.
+fill and share the rounded clip. Raster `data:` background URLs now lower into
+the neutral image side-table and stretch to the element box. Nested scroll
+containers route wheel deltas into their retained offsets, chain at their
+boundaries to the viewport, and replay descendant paint through transforms.
+External resource URLs/background positioning and repeat, CSS keyframes, timing
+functions, and multi-property transitions remain outside this first
+interaction gate.
 `genet.livery` therefore stays an explicit pin rather than the default static
 route.
