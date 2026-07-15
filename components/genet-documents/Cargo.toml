@@ -13,7 +13,7 @@ path = "src/lib.rs"
 [features]
 default = []
 # Clean-room Livery implementation of the static HTML session lane.
-livery = ["dep:genet-livery", "dep:paint_list_render"]
+livery = ["dep:genet-livery", "dep:paint_list_render", "dep:url"]
 # Remote http(s) loading for LocalFetcher via the netfetcher engine.
 netfetch = ["dep:netfetcher", "dep:tokio", "dep:bytes", "dep:url"]
 # The smolweb engine-native lane: errand transport, Nematic EngineDocument
@@ -38,6 +38,7 @@ netrender = { workspace = true }
 genet-layout = { path = "../genet-layout" }
 genet-render = { path = "../genet-render" }
 genet-static-dom = { path = "../genet-static-dom" }
+layout_dom_api = { workspace = true }
 genet-livery = { path = "../genet-livery", optional = true }
 paint_list_render = { workspace = true, optional = true }
 data-url = { workspace = true }
@@ -60,3 +61,4 @@ url = { workspace = true, optional = true }
 # Offline mock HTTP server for the netfetch integration test (moved with
 # net_fetch.rs from pelt); runs without a live network.
 mockito = "1"
+image = { workspace = true }

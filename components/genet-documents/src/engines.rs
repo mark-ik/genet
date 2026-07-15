@@ -17,6 +17,8 @@ use inker::session_engine::{
     DocumentSession, SessionClick, SessionEngine, SessionError, SessionLink, SessionScrollKey,
     SessionSpawnRequest,
 };
+#[cfg(feature = "livery")]
+use layout_dom_api::LayoutDom;
 use netrender::Scene;
 use pelt_core::ResourceFetcher;
 
@@ -148,15 +150,16 @@ impl<Fetch: ResourceFetcher + Send + Sync> SessionEngine<Scene> for LiverySessio
         &self,
         request: &SessionSpawnRequest,
     ) -> Result<Box<dyn DocumentSession<Scene>>, SessionError> {
+        let base_resource = request
+            .address
+            .split_once('#')
+            .map_or(request.address.as_str(), |(resource, _)| resource)
+            .to_owned();
         let source = match &request.body {
             Some(body) => body.clone(),
             None => {
-                let resource = request
-                    .address
-                    .split_once('#')
-                    .map_or(request.address.as_str(), |(resource, _)| resource);
-                let bytes = self.fetcher.fetch(resource).ok_or_else(|| {
-                    SessionError::SpawnFailed(format!("could not load {resource}"))
+                let bytes = self.fetcher.fetch(&base_resource).ok_or_else(|| {
+                    SessionError::SpawnFailed(format!("could not load {base_resource}"))
                 })?;
                 String::from_utf8_lossy(&bytes).into_owned()
             },
@@ -166,16 +169,86 @@ impl<Fetch: ResourceFetcher + Send + Sync> SessionEngine<Scene> for LiverySessio
         sheets.extend(genet_layout::inline_stylesheets(&dom));
         let sheet_refs = sheets.iter().map(String::as_str).collect::<Vec<_>>();
         let (width, height) = request.viewport;
-        let doc = genet_livery::LiveryDocument::new(
+        let mut doc = genet_livery::LiveryDocument::new(
             dom,
             genet_livery::StyleSet::cambium(&sheet_refs),
             genet_livery::Device::screen(width as f32, height as f32),
         );
+        for authored_url in livery_resource_urls(doc.dom(), &sheets) {
+            if authored_url.starts_with("data:") || authored_url.starts_with('#') {
+                continue;
+            }
+            let resolved_url = resolve_livery_resource_url(&base_resource, &authored_url);
+            if let Some(bytes) = self.fetcher.fetch(&resolved_url) {
+                doc.set_image_resource(authored_url.clone(), bytes.clone());
+                if resolved_url != authored_url {
+                    doc.set_image_resource(resolved_url, bytes);
+                }
+            }
+        }
         Ok(Box::new(LiveryDocumentSession {
             doc,
             last_error: None,
         }))
     }
+}
+
+#[cfg(feature = "livery")]
+fn resolve_livery_resource_url(base: &str, authored: &str) -> String {
+    url::Url::parse(base)
+        .ok()
+        .and_then(|base| base.join(authored).ok())
+        .map_or_else(|| authored.to_owned(), |resolved| resolved.to_string())
+}
+
+#[cfg(feature = "livery")]
+fn livery_resource_urls(dom: &genet_static_dom::StaticDocument, sheets: &[String]) -> Vec<String> {
+    let mut urls = Vec::new();
+    for sheet in sheets {
+        let lower = sheet.to_ascii_lowercase();
+        let mut cursor = 0;
+        while let Some(offset) = lower[cursor..].find("url(") {
+            let start = cursor + offset + 4;
+            let Some(close) = sheet[start..].find(')') else {
+                break;
+            };
+            let raw = sheet[start..start + close].trim();
+            let authored = raw
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .or_else(|| {
+                    raw.strip_prefix('\'')
+                        .and_then(|value| value.strip_suffix('\''))
+                })
+                .unwrap_or(raw)
+                .trim();
+            if !authored.is_empty() && !urls.iter().any(|seen| seen == authored) {
+                urls.push(authored.to_owned());
+            }
+            cursor = start + close + 1;
+        }
+    }
+
+    let mut stack = vec![dom.document()];
+    while let Some(id) = stack.pop() {
+        if dom
+            .element_name(id)
+            .is_some_and(|name| name.local.as_ref().eq_ignore_ascii_case("img"))
+        {
+            if let Some(src) = dom.attributes(id).find_map(|attribute| {
+                (attribute.name.ns.as_ref().is_empty()
+                    && attribute.name.local.as_ref().eq_ignore_ascii_case("src"))
+                .then_some(attribute.value)
+            }) {
+                if !src.is_empty() && !urls.iter().any(|seen| seen == src) {
+                    urls.push(src.to_owned());
+                }
+            }
+        }
+        let children = dom.dom_children(id).collect::<Vec<_>>();
+        stack.extend(children.into_iter().rev());
+    }
+    urls
 }
 
 /// Retained Livery document session. The document owns the resolved style and
@@ -526,12 +599,28 @@ impl DocumentSession<Scene> for SmolwebDocumentSession {
 mod tests {
     use super::*;
     use inker::session_engine::SessionRegistry;
+    #[cfg(feature = "livery")]
+    use std::sync::{Arc, Mutex};
 
     /// Byte source for spawn-with-body tests; never fetches.
     struct NoFetch;
     impl ResourceFetcher for NoFetch {
         fn fetch(&self, _url: &str) -> Option<Vec<u8>> {
             None
+        }
+    }
+
+    #[cfg(feature = "livery")]
+    struct ImageFetch {
+        bytes: Vec<u8>,
+        requests: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[cfg(feature = "livery")]
+    impl ResourceFetcher for ImageFetch {
+        fn fetch(&self, url: &str) -> Option<Vec<u8>> {
+            self.requests.lock().unwrap().push(url.to_owned());
+            Some(self.bytes.clone())
         }
     }
 
@@ -654,5 +743,46 @@ mod tests {
         assert!(session.scroll_for_key(SessionScrollKey::Home));
         assert!(session.scroll_by(0.0, 100.0));
         assert!(session.scroll_at(10.0, 10.0, 0.0, -100.0));
+    }
+
+    #[cfg(feature = "livery")]
+    #[test]
+    fn livery_session_fetches_remote_image_resources_through_the_host() {
+        let image = image::RgbaImage::from_pixel(2, 3, image::Rgba([0, 0, 255, 255]));
+        let mut bytes = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .expect("encode test PNG");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let engine = LiverySessionEngine::new(ImageFetch {
+            bytes,
+            requests: requests.clone(),
+        });
+        let request = SessionSpawnRequest::new("https://example.test/docs/index.html")
+            .with_body(
+                r#"<html><head><style>
+                    .card { display: block; width: 80px; height: 40px;
+                            background-repeat: no-repeat;
+                            background-image: url(hero.png); }
+                </style></head><body><div class="card"></div></body></html>"#,
+            )
+            .with_viewport(320, 240);
+        let mut session = engine.spawn(&request).expect("Livery lane spawns");
+
+        let scene = session.frame(320, 240);
+        assert!(
+            scene
+                .ops
+                .iter()
+                .any(|operation| matches!(operation, netrender::SceneOp::Image(_))),
+            "host-fetched image reaches the scene"
+        );
+        assert_eq!(
+            requests.lock().unwrap().as_slice(),
+            ["https://example.test/docs/hero.png"]
+        );
     }
 }
