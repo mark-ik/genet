@@ -10,11 +10,11 @@ pub use color::Color;
 pub use length::{CalcLengthPercentage, Length, LengthPercentage, LengthUnit};
 pub use property::{
     Alignment, AspectRatio, BackgroundImage, BorderStyle, BorderWidth, BoxShadow, BoxShadowValue,
-    BoxSizing, Display, FlexDirection, FlexFactor, FlexWrap, FontFamily, FontSize, FontStyle,
-    FontWeight, Gap, GridAutoFlow, GridPlacement, GridTemplate, GridTrack, Inset, LineHeight,
-    ListStyleType, Margin, Opacity, Order, Overflow, Padding, PointerEvents, Position, Radius,
-    Size, Spacing, TextAlign, TextDecorationColor, TextDecorationLine, TextWrapMode, Transform,
-    TransformFunction, Visibility, WhiteSpaceCollapse, ZIndex,
+    BoxSizing, Display, Duration, FlexDirection, FlexFactor, FlexWrap, FontFamily, FontSize,
+    FontStyle, FontWeight, Gap, GridAutoFlow, GridPlacement, GridTemplate, GridTrack, Inset,
+    LineHeight, ListStyleType, Margin, Opacity, Order, Overflow, Padding, PointerEvents, Position,
+    Radius, Size, Spacing, TextAlign, TextDecorationColor, TextDecorationLine, TextWrapMode,
+    Transform, TransformFunction, TransitionProperty, Visibility, WhiteSpaceCollapse, ZIndex,
 };
 
 /// A rejected CSS value from Livery's bounded first-lane grammar.

@@ -4,7 +4,7 @@
 **Status:** E0b lane choice, themed catalog fixture, and original 40-property
 clean-room database landed. The E1 handoff into Livery and the first E3
 `genet-livery` integration slice have also landed. The native capability
-ratchet now contains 80 properties, including geometry, corner radii,
+ratchet now contains 82 properties, including geometry, corner radii,
 visibility, alignment, spacing, box shadows, two-stop linear-gradient
 backgrounds, flexbox, and bounded grid placement. Source
 hashes are recorded below.
@@ -149,15 +149,17 @@ have also landed for transformable block and inline-block boxes. The
 bounded transform list supports 2D translate, scale, and rotate functions
 around the default center origin. The retained Livery session now routes
 viewport scroll, pointer-events hit testing, links, fragment navigation, and
-focus state. A host-driven opacity clock and a native reftest-style paint pair
-are covered by package receipts. Resource-backed images, CSS transition and
-keyframe declarations, nested scroll chaining, and full WPT reftest parity
-remain the gate for production selection.
+focus state. A host-driven opacity clock, bounded CSS opacity transition
+metadata, and a native reftest-style paint pair are covered by package
+receipts. Resource-backed images, CSS keyframes, timing functions,
+multi-property transitions, nested scroll chaining, and full WPT reftest
+parity remain the gate for production selection.
 
 ## E0 closeout
 
 The 2026-07-15 capability receipt grows the original catalog plus the first
-two ratchet rows to 80 properties. Geometry, flexbox, and bounded grid values
+two ratchet rows and bounded transition controls to 82 properties. Geometry,
+flexbox, and bounded grid values
 are lowered into Taffy; corner radii, color fills, and two-stop gradients reach
 neutral paint commands; Parley consumes text alignment and spacing; and hidden
 boxes retain layout space while suppressing paint. This is an E3 capability

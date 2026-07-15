@@ -52,9 +52,11 @@ hidden boxes in layout while suppressing their paint. The retained document
 now supplies bounded viewport scrolling, pointer-events-aware hit testing,
 retained link rectangles, fragment scrolling, and focus-state routing. A
 host-driven opacity clock can invalidate and repaint intermediate frames through
-the same retained session. Two-stop linear-gradient backgrounds paint as an
-ordered neutral layer over the color fill and share the rounded clip. Nested
-scroll chaining, resource-backed images/background positioning, and CSS
-transition/keyframe declarations remain outside this first interaction gate.
+the same retained session. Bounded `transition-property`/`transition-duration`
+metadata also starts opacity transitions from that clock. Two-stop
+linear-gradient backgrounds paint as an ordered neutral layer over the color
+fill and share the rounded clip. Nested scroll chaining, resource-backed
+images/background positioning, CSS keyframes, timing functions, and
+multi-property transitions remain outside this first interaction gate.
 `genet.livery` therefore stays an explicit pin rather than the default static
 route.

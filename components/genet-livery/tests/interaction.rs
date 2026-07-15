@@ -125,3 +125,53 @@ fn retained_opacity_clock_paints_intermediate_frames() {
             .any(|command| matches!(command, PaintCmd::PushLayer(_)))
     );
 }
+
+#[test]
+fn css_transition_opacity_uses_the_retained_clock() {
+    let document =
+        StaticDocument::parse(r#"<html><body><div class="fade">fade</div></body></html>"#);
+    let fade = document
+        .first_with_class(document.document(), "fade")
+        .unwrap();
+    let styles = StyleSet::cambium(&[r#"
+        .fade { display: block; width: 100px; height: 20px; opacity: 0;
+                transition: opacity 100ms; }
+        .fade:hover { opacity: 1; }
+    "#]);
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(200.0, 100.0));
+    retained.frame(200, 100).unwrap();
+
+    retained
+        .interactions_mut()
+        .set(fade, livery::selector::StatePseudoClass::Hover, true);
+    let initial = retained.frame(200, 100).unwrap();
+    assert!(!retained.settled());
+    assert!(
+        initial
+            .commands()
+            .iter()
+            .any(|command| matches!(command, PaintCmd::PushLayer(layer) if layer.opacity == 0.0))
+    );
+
+    retained.pump(50.0);
+    let middle = retained.frame(200, 100).unwrap();
+    let opacity = middle
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::PushLayer(layer) => Some(layer.opacity),
+            _ => None,
+        })
+        .expect("CSS transition keeps a mid-frame layer");
+    assert!((opacity - 0.5).abs() < 0.01);
+
+    retained.pump(100.0);
+    assert!(retained.settled());
+    let final_frame = retained.frame(200, 100).unwrap();
+    assert!(
+        !final_frame
+            .commands()
+            .iter()
+            .any(|command| matches!(command, PaintCmd::PushLayer(_)))
+    );
+}

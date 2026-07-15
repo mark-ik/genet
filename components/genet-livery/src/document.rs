@@ -6,7 +6,7 @@ use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
 use livery::media::Device;
 use livery::{
     selector::StatePseudoClass,
-    values::{Opacity, Overflow},
+    values::{Opacity, Overflow, TransitionProperty},
 };
 use paint_list_api::DeviceIntSize;
 
@@ -47,6 +47,7 @@ struct OpacityTransition<Id> {
     to: f32,
     start_ms: f64,
     duration_ms: f64,
+    automatic: bool,
 }
 
 /// A static DOM plus the Livery state that should survive between frames.
@@ -133,8 +134,10 @@ where
         self.viewport = (width, height);
         self.device.viewport_width = width as f32;
         self.device.viewport_height = height as f32;
+        self.finish_completed_opacity_transition();
         let mut styles =
             resolve_styles(&self.dom, &self.style_set, &self.device, &self.interactions);
+        self.schedule_opacity_transition(&styles);
         self.apply_opacity_transition(&mut styles);
         let fragments = layout_with_text_system(
             &self.dom,
@@ -171,8 +174,9 @@ where
     }
 
     /// Start a host-driven opacity transition for one retained element. This
-    /// is the runtime clock seam; CSS transition declarations and keyframes
-    /// remain a later property-ratchet layer.
+    /// is the runtime clock seam. CSS transitions use the same clock when the bounded transition
+    /// longhands are present; this explicit method remains useful to hosts
+    /// that need a direct paint-only animation.
     pub fn animate_opacity(
         &mut self,
         node: D::NodeId,
@@ -196,6 +200,7 @@ where
             to: to.clamp(0.0, 1.0),
             start_ms,
             duration_ms,
+            automatic: false,
         });
         self.cached = None;
         true
@@ -332,6 +337,64 @@ where
         if let Some(style) = styles.get_mut(transition.node) {
             style.opacity = Opacity::from_value(value);
         }
+    }
+
+    fn finish_completed_opacity_transition(&mut self) {
+        let Some(transition) = self.opacity_transition else {
+            return;
+        };
+        if !transition.automatic || self.clock_ms < transition.start_ms + transition.duration_ms {
+            return;
+        }
+        if let Some(layout) = self.layout.as_mut()
+            && let Some(style) = layout.styles.get_mut(transition.node)
+        {
+            style.opacity = Opacity::from_value(transition.to);
+        }
+        self.opacity_transition = None;
+    }
+
+    fn schedule_opacity_transition(&mut self, styles: &StylePlane<D::NodeId>) {
+        if self.opacity_transition.is_some() {
+            return;
+        }
+        let Some(previous) = self.layout.as_ref().map(|layout| &layout.styles) else {
+            return;
+        };
+        let Some((node, from, to, duration_ms)) =
+            self.find_opacity_transition(self.dom.document(), previous, styles)
+        else {
+            return;
+        };
+        self.opacity_transition = Some(OpacityTransition {
+            node,
+            from,
+            to,
+            start_ms: self.clock_ms,
+            duration_ms,
+            automatic: true,
+        });
+    }
+
+    fn find_opacity_transition(
+        &self,
+        id: D::NodeId,
+        previous: &StylePlane<D::NodeId>,
+        styles: &StylePlane<D::NodeId>,
+    ) -> Option<(D::NodeId, f32, f32, f64)> {
+        if let (Some(old), Some(new)) = (previous.get(id), styles.get(id)) {
+            let duration_ms = f64::from(new.transition_duration.milliseconds());
+            let accepts_opacity = matches!(
+                new.transition_property,
+                TransitionProperty::All | TransitionProperty::Opacity
+            );
+            if accepts_opacity && duration_ms > 0.0 && old.opacity.value() != new.opacity.value() {
+                return Some((id, old.opacity.value(), new.opacity.value(), duration_ms));
+            }
+        }
+        self.dom
+            .dom_children(id)
+            .find_map(|child| self.find_opacity_transition(child, previous, styles))
     }
 
     fn scrollable_axes(&self, layout: &LayoutState<D::NodeId>) -> (bool, bool) {

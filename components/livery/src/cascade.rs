@@ -2,7 +2,9 @@
 
 use std::{cmp::Ordering, fmt};
 
-use crate::values::{BorderStyle, BorderWidth, Color, Margin, Padding, Radius};
+use crate::values::{
+    BorderStyle, BorderWidth, Color, Duration, Margin, Padding, Radius, TransitionProperty,
+};
 use crate::{ComputedValues, PropertyId, PropertyValue, ShorthandId};
 
 /// A parsed longhand value, including the CSS-wide keywords supported by the
@@ -261,6 +263,49 @@ fn expand_box_shorthand(
     true
 }
 
+fn expand_transition(block: &mut DeclarationBlock, value: &str, important: bool) {
+    let mut property = None;
+    let mut duration = None;
+    for component in split_components(value) {
+        if property.is_none()
+            && let Ok(parsed) = component.parse::<TransitionProperty>()
+        {
+            property = Some(parsed);
+        } else if duration.is_none()
+            && let Ok(parsed) = component.parse::<Duration>()
+        {
+            duration = Some(parsed);
+        } else {
+            block.errors.push(DeclarationError {
+                name: "transition".to_owned(),
+                value: value.to_owned(),
+                kind: DeclarationErrorKind::InvalidValue,
+            });
+            return;
+        }
+    }
+    let Some(duration) = duration else {
+        block.errors.push(DeclarationError {
+            name: "transition".to_owned(),
+            value: value.to_owned(),
+            kind: DeclarationErrorKind::InvalidValue,
+        });
+        return;
+    };
+    block.declarations.push(Declaration {
+        property: PropertyId::TransitionProperty,
+        value: DeclaredValue::Value(PropertyValue::TransitionProperty(
+            property.unwrap_or(TransitionProperty::All),
+        )),
+        important,
+    });
+    block.declarations.push(Declaration {
+        property: PropertyId::TransitionDuration,
+        value: DeclaredValue::Value(PropertyValue::Duration(duration)),
+        important,
+    });
+}
+
 fn expand_border(block: &mut DeclarationBlock, value: &str, important: bool) {
     let mut width = None;
     let mut style = None;
@@ -386,6 +431,8 @@ pub fn parse_declaration_block(input: &str) -> DeclarationBlock {
         ) {
             expand_css_wide_shorthand(&mut block, shorthand, value, important);
         } else if expand_box_shorthand(&mut block, shorthand, value, important) {
+        } else if shorthand == ShorthandId::Transition {
+            expand_transition(&mut block, value, important);
         } else if shorthand == ShorthandId::Border {
             expand_border(&mut block, value, important);
         } else if shorthand == ShorthandId::WhiteSpace {

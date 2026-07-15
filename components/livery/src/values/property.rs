@@ -49,6 +49,56 @@ impl fmt::Display for BackgroundImage {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Duration(f32);
+
+impl Duration {
+    pub const ZERO: Self = Self(0.0);
+
+    pub const fn milliseconds(self) -> f32 {
+        self.0
+    }
+}
+
+impl FromStr for Duration {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let input = input.trim().to_ascii_lowercase();
+        let (number, multiplier) = if let Some(value) = input.strip_suffix("ms") {
+            (value, 1.0)
+        } else if let Some(value) = input.strip_suffix('s') {
+            (value, 1_000.0)
+        } else if input == "0" {
+            ("0", 1.0)
+        } else {
+            return Err(ParseError::expected("a non-negative CSS duration"));
+        };
+        let value = number
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .ok_or_else(|| ParseError::expected("a non-negative CSS duration"))?;
+        Ok(Self(value * multiplier))
+    }
+}
+
+impl fmt::Display for Duration {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}ms", format_number(self.0))
+    }
+}
+
+keyword_value! {
+    /// The bounded transition-property set consumed by the opacity clock.
+    pub enum TransitionProperty {
+        All => "all",
+        None => "none",
+        Opacity => "opacity",
+    }
+}
+
 keyword_value! {
     /// CSS border line style.
     pub enum BorderStyle {

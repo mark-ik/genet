@@ -88,6 +88,7 @@ fn value_type_path(value_type: &str) -> &'static str {
         "box-sizing" => "crate::values::BoxSizing",
         "color" => "crate::values::Color",
         "display" => "crate::values::Display",
+        "duration" => "crate::values::Duration",
         "font-family" => "crate::values::FontFamily",
         "font-size" => "crate::values::FontSize",
         "font-style" => "crate::values::FontStyle",
@@ -117,6 +118,7 @@ fn value_type_path(value_type: &str) -> &'static str {
         "text-decoration-line" => "crate::values::TextDecorationLine",
         "text-wrap-mode" => "crate::values::TextWrapMode",
         "transform" => "crate::values::Transform",
+        "transition-property" => "crate::values::TransitionProperty",
         "visibility" => "crate::values::Visibility",
         "white-space-collapse" => "crate::values::WhiteSpaceCollapse",
         "z-index" => "crate::values::ZIndex",
@@ -145,6 +147,7 @@ fn initial_expression(property: &Property) -> &'static str {
         ("color", "currentcolor") => "crate::values::Color::CurrentColor",
         ("color", "CanvasText") => "crate::values::Color::CanvasText",
         ("display", "inline") => "crate::values::Display::Inline",
+        ("duration", "0s") => "crate::values::Duration::ZERO",
         ("font-family", "depends-on-user-agent") => "crate::values::FontFamily::UserAgentDefault",
         ("font-size", "medium") => "crate::values::FontSize::Medium",
         ("font-style", "normal") => "crate::values::FontStyle::Normal",
@@ -176,6 +179,7 @@ fn initial_expression(property: &Property) -> &'static str {
         ("text-decoration-line", "none") => "crate::values::TextDecorationLine::NONE",
         ("text-wrap-mode", "wrap") => "crate::values::TextWrapMode::Wrap",
         ("transform", "none") => "crate::values::Transform::None",
+        ("transition-property", "all") => "crate::values::TransitionProperty::All",
         ("visibility", "visible") => "crate::values::Visibility::Visible",
         ("white-space-collapse", "collapse") => "crate::values::WhiteSpaceCollapse::Collapse",
         ("z-index", "auto") => "crate::values::ZIndex::Auto",
@@ -189,8 +193,8 @@ fn initial_expression(property: &Property) -> &'static str {
 fn validate(db: &Database) {
     assert_eq!(db.schema, 1, "unsupported properties.toml schema");
     assert!(
-        db.property.len() >= 80,
-        "the native Cambium lane must retain at least the 80-property receipt"
+        db.property.len() >= 82,
+        "the native Cambium lane must retain at least the 82-property receipt"
     );
 
     let mut names = BTreeSet::new();

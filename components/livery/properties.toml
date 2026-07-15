@@ -43,6 +43,9 @@ url = "https://www.w3.org/TR/css-text-4/"
 [sources.css_transforms_1]
 url = "https://www.w3.org/TR/css-transforms-1/#transform-property"
 
+[sources.css_transitions_1]
+url = "https://www.w3.org/TR/css-transitions-1/"
+
 [sources.css_ui_4]
 url = "https://www.w3.org/TR/css-ui-4/"
 
@@ -99,6 +102,12 @@ longhands = ["row-gap", "column-gap"]
 grammar = "<length-percentage>{1,2}"
 seed_values = ["0", "px", "percentage"]
 source = "css_box_alignment_3"
+
+[shorthands.transition]
+longhands = ["transition-property", "transition-duration"]
+grammar = "[ none | all | opacity ] || <time>"
+seed_values = ["opacity 100ms"]
+source = "css_transitions_1"
 
 [[property]]
 name = "aspect-ratio"
@@ -869,6 +878,26 @@ grammar = "none | <transform-list>"
 seed_values = ["translate()", "scale()", "rotate()"]
 animation = "by-computed-value"
 source = "css_transforms_1"
+
+[[property]]
+name = "transition-duration"
+value_type = "duration"
+inherited = false
+initial = "0s"
+grammar = "<time>"
+seed_values = ["0s", "100ms"]
+animation = "discrete"
+source = "css_transitions_1"
+
+[[property]]
+name = "transition-property"
+value_type = "transition-property"
+inherited = false
+initial = "all"
+grammar = "none | all | opacity"
+seed_values = ["all", "opacity"]
+animation = "discrete"
+source = "css_transitions_1"
 
 [[property]]
 name = "white-space-collapse"

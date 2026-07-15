@@ -43,6 +43,21 @@ fn declaration_parser_expands_the_lane_shorthands_and_recovers() {
 }
 
 #[test]
+fn transition_shorthand_expands_to_the_opacity_clock_controls() {
+    let block = parse_declaration_block("transition: opacity 100ms");
+    assert!(block.errors.is_empty(), "{:?}", block.errors);
+    assert_eq!(block.declarations.len(), 2);
+    assert_eq!(
+        block.declarations[0].property.metadata().name,
+        "transition-property"
+    );
+    assert_eq!(
+        block.declarations[1].property.metadata().name,
+        "transition-duration"
+    );
+}
+
+#[test]
 fn origin_importance_specificity_and_source_order_follow_the_cascade() {
     let declarations = vec![
         matched(
