@@ -308,7 +308,12 @@ useful local telemetry, not an apples-to-apples replacement for the 30m35s
 whole-workspace cold-build baseline.
 
 Actual remote fetching, full WPT reftest parity, broader transition lists and
-interpolation, and the E4 default production-lane switch remain open.
+interpolation, and the E4 default production-lane switch remain open. The
+standalone Cambium WebGPU smoke is also blocked before compilation by its
+separate-workspace dependency graph: Cambium requests the crates.io
+`genet-scripted-dom` line while the smoke directly pins the local package, and
+Cargo then selects Stylo 0.16 alongside `genet-stylo` 0.19. That is a smoke
+manifest/dependency-unification fix, outside the Livery engine itself.
 
 ## The destination, named
 
