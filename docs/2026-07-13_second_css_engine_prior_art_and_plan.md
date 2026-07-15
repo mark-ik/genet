@@ -3,7 +3,7 @@
 **Date:** 2026-07-13
 **Status:** E0a full-path audit, E0b Cambium lane choice/40-property catalog,
 E1 values/codegen, E2 style resolution, and the first E3 integration slice are
-landed. The catalog has since ratcheted to 85 properties. `genet-livery` now adapts `LayoutDom` into Livery's selector and cascade
+landed. The catalog has since ratcheted to 87 properties. `genet-livery` now adapts `LayoutDom` into Livery's selector and cascade
 path, retains a concrete Livery style plane, lowers the bounded box model into
 a standalone Taffy tree, and emits backgrounds and borders through the neutral
 `PaintList` API. Consecutive text and inline-element children now shape in one
@@ -21,8 +21,8 @@ transitions on that same clock. Nested scroll containers now route wheel deltas
 into retained offsets, chain at their boundary to the viewport, and replay
 descendant paint through transforms. Bounded opacity-only `@keyframes` and
 named timing functions now run on the retained clock. Remaining E3 work is
-remote resource loading, replaced-element image layout/background positioning,
-full WPT reftest parity, multi-property transitions, and the cold-build
+remote resource loading, replaced-element image layout, full WPT reftest parity,
+multi-property transitions, and the cold-build
 comparison. The
 first audit invalidated the proposed 33-accessor full-crate seam.
 The second chose Cambium structural UI as the bounded first lane.
@@ -249,8 +249,9 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   `data:` backgrounds through the clean-room producer. Stylo remains the
   default. Bounded opacity-only `@keyframes` declarations and linear, ease,
   ease-in, ease-out, and ease-in-out timing functions run on the retained
-  clock. Remaining: remote resource loading, replaced-element image layout,
-  background positioning and repeat, multi-property transitions, full reftest parity, and an apples-to-apples
+  clock. Bounded intrinsic tiling and position/repeat modes now have paint-list
+  receipts. Remaining: remote resource loading, replaced-element image layout,
+  multi-property transitions, full reftest parity, and an apples-to-apples
   cold-build delta against the 30m35s baseline.
 - **E4 — first production lane.** One real lane (host chrome or
   smolweb) ships on Livery by default. Receipt: the lane's
@@ -263,7 +264,7 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
 
 The executable growth pass expands Livery from the original 40-property
 catalog plus the earlier opacity/transform rows and bounded transition
-controls to 85 properties. It adds
+controls to 87 properties. It adds
   `right`/`bottom`, min/max sizing, `box-sizing`, `aspect-ratio`, the four
 physical corner-radius longhands and `border-radius`, visibility and
 pointer-events state, text alignment and spacing, text-decoration color,
@@ -277,9 +278,8 @@ and focus routing through genet-documents. Rounded background clipping is
 covered by the paint-list receipt. The gradient receipt and opacity clock are
   covered by the paint-list, cascade, and interaction suites. The keyframe
   parser and retained opacity animation receipt cover named timing functions.
-  Resource-backed images/background positioning and repeat, multi-property
-  transitions, full reftest parity, and the cold-build
-  comparison remain explicit next gates. The image receipt covers raster
+  Resource-backed images, multi-property transitions, full reftest parity, and
+  the cold-build comparison remain explicit next gates. The image receipt covers raster
   `data:` URLs and host-resolved local bytes; remote loading and replaced
   element layout still belong to the host fetch/cache and intrinsic-sizing
   seams.

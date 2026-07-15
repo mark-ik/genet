@@ -9,6 +9,97 @@ pub enum BackgroundImage {
     Url(Box<str>),
 }
 
+/// The bounded background-position pair consumed by the paint lane. Lengths,
+/// percentages, and the five physical position keywords are accepted; the
+/// full four-value grammar remains outside this ratchet.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BackgroundPosition {
+    pub x: LengthPercentage,
+    pub y: LengthPercentage,
+}
+
+impl BackgroundPosition {
+    pub const ZERO: Self = Self {
+        x: LengthPercentage::ZERO,
+        y: LengthPercentage::ZERO,
+    };
+}
+
+fn position_component(input: &str, horizontal: bool) -> Result<LengthPercentage, ParseError> {
+    let value = input.trim();
+    let keyword = if value.eq_ignore_ascii_case("center") {
+        Some(LengthPercentage::Percentage(0.5))
+    } else if horizontal && value.eq_ignore_ascii_case("left") {
+        Some(LengthPercentage::ZERO)
+    } else if horizontal && value.eq_ignore_ascii_case("right") {
+        Some(LengthPercentage::Percentage(1.0))
+    } else if !horizontal && value.eq_ignore_ascii_case("top") {
+        Some(LengthPercentage::ZERO)
+    } else if !horizontal && value.eq_ignore_ascii_case("bottom") {
+        Some(LengthPercentage::Percentage(1.0))
+    } else {
+        None
+    };
+    keyword.map_or_else(|| value.parse(), Ok)
+}
+
+impl FromStr for BackgroundPosition {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let values = input.split_ascii_whitespace().collect::<Vec<_>>();
+        match values.as_slice() {
+            [value] => {
+                if value.eq_ignore_ascii_case("top") || value.eq_ignore_ascii_case("bottom") {
+                    Ok(Self {
+                        x: LengthPercentage::Percentage(0.5),
+                        y: position_component(value, false)?,
+                    })
+                } else {
+                    Ok(Self {
+                        x: position_component(value, true)?,
+                        y: LengthPercentage::Percentage(0.5),
+                    })
+                }
+            },
+            [first, second]
+                if (first.eq_ignore_ascii_case("top") || first.eq_ignore_ascii_case("bottom"))
+                    && (second.eq_ignore_ascii_case("left")
+                        || second.eq_ignore_ascii_case("right")) =>
+            {
+                Ok(Self {
+                    x: position_component(second, true)?,
+                    y: position_component(first, false)?,
+                })
+            },
+            [first, second] => Ok(Self {
+                x: position_component(first, true)?,
+                y: position_component(second, false)?,
+            }),
+            _ => Err(ParseError::expected(
+                "one or two background-position values",
+            )),
+        }
+    }
+}
+
+impl fmt::Display for BackgroundPosition {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{} {}", self.x, self.y)
+    }
+}
+
+keyword_value! {
+    /// Bounded background tiling modes. `space` and `round` remain future
+    /// additions because they require intrinsic-size adjustment rules.
+    pub enum BackgroundRepeat {
+        Repeat => "repeat",
+        NoRepeat => "no-repeat",
+        RepeatX => "repeat-x",
+        RepeatY => "repeat-y",
+    }
+}
+
 impl FromStr for BackgroundImage {
     type Err = ParseError;
 
@@ -185,18 +276,37 @@ impl TimingFunction {
         let progress = progress.clamp(0.0, 1.0);
         match self {
             Self::Linear => progress,
-            Self::Ease => progress * progress * (3.0 - 2.0 * progress),
-            Self::EaseIn => progress * progress,
-            Self::EaseOut => 1.0 - (1.0 - progress).powi(2),
-            Self::EaseInOut => {
-                if progress < 0.5 {
-                    2.0 * progress * progress
-                } else {
-                    1.0 - (-2.0 * progress + 2.0).powi(2) / 2.0
-                }
-            },
+            Self::Ease => cubic_bezier(progress, 0.25, 0.1, 0.25, 1.0),
+            Self::EaseIn => cubic_bezier(progress, 0.42, 0.0, 1.0, 1.0),
+            Self::EaseOut => cubic_bezier(progress, 0.0, 0.0, 0.58, 1.0),
+            Self::EaseInOut => cubic_bezier(progress, 0.42, 0.0, 0.58, 1.0),
         }
     }
+}
+
+fn cubic_bezier(progress: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
+    if progress <= 0.0 {
+        return 0.0;
+    }
+    if progress >= 1.0 {
+        return 1.0;
+    }
+    let mut low = 0.0;
+    let mut high = 1.0;
+    for _ in 0..16 {
+        let middle = (low + high) * 0.5;
+        if bezier_axis(middle, x1, x2) < progress {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    bezier_axis((low + high) * 0.5, y1, y2)
+}
+
+fn bezier_axis(t: f32, first: f32, second: f32) -> f32 {
+    let inverse = 1.0 - t;
+    3.0 * inverse * inverse * t * first + 3.0 * inverse * t * t * second + t * t * t
 }
 
 keyword_value! {

@@ -192,8 +192,61 @@ fn data_uri_background_image_reaches_neutral_image_side_table() {
         .expect("image command resolves through the paint side table");
     assert_eq!((resource.width, resource.height), (2, 3));
     assert_eq!(resource.data.len(), 2 * 3 * 4);
-    assert_eq!(image.placement.bounds.size().width, 80.0);
-    assert_eq!(image.placement.bounds.size().height, 40.0);
+    assert_eq!(image.placement.bounds.size().width, 2.0);
+    assert_eq!(image.placement.bounds.size().height, 3.0);
+    assert!(
+        list.commands()
+            .iter()
+            .filter(|command| matches!(command, PaintCmd::DrawImage(_)))
+            .count()
+            > 1
+    );
+}
+
+#[test]
+fn background_position_and_no_repeat_place_the_intrinsic_image() {
+    use base64::Engine as _;
+
+    let blue = image::RgbaImage::from_pixel(2, 3, image::Rgba([0, 0, 255, 255]));
+    let mut png = Vec::new();
+    blue.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("encode test PNG");
+    let data_uri = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png)
+    );
+    let css = format!(
+        "body {{ margin: 0; }} .card {{ width: 80px; height: 40px; background-repeat: no-repeat; \
+                 background-position: center center; background-image: url({data_uri}); }}"
+    );
+    let list = render(
+        r#"<html><body><div class="card"></div></body></html>"#,
+        &css,
+        1,
+    );
+    let PaintCmd::DrawImage(image) = list
+        .commands()
+        .iter()
+        .find(|command| matches!(command, PaintCmd::DrawImage(_)))
+        .expect("centered no-repeat image lowers to one primitive")
+    else {
+        unreachable!();
+    };
+    assert_eq!(
+        image.placement.bounds.min,
+        paint_list_api::LayoutPoint::new(39.0, 18.5)
+    );
+    assert_eq!(
+        image.placement.bounds.size(),
+        paint_list_api::LayoutSize::new(2.0, 3.0)
+    );
+    assert_eq!(
+        list.commands()
+            .iter()
+            .filter(|command| matches!(command, PaintCmd::DrawImage(_)))
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -206,7 +259,7 @@ fn host_image_resource_resolves_a_non_data_background_url() {
     let mut retained = LiveryDocument::new(
         document,
         StyleSet::cambium(&[
-            ".card { width: 80px; height: 40px; background-image: url(support/blue.png); }",
+            ".card { width: 80px; height: 40px; background-repeat: no-repeat; background-image: url(support/blue.png); }",
         ]),
         Device::screen(320.0, 240.0),
     );

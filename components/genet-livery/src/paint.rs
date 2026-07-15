@@ -10,9 +10,9 @@ use layout_dom_api::{LayoutDom, NodeKind};
 use livery::{
     ComputedValues,
     values::{
-        BackgroundImage, BorderStyle as CssBorderStyle, BoxShadow as CssBoxShadow, Color, Display,
-        FontSize, Length, LengthPercentage, LengthUnit, Overflow as CssOverflow, Position, Radius,
-        TransformFunction, Visibility, ZIndex,
+        BackgroundImage, BackgroundRepeat, BorderStyle as CssBorderStyle,
+        BoxShadow as CssBoxShadow, Color, Display, FontSize, Length, LengthPercentage, LengthUnit,
+        Overflow as CssOverflow, Position, Radius, TransformFunction, Visibility, ZIndex,
     },
 };
 use paint_list_api::{
@@ -86,6 +86,13 @@ impl LiveryPaintList {
         });
         self.image_keys.insert(url.to_owned(), key);
         Some(key)
+    }
+
+    fn image_size(&self, key: ImageKey) -> Option<(f32, f32)> {
+        self.images
+            .iter()
+            .find(|image| image.key == key)
+            .map(|image| (image.width as f32, image.height as f32))
     }
 
     pub(crate) fn translated(mut self, x: f32, y: f32) -> Self {
@@ -981,15 +988,90 @@ fn emit_background_image(list: &mut LiveryPaintList, style: &ComputedValues, fra
             let Some(image_key) = list.image_key_for(url) else {
                 return;
             };
-            list.commands.push(PaintCmd::DrawImage(ImageItem {
-                placement: CommonPlacement::new(rect),
-                image_key,
-                image_rendering: ImageRendering::Auto,
-                alpha_type: AlphaType::Alpha,
-                color: ColorF::WHITE,
-            }));
+            let Some((image_width, image_height)) = list.image_size(image_key) else {
+                return;
+            };
+            let em = used_font_size(style);
+            let offset_x = resolve_length_percentage(
+                style.background_position.x,
+                rect.size().width - image_width,
+                em,
+            );
+            let offset_y = resolve_length_percentage(
+                style.background_position.y,
+                rect.size().height - image_height,
+                em,
+            );
+            let repeat_x = matches!(
+                style.background_repeat,
+                BackgroundRepeat::Repeat | BackgroundRepeat::RepeatX
+            );
+            let repeat_y = matches!(
+                style.background_repeat,
+                BackgroundRepeat::Repeat | BackgroundRepeat::RepeatY
+            );
+            let first_x = tile_origin(rect.min.x, offset_x, image_width, repeat_x);
+            let first_y = tile_origin(rect.min.y, offset_y, image_height, repeat_y);
+            let x_count = tile_count(first_x, rect.max.x, image_width, repeat_x);
+            let y_count = tile_count(first_y, rect.max.y, image_height, repeat_y);
+            if repeat_x || repeat_y {
+                list.commands.push(PaintCmd::PushClip(ClipSpec {
+                    kind: ClipKind::Rect(rect),
+                }));
+            }
+            for x_index in 0..x_count {
+                let x = first_x + x_index as f32 * image_width;
+                for y_index in 0..y_count {
+                    let y = first_y + y_index as f32 * image_height;
+                    let placement = LayoutRect::new(
+                        LayoutPoint::new(x, y),
+                        LayoutPoint::new(x + image_width, y + image_height),
+                    );
+                    list.commands.push(PaintCmd::DrawImage(ImageItem {
+                        placement: CommonPlacement::new(placement),
+                        image_key,
+                        image_rendering: ImageRendering::Auto,
+                        alpha_type: AlphaType::Alpha,
+                        color: ColorF::WHITE,
+                    }));
+                }
+            }
+            if repeat_x || repeat_y {
+                list.commands.push(PaintCmd::PopClip);
+            }
         },
     }
+}
+
+fn resolve_length_percentage(value: LengthPercentage, basis: f32, em: f32) -> f32 {
+    match value {
+        LengthPercentage::Zero => 0.0,
+        LengthPercentage::Length(length) => match length.unit {
+            LengthUnit::Px => length.value,
+            LengthUnit::Em => length.value * em,
+            LengthUnit::Rem => length.value * 16.0,
+        },
+        LengthPercentage::Percentage(value) => basis * value,
+        LengthPercentage::Calc(calc) => {
+            calc.percentage * basis + calc.px + calc.em * em + calc.rem * 16.0
+        },
+    }
+}
+
+fn tile_origin(min: f32, offset: f32, tile: f32, repeated: bool) -> f32 {
+    let origin = min + offset;
+    if repeated && tile > 0.0 {
+        origin - (offset / tile).ceil() * tile
+    } else {
+        origin
+    }
+}
+
+fn tile_count(first: f32, max: f32, tile: f32, repeated: bool) -> usize {
+    if !repeated || tile <= 0.0 {
+        return 1;
+    }
+    (((max - first) / tile).ceil().max(0.0) as usize).saturating_add(1)
 }
 
 fn emit_shadow(list: &mut LiveryPaintList, style: &ComputedValues, fragment: &Fragment) {

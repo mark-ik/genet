@@ -61,8 +61,9 @@ containers route wheel deltas into their retained offsets, chain at their
 boundaries to the viewport, and replay descendant paint through transforms.
 Bounded `@keyframes` declarations animate opacity through the same retained
 clock, with linear, ease, ease-in, ease-out, and ease-in-out timing functions.
-Host-resolved local image bytes use the same neutral image side-table. Remote
-resource loading, replaced-element layout, background positioning and repeat,
-and multi-property transitions remain outside this first interaction gate.
+Host-resolved local image bytes use the same neutral image side-table, with
+bounded intrinsic tiling and position/repeat modes. Remote resource loading,
+replaced-element layout, and multi-property transitions remain outside this
+first interaction gate.
 `genet.livery` therefore stays an explicit pin rather than the default static
 route.

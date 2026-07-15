@@ -149,6 +149,26 @@ animation = "discrete"
 source = "css_backgrounds_3"
 
 [[property]]
+name = "background-position"
+value_type = "background-position"
+inherited = false
+initial = "0% 0%"
+grammar = "[ left | center | right | <length-percentage> ] [ top | center | bottom | <length-percentage> ]?"
+seed_values = ["0% 0%", "center center", "px percentage"]
+animation = "by-computed-value"
+source = "css_backgrounds_3"
+
+[[property]]
+name = "background-repeat"
+value_type = "background-repeat"
+inherited = false
+initial = "repeat"
+grammar = "repeat | no-repeat | repeat-x | repeat-y"
+seed_values = ["repeat", "no-repeat"]
+animation = "discrete"
+source = "css_backgrounds_3"
+
+[[property]]
 name = "border-bottom-left-radius"
 value_type = "radius"
 inherited = false

@@ -4,7 +4,7 @@
 **Status:** E0b lane choice, themed catalog fixture, and original 40-property
 clean-room database landed. The E1 handoff into Livery and the first E3
 `genet-livery` integration slice have also landed. The native capability
-ratchet now contains 85 properties, including geometry, corner radii,
+ratchet now contains 87 properties, including geometry, corner radii,
 visibility, alignment, spacing, box shadows, two-stop linear-gradient
 backgrounds, bounded opacity keyframes, flexbox, and bounded grid placement. Source
 hashes are recorded below.
@@ -154,8 +154,9 @@ metadata, and a native reftest-style paint pair are covered by package
 receipts. Nested scroll containers route wheel deltas into retained offsets and
 chain to the viewport at their boundary. Raster `data:` background URLs reach
 the neutral image side-table, and host-resolved local image bytes now use the
-same side-table seam. Remote resource loading, replaced-element image layout,
-and background positioning remain open alongside multi-property transitions,
+same side-table seam. Bounded intrinsic tiling and position/repeat modes now
+paint through that seam. Remote resource loading and replaced-element image
+layout remain open alongside multi-property transitions,
 and full WPT reftest parity. Bounded opacity-only `@keyframes` declarations
 with linear, ease, ease-in, ease-out, and ease-in-out timing functions now run
 on the retained clock. The WPT command surface now accepts
@@ -167,7 +168,7 @@ the route is a comparison seam rather than a full-corpus parity receipt.
 
 The 2026-07-15 capability receipt grows the original catalog plus the first
 two ratchet rows, bounded transition controls, and opacity keyframe controls to
-85 properties. Geometry,
+87 properties. Geometry,
 flexbox, and bounded grid values
 are lowered into Taffy; corner radii, color fills, and two-stop gradients reach
 neutral paint commands; Parley consumes text alignment and spacing; and hidden

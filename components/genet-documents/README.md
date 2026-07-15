@@ -22,8 +22,9 @@ session, take paint frames, scroll, click, settle).
   named timing functions. Nested scroll chaining is routed through the retained
   session and chains at its boundary. Resource-backed images and multi-property
   transitions remain open. Livery's image gate covers two-stop gradients,
-  raster `data:` URLs, and host-resolved local bytes; remote URL resources,
-  replaced-element layout, positioning, and repeat remain open.
+  raster `data:` URLs, host-resolved local bytes, and bounded intrinsic
+  position/repeat modes; remote URL resources and replaced-element layout
+  remain open.
 - `ScriptedDocument` sessions / `ScriptedSessionEngine<E, _>` (`scripted`
   feature): a live page whose JS runs on Boa (or Nova on the nova rung),
   with the tick + quiescence seam (`pump` / `settled`).

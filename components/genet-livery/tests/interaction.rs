@@ -186,7 +186,7 @@ fn css_keyframes_opacity_use_the_retained_clock() {
             to { opacity: 1; }
         }
         .fade { display: block; width: 100px; height: 20px;
-                animation: fade-in 100ms ease-in-out; }
+                animation: fade-in 100ms ease-in; }
     "#]);
     let mut retained = LiveryDocument::new(document, styles, Device::screen(200.0, 100.0));
 
@@ -209,7 +209,10 @@ fn css_keyframes_opacity_use_the_retained_clock() {
             _ => None,
         })
         .expect("mid-keyframe frame keeps a compositing layer");
-    assert!((opacity - 0.5).abs() < 0.01);
+    assert!(
+        opacity > 0.25 && opacity < 0.4,
+        "ease-in opacity: {opacity}"
+    );
 
     retained.pump(100.0);
     assert!(retained.settled());

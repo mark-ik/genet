@@ -84,6 +84,8 @@ fn value_type_path(value_type: &str) -> &'static str {
         "timing-function" => "crate::values::TimingFunction",
         "aspect-ratio" => "crate::values::AspectRatio",
         "background-image" => "crate::values::BackgroundImage",
+        "background-position" => "crate::values::BackgroundPosition",
+        "background-repeat" => "crate::values::BackgroundRepeat",
         "border-style" => "crate::values::BorderStyle",
         "border-width" => "crate::values::BorderWidth",
         "box-shadow" => "crate::values::BoxShadow",
@@ -148,6 +150,8 @@ fn initial_expression(property: &Property) -> &'static str {
         ("timing-function", "linear") => "crate::values::TimingFunction::Linear",
         ("aspect-ratio", "auto") => "crate::values::AspectRatio::Auto",
         ("background-image", "none") => "crate::values::BackgroundImage::None",
+        ("background-position", "0% 0%") => "crate::values::BackgroundPosition::ZERO",
+        ("background-repeat", "repeat") => "crate::values::BackgroundRepeat::Repeat",
         ("border-style", "none") => "crate::values::BorderStyle::None",
         ("border-width", "medium") => "crate::values::BorderWidth::Medium",
         ("box-shadow", "none") => "crate::values::BoxShadow::None",
@@ -202,8 +206,8 @@ fn initial_expression(property: &Property) -> &'static str {
 fn validate(db: &Database) {
     assert_eq!(db.schema, 1, "unsupported properties.toml schema");
     assert!(
-        db.property.len() >= 85,
-        "the native Cambium lane must retain at least the 85-property receipt"
+        db.property.len() >= 87,
+        "the native Cambium lane must retain at least the 87-property receipt"
     );
 
     let mut names = BTreeSet::new();
