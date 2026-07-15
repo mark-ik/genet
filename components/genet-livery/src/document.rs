@@ -74,6 +74,16 @@ struct ColorTransition<Id> {
     automatic: bool,
 }
 
+#[derive(Clone, Copy)]
+struct BorderTopColorTransition<Id> {
+    node: Id,
+    from: Color,
+    to: Color,
+    start_ms: f64,
+    duration_ms: f64,
+    automatic: bool,
+}
+
 #[derive(Clone)]
 struct KeyframeAnimation<Id> {
     node: Id,
@@ -108,6 +118,7 @@ where
     opacity_transition: Option<OpacityTransition<D::NodeId>>,
     background_color_transition: Option<BackgroundColorTransition<D::NodeId>>,
     color_transition: Option<ColorTransition<D::NodeId>>,
+    border_top_color_transition: Option<BorderTopColorTransition<D::NodeId>>,
     keyframe_animation: Option<KeyframeAnimation<D::NodeId>>,
     nested_scroll: HashMap<D::NodeId, (f32, f32)>,
     image_sources: HashMap<String, Vec<u8>>,
@@ -139,6 +150,7 @@ where
             opacity_transition: None,
             background_color_transition: None,
             color_transition: None,
+            border_top_color_transition: None,
             keyframe_animation: None,
             nested_scroll: HashMap::new(),
             image_sources: HashMap::new(),
@@ -188,15 +200,18 @@ where
         self.finish_completed_opacity_transition();
         self.finish_completed_background_color_transition();
         self.finish_completed_color_transition();
+        self.finish_completed_border_top_color_transition();
         let mut styles =
             resolve_styles(&self.dom, &self.style_set, &self.device, &self.interactions);
         self.schedule_opacity_transition(&styles);
         self.schedule_background_color_transition(&styles);
         self.schedule_color_transition(&styles);
+        self.schedule_border_top_color_transition(&styles);
         self.schedule_keyframe_animation(&styles);
         self.apply_opacity_transition(&mut styles);
         self.apply_background_color_transition(&mut styles);
         self.apply_color_transition(&mut styles);
+        self.apply_border_top_color_transition(&mut styles);
         self.apply_keyframe_animation(&mut styles);
         let fragments = layout_with_text_system(
             &self.dom,
@@ -275,6 +290,7 @@ where
         if (self.opacity_transition.is_none()
             && self.background_color_transition.is_none()
             && self.color_transition.is_none()
+            && self.border_top_color_transition.is_none()
             && self.keyframe_animation.is_none())
             || !now_ms.is_finite()
         {
@@ -303,7 +319,14 @@ where
         let color_settled = self
             .color_transition
             .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
-        opacity_settled && background_color_settled && color_settled && keyframe_settled
+        let border_top_color_settled = self
+            .border_top_color_transition
+            .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
+        opacity_settled
+            && background_color_settled
+            && color_settled
+            && border_top_color_settled
+            && keyframe_settled
     }
 
     /// Scroll the document viewport by device pixels. Wheel deltas that need
@@ -621,6 +644,21 @@ where
         }
     }
 
+    fn apply_border_top_color_transition(&self, styles: &mut StylePlane<D::NodeId>) {
+        let Some(transition) = self.border_top_color_transition else {
+            return;
+        };
+        let progress = if transition.duration_ms == 0.0 {
+            1.0
+        } else {
+            ((self.clock_ms - transition.start_ms) / transition.duration_ms).clamp(0.0, 1.0) as f32
+        };
+        let value = transition.from.interpolate(transition.to, progress);
+        if let Some(style) = styles.get_mut(transition.node) {
+            style.border_top_color = value;
+        }
+    }
+
     fn apply_keyframe_animation(&self, styles: &mut StylePlane<D::NodeId>) {
         let Some(animation) = self.keyframe_animation.as_ref() else {
             return;
@@ -733,6 +771,21 @@ where
             style.color = transition.to;
         }
         self.color_transition = None;
+    }
+
+    fn finish_completed_border_top_color_transition(&mut self) {
+        let Some(transition) = self.border_top_color_transition else {
+            return;
+        };
+        if !transition.automatic || self.clock_ms < transition.start_ms + transition.duration_ms {
+            return;
+        }
+        if let Some(layout) = self.layout.as_mut()
+            && let Some(style) = layout.styles.get_mut(transition.node)
+        {
+            style.border_top_color = transition.to;
+        }
+        self.border_top_color_transition = None;
     }
 
     fn schedule_opacity_transition(&mut self, styles: &StylePlane<D::NodeId>) {
@@ -858,6 +911,53 @@ where
         self.dom
             .dom_children(id)
             .find_map(|child| self.find_color_transition(child, previous, styles))
+    }
+
+    fn schedule_border_top_color_transition(&mut self, styles: &StylePlane<D::NodeId>) {
+        if self.border_top_color_transition.is_some() {
+            return;
+        }
+        let Some(previous) = self.layout.as_ref().map(|layout| &layout.styles) else {
+            return;
+        };
+        let Some((node, from, to, duration_ms)) =
+            self.find_border_top_color_transition(self.dom.document(), previous, styles)
+        else {
+            return;
+        };
+        self.border_top_color_transition = Some(BorderTopColorTransition {
+            node,
+            from,
+            to,
+            start_ms: self.clock_ms,
+            duration_ms,
+            automatic: true,
+        });
+    }
+
+    fn find_border_top_color_transition(
+        &self,
+        id: D::NodeId,
+        previous: &StylePlane<D::NodeId>,
+        styles: &StylePlane<D::NodeId>,
+    ) -> Option<(D::NodeId, Color, Color, f64)> {
+        if let (Some(old), Some(new)) = (previous.get(id), styles.get(id)) {
+            let duration_ms = f64::from(new.transition_duration.milliseconds());
+            if new.transition_property.includes_border_top_color()
+                && duration_ms > 0.0
+                && old.border_top_color != new.border_top_color
+            {
+                return Some((
+                    id,
+                    old.border_top_color,
+                    new.border_top_color,
+                    duration_ms,
+                ));
+            }
+        }
+        self.dom
+            .dom_children(id)
+            .find_map(|child| self.find_border_top_color_transition(child, previous, styles))
     }
 
     fn scrollable_axes(&self, layout: &LayoutState<D::NodeId>) -> (bool, bool) {

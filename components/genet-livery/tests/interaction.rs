@@ -4,7 +4,7 @@ use genet_livery::{
 use genet_static_dom::StaticDocument;
 use layout_dom_api::LayoutDom;
 use livery::media::Device;
-use paint_list_api::{ColorF, PaintCmd, PaintList};
+use paint_list_api::{BorderDetails, ColorF, PaintCmd, PaintList};
 
 #[test]
 fn hit_test_skips_pointer_events_none_overlays() {
@@ -401,6 +401,49 @@ fn css_transition_three_property_list_shares_the_retained_clock() {
     let middle_text = middle_text.expect("three-property transition keeps a text run");
     assert!((middle_text.r - 0.5).abs() < 0.01);
     assert!((middle_text.b - 0.5).abs() < 0.01);
+}
+
+#[test]
+fn css_transition_border_top_color_uses_the_retained_clock() {
+    let document =
+        StaticDocument::parse(r#"<html><body><div class="card">card</div></body></html>"#);
+    let card = document
+        .first_with_class(document.document(), "card")
+        .unwrap();
+    let styles = StyleSet::cambium(&[r#"
+        .card { display: block; width: 100px; height: 20px; border-top: 4px solid red;
+                transition: border-top-color 100ms; }
+        .card:hover { border-top-color: blue; }
+    "#]);
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(200.0, 100.0));
+    let initial = retained.frame(200, 100).unwrap();
+    let border_color = |frame: &genet_livery::LiveryPaintList| {
+        frame.commands().iter().find_map(|command| match command {
+            PaintCmd::DrawBorder(border) => match &border.details {
+                BorderDetails::Normal(border) => Some(border.top.color),
+                _ => None,
+            },
+            _ => None,
+        })
+    };
+    assert_eq!(border_color(&initial), Some(ColorF::new(1.0, 0.0, 0.0, 1.0)));
+
+    retained
+        .interactions_mut()
+        .set(card, livery::selector::StatePseudoClass::Hover, true);
+    retained.frame(200, 100).unwrap();
+    assert!(!retained.settled());
+
+    retained.pump(50.0);
+    let middle = retained.frame(200, 100).unwrap();
+    let middle_color = border_color(&middle).expect("border transition keeps a border primitive");
+    assert!((middle_color.r - 0.5).abs() < 0.01);
+    assert!((middle_color.b - 0.5).abs() < 0.01);
+
+    retained.pump(100.0);
+    assert!(retained.settled());
+    let final_frame = retained.frame(200, 100).unwrap();
+    assert_eq!(border_color(&final_frame), Some(ColorF::new(0.0, 0.0, 1.0, 1.0)));
 }
 
 #[test]

@@ -261,6 +261,7 @@ pub enum TransitionProperty {
     Opacity,
     BackgroundColor,
     Color,
+    BorderTopColor,
     OpacityAndBackgroundColor,
     OpacityAndColor,
     BackgroundColorAndColor,
@@ -286,6 +287,7 @@ impl FromStr for TransitionProperty {
                 "opacity" => 1,
                 "background-color" => 2,
                 "color" => 4,
+                "border-top-color" => 8,
                 _ => return Err(ParseError::expected("a bounded transition-property list")),
             };
             if flags & bit != 0 {
@@ -309,6 +311,7 @@ impl fmt::Display for TransitionProperty {
             Self::Opacity => "opacity",
             Self::BackgroundColor => "background-color",
             Self::Color => "color",
+            Self::BorderTopColor => "border-top-color",
             Self::OpacityAndBackgroundColor => "opacity, background-color",
             Self::OpacityAndColor => "opacity, color",
             Self::BackgroundColorAndColor => "background-color, color",
@@ -323,6 +326,7 @@ impl TransitionProperty {
             1 => Self::Opacity,
             2 => Self::BackgroundColor,
             4 => Self::Color,
+            8 => Self::BorderTopColor,
             3 => Self::OpacityAndBackgroundColor,
             5 => Self::OpacityAndColor,
             6 => Self::BackgroundColorAndColor,
@@ -364,12 +368,17 @@ impl TransitionProperty {
         )
     }
 
+    pub fn includes_border_top_color(self) -> bool {
+        matches!(self, Self::All | Self::BorderTopColor)
+    }
+
     fn flags(self) -> u8 {
         match self {
             Self::All | Self::None => 0,
             Self::Opacity => 1,
             Self::BackgroundColor => 2,
             Self::Color => 4,
+            Self::BorderTopColor => 8,
             Self::OpacityAndBackgroundColor => 3,
             Self::OpacityAndColor => 5,
             Self::BackgroundColorAndColor => 6,
