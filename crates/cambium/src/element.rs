@@ -6,7 +6,7 @@
 //! modifier.
 //!
 //! Modelled on `xilem_web`'s `define_element!`-generated views, collapsed to a
-//! single generic `El` (serval has one element type, so there is no per-tag
+//! single generic `El` (Genet has one element type, so there is no per-tag
 //! `DomNode` interface to specialize). Children are any `meristem`
 //! [`ViewSequence`] over [`GenetElement`]; attributes are applied eagerly to
 //! the `ScriptedDom`.
@@ -27,7 +27,7 @@ pub use crate::pod::GenetElement as Element;
 /// Element-only operations — [`on_click`](crate::on_click),
 /// [`on_key`](crate::on_key), and [`El::attr`] — require `ElementView`, so they
 /// reject text views (`&str` / `String` / [`text`](crate::text)): a text node is
-/// not a sensible click / key / attribute target. Every node in serval is still
+/// not a sensible click / key / attribute target. Every node in Genet is still
 /// one runtime type ([`GenetElement`]) — this is a *compile-time* distinction
 /// over views, not a second element type, so the children sequence stays
 /// heterogeneous (text and elements mix freely as children).
@@ -104,7 +104,7 @@ pub struct ElementState<SeqState> {
 /// Apply the attribute diff between `prev` and `next` eagerly to `node`.
 fn apply_attr_diff(
     dom: &DomHandle,
-    node: serval_scripted_dom::NodeId,
+    node: genet_scripted_dom::NodeId,
     prev: &[(String, String)],
     next: &[(String, String)],
 ) {

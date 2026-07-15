@@ -3,22 +3,22 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 //! The [`ElementSplice`] that turns a view-sequence diff into ordered child
-//! mutations on a serval node.
+//! mutations on a Genet node.
 //!
 //! Modelled on `xilem_web`'s `DomChildrenSplice`, but:
 //!   * the retained child collection is `Vec<GenetElement>` (no `AnyPod`
 //!     boxing — the element type is uniform);
 //!   * inserts/removes are applied *eagerly* against the `ScriptedDom`
-//!     (`insert_before` / `remove`), since serval batches at the
+//!     (`insert_before` / `remove`), since Genet batches at the
 //!     `drain_mutations` boundary rather than at a `Mut` drop;
-//!   * there is no `DocumentFragment`: serval has no detached-batch primitive,
+//!   * there is no `DocumentFragment`: Genet has no detached-batch primitive,
 //!     so `with_scratch` inserts each built child individually (the recorded
 //!     `DomMutation`s are identical to inserting them one by one anyway).
 
 use crate::pod::{GenetElement, GenetElementMut};
+use genet_scripted_dom::NodeId;
 use layout_dom_api::LayoutDomMut;
 use meristem::{AppendVec, ElementSplice, Mut};
-use serval_scripted_dom::NodeId;
 
 /// An append-only cursor over a retained `Vec`, ported from `xilem_web`'s
 /// `VecSplice`. Elements before the cursor are processed; elements at/after it
@@ -135,7 +135,7 @@ impl<'v, 's, T> VecSplice<'v, 's, T> {
     }
 }
 
-/// [`ElementSplice`] managing the children of one serval node in place.
+/// [`ElementSplice`] managing the children of one Genet node in place.
 ///
 /// `parent` is the node whose children are being diffed; `dom` is the shared
 /// document handle. The retained children live in `children`; `scratch` is the
@@ -182,7 +182,7 @@ impl ElementSplice<GenetElement> for GenetChildrenSplice<'_, '_, '_> {
     fn with_scratch<R>(&mut self, f: impl FnOnce(&mut AppendVec<GenetElement>) -> R) -> R {
         let ret = f(self.scratch);
         if !self.scratch.is_empty() {
-            // serval has no DocumentFragment, so insert each built child at the
+            // Genet has no DocumentFragment, so insert each built child at the
             // current cursor in order. The reference node is recomputed each
             // time because previously inserted children become preceding
             // siblings, not the reference.

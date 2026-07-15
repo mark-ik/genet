@@ -4,8 +4,6 @@
 
 //! A self-positioning dropdown [`select`] control.
 //!
-//! The T2 form control the serval-as-host plan flagged as needing "simple
-//! overlay/popup positioning" — now available via serval's inline-style support.
 //! Unlike the host-driven [`overlay_at`](crate::overlay_at) (whose `(x, y)` only
 //! the host knows post-layout), `select` positions its own option list with **no
 //! host plumbing**: the list is `position: absolute; top: 100%` inside a
@@ -14,7 +12,7 @@
 //! control like [`checkbox`](crate::checkbox) / [`text_field`](crate::text_field).
 //!
 //! Stacking: the option list is `position: absolute`, so it auto-lifts above
-//! in-flow content (serval-layout's CSS 2.1 Appendix E stacking + z-index). To sit
+//! in-flow content (genet-layout's CSS 2.1 Appendix E stacking + z-index). To sit
 //! above a *later positioned* sibling, give the open list (or the select) a higher
 //! `z-index`; the old "place the select last" workaround is no longer required.
 

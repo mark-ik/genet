@@ -5,14 +5,14 @@
 //! Syntax-highlighted text fields (the `highlight` feature).
 //!
 //! This is the assembly point that joins a lexer ([`illume`]) to a palette
-//! ([`tinct`]) over serval's styled field, so any serval host gets highlighted
+//! ([`tinct`]) over Genet's styled field, so any Genet host gets highlighted
 //! djot/code/entity editing for free — the omnibar, a note editor, a chat line,
 //! a script prompt. The two libraries stay independent of each other; Cambium
 //! is the one place allowed to know both, mapping illume's fine-grained
 //! [`SyntaxKind`] (what was lexed) onto tinct's canonical [`SyntaxRole`] (what
 //! colour), then naming a `syntax-*` CSS class a host stylesheet themes.
 //!
-//! Two halves, kept apart so colours stay themeable the serval/stylo way:
+//! Two halves, kept apart so colours stay themeable the Genet/stylo way:
 //! - [`note_styles`] / [`entity_styles`] produce the `(range, class)`
 //!   [`StyleRange`]s the styled field paints;
 //! - [`syntax_css`] derives the actual colours from a theme's seeds (perceptual,

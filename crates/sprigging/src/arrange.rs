@@ -15,7 +15,7 @@ pub struct Placement {
     pub x: f32,
     pub y: f32,
     /// CSS `z-index` within the container's stacking context: raise a card by
-    /// giving it the highest z (serval's `paint_stacking` orders natively).
+    /// giving it the highest z (Genet's `paint_stacking` orders natively).
     pub z: i32,
 }
 

@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 //! A small reusable overlay menu: a positioned vertical list of labelled rows with one
-//! marked active and each clicking a host handler. It is the shape every serval host
+//! marked active and each clicking a host handler. It is the shape every Genet host
 //! reaches for — a completion popup, a slash / command menu, a context menu, a picker —
 //! composed from the existing [`overlay_at`](crate::overlay_at) primitive so it is pure
 //! Tier-1 CSS/native views (no leaf). The host owns the state (which items, the query,

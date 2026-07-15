@@ -3,24 +3,21 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 //! The native key event view: [`on_key`]`(child, handler)`, plus the
-//! serval-native [`KeyEvent`] it carries.
+//! Genet-native [`KeyEvent`] it carries.
 //!
-//! Stage 3b of `docs/history/2026-05-27_serval_as_host_xilem_serval_plan.md`: the
-//! keyboard/focus *foundation*. It mirrors [`OnClick`](crate::OnClick) (Stage
-//! 2b) exactly, swapping the click payload for a [`KeyEvent`] and the click
-//! registry for the parallel key registry on [`GenetCtx`]. A later slice maps
-//! winit key events to [`KeyEvent`] and adds form controls on top; this layer
-//! stays headless (no winit, no bin).
+//! It mirrors [`OnClick`](crate::OnClick), swapping the click payload for a
+//! [`KeyEvent`] and the click registry for the parallel key registry on
+//! [`GenetCtx`]. This layer stays platform-neutral; `cambium-winit` provides
+//! winit translation.
 //!
 //! As with [`on_click`](crate::on_click): there is no browser, so no
 //! `addEventListener`. On build, the view records its routing path in
 //! [`GenetCtx`]'s *key* registry, keyed by the DOM node it wraps. The runner
 //! ([`dispatch_key`]) is the dispatch engine: it routes a [`KeyEvent`] from the
 //! currently *focused* node up its ancestor chain through the same
-//! `id_path`-routed `View::message` cycle the click path uses. A node is
-//! "focusable" precisely because it carries a key handler (it is in the key
-//! registry); [`dispatch_click`] sets focus to the nearest such ancestor of the
-//! click target.
+//! `id_path`-routed `View::message` cycle the click path uses. Key handlers and
+//! explicit [`focusable`](crate::focusable) markers define the focus set;
+//! [`dispatch_click`] focuses the nearest eligible ancestor of the click target.
 //!
 //! The message-routing shape is identical to [`OnClick::message`]: the captured
 //! `view_path()` ends in [`ON_KEY_ID`], so `message` does `take_first()` (==
@@ -33,8 +30,8 @@
 
 use core::marker::PhantomData;
 
+use genet_scripted_dom::NodeId;
 use meristem::{MessageCtx, MessageResult, Mut, View, ViewId, ViewMarker, ViewPathTracker};
-use serval_scripted_dom::NodeId;
 
 use crate::pod::GenetElement;
 use crate::{ElementView, GenetCtx, OptionalAction};

@@ -27,8 +27,8 @@
 //! step 3) makes every window a subtree of one document — at which point
 //! same-document `move_before` covers cross-window moves too.
 
+use genet_scripted_dom::NodeId;
 use meristem::View;
-use serval_scripted_dom::NodeId;
 
 use crate::runner::RunnerTree;
 use crate::{DomHandle, GenetCtx, GenetElement, KeyEvent, PointerClick, PointerEvent, WheelEvent};

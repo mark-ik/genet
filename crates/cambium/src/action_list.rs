@@ -256,7 +256,7 @@ fn next_enabled(current: Option<usize>, enabled: &[usize], forward: bool) -> usi
 mod tests {
     use super::*;
     use crate::{DomHandle, GenetAppRunner, KeyEvent};
-    use serval_scripted_dom::ScriptedDom;
+    use genet_scripted_dom::ScriptedDom;
     use std::cell::RefCell;
     use std::rc::Rc;
 

@@ -182,7 +182,7 @@ impl Meter {
 }
 
 impl Leaf for Meter {
-    /// A level meter announces as [`Role::Meter`] carrying its normalized level.
+    /// A level meter announces as [`accesskit::Role::Meter`] carrying its normalized level.
     /// Read-only: a meter reports, it is not actuated, so it declares no action
     /// and never lands in the host's routable set.
     fn accessibility(&mut self, node: &mut accesskit::Node) {
@@ -286,7 +286,7 @@ impl Knob {
 }
 
 impl Leaf for Knob {
-    /// A knob announces as [`Role::Slider`] carrying its normalized value, and
+    /// A knob announces as [`accesskit::Role::Slider`] carrying its normalized value, and
     /// declares the actions assistive tech and automation invoke on a slider.
     /// Declaring them here is what puts the knob in the host's routable set, so
     /// a leaf interior is actuated through the same path a `<button>` is.

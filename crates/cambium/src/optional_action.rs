@@ -5,21 +5,16 @@
 //! [`OptionalAction`]: let an event handler return `()`, an `Action`, or an
 //! `Option<Action>`, uniformly.
 //!
-//! Stage 3a of `docs/history/2026-05-27_serval_as_host_xilem_serval_plan.md`. Mirrors
-//! `xilem_web`'s `optional_action.rs` line for line: a sealed marker trait
-//! [`Action`] tags the types an app uses as bubbling actions, and
+//! A sealed marker trait [`Action`] tags the types an app uses as bubbling actions, and
 //! [`OptionalAction`] lets [`on_click`](crate::on_click)'s handler be
 //! polymorphic on its return type so the same view covers both
-//!   * the Stage 2b *unit* handler (`Fn(&mut State, _)` returning `()`,
+//!   * a *unit* handler (`Fn(&mut State, _)` returning `()`,
 //!     which yields no action), and
 //!   * an action-bubbling handler (`Fn(&mut State, _) -> A`, which feeds
 //!     [`MessageResult::Action`](meristem::MessageResult::Action) and composes
 //!     up through [`map_action`](meristem::map_action)).
 //!
-//! The `()` impl is what keeps every existing unit-handler call site (and the
-//! Stage 2b tests) compiling unchanged: their handler returns `()`, which
-//! `action()` turns into `None`, i.e. `MessageResult::Nop` — exactly the old
-//! behaviour.
+//! A `()` return becomes `None`, yielding `MessageResult::Nop`.
 
 /// Implement this (empty) marker for any type you want to bubble as an action.
 ///

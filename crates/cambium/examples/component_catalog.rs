@@ -12,8 +12,8 @@ use cambium::{
     Slider, TextInput, View, button, checkbox, el, lens, radio_group, select, slider, text_field,
     toggle,
 };
+use genet_scripted_dom::ScriptedDom;
 use layout_dom_api::LayoutDom;
-use serval_scripted_dom::ScriptedDom;
 
 const THEME: &str = include_str!("component_catalog.css");
 

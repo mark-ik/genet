@@ -136,8 +136,8 @@ mod tests {
     use super::*;
     use crate::tags::custom_leaf;
     use crate::{DomHandle, GenetAppRunner};
+    use genet_scripted_dom::{NodeId, ScriptedDom};
     use layout_dom_api::{LayoutDom, LocalName, Namespace};
-    use serval_scripted_dom::{NodeId, ScriptedDom};
     use sprigging::GridColumn;
     use std::cell::RefCell;
     use std::rc::Rc;

@@ -19,8 +19,8 @@
 
 use core::marker::PhantomData;
 
+use genet_scripted_dom::NodeId;
 use meristem::{MessageCtx, MessageResult, Mut, View, ViewId, ViewMarker, ViewPathTracker};
-use serval_scripted_dom::NodeId;
 
 use crate::pod::GenetElement;
 use crate::{ElementView, GenetCtx, OptionalAction, Propagation};
@@ -231,8 +231,8 @@ mod tests {
     use super::*;
     use crate::tags::custom_leaf;
     use crate::{AnyView, DomHandle, GenetAppRunner, GenetCtx, GenetElement};
+    use genet_scripted_dom::ScriptedDom;
     use layout_dom_api::LayoutDom;
-    use serval_scripted_dom::ScriptedDom;
     use sprigging::{Knob, Size};
     use std::cell::RefCell;
     use std::rc::Rc;

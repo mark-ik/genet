@@ -2,28 +2,28 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! The uniform element type for the serval backend.
+//! The uniform element type for the Genet backend.
 //!
 //! `xilem_web` needs `Box<dyn AnyNode>` type erasure because the browser's
 //! `web_sys::Element`/`Text`/`HtmlInputElement` are distinct Rust types. In
-//! serval every DOM node is the *same* type — [`NodeId`] — so there is no type
+//! Genet every DOM node is the *same* type — [`NodeId`] — so there is no type
 //! erasure here: the element type is uniform, the "any" element is the same
 //! type, and the [`SuperElement<Self, GenetCtx>`] impl is the identity.
 //!
 //! Unlike `xilem_web`'s `Pod`/`PodMut`, props are applied *eagerly* against the
 //! `ScriptedDom` (each `set_attribute`/`remove_attribute` records a
-//! `DomMutation` immediately). serval already batches at the
+//! `DomMutation` immediately). Genet already batches at the
 //! `drain_mutations` → relayout boundary, so the deferred-apply-on-drop
 //! machinery (`PodMut::drop`) is unnecessary.
 
 use crate::DomHandle;
 use crate::context::GenetCtx;
+use genet_scripted_dom::NodeId;
 use layout_dom_api::LayoutDomMut;
 use meristem::{AnyElement, Mut, SuperElement, ViewElement};
-use serval_scripted_dom::NodeId;
 
-/// A retained backend element: a serval DOM node plus the handle needed to keep
-/// mutating it. This is the `View::Element` for every serval view, and also the
+/// A retained backend element: a Genet DOM node plus the handle needed to keep
+/// mutating it. This is the `View::Element` for every Genet view, and also the
 /// element type carried by every [`ViewSequence`](meristem::ViewSequence)
 /// over this backend.
 pub struct GenetElement {

@@ -39,9 +39,9 @@ where
 ///
 /// The child leaf reaches paint at any button `display`. It takes the block
 /// replaced-leaf path inside a block button, and rides as an `InlineBoxItem`
-/// inside the `inline-block` button serval's UA sheet gives `<button>`. Pinned by
+/// inside the `inline-block` button Genet's UA sheet gives `<button>`. Pinned by
 /// `a_chisel_leaf_inside_a_button_is_reported_at_every_button_display` in
-/// serval-layout.
+/// genet-layout.
 pub fn button_with<Seq, State, Action, OA, F>(
     child: Seq,
     handler: F,
@@ -61,8 +61,8 @@ mod tests {
     use super::*;
     use crate::tags::custom_leaf;
     use crate::{AnyView, DomHandle, GenetAppRunner};
+    use genet_scripted_dom::{NodeId, ScriptedDom};
     use layout_dom_api::{LayoutDom, LocalName, Namespace};
-    use serval_scripted_dom::{NodeId, ScriptedDom};
     use std::cell::RefCell;
     use std::rc::Rc;
 

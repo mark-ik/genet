@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Use the canonical `genet_scripted_dom` Rust crate name throughout Cambium,
+  Cambium Nematic, tests, and examples.
+- Replace stale Serval-era crate documentation with the current Cambium,
+  Meristem, Sprigging, and Genet ownership boundary.
+
 ## 0.2.0 - 2026-07-14
 
 - Make `GenetCtx`, `GenetElement`, `GenetAppRunner`, and related `Genet*`

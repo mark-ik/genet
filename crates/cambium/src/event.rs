@@ -4,16 +4,10 @@
 
 //! The native click event view: [`on_click`]`(child, handler)`.
 //!
-//! Stage 2b of `docs/history/2026-05-27_serval_as_host_xilem_serval_plan.md`. This is
-//! `xilem_web`'s `OnEvent` view (in `crates/xilem/xilem_web/src/events.rs`),
-//! collapsed to *click only* and adapted to serval: there is no browser, so
-//! there is no `addEventListener`. Instead, on build, the view records its
-//! routing path in [`GenetCtx`]'s click registry, keyed by the DOM node it
-//! wraps. The serval-native runner ([`dispatch_click`]) is the dispatch
-//! engine: it hit-tests a pointer event to a node, walks that node's ancestor
-//! chain, and routes a [`PointerClick`] message down each registered path —
-//! the same `id_path`-routed `View::message` cycle the browser path uses,
-//! just driven by serval rather than `web_sys`.
+//! On build, the view records its routing path in [`GenetCtx`]'s click registry,
+//! keyed by the DOM node it wraps. [`dispatch_click`] walks the hit node's
+//! ancestor chain and routes a [`PointerClick`] message down each registered
+//! path through Meristem's `View::message` cycle.
 //!
 //! The message-routing shape is identical to `OnEvent::message`: the captured
 //! `view_path()` ends in [`ON_CLICK_ID`], so `message` does `take_first()` (==
@@ -24,8 +18,8 @@
 
 use core::marker::PhantomData;
 
+use genet_scripted_dom::NodeId;
 use meristem::{MessageCtx, MessageResult, Mut, View, ViewId, ViewMarker, ViewPathTracker};
-use serval_scripted_dom::NodeId;
 
 use crate::pod::GenetElement;
 use crate::{El, ElementView, Focusable, GenetCtx, OptionalAction, focusable};
@@ -85,14 +79,14 @@ impl PointerClick {
 /// Construct with [`on_click`]. The wrapped child must produce a
 /// [`GenetElement`] (so the view has a DOM node to key the registry on).
 ///
-/// Stage 3a's handler returns an [`OptionalAction`] (`OA`): it may mutate app
+/// The handler returns an [`OptionalAction`] (`OA`): it may mutate app
 /// state and *also* bubble an `Action`. The two ends of that polymorphism are
 ///   * a **unit** handler (`Fn(&mut State, PointerClick)`, `OA = ()`), the
-///     Stage 2b shape — `action()` is `None`, so `message` returns
+///     non-bubbling shape — `action()` is `None`, so `message` returns
 ///     [`MessageResult::Nop`] exactly as before; and
 ///   * an **action** handler (`Fn(&mut State, PointerClick) -> A`, `OA = A`) —
 ///     `action()` is `Some(a)`, so `message` returns
-///     [`MessageResult::Action(a)`], which composes up through
+///     [`MessageResult::Action`], which composes up through
 ///     [`map_action`](meristem::map_action), as `OnEvent` does.
 ///
 /// `OA` is not a struct field; it is introduced by the `View` impl (mirroring
@@ -130,7 +124,7 @@ impl<V, State, Action, F> OnClick<V, State, Action, F> {
 impl<Seq, State, Action, F> OnClick<El<Seq, State, Action>, State, Action, F> {
     /// Set an attribute on the wrapped element, forwarding to [`El::attr`].
     ///
-    /// This is what lets the ergonomic [`button`] (and any `on_click(el(..), h)`)
+    /// This is what lets the ergonomic [`crate::button`] (and any `on_click(el(..), h)`)
     /// carry a `class` (or any attribute) *after* wrapping, since `.attr` is
     /// otherwise inherent to [`El`] and hidden once the element is wrapped in an
     /// `OnClick`. Repeated names overwrite, matching `El::attr`.

@@ -15,9 +15,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use genet_scripted_dom::{NodeId, ScriptedDom};
 use layout_dom_api::{DomMutation, LayoutDom, LayoutDomMut, Namespace, NodeKind};
 use meristem::{MessageCtx, MessageResult, View};
-use serval_scripted_dom::{NodeId, ScriptedDom};
 
 use crate::{DomHandle, El, GenetCtx, GenetElement, el};
 
@@ -339,9 +339,9 @@ mod keyed {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use genet_scripted_dom::{NodeId, ScriptedDom};
     use layout_dom_api::LayoutDom;
     use meristem::{MessageCtx, MessageResult, Mut, View, ViewMarker};
-    use serval_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{GenetAppRunner, GenetCtx, GenetElement, Keyed, el};
 
@@ -571,9 +571,9 @@ mod portable {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use genet_scripted_dom::{NodeId, ScriptedDom};
     use layout_dom_api::{DomMutation, LayoutDom, LayoutDomMut};
     use meristem::{MessageCtx, MessageResult, Mut, View, ViewMarker};
-    use serval_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{
         El, GenetAppRunner, GenetCtx, GenetElement, OnClick, PointerClick, PortableKeyed, el,
@@ -866,8 +866,8 @@ mod multi {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use genet_scripted_dom::{NodeId, ScriptedDom};
     use layout_dom_api::{LayoutDom, NodeKind};
-    use serval_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{DomHandle, El, GenetMultiRunner, OnClick, PointerClick, el, on_click};
 
@@ -1006,8 +1006,8 @@ mod multi {
 // --- MARK: Stage 3a — component composition (backend-only) --------------------
 //
 // These prove the `meristem` composition vocabulary works over `GenetCtx`
-// using only this crate + the `ScriptedDom` — no serval-layout/netrender. The
-// `pelt-live` suite asserts the same with full render-path coverage; these are
+// using only this crate + the `ScriptedDom` — no genet-layout/genet-render. The
+// `pelt-desktop` suite asserts the same with full render-path coverage; these are
 // the boundary-level twin, so a `lens`/`map_action`/`OptionalAction` regression
 // is caught even with the engine stack absent.
 
@@ -1016,8 +1016,8 @@ mod composition {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use genet_scripted_dom::{NodeId, ScriptedDom};
     use layout_dom_api::{LayoutDom, NodeKind};
-    use serval_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{
         DomHandle, GenetAppRunner, GenetCtx, GenetElement, PointerClick, View, el, lens,
@@ -1156,9 +1156,9 @@ mod composition {
 
 // --- MARK: Stage 3b — keyboard + focus (backend-only) -------------------------
 //
-// The headless twin of `pelt-live`'s Stage 3b suite: focus routing, the
+// The headless twin of `pelt-desktop`'s Stage 3b suite: focus routing, the
 // no-focus no-op, click-to-focus, and key bubbling — proven over the
-// `ScriptedDom` with no serval-layout/netrender, so a key-registry/focus
+// `ScriptedDom` with no genet-layout/genet-render, so a key-registry/focus
 // regression is caught even with the engine stack absent.
 
 #[cfg(test)]
@@ -1166,8 +1166,8 @@ mod keyboard {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use genet_scripted_dom::{NodeId, ScriptedDom};
     use layout_dom_api::{LayoutDom, NodeKind};
-    use serval_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{
         DomHandle, El, GenetAppRunner, GenetCtx, GenetElement, Key, KeyEvent, Modifiers, NamedKey,
@@ -1642,10 +1642,10 @@ mod keyboard {
 
 // --- MARK: Stage 3 — form controls (text_field, backend-only) -----------------
 //
-// The headless twin of `pelt-live`'s Stage 3 form-control coverage: a reusable
+// The headless twin of `pelt-desktop`'s Stage 3 form-control coverage: a reusable
 // `text_field` whose state is its own `TextInput` (buffer + caret), edited through the focus + key
 // dispatch foundation, and composed under a larger struct via `lens` — proven
-// over the `ScriptedDom` with no serval-layout/netrender, so a regression in the
+// over the `ScriptedDom` with no genet-layout/genet-render, so a regression in the
 // field's edit handler or its `lens` composition is caught with the engine stack
 // absent. (NB: per Stage 3b, space arrives as `Named(Space)`, not
 // `Character(" ")`, so the sequence below exercises that path explicitly.)
@@ -1655,8 +1655,8 @@ mod controls {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use genet_scripted_dom::{NodeId, ScriptedDom};
     use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
-    use serval_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{
         AnyView, DomHandle, GenetAppRunner, GenetCtx, GenetElement, Key, KeyEvent, Modifiers,
@@ -2060,7 +2060,7 @@ mod controls {
 
     /// `overlay_at(x, y, content)`: a `<div>` carrying its position in an inline
     /// `style` (`position: absolute` + the insets), wrapping the content. The
-    /// inline style is what serval's cascade reads to place the overlay.
+    /// inline style is what Genet's cascade reads to place the overlay.
     #[test]
     fn overlay_at_carries_inline_position() {
         let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
@@ -2165,7 +2165,7 @@ mod controls {
     /// `Box<dyn AnyView>` whose inner view changes *type* across a rebuild
     /// (`<div>` → `<span>`): the element node is swapped in place via
     /// `AnyElement::replace_inner`, staying attached under the document. Proves
-    /// erased/dynamic views work on serval's uniform element type.
+    /// erased/dynamic views work on Genet's uniform element type.
     #[test]
     fn any_view_swaps_node_on_type_change() {
         // The two branches are *different concrete View types* (their children
@@ -2743,19 +2743,19 @@ mod controls {
 
 // --- MARK: Stage 3 — capture phase (backend-only) -----------------------------
 //
-// The headless twin of `pelt-live`'s capture-phase suite: per-listener phase
+// The headless twin of `pelt-desktop`'s capture-phase suite: per-listener phase
 // (`.capture(true)` vs the default bubble), and the dispatch order it produces
 // (capture → target → bubble). Each handler appends a label to a shared
 // `Vec<String>` log on the app state, so the assertions read the literal firing
-// order — proven over the `ScriptedDom` with no serval-layout/netrender.
+// order — proven over the `ScriptedDom` with no genet-layout/genet-render.
 
 #[cfg(test)]
 mod capture {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use genet_scripted_dom::{NodeId, ScriptedDom};
     use layout_dom_api::{LayoutDom, NodeKind};
-    use serval_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{
         DomHandle, GenetAppRunner, GenetCtx, GenetElement, Key, KeyEvent, PointerClick, View, el,

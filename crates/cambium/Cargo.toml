@@ -14,7 +14,7 @@ highlight = ["dep:illume", "dep:tinct"]
 [dependencies]
 meristem = { version = "0.1.0", path = "../meristem" }
 sprigging = { version = "0.1.0", path = "../sprigging" }
-serval-scripted-dom = { package = "genet-scripted-dom", version = "0.1.0" }
+genet-scripted-dom = "0.1.0"
 layout_dom_api = { package = "layout-dom-api", version = "0.1.0" }
 unicode-segmentation = "1.13.2"
 illume = { version = "=0.0.2", optional = true }

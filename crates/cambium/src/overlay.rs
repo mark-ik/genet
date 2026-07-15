@@ -4,10 +4,9 @@
 
 //! Host overlays / popups: an absolutely-positioned layer placed by a point.
 //!
-//! Roadmap item 4 of the serval-as-host track. An overlay is the simplest possible
-//! thing: a `position: absolute` element placed by an inline `style` (serval gained
-//! inline-style support for exactly this). serval-layout now implements full CSS 2.1
-//! Appendix E stacking with z-index (`serval-layout/paint_stacking.rs`), so an
+//! An overlay is a `position: absolute` element placed by an inline `style`.
+//! genet-layout implements CSS 2.1
+//! Appendix E stacking with z-index (`genet-layout/paint_stacking.rs`), so an
 //! out-of-flow `position: absolute` box auto-lifts above in-flow content regardless
 //! of document order; overlapping positioned boxes order by `(z-index, document
 //! order)`. (No portal / teleport: an overlay stays a DOM child of wherever it is
@@ -26,7 +25,7 @@
 //! ## Two responsibilities the caller owns
 //!
 //! 1. **A positioned ancestor.** `position: absolute` resolves against the
-//!    nearest positioned ancestor (serval/taffy has no true viewport-fixed
+//!    nearest positioned ancestor (Genet/taffy has no true viewport-fixed
 //!    box). Make the app root `position: relative` so an overlay's `(x, y)` is
 //!    root-relative and predictable.
 //! 2. **Stacking.** A `position: absolute` overlay auto-lifts above its in-flow
@@ -43,8 +42,8 @@ use meristem::ViewSequence;
 /// An overlay box: `content` in a `position: absolute` element at `(x, y)`
 /// (device px) relative to the nearest positioned ancestor.
 ///
-/// The positioning rides an inline `style` attribute, so it depends on serval's
-/// inline-style support. See the [module docs](self) for the two caller
+/// The positioning rides an inline `style` attribute, so it depends on Genet's
+/// inline-style support. See the module-level documentation for the two caller
 /// responsibilities (a positioned ancestor, and z-index/document-order stacking).
 pub fn overlay_at<Seq, State, Action>(x: f32, y: f32, content: Seq) -> El<Seq, State, Action>
 where
@@ -66,7 +65,7 @@ where
 /// otherwise re-stamp a full geometry `style` each frame. This element owns the
 /// geometry `style`, so visual styling (background, border-radius, shadow,
 /// `flex-direction`) belongs on the `content`'s own element, not here. See the
-/// [module docs](self) for the two caller responsibilities.
+/// module-level documentation for the two caller responsibilities.
 pub fn overlay_rect<Seq, State, Action>(
     x: f32,
     y: f32,

@@ -7,11 +7,11 @@
 //! Each format gets its own idiomatic view (the Lagrange / Geopard approach:
 //! render natively, not flattened into one document model). The views build
 //! genet element trees directly — real focusable links, format-specific classes
-//! for theming — so genet lays them out and netrender paints them, the same path
+//! for theming — so genet lays them out and genet-render paints them, the same path
 //! the host chrome and the djot note tile take. They consume [`errand::parse`]
 //! ASTs and depend on no document model, so application hosts can share them.
 //!
-//! Theming lives in [`theme`]: a per-site palette by default (each capsule its own
+//! Theming is exposed through [`SmolwebTheme`]: a per-site palette by default (each capsule its own
 //! color identity), overridable with presets. See [`stylesheet`].
 //!
 //! v1 ships [`gemtext_view`]; gopher and feed views follow.
@@ -408,8 +408,8 @@ mod tests {
     use super::*;
     use cambium::GenetAppRunner;
     use errand::parse::gemtext::parse as parse_gemtext;
+    use genet_scripted_dom::ScriptedDom;
     use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
-    use serval_scripted_dom::ScriptedDom;
     use std::cell::RefCell;
     use std::rc::Rc;
 

@@ -2,9 +2,9 @@
 
 Meristem is the renderer-independent reactive diff and message core of
 Cambium. Backends implement its view and element contracts; Cambium's primary
-backend targets Serval.
+backend targets Genet.
 
-The crate supports `no_std` with `alloc` and contains no dependency on Serval,
+The crate supports `no_std` with `alloc` and contains no dependency on Genet,
 Chisel, winit, or a renderer.
 
 Meristem is derived from Linebender's Apache-2.0 `xilem_core`. Existing Xilem

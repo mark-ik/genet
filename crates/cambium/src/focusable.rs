@@ -26,8 +26,8 @@
 
 use core::marker::PhantomData;
 
+use genet_scripted_dom::NodeId;
 use meristem::{MessageCtx, MessageResult, Mut, View, ViewId, ViewMarker, ViewPathTracker};
-use serval_scripted_dom::NodeId;
 
 use crate::pod::GenetElement;
 use crate::{El, ElementView, GenetCtx, OnClick};

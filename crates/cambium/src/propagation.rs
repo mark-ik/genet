@@ -77,7 +77,7 @@ impl Propagation {
     /// [`default_prevented`](Self::default_prevented) after dispatch to decide
     /// whether to run that default (form activation, drag start, caret move).
     /// Mirrors `Event.preventDefault` (the native event is always cancelable —
-    /// serval has no passive-listener distinction yet).
+    /// Genet has no passive-listener distinction yet).
     pub fn prevent_default(&self) {
         let mut f = self.flags.get();
         f.default_prevented = true;

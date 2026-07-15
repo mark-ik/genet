@@ -6,10 +6,10 @@
 //! element over a [`TextInput`], plus the [`edit`] / [`edit_multiline`] handlers
 //! that apply a [`KeyEvent`] to it.
 //!
-//! There is no browser `<input>` machinery here: serval lays out a plain
+//! There is no browser `<input>` machinery here: Genet lays out a plain
 //! element whose text content is the buffer, and [`on_key`](crate::on_key)
 //! makes that element focusable and routes typed keys to an edit handler that
-//! mutates the [`TextInput`]. The host (`pelt-live`) maps winit key events to
+//! mutates the [`TextInput`]. The host (`pelt-desktop`) maps winit key events to
 //! the native [`KeyEvent`]; the runner's focus + dispatch
 //! ([`dispatch_key`](crate::GenetAppRunner::dispatch_key)) deliver them here.
 
@@ -26,7 +26,7 @@ use crate::{El, GenetCtx, Key, KeyEvent, NamedKey, OnKey, View, el, on_key};
 ///
 /// * [`Key::Character`] inserts the produced text at the caret (so `"h"`, `"H"`,
 ///   `"é"`, and multi-character IME input all insert verbatim).
-/// * [`NamedKey::Space`] inserts a literal space — per Stage 3b, the space bar
+/// * [`NamedKey::Space`] inserts a literal space — the space bar
 ///   arrives as [`NamedKey::Space`], *not* `Character(" ")`, so the field handles
 ///   it explicitly.
 /// * [`NamedKey::Backspace`] / [`NamedKey::Delete`] remove the selection if any,
@@ -145,11 +145,11 @@ fn build_text_field(input: &TextInput) -> TextField {
 ///
 /// Renders the field's [`display`](TextInput::display) (buffer + caret marker) as
 /// the text content of an `<input>` element wrapped in [`on_key`](crate::on_key);
-/// the `on_key` makes the element focusable and routes typed keys to [`edit`],
+/// the `on_key` makes the element focusable and routes typed keys to `edit`,
 /// which mutates the `&mut TextInput`. Knowing nothing but its own
 /// [`TextInput`], the field composes onto any larger app state through
 /// [`lens`](crate::lens) — `lens(|s| text_field(s), |app| &mut app.name)` — just
-/// as the Stage 3a `counter_button` composes onto a `u32`.
+/// as any other focused component composes onto its substate.
 ///
 /// `+ use<>` keeps the opaque return type from capturing the `input` borrow's
 /// lifetime, so it is a single `V` usable as a `FnMut(&_) -> V` app logic. A host
@@ -157,7 +157,7 @@ fn build_text_field(input: &TextInput) -> TextField {
 /// [`text_field_typed`] instead.
 ///
 /// The element is an `<input>` so author CSS can target the field (e.g. a
-/// border/background) and so it reads as a control; serval lays it out as
+/// border/background) and so it reads as a control; Genet lays it out as
 /// whatever the cascade resolves. It carries no browser `<input>` value
 /// semantics — its text is just its content, diffed like any other text on
 /// rebuild.
@@ -181,7 +181,7 @@ pub fn text_field_typed(input: &TextInput) -> TextField {
 /// Build the concrete view for a multi-line [`textarea`]. Structurally identical
 /// to a [`TextField`] (an `on_key`-wrapped element over a [`TextInput`]); the
 /// difference is the [`edit_multiline`] handler and a `<textarea>` tag. With
-/// `\n`s in the buffer, serval/parley break it into lines (serval feeds raw text
+/// `\n`s in the buffer, Genet/parley break it into lines (Genet feeds raw text
 /// to parley, which honors `\n`).
 fn build_textarea(input: &TextInput) -> TextField {
     let handler: fn(&mut TextInput, KeyEvent) = edit_multiline;
@@ -195,7 +195,7 @@ fn build_textarea(input: &TextInput) -> TextField {
 ///
 /// Lines are `\n`-delimited in the buffer; up/down navigate those hard lines with a
 /// sticky goal column. (Soft-wrap visual-line navigation needs the layout — the
-/// separate `serval_layout::caret_byte_vertical` path a host can wire instead.)
+/// separate `genet_layout::caret_byte_vertical` path a host can wire instead.)
 pub fn textarea(
     input: &TextInput,
 ) -> impl View<TextInput, (), GenetCtx, Element = GenetElement> + use<> {

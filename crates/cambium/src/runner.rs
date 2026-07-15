@@ -2,27 +2,22 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! The serval-native runner that owns app state and the retained view tree.
+//! The Genet-native runner that owns app state and the retained view tree.
 //!
-//! Stage 1b of `docs/history/2026-05-27_serval_as_host_xilem_serval_plan.md`. The plan
-//! names the runner the real artifact: `meristem` provides view diffing and
-//! (eventually) message thunks, but it *schedules nothing*. Something
-//! serval-native has to own state, the root node, and the rebuild cadence —
-//! the thing that turns "state changed" into "diff → DOM mutations" (and, in a
-//! host, "→ relayout → netrender → present").
+//! Meristem provides view diffing and message routing but does not schedule
+//! work. [`GenetAppRunner`] owns state, the root node, and the rebuild cadence
+//! that turns a state change into DOM mutations.
 //!
 //! [`GenetAppRunner`] is that owner, kept deliberately thin: it depends only
-//! on `meristem` and this backend, never on serval-layout / netrender. A host
-//! crate (`pelt-live`) drives the render side over the
-//! [`ScriptedDom`](serval_scripted_dom::ScriptedDom) the runner mutates.
+//! on `meristem` and this backend, never on genet-layout / genet-render. A host
+//! crate such as `pelt-desktop` drives the render side over the
+//! [`ScriptedDom`](genet_scripted_dom::ScriptedDom) the runner mutates.
 //!
-//! Stage 2b adds native event dispatch: [`GenetAppRunner::dispatch_click`]
-//! takes a hit [`NodeId`] (the `point → NodeId` half is the `pelt-live` host's
-//! `hit_test_node`), walks the node's ancestor chain, and routes a
-//! [`PointerClick`] down each registered click handler's path via the faithful
-//! `meristem` message cycle, then rebuilds so handler state changes reach the
-//! DOM. The timer tick that drives [`update`](GenetAppRunner::update) and the
-//! window event that drives dispatch are the host's concern.
+//! Native event dispatch takes a hit [`NodeId`] (the `point → NodeId` half is
+//! the host's responsibility), walks the node's ancestor chain, and routes
+//! events through Meristem's message cycle. The timer tick that drives
+//! [`update`](GenetAppRunner::update), platform input, relayout, rendering, and
+//! presentation remain host concerns.
 //!
 //! **One state, N windows** (one-state-N-windows design, step 2): the per-tree
 //! half of the runner — the dom, ctx, retained view, focus, and pointer
@@ -34,9 +29,9 @@
 
 use core::marker::PhantomData;
 
+use genet_scripted_dom::{NodeId, ScriptedDom};
 use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace};
 use meristem::{DynMessage, MessageCtx, MessageResult, View, ViewId};
-use serval_scripted_dom::{NodeId, ScriptedDom};
 
 use crate::{
     DomHandle, GenetCtx, GenetElement, GenetElementMut, Key, KeyEvent, NamedKey, PointerClick,
@@ -65,7 +60,7 @@ where
     /// The currently focused node, if any. A click sets this to the nearest
     /// focusable (key-handler-bearing) ancestor of the click target, or clears
     /// it to `None` when the click lands outside any focusable element.
-    /// [`dispatch_key`](Self::dispatch_key) walks from here. Stage 3b.
+    /// [`dispatch_key`](Self::dispatch_key) walks from here.
     focus: Option<NodeId>,
     /// The element capturing the current pointer drag, if any. Set by
     /// [`dispatch_pointer_down`](Self::dispatch_pointer_down) to the nearest
@@ -775,14 +770,10 @@ where
 /// Owns the app state, the view-producing logic, and one retained view tree,
 /// rebuilding the [`ScriptedDom`] whenever the state changes.
 ///
-/// `Logic: FnMut(&State) -> V` is the app-logic closure (Xilem's `app_logic`,
-/// minus the `&mut State` — Stage 1b has no message handlers mutating state
-/// from inside a view, so the logic only *reads* state). `V` is the root view;
-/// its element is always the uniform [`GenetElement`].
+/// `Logic: FnMut(&State) -> V` reads state and produces the root view. Its
+/// element is always the uniform [`GenetElement`].
 ///
-/// `Action` is the root view's action type. Stage 2b used `()` exclusively (a
-/// handler mutates state and the runner rebuilds). Stage 3a generalizes it so an
-/// action can *reach the root*: when a click handler returns an action that no
+/// `Action` is the root view's action type. When a handler returns an action that no
 /// parent [`map_action`](meristem::map_action) consumes, it surfaces as a
 /// [`MessageResult::Action`] which [`dispatch_click`](Self::dispatch_click)
 /// collects and returns. The common `Action = ()` case is the no-op it was — a
@@ -829,7 +820,7 @@ where
 
     /// Dispatch a native pointer click that hit `target`.
     ///
-    /// `target` is the node serval's hit-test resolved the pointer to (the
+    /// `target` is the node Genet's hit-test resolved the pointer to (the
     /// `point → NodeId` half lives in the host's `hit_test_node`). This is the
     /// faithful-routing dispatch: no native handler registry of `Rc<dyn Fn>`,
     /// just the `meristem` message cycle the browser path also uses.
@@ -838,11 +829,11 @@ where
     /// bubble**; a `.capture(true)` ancestor fires before a default (bubble)
     /// descendant/target, yielding the browser/`xilem_web` ordering.
     ///
-    /// Returns the [`Action`]s that bubbled all the way to the root — i.e. any
+    /// Returns the `Action`s that bubbled all the way to the root — i.e. any
     /// handler action no parent [`map_action`](meristem::map_action) absorbed.
     ///
-    /// Stage 3b — **click-to-focus.** After routing + rebuild, focus is set to
-    /// the nearest ancestor of `target` (including `target` itself) that carries
+    /// After routing and rebuilding, focus is set to the nearest ancestor of
+    /// `target` (including `target` itself) that carries
     /// a key handler (is focusable); if none is found, focus is cleared. So
     /// clicking a focusable element focuses it and clicking elsewhere defocuses,
     /// independent of whether any *click* handler fired.
@@ -865,7 +856,7 @@ where
     ///
     /// Set by [`dispatch_click`](Self::dispatch_click) (click-to-focus) or
     /// [`set_focus`](Self::set_focus); read by [`dispatch_key`](Self::dispatch_key)
-    /// as the root of its bubble walk. Stage 3b.
+    /// as the root of its bubble walk.
     pub fn focus(&self) -> Option<NodeId> {
         self.tree.focus()
     }
@@ -875,13 +866,13 @@ where
     /// The keyboard counterpart of a programmatic `element.focus()`. No
     /// validation that `node` is focusable: a test (or a host) may aim focus at
     /// any node, and [`dispatch_key`](Self::dispatch_key) simply finds no key
-    /// handler to route to if it is not focusable. Stage 3b.
+    /// handler to route to if it is not focusable.
     pub fn set_focus(&mut self, node: Option<NodeId>) {
         self.tree.set_focus(node);
     }
 
     /// Move focus to the next (`forward`) or previous focusable element in
-    /// document order, wrapping. See [`RunnerTree::focus_traverse`].
+    /// document order, wrapping.
     pub fn focus_traverse(&mut self, forward: bool) {
         self.tree
             .focus_traverse(&mut self.logic, &mut self.state, forward);
@@ -1031,8 +1022,8 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use genet_scripted_dom::{NodeId, ScriptedDom};
     use layout_dom_api::{DomMutation, LayoutDom, LayoutDomMut, NodeKind};
-    use serval_scripted_dom::{NodeId, ScriptedDom};
 
     use crate::{DomHandle, El, el};
 

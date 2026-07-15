@@ -9,7 +9,7 @@
 //! `el("div", ..)`. Each returns an [`El`], so it is an
 //! [`ElementView`](crate::ElementView) and composes with `.attr` / `on_click` /
 //! `on_key` exactly as `el` does. `xilem_web` generates a per-tag view per HTML
-//! element; serval has one element type, so these are one-liners over `el`.
+//! element; Genet has one element type, so these are one-liners over `el`.
 
 use crate::pod::GenetElement;
 use crate::{El, GenetCtx, el};
@@ -64,10 +64,10 @@ tag_fns! {
 /// An `<external-texture>` element view: a host-composited texture region.
 ///
 /// The producer registers a `wgpu::Texture` with the renderer under `key` (a stable
-/// `u64`); serval lays out a `width`×`height` block box, and paint emits a
+/// `u64`); Genet lays out a `width`×`height` block box, and paint emits a
 /// `DrawExternalTexture` at it that the host composites the producer's texture into —
 /// a constellation actor scene, a scrying WebView, or a pelt tile's external-content
-/// lane. A leaf: it has no serval-painted children (the texture *is* its content).
+/// lane. A leaf: it has no Genet-painted children (the texture *is* its content).
 /// The element sets its own `display:block` + intrinsic size via the `style`
 /// attribute, so it needs no stylesheet rule; override the size with CSS as for any
 /// replaced box.
@@ -87,9 +87,9 @@ where
 /// A `<custom-leaf>` element view for host-painted widget content.
 ///
 /// The host registers a Sprigging `Leaf` under `key` (a stable `u64`) in its
-/// `LeafRegistry`; serval lays out a `width`×`height` block box and paint splices
+/// `LeafRegistry`; Genet lays out a `width`×`height` block box and paint splices
 /// the leaf's own Path-A `PaintCmd`s (from the host's `LeafPaintSource`) at it — or,
-/// later, a Path-B external texture. A leaf: it has no serval-painted children (the
+/// later, a Path-B external texture. A leaf: it has no Genet-painted children (the
 /// widget *is* its content). This mirrors [`external_texture`]: the view carries only
 /// the stable `key` + a box, and the host registers the payload under that key out of
 /// band. See `docs/history/2026-07-07_chisel_widget_leaf_design.md`.
@@ -136,16 +136,16 @@ mod tests {
     use super::*;
     use crate::GenetAppRunner;
     use crate::html_qual;
+    use genet_scripted_dom::ScriptedDom;
     use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, NodeKind};
-    use serval_scripted_dom::ScriptedDom;
     use std::cell::RefCell;
     use std::rc::Rc;
 
     fn first_by_class(
         dom: &ScriptedDom,
-        node: serval_scripted_dom::NodeId,
+        node: genet_scripted_dom::NodeId,
         class: &str,
-    ) -> Option<serval_scripted_dom::NodeId> {
+    ) -> Option<genet_scripted_dom::NodeId> {
         if dom.has_class(node, class) {
             return Some(node);
         }
@@ -177,7 +177,7 @@ mod tests {
 
     /// `external_texture(7, 320, 240)` builds an `<external-texture>` element carrying
     /// the host texture key and a block box sized via its `style` attribute — the
-    /// element serval-layout paints as a `DrawExternalTexture` compositor pass.
+    /// element genet-layout paints as a `DrawExternalTexture` compositor pass.
     #[test]
     fn external_texture_builds_keyed_element() {
         use layout_dom_api::{LocalName, Namespace};
@@ -209,7 +209,7 @@ mod tests {
 
     /// `custom_leaf(7, 20, 10)` builds a `<custom-leaf>` element carrying the leaf
     /// key and a block box sized via its `style` attribute — the element
-    /// serval-layout treats as a replaced leaf whose paint is the host leaf's
+    /// genet-layout treats as a replaced leaf whose paint is the host leaf's
     /// Path-A commands. Mirrors `external_texture_builds_keyed_element`.
     #[test]
     fn custom_leaf_builds_keyed_element() {

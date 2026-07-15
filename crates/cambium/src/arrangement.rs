@@ -3,18 +3,18 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 //! Arrangement views (Sprigging catalog tier 3): a container that owns its
-//! children's x/y/z while the children stay real serval nodes.
+//! children's x/y/z while the children stay real Genet nodes.
 //!
 //! [`arrangement`] is a `position: relative` container claiming an explicit
 //! content extent; [`placed`] wraps one child absolutely at a
-//! [`Placement`] (position + `z-index` — serval's `paint_stacking` orders the
+//! [`Placement`] (position + `z-index` — Genet's `paint_stacking` orders the
 //! stack natively). Because placements are plain attribute mutations, a
 //! re-placement (drag, raise, virtualization window shift) is an attribute
 //! diff on a retained element, not a rebuild: hit-test, focus, and a11y state
 //! ride through. Fixed-height virtualization pairs this with
 //! [`sprigging::VirtualWindow`]: the container takes `total_height()` so the
 //! scroll range stays honest while only `range()` rows exist as DOM.
-//! Design: serval `docs/history/2026-07-08_chisel_widget_catalog.md`.
+//! Design: Genet `docs/history/2026-07-08_chisel_widget_catalog.md`.
 
 use meristem::ViewSequence;
 use sprigging::Placement;
@@ -79,13 +79,13 @@ where
 mod tests {
     use super::*;
     use crate::GenetAppRunner;
+    use genet_scripted_dom::ScriptedDom;
     use layout_dom_api::{LayoutDom, LocalName, Namespace};
-    use serval_scripted_dom::ScriptedDom;
     use sprigging::VirtualWindow;
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    fn style_of(dom: &ScriptedDom, node: serval_scripted_dom::NodeId) -> String {
+    fn style_of(dom: &ScriptedDom, node: genet_scripted_dom::NodeId) -> String {
         dom.attribute(node, &Namespace::from(""), &LocalName::from("style"))
             .unwrap_or_default()
             .to_string()

@@ -2,24 +2,21 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! The view context for the serval backend.
+//! The view context for the Genet backend.
 //!
-//! Mirrors `xilem_web`'s `ViewCtx`, minus the browser-only state (document
-//! fragment, hydration node stack, modifier size hints). It holds the `id_path`
-//! used for message routing, the [`Environment`], a shared handle to the
-//! [`ScriptedDom`] every view mutates, and the native click-handler registry
-//! (Stage 2b's stand-in for the browser's `addEventListener`) plus the parallel
-//! key-handler registry (Stage 3b, which also defines focusability).
+//! It holds the `id_path` used for message routing, the [`Environment`], a
+//! shared handle to the [`ScriptedDom`] every view mutates, event-handler
+//! registries, focusability markers, and the portable-child nursery.
 //!
-//! The capture-phase slice of Stage 3 gives each registered handler a *phase*
-//! ([`Handler::capture`]): a listener registered with `capture == true` fires in
+//! Each click or key handler has a propagation phase ([`Handler::capture`]): a
+//! listener registered with `capture == true` fires in
 //! the `root → target` capture pass, one with `capture == false` (the
 //! browser/`xilem_web` default) in the `target → root` bubble pass. A node may
 //! carry *several* listeners of one kind (nested `on_click`s over one element, a
 //! handler beside an instrumentation listener), so each registry maps a node to a
 //! `Vec` of [`Handler`]s and dispatch routes every one — in registration order
 //! within the matching phase — rather than letting a later listener silently
-//! clobber an earlier one. (Grab-bag G2.3.)
+//! clobber an earlier one.
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -27,9 +24,9 @@ use std::hash::Hash;
 
 use crate::DomHandle;
 use crate::pod::{GenetElement, GenetElementMut};
+use genet_scripted_dom::NodeId;
 use layout_dom_api::{LayoutDom, LayoutDomMut};
 use meristem::{Environment, View, ViewId, ViewPathTracker};
-use serval_scripted_dom::NodeId;
 
 /// A registered event handler: its routing view path plus the propagation phase
 /// it listens in.
@@ -50,27 +47,17 @@ pub struct Handler {
     pub capture: bool,
 }
 
-/// The [`ViewPathTracker`] context for all serval views.
+/// The [`ViewPathTracker`] context for all Genet views.
 ///
-/// Stage 1a carries no `AppRunner`/message-thunk wiring (that is Stage 1b's
-/// `GenetAppRunner`); the context exists so the `View` traits can be driven
-/// directly by a test.
+/// The context tracks the current Meristem view path, the shared DOM, and the
+/// routing registries built by event views. [`OnClick`](crate::OnClick) and
+/// [`OnKey`](crate::OnKey) record their view paths against the DOM node they
+/// wrap. [`GenetAppRunner`](crate::GenetAppRunner) walks the hit or focused
+/// node's ancestors and routes messages down those retained paths.
 ///
-/// Stage 2b adds the [`click_handlers`](Self::click_handlers) registry: the
-/// faithful-routing replacement for `xilem_web`'s browser listener. There is no
-/// `addEventListener` here; instead an [`OnClick`](crate::OnClick) view, on
-/// build, records the routing **view path** to itself keyed by the DOM
-/// [`NodeId`] it wraps. Native dispatch (the runner) walks the hit node's
-/// ancestor chain, looks each node up here, and routes a message down the
-/// recorded path — exactly the `id_path` Xilem's message cycle expects.
-///
-/// Stage 3b adds the parallel [`key_handlers`](Self::key_handlers) registry,
-/// populated by [`OnKey`](crate::OnKey) the same way. It does double duty: it
-/// is both the key-event routing table *and* the focusability set — a node is
-/// focusable iff it carries a key handler (i.e. is present here). The runner's
-/// [`dispatch_click`](crate::GenetAppRunner::dispatch_click) consults it to
-/// move focus, and [`dispatch_key`](crate::GenetAppRunner::dispatch_key) walks
-/// it from the focused node.
+/// Key handlers and explicit [`focusable`](crate::focusable) markers together
+/// define the focus traversal set. Pointer and wheel handlers use the same
+/// context for direct drag capture and nearest-scroll-ancestor routing.
 pub struct GenetCtx {
     id_path: Vec<ViewId>,
     environment: Environment,
@@ -329,7 +316,7 @@ impl GenetCtx {
         }
     }
 
-    /// The click [`Handler`]s on `node`, in registration order (empty if none).
+    /// The click handlers on `node`, in registration order (empty if none).
     /// The runner's dispatch walk consults this per ancestor, in both the capture
     /// and bubble passes, routing every listener in the matching phase.
     pub fn click_handlers_at(&self, node: NodeId) -> &[Handler] {
@@ -363,7 +350,7 @@ impl GenetCtx {
         }
     }
 
-    /// The key [`Handler`]s on `node`, in registration order (empty if none).
+    /// The key handlers on `node`, in registration order (empty if none).
     ///
     /// A non-empty result also means `node` is *focusable* via a handler —
     /// independent of phase: the runner's

@@ -28,7 +28,7 @@ use crate::{AnyView, GenetCtx, KeyEvent, el, on_key};
 /// A styled run over the field text: a byte `range` painted with a CSS `class`
 /// (`"syntax-keyword"`) the host's stylesheet themes. Ranges may overlap and nest
 /// (a heading containing emphasis, a code block containing a keyword);
-/// [`field_children`] flattens them innermost-wins into non-overlapping runs.
+/// The field builder flattens them innermost-wins into non-overlapping runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StyleRange {
     pub range: Range<usize>,
@@ -36,7 +36,7 @@ pub struct StyleRange {
 }
 
 /// One child of a field element: a text node or a styled `<span>`, type-erased so
-/// the field's children are a uniform `Vec`. Public so the [`TextField`] alias can
+/// the field's children are a uniform `Vec`. Public so the [`crate::TextField`] alias can
 /// name it.
 pub type FieldChild = Box<dyn AnyView<TextInput, (), GenetCtx, GenetElement>>;
 

@@ -23,7 +23,7 @@ const CARET_MARKER: char = '|';
 /// `on_key` + `fn` rather than a bespoke `View`.
 ///
 /// Fields are `pub(super)`: private to the outside world, but visible to the
-/// [`super::multiline`] / [`super::word_motion`] sibling impls that split this
+/// `multiline` and `word_motion` sibling impls split this
 /// type's behaviour across files.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TextInput {
@@ -346,7 +346,7 @@ impl TextInput {
         }
     }
 
-    /// The buffer with a [`CARET_MARKER`] inserted at the caret — the field's
+    /// The buffer with a `CARET_MARKER` inserted at the caret — the field's
     /// rendered text (a placeholder visible cursor). Render-only: [`text`](Self::text)
     /// is unchanged.
     pub fn display(&self) -> String {

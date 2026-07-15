@@ -3,7 +3,7 @@
 
 //! Meristem is Cambium's renderer-independent reactive diff and message core.
 //! Backends implement its [`View`] and element contracts; Cambium's primary
-//! backend targets Serval.
+//! backend targets Genet.
 //!
 //! # Hot reloading
 //!
