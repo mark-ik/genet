@@ -170,9 +170,11 @@ the route is a comparison seam rather than a full-corpus parity receipt.
 
 The 2026-07-15 gate pass adds a host-supplied remote-looking URL receipt and a
 bounded explicit `opacity, background-color` transition receipt. The producer
-helper tests and one representative reftest pass on both routes. Full WPT
-parity remains open because the complete runner still has one unrelated WebGL
-`gl_clear` harness panic; actual remote fetching remains host-owned.
+helper tests and `css/CSS2/box/ltr-basic.xht` pass on both routes. A first
+`css/css-backgrounds` probe reports 7 passes, 582 failures, 360 skips, and no
+runner errors. That is a capability map rather than a parity receipt: the
+failures cluster around background features outside the bounded lane and
+crash-path coverage. Actual remote fetching remains host-owned.
 
 ## E0 closeout
 

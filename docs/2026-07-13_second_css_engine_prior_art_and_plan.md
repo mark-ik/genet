@@ -298,8 +298,12 @@ cascade, value round-trip, and retained mid-frame receipts. The image seam also
 accepts host-supplied bytes for an `https` URL, which keeps URL scheme handling
 inside Livery while leaving fetch, cache, and policy with the host.
 
-The WPT producer helper tests pass, and the representative `ltr-basic.xht`
-reftest passes through both `--renderer livery` and the default Stylo route.
+The WPT producer helper tests pass, and the representative
+`css/CSS2/box/ltr-basic.xht` reftest passes through both `--renderer livery`
+and the default Stylo route. A first `css/css-backgrounds` probe reports 7
+passes, 582 failures, 360 skips, and no runner errors. That is a capability
+map rather than a parity receipt: the failures cluster around background
+features outside the bounded lane and crash-path coverage.
 The full `genet-wpt` unit wall is 18 passed, 1 failed, and 3 ignored; its sole
 failure is the existing WebGL `gl_clear` harness panic (`JsError: not a callable
 function`), outside the Livery route. A clean package-only
