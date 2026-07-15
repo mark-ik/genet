@@ -10,7 +10,7 @@ use livery::{
         GridPlacement as CssGridPlacement, GridTemplate as CssGridTemplate,
         GridTrack as CssGridTrack, Inset, Length, LengthPercentage as CssLengthPercentage,
         LengthUnit, LineHeight, Margin, Overflow as CssOverflow, Position as CssPosition,
-        Size as CssSize,
+        Size as CssSize, WhiteSpaceCollapse,
     },
 };
 use taffy::{
@@ -528,7 +528,13 @@ where
             },
             NodeKind::Text => {
                 let text = self.dom.text(id).unwrap_or("");
-                if text.is_empty() {
+                let preserves_whitespace = inherited.is_some_and(|style| {
+                    matches!(
+                        style.white_space_collapse,
+                        WhiteSpaceCollapse::Preserve | WhiteSpaceCollapse::BreakSpaces
+                    )
+                });
+                if text.is_empty() || (!preserves_whitespace && text.trim().is_empty()) {
                     return Ok(None);
                 }
                 let font_size = parent_font_size;
@@ -892,11 +898,15 @@ fn to_taffy_style(computed: &ComputedValues, font_size: f32) -> Style {
             CssPosition::Absolute | CssPosition::Fixed => Position::Absolute,
             _ => Position::Relative,
         },
-        inset: Rect {
-            left: inset(computed.left, font_size),
-            right: inset(computed.right, font_size),
-            top: inset(computed.top, font_size),
-            bottom: inset(computed.bottom, font_size),
+        inset: if matches!(computed.position, CssPosition::Static) {
+            Rect::auto()
+        } else {
+            Rect {
+                left: inset(computed.left, font_size),
+                right: inset(computed.right, font_size),
+                top: inset(computed.top, font_size),
+                bottom: inset(computed.bottom, font_size),
+            }
         },
         size: Size {
             width: dimension(computed.width, font_size),

@@ -317,6 +317,38 @@ fn host_image_resource_resolves_a_remote_url_without_engine_fetching() {
 }
 
 #[test]
+fn formatting_whitespace_does_not_shift_following_block_flow() {
+    let css = ".card { width: 80px; height: 40px; background-color: lime; }";
+    let mut compact = LiveryDocument::new(
+        StaticDocument::parse(
+            "<html><body><p>hello</p><div class=\"card\"></div></body></html>",
+        ),
+        StyleSet::cambium(&[css]),
+        Device::screen(320.0, 240.0),
+    );
+    let mut formatted = LiveryDocument::new(
+        StaticDocument::parse(
+            "<html><body>\n  <p>hello</p>\n  <div class=\"card\"></div>\n</body></html>",
+        ),
+        StyleSet::cambium(&[css]),
+        Device::screen(320.0, 240.0),
+    );
+    let card_bounds = |document: &mut LiveryDocument<StaticDocument>| {
+        document
+            .frame(320, 240)
+            .expect("formatting-whitespace frame")
+            .commands()
+            .iter()
+            .find_map(|command| match command {
+                PaintCmd::DrawRect(item) => Some(item.placement.bounds),
+                _ => None,
+            })
+            .expect("card background")
+    };
+    assert_eq!(card_bounds(&mut compact), card_bounds(&mut formatted));
+}
+
+#[test]
 fn replaced_img_uses_intrinsic_size_and_paints_a_neutral_image() {
     use base64::Engine as _;
 
