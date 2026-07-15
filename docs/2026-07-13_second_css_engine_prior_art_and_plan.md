@@ -241,9 +241,12 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   fill under that clip. The retained session also has a host-driven opacity
   clock and bounded CSS opacity transitions, with intermediate-frame receipts.
   Raster `data:` background URLs now lower into the neutral image side-table.
-  Remaining: external resource images/background positioning and repeat, CSS keyframes, timing functions, multi-property
-  transitions, full reftest parity, and an apples-to-apples cold-build delta
-  against the 30m35s baseline.
+  The WPT command surface now accepts `--renderer livery`, routing bounded
+  inline and local linked stylesheet cases plus raster `data:` backgrounds
+  through the clean-room producer. Stylo remains the default. Remaining:
+  external resource images/background positioning and repeat, CSS keyframes,
+  timing functions, multi-property transitions, full reftest parity, and an
+  apples-to-apples cold-build delta against the 30m35s baseline.
 - **E4 — first production lane.** One real lane (host chrome or
   smolweb) ships on Livery by default. Receipt: the lane's
   existing suites green + capture receipts.

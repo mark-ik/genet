@@ -17,6 +17,7 @@ path = "src/main.rs"
 # Phase 1 (crash-smoke): parse + layout, no GPU.
 genet-static-dom = { path = "../../components/genet-static-dom" }
 genet-layout = { path = "../../components/genet-layout" }
+genet-livery = { path = "../../components/genet-livery" }
 # H7a rendering session: the testharness lane's IncrementalLayout runs over the
 # runtime's live (mutable) DOM, whose node ids are genet-scripted-dom's.
 genet-scripted-dom = { path = "../../components/genet-scripted-dom" }

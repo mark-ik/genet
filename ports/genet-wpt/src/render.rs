@@ -18,6 +18,12 @@ use std::rc::Rc;
 use dpi::PhysicalSize;
 use embedder_traits::ViewportDetails;
 use euclid::{Scale, Size2D};
+use genet_layout::{
+    BackgroundImagePlane, ImagePlane, LocalFileImageLoader, ResourceResolver, StylePlane,
+    emit_paint_list_with_layouts, inline_stylesheets, layout, linked_stylesheets, run_cascade,
+};
+use genet_livery::{Device as LiveryDevice, LiveryDocument, StyleSet as LiveryStyleSet};
+use genet_static_dom::StaticDocument;
 use netrender::{NetrenderOptions, boot, create_netrender_instance};
 use paint::Paint;
 use paint_api::display_list::{AxesScrollSensitivity, PaintDisplayListInfo, ScrollType};
@@ -25,11 +31,6 @@ use paint_api::wgpu_readback::read_texture_to_image;
 use paint_list_api::{DeviceIntSize, PaintEnvelope};
 use paint_types::PipelineId;
 use paint_types::units::{DeviceIntRect, LayoutSize};
-use genet_layout::{
-    BackgroundImagePlane, ImagePlane, LocalFileImageLoader, ResourceResolver, StylePlane,
-    emit_paint_list_with_layouts, inline_stylesheets, layout, linked_stylesheets, run_cascade,
-};
-use genet_static_dom::StaticDocument;
 use servo_base::id::{PainterId, PipelineNamespace, PipelineNamespaceId, WebViewId};
 
 pub type Image = image::ImageBuffer<image::Rgba<u8>, Vec<u8>>;
@@ -111,6 +112,63 @@ impl Renderer {
             ),
         )
         .expect("master readback")
+    }
+
+    /// Render through the clean-room Livery lane. This first WPT bridge is
+    /// intentionally bounded: it extracts inline and local linked stylesheets
+    /// and lets Livery handle its own declarations and data-URI image subset.
+    pub fn render_html_livery(
+        &self,
+        html: &str,
+        base_dir: &Path,
+        tests_root: &Path,
+        width: u32,
+        height: u32,
+        is_xml: bool,
+    ) -> Image {
+        let document = if is_xml {
+            StaticDocument::parse_xml(html)
+        } else {
+            StaticDocument::parse(html)
+        };
+        let resolver = ResourceResolver {
+            base_dir: Some(base_dir.to_path_buf()),
+            tests_root: Some(tests_root.to_path_buf()),
+        };
+        let mut sheets = inline_stylesheets(&document);
+        sheets.extend(linked_stylesheets(&document, &resolver));
+        let sheet_refs = sheets.iter().map(String::as_str).collect::<Vec<_>>();
+        let mut session = LiveryDocument::new(
+            document,
+            LiveryStyleSet::cambium(&sheet_refs),
+            LiveryDevice::screen(width as f32, height as f32),
+        );
+        let list = session
+            .frame(width, height)
+            .expect("Livery WPT reftest layout");
+        let envelope = PaintEnvelope::from_list(&list);
+        let paint = self.paint.borrow();
+        paint.handle_messages(vec![paint_api::PaintMessage::SendPaintList {
+            webview_id: self.webview_id,
+            envelope,
+            paint_info: paint_info_for(PipelineId::default(), width, height),
+        }]);
+        paint.render(self.webview_id);
+        let master = paint
+            .composite_texture(self.painter_id)
+            .expect("composite_texture after Livery render");
+        read_texture_to_image(
+            &self.device,
+            &self.queue,
+            &master,
+            master.format(),
+            PhysicalSize::new(width, height),
+            DeviceIntRect::new(
+                paint_types::units::DeviceIntPoint::new(0, 0),
+                paint_types::units::DeviceIntPoint::new(width as i32, height as i32),
+            ),
+        )
+        .expect("Livery master readback")
     }
 }
 

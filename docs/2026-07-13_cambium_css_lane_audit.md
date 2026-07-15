@@ -155,7 +155,10 @@ receipts. Nested scroll containers route wheel deltas into retained offsets and
 chain to the viewport at their boundary. Raster `data:` background URLs reach
 the neutral image side-table; external resource URLs and positioning remain
 open alongside CSS keyframes, timing functions, multi-property transitions,
-and full WPT reftest parity.
+and full WPT reftest parity. The WPT command surface now accepts
+`--renderer livery` for a bounded producer route covering inline and local linked
+stylesheets plus raster `data:` backgrounds. Stylo remains the default, and
+the route is a comparison seam rather than a full-corpus parity receipt.
 
 ## E0 closeout
 

@@ -21,9 +21,9 @@ use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
+use genet_static_dom::StaticDocument;
 use layout_dom_api::{LayoutDom, LocalName};
 use script_engine_api::ScriptEngine;
-use genet_static_dom::StaticDocument;
 
 mod harness;
 mod manifest;
@@ -401,6 +401,7 @@ struct Args {
     tests_root: String,
     verbose: bool,
     engine: harness::Engine,
+    renderer: ReftestRenderer,
     /// Connect to an already-running `wpt serve` at this origin (server mode).
     server_base: Option<String>,
     /// Spawn (and tear down) a `wpt serve` for the run (server mode).
@@ -429,6 +430,7 @@ fn parse_args() -> Result<Args, String> {
     let mut tests_root = DEFAULT_TESTS_ROOT.to_string();
     let mut verbose = false;
     let mut engine = harness::Engine::default();
+    let mut renderer = ReftestRenderer::Stylo;
     let mut server_base = None;
     let mut spawn_server = false;
     let mut timeout_secs = 30u64;
@@ -446,6 +448,14 @@ fn parse_args() -> Result<Args, String> {
                 let v = it.next().ok_or("--engine needs a value (boa | nova)")?;
                 engine = harness::Engine::parse(&v)
                     .ok_or_else(|| format!("unknown engine: {v} (expected boa | nova)"))?;
+            },
+            "--renderer" => {
+                let value = it
+                    .next()
+                    .ok_or("--renderer needs a value (stylo | livery)")?;
+                renderer = ReftestRenderer::parse(&value).ok_or_else(|| {
+                    format!("unknown renderer: {value} (expected stylo | livery)")
+                })?;
             },
             "--server-base" => {
                 server_base = Some(it.next().ok_or("--server-base needs a URL")?);
@@ -479,6 +489,7 @@ fn parse_args() -> Result<Args, String> {
         tests_root,
         verbose,
         engine,
+        renderer,
         server_base,
         spawn_server,
         timeout_secs,
@@ -511,6 +522,7 @@ Options:
     --write-expectations <f>
                          write current testharness results as JSON expectations
     --engine <name>      testharness JS engine: boa (default) | nova
+    --renderer <name>    reftest producer: stylo (default) | livery
     --server-base <url>  run testharness against a live `wpt serve` at <url>
                          (server mode; needs --features netfetch)
     --spawn-server       spawn + tear down a `wpt serve` for the run
@@ -1903,6 +1915,22 @@ fn testharness(tests: &[TestCase], args: &Args) {
     finish_expectations(args, "testharness", &actuals);
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReftestRenderer {
+    Stylo,
+    Livery,
+}
+
+impl ReftestRenderer {
+    fn parse(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "stylo" => Some(Self::Stylo),
+            "livery" => Some(Self::Livery),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MatchKind {
     Match,
@@ -2189,12 +2217,16 @@ fn reftest(tests: &[TestCase], args: &Args) {
         let test_xml = is_xml_path(&test.path);
         let ref_xml = is_xml_path(&ref_path);
         let rendered = panic::catch_unwind(AssertUnwindSafe(|| {
-            let t = renderer.render_html(
-                &test_html, test_dir, tests_root, REFTEST_W, REFTEST_H, test_xml,
-            );
-            let r = renderer.render_html(
-                &ref_html, ref_dir, tests_root, REFTEST_W, REFTEST_H, ref_xml,
-            );
+            let render = |html: &str, dir: &Path, xml: bool| match args.renderer {
+                ReftestRenderer::Stylo => {
+                    renderer.render_html(html, dir, tests_root, REFTEST_W, REFTEST_H, xml)
+                },
+                ReftestRenderer::Livery => {
+                    renderer.render_html_livery(html, dir, tests_root, REFTEST_W, REFTEST_H, xml)
+                },
+            };
+            let t = render(&test_html, test_dir, test_xml);
+            let r = render(&ref_html, ref_dir, ref_xml);
             (t, r)
         }));
         let (test_img, ref_img) = match rendered {
@@ -2331,22 +2363,16 @@ fn dump(tests: &[TestCase], args: &Args) {
         };
         let test_dir = test.path.parent().unwrap_or(tests_root);
         let ref_dir = ref_path.parent().unwrap_or(tests_root);
-        let t = renderer.render_html(
-            &test_html,
-            test_dir,
-            tests_root,
-            REFTEST_W,
-            REFTEST_H,
-            is_xml_path(&test.path),
-        );
-        let r = renderer.render_html(
-            &ref_html,
-            ref_dir,
-            tests_root,
-            REFTEST_W,
-            REFTEST_H,
-            is_xml_path(&ref_path),
-        );
+        let render = |html: &str, dir: &Path, xml: bool| match args.renderer {
+            ReftestRenderer::Stylo => {
+                renderer.render_html(html, dir, tests_root, REFTEST_W, REFTEST_H, xml)
+            },
+            ReftestRenderer::Livery => {
+                renderer.render_html_livery(html, dir, tests_root, REFTEST_W, REFTEST_H, xml)
+            },
+        };
+        let t = render(&test_html, test_dir, is_xml_path(&test.path));
+        let r = render(&ref_html, ref_dir, is_xml_path(&ref_path));
         let stem = test
             .path
             .file_stem()
@@ -2462,6 +2488,19 @@ mod tests {
             "{err}"
         );
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn reftest_renderer_selects_the_clean_room_lane_explicitly() {
+        assert_eq!(
+            ReftestRenderer::parse("stylo"),
+            Some(ReftestRenderer::Stylo)
+        );
+        assert_eq!(
+            ReftestRenderer::parse("LIVERY"),
+            Some(ReftestRenderer::Livery)
+        );
+        assert_eq!(ReftestRenderer::parse("boa"), None);
     }
 }
 
