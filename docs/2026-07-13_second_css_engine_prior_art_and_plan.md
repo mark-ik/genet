@@ -291,6 +291,25 @@ covered by the paint-list receipt. The gradient receipt and opacity clock are
   aspect-ratio preservation; actual remote loading still belongs to the host
   fetch/cache seam.
 
+### 2026-07-15 remaining-gate receipt
+
+The bounded explicit `opacity, background-color` transition list now has
+cascade, value round-trip, and retained mid-frame receipts. The image seam also
+accepts host-supplied bytes for an `https` URL, which keeps URL scheme handling
+inside Livery while leaving fetch, cache, and policy with the host.
+
+The WPT producer helper tests pass, and the representative `ltr-basic.xht`
+reftest passes through both `--renderer livery` and the default Stylo route.
+The full `genet-wpt` unit wall is 18 passed, 1 failed, and 3 ignored; its sole
+failure is the existing WebGL `gl_clear` harness panic (`JsError: not a callable
+function`), outside the Livery route. A clean package-only
+`cargo check -p genet-livery` measured 4.9 seconds on this checkout. That is
+useful local telemetry, not an apples-to-apples replacement for the 30m35s
+whole-workspace cold-build baseline.
+
+Actual remote fetching, full WPT reftest parity, broader transition lists and
+interpolation, and the E4 default production-lane switch remain open.
+
 ## The destination, named
 
 *(Amended 2026-07-14.)* Livery's document profile grinds toward full browser

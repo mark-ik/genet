@@ -168,6 +168,12 @@ on the retained clock. The WPT command surface now accepts
 stylesheets, local image URLs, and raster `data:` backgrounds. Stylo remains the default, and
 the route is a comparison seam rather than a full-corpus parity receipt.
 
+The 2026-07-15 gate pass adds a host-supplied remote-looking URL receipt and a
+bounded explicit `opacity, background-color` transition receipt. The producer
+helper tests and one representative reftest pass on both routes. Full WPT
+parity remains open because the complete runner still has one unrelated WebGL
+`gl_clear` harness panic; actual remote fetching remains host-owned.
+
 ## E0 closeout
 
 The 2026-07-15 capability receipt grows the original catalog plus the first
