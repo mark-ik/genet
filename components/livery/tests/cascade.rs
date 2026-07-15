@@ -1,7 +1,10 @@
+use livery::PropertyValue;
 use livery::cascade::{
     CascadeLayer, MatchedDeclaration, Origin, Specificity, cascade, parse_declaration_block,
 };
-use livery::values::{Color, FontWeight, Length, LengthPercentage, Margin, Size};
+use livery::values::{
+    Color, FontWeight, Length, LengthPercentage, Margin, Size, TransitionProperty,
+};
 
 fn matched(
     css: &str,
@@ -55,6 +58,21 @@ fn transition_shorthand_expands_to_the_opacity_clock_controls() {
         block.declarations[1].property.metadata().name,
         "transition-duration"
     );
+}
+
+#[test]
+fn transition_shorthand_accepts_the_bounded_background_color_lane() {
+    let block = parse_declaration_block("transition: background-color 100ms");
+    assert!(block.errors.is_empty(), "{:?}", block.errors);
+    assert!(matches!(
+        block
+            .declarations
+            .first()
+            .map(|declaration| &declaration.value),
+        Some(livery::cascade::DeclaredValue::Value(
+            PropertyValue::TransitionProperty(TransitionProperty::BackgroundColor)
+        ))
+    ));
 }
 
 #[test]

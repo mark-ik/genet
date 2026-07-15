@@ -16,13 +16,14 @@ and atomic `inline-block` placement. The retained interaction path now covers
 viewport scroll, pointer-events hit testing, link rectangles, fragment
 navigation, focus state, rounded fills, and two-stop gradient layering. A
 host-driven opacity clock supplies intermediate frames, and bounded
-`transition-property`/`transition-duration` metadata starts opacity
-transitions on that same clock. Nested scroll containers now route wheel deltas
+`transition-property`/`transition-duration` metadata starts opacity and
+background-color transitions on that same clock, so `transition: all` can paint
+both changes in one retained tick. Nested scroll containers now route wheel deltas
 into retained offsets, chain at their boundary to the viewport, and replay
 descendant paint through transforms. Bounded opacity-only `@keyframes` and
 named timing functions now run on the retained clock. Remaining E3 work is
 remote resource loading, replaced-element image layout, full WPT reftest parity,
-multi-property transitions, and the cold-build
+broader transition-property lists and interpolation, and the cold-build
 comparison. The
 first audit invalidated the proposed 33-accessor full-crate seam.
 The second chose Cambium structural UI as the bounded first lane.
@@ -241,7 +242,9 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   Rounded backgrounds are clipped through the neutral paint stack. Two-stop
   linear-gradient backgrounds paint as an ordered neutral layer over the color
   fill under that clip. The retained session also has a host-driven opacity
-  clock and bounded CSS opacity transitions, with intermediate-frame receipts.
+  clock and bounded CSS opacity/background-color transitions, with an
+  intermediate-frame receipt proving `transition: all` updates both paint
+  properties from the same clock.
   Raster `data:` background URLs now lower into the neutral image side-table.
   Host-resolved local image bytes now feed the same neutral image side-table,
   and the WPT command surface accepts `--renderer livery`, routing bounded
@@ -251,7 +254,8 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   ease-in, ease-out, and ease-in-out timing functions run on the retained
   clock. Bounded intrinsic tiling and position/repeat modes now have paint-list
   receipts. Remaining: remote resource loading, replaced-element image layout,
-  multi-property transitions, full reftest parity, and an apples-to-apples
+  broader transition-property lists and interpolation, full reftest parity, and
+  an apples-to-apples
   cold-build delta against the 30m35s baseline.
 - **E4 — first production lane.** One real lane (host chrome or
   smolweb) ships on Livery by default. Receipt: the lane's
@@ -278,8 +282,9 @@ and focus routing through genet-documents. Rounded background clipping is
 covered by the paint-list receipt. The gradient receipt and opacity clock are
   covered by the paint-list, cascade, and interaction suites. The keyframe
   parser and retained opacity animation receipt cover named timing functions.
-  Resource-backed images, multi-property transitions, full reftest parity, and
-  the cold-build comparison remain explicit next gates. The image receipt covers raster
+  Resource-backed images, broader transition-property lists and interpolation,
+  full reftest parity, and the cold-build comparison remain explicit next gates.
+  The image receipt covers raster
   `data:` URLs and host-resolved local bytes; remote loading and replaced
   element layout still belong to the host fetch/cache and intrinsic-sizing
   seams.

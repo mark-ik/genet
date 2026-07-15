@@ -66,6 +66,7 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<AnimationName>("fade");
     assert_round_trip::<TimingFunction>("ease-in-out");
     assert_round_trip::<TransitionProperty>("opacity");
+    assert_round_trip::<TransitionProperty>("background-color");
     assert_round_trip::<Alignment>("space-between");
     assert_round_trip::<FlexDirection>("column");
     assert_round_trip::<FlexFactor>("1.5");

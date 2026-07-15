@@ -19,6 +19,44 @@ pub enum Color {
 }
 
 impl Color {
+    /// Interpolate the serializable RGBA subset used by the retained paint
+    /// clock. Named system colors stay discrete until their endpoint because
+    /// their used value depends on the current device palette.
+    pub fn interpolate(self, other: Self, progress: f32) -> Self {
+        let progress = progress.clamp(0.0, 1.0);
+        if progress == 0.0 {
+            return self;
+        }
+        if progress == 1.0 {
+            return other;
+        }
+        let Some(from) = self.rgba_components() else {
+            return self;
+        };
+        let Some(to) = other.rgba_components() else {
+            return self;
+        };
+        Self::rgba(
+            interpolate_channel(from.0, to.0, progress),
+            interpolate_channel(from.1, to.1, progress),
+            interpolate_channel(from.2, to.2, progress),
+            interpolate_channel(from.3, to.3, progress),
+        )
+    }
+
+    fn rgba_components(self) -> Option<(u8, u8, u8, u8)> {
+        match self {
+            Self::Transparent => Some((0, 0, 0, 0)),
+            Self::Rgba {
+                red,
+                green,
+                blue,
+                alpha,
+            } => Some((red, green, blue, alpha)),
+            Self::CurrentColor | Self::CanvasText => None,
+        }
+    }
+
     fn rgba(red: u8, green: u8, blue: u8, alpha: u8) -> Self {
         Self::Rgba {
             red,
@@ -97,6 +135,10 @@ impl Color {
             alpha.map(Self::parse_alpha).transpose()?.unwrap_or(255),
         ))
     }
+}
+
+fn interpolate_channel(from: u8, to: u8, progress: f32) -> u8 {
+    (f32::from(from) + (f32::from(to) - f32::from(from)) * progress).round() as u8
 }
 
 impl FromStr for Color {

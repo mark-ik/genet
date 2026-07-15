@@ -252,11 +252,13 @@ impl fmt::Display for AnimationName {
 }
 
 keyword_value! {
-    /// The bounded transition-property set consumed by the opacity clock.
+    /// The bounded transition-property set consumed by the retained paint
+    /// clock. `all` currently covers opacity and background-color together.
     pub enum TransitionProperty {
         All => "all",
         None => "none",
         Opacity => "opacity",
+        BackgroundColor => "background-color",
     }
 }
 

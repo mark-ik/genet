@@ -10,7 +10,7 @@ use livery::{
     PropertyValue,
     selector::StatePseudoClass,
     stylesheet::Keyframes,
-    values::{AnimationName, Opacity, Overflow, TimingFunction, TransitionProperty},
+    values::{AnimationName, Color, Opacity, Overflow, TimingFunction, TransitionProperty},
 };
 use paint_list_api::DeviceIntSize;
 
@@ -54,6 +54,16 @@ struct OpacityTransition<Id> {
     automatic: bool,
 }
 
+#[derive(Clone, Copy)]
+struct BackgroundColorTransition<Id> {
+    node: Id,
+    from: Color,
+    to: Color,
+    start_ms: f64,
+    duration_ms: f64,
+    automatic: bool,
+}
+
 #[derive(Clone)]
 struct KeyframeAnimation<Id> {
     node: Id,
@@ -86,6 +96,7 @@ where
     focused_chain: Vec<D::NodeId>,
     clock_ms: f64,
     opacity_transition: Option<OpacityTransition<D::NodeId>>,
+    background_color_transition: Option<BackgroundColorTransition<D::NodeId>>,
     keyframe_animation: Option<KeyframeAnimation<D::NodeId>>,
     nested_scroll: HashMap<D::NodeId, (f32, f32)>,
     image_sources: HashMap<String, Vec<u8>>,
@@ -115,6 +126,7 @@ where
             focused_chain: Vec::new(),
             clock_ms: 0.0,
             opacity_transition: None,
+            background_color_transition: None,
             keyframe_animation: None,
             nested_scroll: HashMap::new(),
             image_sources: HashMap::new(),
@@ -162,11 +174,14 @@ where
         self.device.viewport_width = width as f32;
         self.device.viewport_height = height as f32;
         self.finish_completed_opacity_transition();
+        self.finish_completed_background_color_transition();
         let mut styles =
             resolve_styles(&self.dom, &self.style_set, &self.device, &self.interactions);
         self.schedule_opacity_transition(&styles);
+        self.schedule_background_color_transition(&styles);
         self.schedule_keyframe_animation(&styles);
         self.apply_opacity_transition(&mut styles);
+        self.apply_background_color_transition(&mut styles);
         self.apply_keyframe_animation(&mut styles);
         let fragments = layout_with_text_system(
             &self.dom,
@@ -241,7 +256,9 @@ where
     /// Advance retained animation time. A following frame samples the
     /// interpolated value without re-running layout.
     pub fn pump(&mut self, now_ms: f64) -> bool {
-        if (self.opacity_transition.is_none() && self.keyframe_animation.is_none())
+        if (self.opacity_transition.is_none()
+            && self.background_color_transition.is_none()
+            && self.keyframe_animation.is_none())
             || !now_ms.is_finite()
         {
             return false;
@@ -263,7 +280,10 @@ where
             .keyframe_animation
             .as_ref()
             .is_none_or(|animation| self.clock_ms >= animation.start_ms + animation.duration_ms);
-        opacity_settled && keyframe_settled
+        let background_color_settled = self
+            .background_color_transition
+            .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
+        opacity_settled && background_color_settled && keyframe_settled
     }
 
     /// Scroll the document viewport by device pixels. Wheel deltas that need
@@ -551,6 +571,21 @@ where
         }
     }
 
+    fn apply_background_color_transition(&self, styles: &mut StylePlane<D::NodeId>) {
+        let Some(transition) = self.background_color_transition else {
+            return;
+        };
+        let progress = if transition.duration_ms == 0.0 {
+            1.0
+        } else {
+            ((self.clock_ms - transition.start_ms) / transition.duration_ms).clamp(0.0, 1.0) as f32
+        };
+        let value = transition.from.interpolate(transition.to, progress);
+        if let Some(style) = styles.get_mut(transition.node) {
+            style.background_color = value;
+        }
+    }
+
     fn apply_keyframe_animation(&self, styles: &mut StylePlane<D::NodeId>) {
         let Some(animation) = self.keyframe_animation.as_ref() else {
             return;
@@ -635,6 +670,21 @@ where
         self.opacity_transition = None;
     }
 
+    fn finish_completed_background_color_transition(&mut self) {
+        let Some(transition) = self.background_color_transition else {
+            return;
+        };
+        if !transition.automatic || self.clock_ms < transition.start_ms + transition.duration_ms {
+            return;
+        }
+        if let Some(layout) = self.layout.as_mut()
+            && let Some(style) = layout.styles.get_mut(transition.node)
+        {
+            style.background_color = transition.to;
+        }
+        self.background_color_transition = None;
+    }
+
     fn schedule_opacity_transition(&mut self, styles: &StylePlane<D::NodeId>) {
         if self.opacity_transition.is_some() {
             return;
@@ -676,6 +726,52 @@ where
         self.dom
             .dom_children(id)
             .find_map(|child| self.find_opacity_transition(child, previous, styles))
+    }
+
+    fn schedule_background_color_transition(&mut self, styles: &StylePlane<D::NodeId>) {
+        if self.background_color_transition.is_some() {
+            return;
+        }
+        let Some(previous) = self.layout.as_ref().map(|layout| &layout.styles) else {
+            return;
+        };
+        let Some((node, from, to, duration_ms)) =
+            self.find_background_color_transition(self.dom.document(), previous, styles)
+        else {
+            return;
+        };
+        self.background_color_transition = Some(BackgroundColorTransition {
+            node,
+            from,
+            to,
+            start_ms: self.clock_ms,
+            duration_ms,
+            automatic: true,
+        });
+    }
+
+    fn find_background_color_transition(
+        &self,
+        id: D::NodeId,
+        previous: &StylePlane<D::NodeId>,
+        styles: &StylePlane<D::NodeId>,
+    ) -> Option<(D::NodeId, Color, Color, f64)> {
+        if let (Some(old), Some(new)) = (previous.get(id), styles.get(id)) {
+            let duration_ms = f64::from(new.transition_duration.milliseconds());
+            let accepts_background_color = matches!(
+                new.transition_property,
+                TransitionProperty::All | TransitionProperty::BackgroundColor
+            );
+            if accepts_background_color
+                && duration_ms > 0.0
+                && old.background_color != new.background_color
+            {
+                return Some((id, old.background_color, new.background_color, duration_ms));
+            }
+        }
+        self.dom
+            .dom_children(id)
+            .find_map(|child| self.find_background_color_transition(child, previous, styles))
     }
 
     fn scrollable_axes(&self, layout: &LayoutState<D::NodeId>) -> (bool, bool) {

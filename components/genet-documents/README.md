@@ -18,10 +18,10 @@ session, take paint frames, scroll, click, settle).
   scene contract. It also routes bounded viewport scrolling, retained link
   rectangles, pointer hit testing, fragment navigation, and focus state. The
   session also exposes the retained animation clock for host-driven opacity
-  frames, bounded CSS opacity transitions, and opacity-only `@keyframes` with
+  frames, bounded CSS opacity/background-color transitions, and opacity-only `@keyframes` with
   named timing functions. Nested scroll chaining is routed through the retained
-  session and chains at its boundary. Resource-backed images and multi-property
-  transitions remain open. Livery's image gate covers two-stop gradients,
+  session and chains at its boundary. Resource-backed images, comma-separated
+  transition lists, and broader property interpolation remain open. Livery's image gate covers two-stop gradients,
   raster `data:` URLs, host-resolved local bytes, and bounded intrinsic
   position/repeat modes; remote URL resources and replaced-element layout
   remain open.

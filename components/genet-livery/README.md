@@ -53,7 +53,8 @@ now supplies bounded viewport scrolling, pointer-events-aware hit testing,
 retained link rectangles, fragment scrolling, and focus-state routing. A
 host-driven opacity clock can invalidate and repaint intermediate frames through
 the same retained session. Bounded `transition-property`/`transition-duration`
-metadata also starts opacity transitions from that clock. Two-stop
+metadata also starts opacity transitions from that clock; `transition: all`
+interpolates opacity and background-color together on the same clock. Two-stop
 linear-gradient backgrounds paint as an ordered neutral layer over the color
 fill and share the rounded clip. Raster `data:` background URLs now lower into
 the neutral image side-table and stretch to the element box. Nested scroll
@@ -62,8 +63,7 @@ boundaries to the viewport, and replay descendant paint through transforms.
 Bounded `@keyframes` declarations animate opacity through the same retained
 clock, with linear, ease, ease-in, ease-out, and ease-in-out timing functions.
 Host-resolved local image bytes use the same neutral image side-table, with
-bounded intrinsic tiling and position/repeat modes. Remote resource loading,
-replaced-element layout, and multi-property transitions remain outside this
-first interaction gate.
+bounded intrinsic tiling and position/repeat modes. Remote resource loading
+and replaced-element layout remain outside this first interaction gate.
 `genet.livery` therefore stays an explicit pin rather than the default static
 route.
