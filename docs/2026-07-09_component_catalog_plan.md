@@ -1,7 +1,10 @@
 # Component catalog: ready compositions, leaves, and widgets
 
 **Date:** 2026-07-09
-**Status:** plan, proposed.
+**Status:** historical. Superseded 2026-07-15 by
+`repos/cambium/docs/2026-07-15_component_catalog_growth_plan.md`. Cambium now
+owns the composition catalog and Sprigging owns portable paint leaves; the
+`xilem-serval` and `chisel` names below describe the pre-extraction design.
 
 Companion to [2026-07-07_chisel_widget_leaf_design.md](./2026-07-07_chisel_widget_leaf_design.md)
 (the leaf contract: paint paths, retention gates) and
