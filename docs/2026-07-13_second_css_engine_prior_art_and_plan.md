@@ -26,8 +26,8 @@ descendant paint through transforms. Bounded opacity-only `@keyframes` and
 named timing functions now run on the retained clock. Host-owned remote image
 fetching now feeds the same resource seam. Remaining E3 work is full WPT
 reftest parity, additional transition-property lists and interpolation beyond
-the bounded opacity/background-color/color/border-top-color paths, and the cold-build
-comparison. The
+the bounded opacity/background-color/color/border-top-color paths. A fresh
+workspace cold-build receipt is recorded below. The
 first audit invalidated the proposed 33-accessor full-crate seam.
 The second chose Cambium structural UI as the bounded first lane.
 Mark's framing: "grow a rust alternative using firefox, chrome, servo,
@@ -258,8 +258,8 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   ease-in, ease-out, and ease-in-out timing functions run on the retained
   clock. Bounded intrinsic tiling and position/repeat modes now have paint-list
   receipts. Remaining: additional transition-property lists and interpolation
-  beyond the bounded opacity/background-color/color paths, full reftest parity,
-  and an apples-to-apples cold-build delta against the 30m35s baseline.
+  beyond the bounded opacity/background-color/color paths and full reftest parity.
+  The cold-build delta against the 30m35s baseline is recorded below.
 - **E4 — first production lane.** One real lane (host chrome or
   smolweb) ships on Livery by default. Receipt: the lane's
   existing suites green + capture receipts.
@@ -286,8 +286,8 @@ covered by the paint-list receipt. The gradient receipt and opacity clock are
   covered by the paint-list, cascade, and interaction suites. The keyframe
   parser and retained opacity animation receipt cover named timing functions.
   Additional transition-property lists and interpolation beyond the new color
-  and border-top-color lanes, full reftest parity, and the cold-build comparison
-  remain explicit next gates. The image receipt covers raster `data:` URLs, host-resolved local and
+  and border-top-color lanes and full reftest parity remain explicit next gates.
+  The image receipt covers raster `data:` URLs, host-resolved local and
   remote-looking bytes, intrinsic `<img>` sizing, and aspect-ratio preservation;
   the session now exercises the host fetcher for a remote image while keeping
   URL policy and caching host-owned.
@@ -323,7 +323,11 @@ function`), outside the Livery route. After removing 17.9 GiB of targeted
 Livery/document artifacts, `cargo check -p genet-documents --features livery`
 completed in 57.1 seconds. That is useful package-graph telemetry, not an
 apples-to-apples replacement for the 30m35s whole-workspace cold-build
-baseline.
+baseline. A fresh `CARGO_TARGET_DIR=C:\\t\\genet-cold-target cargo check --workspace`
+then completed with exit 0 in 5m24s (323.9s). That is about 25m11s faster than
+the recorded baseline under the current checkout and source-cache state; it is
+useful comparison telemetry rather than a controlled benchmark. Cargo emitted
+the existing path-override and unused-code warnings, with no errors.
 
 Full WPT reftest parity, broader transition lists and interpolation beyond
 color and border-top-color, and the E4 default production-lane switch remain
