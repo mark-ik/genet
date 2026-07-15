@@ -6,11 +6,12 @@ from a declarative property catalog and licensed under MIT or Apache-2.0.
 The first lane is Cambium structural UI. Fullweb documents continue to use
 Genet Stylo.
 
-The 79-property native lane catalog generates concrete property metadata and a
+The 80-property native lane catalog generates concrete property metadata and a
 typed `ComputedValues`. The current ratchet adds box geometry (`right`,
 `bottom`, min/max sizing, `box-sizing`, and `aspect-ratio`), corner radii,
 visibility and pointer-event state, text alignment and spacing, box shadows,
-flexbox, and a bounded grid track/placement family. The seed value layer
+two-stop linear-gradient backgrounds, flexbox, and a bounded grid
+track/placement family. The seed value layer
 covers the audited Cambium and UA
 stylesheet values, including lengths, percentages, linear `calc()`, colors,
 and the lane's keyword families. The bounded E2 resolver adds declaration and

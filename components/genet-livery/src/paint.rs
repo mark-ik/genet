@@ -7,16 +7,17 @@ use layout_dom_api::{LayoutDom, NodeKind};
 use livery::{
     ComputedValues,
     values::{
-        BorderStyle as CssBorderStyle, BoxShadow as CssBoxShadow, Color, Display, FontSize, Length,
-        LengthPercentage, LengthUnit, Overflow as CssOverflow, Position, Radius, TransformFunction,
-        Visibility, ZIndex,
+        BackgroundImage, BorderStyle as CssBorderStyle, BoxShadow as CssBoxShadow, Color, Display,
+        FontSize, Length, LengthPercentage, LengthUnit, Overflow as CssOverflow, Position, Radius,
+        TransformFunction, Visibility, ZIndex,
     },
 };
 use paint_list_api::{
     BorderDetails, BorderItem, BorderRadius, BorderSide, BorderStyle, BoxShadowClipMode, ClipKind,
-    ClipSpec, ColorF, CommonPlacement, DeviceIntSize, EngineId, FontResource, LayerSpec,
-    LayoutPoint, LayoutRect, LayoutSideOffsets, LayoutSize, LayoutTransform, LayoutVector2D,
-    NormalBorder, PaintCmd, PaintList, RectItem, ShadowItem, TransformKind, TransformSpec,
+    ClipSpec, ColorF, CommonPlacement, DeviceIntSize, EngineId, ExtendMode, FontResource,
+    GradientStop, LayerSpec, LayoutPoint, LayoutRect, LayoutSideOffsets, LayoutSize,
+    LayoutTransform, LayoutVector2D, LinearGradientItem, LinearGradientPayload, NormalBorder,
+    PaintCmd, PaintList, RectItem, ShadowItem, TransformKind, TransformSpec,
 };
 use serde::{Deserialize, Serialize};
 
@@ -726,10 +727,11 @@ pub(crate) fn bounds(fragment: &Fragment) -> LayoutRect {
 
 fn emit_background(list: &mut LiveryPaintList, style: &ComputedValues, fragment: &Fragment) {
     let color = resolve_color(style.background_color, used_text_color(style));
-    if color.a <= 0.0 {
+    let radius = border_radius(style, fragment);
+    let has_image = !matches!(&style.background_image, BackgroundImage::None);
+    if color.a <= 0.0 && !has_image {
         return;
     }
-    let radius = border_radius(style, fragment);
     if !radius.is_zero() {
         list.commands.push(PaintCmd::PushClip(ClipSpec {
             kind: ClipKind::RoundedRect {
@@ -739,13 +741,46 @@ fn emit_background(list: &mut LiveryPaintList, style: &ComputedValues, fragment:
             },
         }));
     }
-    list.commands.push(PaintCmd::DrawRect(RectItem {
-        placement: CommonPlacement::new(bounds(fragment)),
-        color,
-    }));
+    if color.a > 0.0 {
+        list.commands.push(PaintCmd::DrawRect(RectItem {
+            placement: CommonPlacement::new(bounds(fragment)),
+            color,
+        }));
+    }
+    emit_background_image(list, style, fragment);
     if !radius.is_zero() {
         list.commands.push(PaintCmd::PopClip);
     }
+}
+
+fn emit_background_image(list: &mut LiveryPaintList, style: &ComputedValues, fragment: &Fragment) {
+    let BackgroundImage::LinearGradient { from, to } = &style.background_image else {
+        return;
+    };
+    let rect = bounds(fragment);
+    let start_point = LayoutPoint::new((rect.min.x + rect.max.x) * 0.5, rect.min.y);
+    let end_point = LayoutPoint::new((rect.min.x + rect.max.x) * 0.5, rect.max.y);
+    list.commands
+        .push(PaintCmd::DrawLinearGradient(LinearGradientItem {
+            placement: CommonPlacement::new(rect),
+            gradient: LinearGradientPayload {
+                start_point,
+                end_point,
+                extend_mode: ExtendMode::Clamp,
+                stops: vec![
+                    GradientStop {
+                        offset: 0.0,
+                        color: resolve_color(*from, used_text_color(style)),
+                    },
+                    GradientStop {
+                        offset: 1.0,
+                        color: resolve_color(*to, used_text_color(style)),
+                    },
+                ],
+            },
+            tile_size: LayoutSize::new(fragment.width, fragment.height),
+            tile_spacing: LayoutSize::zero(),
+        }));
 }
 
 fn emit_shadow(list: &mut LiveryPaintList, style: &ComputedValues, fragment: &Fragment) {

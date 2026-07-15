@@ -96,8 +96,8 @@ fn cambium_catalog_declarations_are_covered_by_the_native_seed() {
     }
 
     assert!(
-        properties.len() >= 79,
-        "the native lane must retain the 79-property receipt"
+        properties.len() >= 80,
+        "the native lane must retain the 80-property receipt"
     );
     assert!(
         missing.is_empty(),
@@ -107,7 +107,7 @@ fn cambium_catalog_declarations_are_covered_by_the_native_seed() {
 
 #[test]
 fn generated_property_names_round_trip() {
-    assert!(PropertyId::ALL.len() >= 79);
+    assert!(PropertyId::ALL.len() >= 80);
     for &property in PropertyId::ALL {
         let metadata = property.metadata();
         assert_eq!(PropertyId::from_css_name(metadata.name), Some(property));

@@ -135,9 +135,36 @@ fn border_radii_clip_background_fills() {
 }
 
 #[test]
+fn linear_gradient_background_reaches_neutral_primitive() {
+    let list = render(
+        r#"<html><body><div class="card"></div></body></html>"#,
+        ".card { width: 80px; height: 40px; background-image: linear-gradient(red, blue); }",
+        1,
+    );
+    let gradient = list.commands().iter().find_map(|command| match command {
+        PaintCmd::DrawLinearGradient(item) => Some(item),
+        _ => None,
+    });
+    let gradient = gradient.expect("linear-gradient lowers through PaintList");
+    assert_eq!(gradient.gradient.stops.len(), 2);
+    assert_eq!(gradient.gradient.stops[0].offset, 0.0);
+    assert_eq!(gradient.gradient.stops[1].offset, 1.0);
+    assert_eq!(
+        gradient.gradient.stops[0].color,
+        ColorF::new(1.0, 0.0, 0.0, 1.0)
+    );
+    assert_eq!(
+        gradient.gradient.stops[1].color,
+        ColorF::new(0.0, 0.0, 1.0, 1.0)
+    );
+}
+
+#[test]
 fn retained_opacity_clock_samples_and_settles() {
     let document = StaticDocument::parse(r#"<html><body><div class="card"></div></body></html>"#);
-    let card = document.first_with_class(document.document(), "card").unwrap();
+    let card = document
+        .first_with_class(document.document(), "card")
+        .unwrap();
     let mut retained = LiveryDocument::new(
         document,
         StyleSet::cambium(&[".card { width: 40px; height: 20px; background-color: lime; }"]),
@@ -165,10 +192,44 @@ fn retained_opacity_clock_samples_and_settles() {
     assert!(retained.pump(1_000.0));
     assert!(retained.settled());
     let end = retained.frame(320, 240).unwrap();
-    assert!(!end
+    assert!(
+        !end.commands()
+            .iter()
+            .any(|command| matches!(command, PaintCmd::PushLayer(_)))
+    );
+}
+
+#[test]
+fn linear_gradient_layers_over_background_fill() {
+    let list = render(
+        r#"<html><body><div class="card"></div></body></html>"#,
+        ".card { width: 80px; height: 40px; background-color: #101010; \
+                 background-image: linear-gradient(red, blue); }",
+        1,
+    );
+    let fill = list
         .commands()
         .iter()
-        .any(|command| matches!(command, PaintCmd::PushLayer(_))));
+        .position(|command| matches!(command, PaintCmd::DrawRect(_)))
+        .expect("background color paints");
+    let gradient = list
+        .commands()
+        .iter()
+        .position(|command| matches!(command, PaintCmd::DrawLinearGradient(_)))
+        .expect("background image lowers to a gradient primitive");
+    assert!(gradient > fill, "the image layer paints over the fill");
+    let PaintCmd::DrawLinearGradient(item) = &list.commands()[gradient] else {
+        unreachable!();
+    };
+    assert_eq!(item.gradient.stops.len(), 2);
+    assert_eq!(
+        item.gradient.stops[0].color,
+        ColorF::new(1.0, 0.0, 0.0, 1.0)
+    );
+    assert_eq!(
+        item.gradient.stops[1].color,
+        ColorF::new(0.0, 0.0, 1.0, 1.0)
+    );
 }
 
 #[test]

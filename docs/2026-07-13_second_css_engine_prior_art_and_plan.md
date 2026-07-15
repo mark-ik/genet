@@ -3,7 +3,7 @@
 **Date:** 2026-07-13
 **Status:** E0a full-path audit, E0b Cambium lane choice/40-property catalog,
 E1 values/codegen, E2 style resolution, and the first E3 integration slice are
-landed. The catalog has since ratcheted to 79 properties. `genet-livery` now adapts `LayoutDom` into Livery's selector and cascade
+landed. The catalog has since ratcheted to 80 properties. `genet-livery` now adapts `LayoutDom` into Livery's selector and cascade
 path, retains a concrete Livery style plane, lowers the bounded box model into
 a standalone Taffy tree, and emits backgrounds and borders through the neutral
 `PaintList` API. Consecutive text and inline-element children now shape in one
@@ -12,9 +12,12 @@ font resources, and cached frame. The opt-in `genet.livery` session route
 lowers that PaintList into `netrender::Scene`; the existing default remains
 `genet.web`. The integration crate's normal/build dependency graph excludes
 Stylo. Parley's positioned lines now supply multi-fragment span paint geometry
-and atomic `inline-block` placement. Full E3 parity remains open at hit-test
-routing, layered background/image fidelity, animation/transition runtime, and
-reftest coverage. The
+and atomic `inline-block` placement. The retained interaction path now covers
+viewport scroll, pointer-events hit testing, link rectangles, fragment
+navigation, focus state, rounded fills, and two-stop gradient layering. A
+host-driven opacity clock supplies intermediate frames. Remaining E3 work is
+nested scroll chaining, resource-backed images, CSS transition/keyframe
+declarations, full WPT reftest routing, and the cold-build comparison. The
 first audit invalidated the proposed 33-accessor full-crate seam.
 The second chose Cambium structural UI as the bounded first lane.
 Mark's framing: "grow a rust alternative using firefox, chrome, servo,
@@ -229,10 +232,11 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   viewport scroll offset through the retained PaintList, performs
   pointer-events-aware hit testing, retains link rectangles, handles fragment
   navigation, and feeds focus/focus-within state back into the cascade.
-  Rounded backgrounds are clipped through the neutral paint stack. The
-  retained session also has a host-driven opacity clock and an intermediate
-  frame receipt. Remaining:
-  nested scroll chaining, layered image/gradient backgrounds,
+  Rounded backgrounds are clipped through the neutral paint stack. Two-stop
+  linear-gradient backgrounds paint as an ordered neutral layer over the color
+  fill under that clip. The retained session also has a host-driven opacity
+  clock and an intermediate frame receipt. Remaining:
+  nested scroll chaining, resource-backed images/background positioning,
   CSS transition/keyframe declarations, full reftest parity, and an
   apples-to-apples cold-build delta against the 30m35s baseline.
 - **E4 — first production lane.** One real lane (host chrome or
@@ -245,21 +249,21 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
 ### 2026-07-15 capability-ratchet receipt
 
 The executable growth pass expands Livery from the original 40-property
-catalog plus the earlier opacity/transform rows to 79 properties. It adds
-`right`/`bottom`, min/max sizing, `box-sizing`, `aspect-ratio`, the four
+catalog plus the earlier opacity/transform rows to 80 properties. It adds
+  `right`/`bottom`, min/max sizing, `box-sizing`, `aspect-ratio`, the four
 physical corner-radius longhands and `border-radius`, visibility and
 pointer-events state, text alignment and spacing, text-decoration color,
-box-shadow, flexbox, and a bounded grid track/placement family. Taffy consumes
+  box-shadow, the two-stop background-image gradient subset, flexbox, and a bounded grid track/placement family. Taffy consumes
 the geometry, flex, and grid values; Parley consumes alignment and spacing; the
 neutral border and shadow primitives carry radii and shadows; hidden boxes
 retain layout space while suppressing paint. The receipt is the Livery and
 genet-livery test suites. The retained interaction receipt now covers viewport
 scrolling, link rectangles, pointer-events hit testing, fragment navigation,
 and focus routing through genet-documents. Rounded background clipping is
-covered by the paint-list receipt. Nested scroll chaining, layered
-image/gradient backgrounds, CSS transition/keyframe declarations, full reftest
-parity, and the cold-build comparison remain explicit next gates. The retained
-opacity clock is covered by the interaction receipt.
+covered by the paint-list receipt. The gradient receipt and opacity clock are
+  covered by the paint-list and interaction suites. Resource-backed
+  images/background positioning, CSS transition/keyframe declarations, full
+  reftest parity, and the cold-build comparison remain explicit next gates.
 
 ## The destination, named
 

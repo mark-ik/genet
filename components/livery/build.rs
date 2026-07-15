@@ -81,6 +81,7 @@ fn value_type_path(value_type: &str) -> &'static str {
     match value_type {
         "alignment" => "crate::values::Alignment",
         "aspect-ratio" => "crate::values::AspectRatio",
+        "background-image" => "crate::values::BackgroundImage",
         "border-style" => "crate::values::BorderStyle",
         "border-width" => "crate::values::BorderWidth",
         "box-shadow" => "crate::values::BoxShadow",
@@ -126,7 +127,7 @@ fn value_type_path(value_type: &str) -> &'static str {
 fn value_type_is_copy(value_type: &str) -> bool {
     !matches!(
         value_type,
-        "box-shadow" | "font-family" | "grid-template" | "transform"
+        "background-image" | "box-shadow" | "font-family" | "grid-template" | "transform"
     )
 }
 
@@ -135,6 +136,7 @@ fn initial_expression(property: &Property) -> &'static str {
         ("alignment", "start") => "crate::values::Alignment::Start",
         ("alignment", "stretch") => "crate::values::Alignment::Stretch",
         ("aspect-ratio", "auto") => "crate::values::AspectRatio::Auto",
+        ("background-image", "none") => "crate::values::BackgroundImage::None",
         ("border-style", "none") => "crate::values::BorderStyle::None",
         ("border-width", "medium") => "crate::values::BorderWidth::Medium",
         ("box-shadow", "none") => "crate::values::BoxShadow::None",
@@ -187,8 +189,8 @@ fn initial_expression(property: &Property) -> &'static str {
 fn validate(db: &Database) {
     assert_eq!(db.schema, 1, "unsupported properties.toml schema");
     assert!(
-        db.property.len() >= 79,
-        "the native Cambium lane must retain at least the 79-property receipt"
+        db.property.len() >= 80,
+        "the native Cambium lane must retain at least the 80-property receipt"
     );
 
     let mut names = BTreeSet::new();

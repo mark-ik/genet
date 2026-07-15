@@ -1,11 +1,11 @@
 use std::fmt::Debug;
 
 use livery::values::{
-    Alignment, AspectRatio, BorderStyle, BorderWidth, BoxShadow, BoxSizing, Color, CssValue,
-    Display, FlexDirection, FlexFactor, FlexWrap, FontFamily, FontSize, FontStyle, FontWeight,
-    Gap, Inset, LengthPercentage, LineHeight, ListStyleType, Margin, Opacity, Order, Overflow,
-    Padding, PointerEvents, Position, Radius, Size, Spacing, TextAlign, TextDecorationLine,
-    TextWrapMode, Transform, Visibility, WhiteSpaceCollapse, ZIndex,
+    Alignment, AspectRatio, BackgroundImage, BorderStyle, BorderWidth, BoxShadow, BoxSizing, Color,
+    CssValue, Display, FlexDirection, FlexFactor, FlexWrap, FontFamily, FontSize, FontStyle,
+    FontWeight, Gap, Inset, LengthPercentage, LineHeight, ListStyleType, Margin, Opacity, Order,
+    Overflow, Padding, PointerEvents, Position, Radius, Size, Spacing, TextAlign,
+    TextDecorationLine, TextWrapMode, Transform, Visibility, WhiteSpaceCollapse, ZIndex,
 };
 
 fn assert_round_trip<T>(css: &str)
@@ -57,6 +57,7 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<AspectRatio>("16 / 9");
     assert_round_trip::<BoxSizing>("border-box");
     assert_round_trip::<BoxShadow>("0 2px 4px #00000055");
+    assert_round_trip::<BackgroundImage>("linear-gradient(red, blue)");
     assert_round_trip::<Alignment>("space-between");
     assert_round_trip::<FlexDirection>("column");
     assert_round_trip::<FlexFactor>("1.5");

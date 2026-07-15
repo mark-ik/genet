@@ -121,6 +121,16 @@ animation = "by-computed-value"
 source = "css_backgrounds_3"
 
 [[property]]
+name = "background-image"
+value_type = "background-image"
+inherited = false
+initial = "none"
+grammar = "none | linear-gradient(<color>, <color>)"
+seed_values = ["none", "linear-gradient(red, blue)"]
+animation = "discrete"
+source = "css_backgrounds_3"
+
+[[property]]
 name = "border-bottom-left-radius"
 value_type = "radius"
 inherited = false

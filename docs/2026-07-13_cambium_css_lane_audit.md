@@ -4,9 +4,9 @@
 **Status:** E0b lane choice, themed catalog fixture, and original 40-property
 clean-room database landed. The E1 handoff into Livery and the first E3
 `genet-livery` integration slice have also landed. The native capability
-ratchet now contains 79 properties, including geometry, corner radii,
-visibility, alignment, spacing, box shadows, flexbox, and bounded grid
-placement. Source
+ratchet now contains 80 properties, including geometry, corner radii,
+visibility, alignment, spacing, box shadows, two-stop linear-gradient
+backgrounds, flexbox, and bounded grid placement. Source
 hashes are recorded below.
 
 Audited revisions: Cambium `a7c4603c` for the live catalog and Genet
@@ -147,17 +147,21 @@ bidi visual order. Opacity below one now creates an atomic level-zero context
 and a neutral compositing layer around the subtree. Transform context triggers
 have also landed for transformable block and inline-block boxes. The
 bounded transform list supports 2D translate, scale, and rotate functions
-around the default center origin. Link/scroll/focus semantics and cross-engine
-reftest parity remain the gate for production selection.
+around the default center origin. The retained Livery session now routes
+viewport scroll, pointer-events hit testing, links, fragment navigation, and
+focus state. A host-driven opacity clock and a native reftest-style paint pair
+are covered by package receipts. Resource-backed images, CSS transition and
+keyframe declarations, nested scroll chaining, and full WPT reftest parity
+remain the gate for production selection.
 
 ## E0 closeout
 
 The 2026-07-15 capability receipt grows the original catalog plus the first
-two ratchet rows to 79 properties. Geometry, flexbox, and bounded grid values
-are lowered into Taffy; corner radii and box shadows reach neutral paint
-commands; Parley consumes text alignment and spacing; and hidden boxes retain
-layout space while suppressing paint. This is an E3 capability ratchet, not a
-change to the original catalog census.
+two ratchet rows to 80 properties. Geometry, flexbox, and bounded grid values
+are lowered into Taffy; corner radii, color fills, and two-stop gradients reach
+neutral paint commands; Parley consumes text alignment and spacing; and hidden
+boxes retain layout space while suppressing paint. This is an E3 capability
+ratchet, not a change to the original catalog census.
 
 The lane choice, themed fixture, expanded database, and executable coverage
 guard are landed. `components/livery/tests/catalog_contract.rs` checks the

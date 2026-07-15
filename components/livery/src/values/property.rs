@@ -2,6 +2,53 @@ use std::{fmt, str::FromStr};
 
 use super::{Color, Length, LengthPercentage, ParseError, format_number, keyword_value};
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum BackgroundImage {
+    None,
+    LinearGradient { from: Color, to: Color },
+}
+
+impl FromStr for BackgroundImage {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let input = input.trim();
+        if input.eq_ignore_ascii_case("none") {
+            return Ok(Self::None);
+        }
+        let Some(arguments) = input
+            .strip_prefix("linear-gradient(")
+            .and_then(|value| value.strip_suffix(')'))
+        else {
+            return Err(ParseError::expected("none or a two-stop linear-gradient"));
+        };
+        let mut colors = arguments.split(',').map(str::trim);
+        let from = colors
+            .next()
+            .ok_or_else(|| ParseError::expected("two gradient colors"))?
+            .parse::<Color>()?;
+        let to = colors
+            .next()
+            .ok_or_else(|| ParseError::expected("two gradient colors"))?
+            .parse::<Color>()?;
+        if colors.next().is_some() {
+            return Err(ParseError::expected("two gradient colors"));
+        }
+        Ok(Self::LinearGradient { from, to })
+    }
+}
+
+impl fmt::Display for BackgroundImage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => formatter.write_str("none"),
+            Self::LinearGradient { from, to } => {
+                write!(formatter, "linear-gradient({from}, {to})")
+            },
+        }
+    }
+}
+
 keyword_value! {
     /// CSS border line style.
     pub enum BorderStyle {
@@ -534,7 +581,9 @@ impl FromStr for AspectRatio {
         }
         let (width, height) = input
             .split_once('/')
-            .map_or((input, "1"), |(width, height)| (width.trim(), height.trim()));
+            .map_or((input, "1"), |(width, height)| {
+                (width.trim(), height.trim())
+            });
         let width = width
             .parse::<f32>()
             .ok()
