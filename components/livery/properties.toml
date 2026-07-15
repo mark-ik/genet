@@ -108,8 +108,13 @@ source = "css_box_alignment_3"
 
 [shorthands.transition]
 longhands = ["transition-property", "transition-duration"]
-grammar = "[ none | all | opacity | background-color ] || <time>"
-seed_values = ["opacity 100ms", "background-color 100ms"]
+grammar = "[ none | all | opacity | background-color | color | border-top-color ] || <time>"
+seed_values = [
+    "opacity 100ms",
+    "background-color 100ms",
+    "color 100ms",
+    "border-top-color 100ms",
+]
 source = "css_transitions_1"
 
 [shorthands.animation]
@@ -953,8 +958,18 @@ name = "transition-property"
 value_type = "transition-property"
 inherited = false
 initial = "all"
-grammar = "none | all | opacity | background-color | opacity, background-color"
-seed_values = ["all", "opacity", "background-color", "opacity, background-color"]
+grammar = "none | all | opacity | background-color | color | border-top-color | opacity, background-color | opacity, color | background-color, color | opacity, background-color, color"
+seed_values = [
+    "all",
+    "opacity",
+    "background-color",
+    "color",
+    "border-top-color",
+    "opacity, background-color",
+    "opacity, color",
+    "background-color, color",
+    "opacity, background-color, color",
+]
 animation = "discrete"
 source = "css_transitions_1"
 
