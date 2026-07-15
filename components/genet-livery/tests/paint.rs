@@ -282,6 +282,41 @@ fn host_image_resource_resolves_a_non_data_background_url() {
 }
 
 #[test]
+fn host_image_resource_resolves_a_remote_url_without_engine_fetching() {
+    let blue = image::RgbaImage::from_pixel(2, 3, image::Rgba([0, 0, 255, 255]));
+    let mut png = Vec::new();
+    blue.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("encode test PNG");
+    let url = "https://cdn.example.test/blue.png";
+    let document = StaticDocument::parse(r#"<html><body><div class="card"></div></body></html>"#);
+    let mut retained = LiveryDocument::new(
+        document,
+        StyleSet::cambium(&[&format!(
+            ".card {{ width: 80px; height: 40px; background-repeat: no-repeat; background-image: url({url}); }}"
+        )]),
+        Device::screen(320.0, 240.0),
+    );
+    retained.set_image_resource(url, png);
+    let list = retained
+        .frame(320, 240)
+        .expect("frame with host-supplied remote image");
+    let PaintCmd::DrawImage(image) = list
+        .commands()
+        .iter()
+        .find(|command| matches!(command, PaintCmd::DrawImage(_)))
+        .expect("host-supplied remote URL lowers to an image primitive")
+    else {
+        unreachable!();
+    };
+    let resource = list
+        .images()
+        .iter()
+        .find(|resource| resource.key == image.image_key)
+        .expect("remote URL command resolves through the paint side table");
+    assert_eq!((resource.width, resource.height), (2, 3));
+}
+
+#[test]
 fn replaced_img_uses_intrinsic_size_and_paints_a_neutral_image() {
     use base64::Engine as _;
 

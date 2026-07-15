@@ -267,16 +267,18 @@ fn expand_box_shorthand(
 fn expand_transition(block: &mut DeclarationBlock, value: &str, important: bool) {
     let mut property = None;
     let mut duration = None;
-    for component in split_components(value) {
-        if property.is_none()
-            && let Ok(parsed) = component.parse::<TransitionProperty>()
+    for item in split_top_level(value, ',') {
+        let Some((item_property, item_duration)) = parse_transition_item(item) else {
+            block.errors.push(DeclarationError {
+                name: "transition".to_owned(),
+                value: value.to_owned(),
+                kind: DeclarationErrorKind::InvalidValue,
+            });
+            return;
+        };
+        if duration
+            .is_some_and(|current: Duration| current.milliseconds() != item_duration.milliseconds())
         {
-            property = Some(parsed);
-        } else if duration.is_none()
-            && let Ok(parsed) = component.parse::<Duration>()
-        {
-            duration = Some(parsed);
-        } else {
             block.errors.push(DeclarationError {
                 name: "transition".to_owned(),
                 value: value.to_owned(),
@@ -284,6 +286,8 @@ fn expand_transition(block: &mut DeclarationBlock, value: &str, important: bool)
             });
             return;
         }
+        duration = Some(item_duration);
+        property = Some(merge_transition_properties(property, item_property));
     }
     let Some(duration) = duration else {
         block.errors.push(DeclarationError {
@@ -305,6 +309,46 @@ fn expand_transition(block: &mut DeclarationBlock, value: &str, important: bool)
         value: DeclaredValue::Value(PropertyValue::Duration(duration)),
         important,
     });
+}
+
+fn parse_transition_item(input: &str) -> Option<(TransitionProperty, Duration)> {
+    let mut property = None;
+    let mut duration = None;
+    for component in split_components(input) {
+        if property.is_none()
+            && let Ok(parsed) = component.parse::<TransitionProperty>()
+        {
+            property = Some(parsed);
+        } else if duration.is_none()
+            && let Ok(parsed) = component.parse::<Duration>()
+        {
+            duration = Some(parsed);
+        } else {
+            return None;
+        }
+    }
+    Some((property.unwrap_or(TransitionProperty::All), duration?))
+}
+
+fn merge_transition_properties(
+    current: Option<TransitionProperty>,
+    next: TransitionProperty,
+) -> TransitionProperty {
+    let Some(current) = current else {
+        return next;
+    };
+    match (current, next) {
+        (TransitionProperty::All, _) | (_, TransitionProperty::All) => TransitionProperty::All,
+        (TransitionProperty::None, value) | (value, TransitionProperty::None) => value,
+        (TransitionProperty::Opacity, TransitionProperty::BackgroundColor)
+        | (TransitionProperty::BackgroundColor, TransitionProperty::Opacity)
+        | (TransitionProperty::OpacityAndBackgroundColor, _)
+        | (_, TransitionProperty::OpacityAndBackgroundColor) => {
+            TransitionProperty::OpacityAndBackgroundColor
+        },
+        (left, right) if left == right => left,
+        _ => TransitionProperty::All,
+    }
 }
 
 fn expand_animation(block: &mut DeclarationBlock, value: &str, important: bool) {

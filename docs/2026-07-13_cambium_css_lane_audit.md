@@ -155,10 +155,11 @@ covered by package receipts. Nested scroll containers route wheel deltas into re
 chain to the viewport at their boundary. Raster `data:` background URLs reach
 the neutral image side-table, and host-resolved local image bytes now use the
 same side-table seam. Bounded intrinsic tiling and position/repeat modes now
-paint through that seam. The bounded `all` transition path now samples opacity
-and background-color together. Replaced `<img>` elements now use intrinsic
-data/local dimensions and preserve their aspect ratio under a bounded CSS
-width or height. Remote resource loading remains open, along with full WPT
+paint through that seam. The bounded `all` and explicit `opacity, background-color`
+transition paths now sample opacity and background-color together. Replaced
+`<img>` elements now use intrinsic data/local dimensions and preserve their
+aspect ratio under a bounded CSS width or height. Host-supplied remote-looking
+URLs use the same image seam; actual remote fetching remains open, along with full WPT
 reftest parity. Bounded
 opacity-only `@keyframes` declarations
 with linear, ease, ease-in, ease-out, and ease-in-out timing functions now run

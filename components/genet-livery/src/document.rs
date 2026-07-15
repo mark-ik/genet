@@ -718,7 +718,9 @@ where
             let duration_ms = f64::from(new.transition_duration.milliseconds());
             let accepts_opacity = matches!(
                 new.transition_property,
-                TransitionProperty::All | TransitionProperty::Opacity
+                TransitionProperty::All
+                    | TransitionProperty::Opacity
+                    | TransitionProperty::OpacityAndBackgroundColor
             );
             if accepts_opacity && duration_ms > 0.0 && old.opacity.value() != new.opacity.value() {
                 return Some((id, old.opacity.value(), new.opacity.value(), duration_ms));
@@ -761,7 +763,9 @@ where
             let duration_ms = f64::from(new.transition_duration.milliseconds());
             let accepts_background_color = matches!(
                 new.transition_property,
-                TransitionProperty::All | TransitionProperty::BackgroundColor
+                TransitionProperty::All
+                    | TransitionProperty::BackgroundColor
+                    | TransitionProperty::OpacityAndBackgroundColor
             );
             if accepts_background_color
                 && duration_ms > 0.0

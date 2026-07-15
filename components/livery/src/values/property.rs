@@ -251,14 +251,44 @@ impl fmt::Display for AnimationName {
     }
 }
 
-keyword_value! {
-    /// The bounded transition-property set consumed by the retained paint
-    /// clock. `all` currently covers opacity and background-color together.
-    pub enum TransitionProperty {
-        All => "all",
-        None => "none",
-        Opacity => "opacity",
-        BackgroundColor => "background-color",
+/// The bounded transition-property set consumed by the retained paint clock.
+/// The pair variant accepts an explicit two-property list while sharing the
+/// same retained tick as `all`.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum TransitionProperty {
+    All,
+    None,
+    Opacity,
+    BackgroundColor,
+    OpacityAndBackgroundColor,
+}
+
+impl FromStr for TransitionProperty {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        match input.trim().to_ascii_lowercase().as_str() {
+            "all" => Ok(Self::All),
+            "none" => Ok(Self::None),
+            "opacity" => Ok(Self::Opacity),
+            "background-color" => Ok(Self::BackgroundColor),
+            "opacity, background-color" | "background-color, opacity" => {
+                Ok(Self::OpacityAndBackgroundColor)
+            },
+            _ => Err(ParseError::expected("a bounded transition-property list")),
+        }
+    }
+}
+
+impl fmt::Display for TransitionProperty {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::All => "all",
+            Self::None => "none",
+            Self::Opacity => "opacity",
+            Self::BackgroundColor => "background-color",
+            Self::OpacityAndBackgroundColor => "opacity, background-color",
+        })
     }
 }
 

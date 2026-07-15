@@ -230,7 +230,8 @@ fn livery_dom_image_urls(document: &StaticDocument) -> Vec<String> {
                 }
             }
         }
-        stack.extend(document.dom_children(id));
+        let children = document.dom_children(id).collect::<Vec<_>>();
+        stack.extend(children.into_iter().rev());
     }
     urls
 }

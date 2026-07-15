@@ -953,8 +953,8 @@ name = "transition-property"
 value_type = "transition-property"
 inherited = false
 initial = "all"
-grammar = "none | all | opacity | background-color"
-seed_values = ["all", "opacity", "background-color"]
+grammar = "none | all | opacity | background-color | opacity, background-color"
+seed_values = ["all", "opacity", "background-color", "opacity, background-color"]
 animation = "discrete"
 source = "css_transitions_1"
 
