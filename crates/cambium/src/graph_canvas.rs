@@ -300,7 +300,7 @@ where
     .attr(
         "style",
         format!(
-            "position:relative;display:inline-block;width:{}px;height:{}px;max-width:100%;overflow:hidden;",
+            "position:relative;display:block;width:{}px;height:{}px;max-width:100%;",
             swatch.width, swatch.height
         ),
     )
