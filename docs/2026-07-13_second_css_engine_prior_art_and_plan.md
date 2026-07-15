@@ -22,8 +22,8 @@ both changes in one retained tick. Nested scroll containers now route wheel delt
 into retained offsets, chain at their boundary to the viewport, and replay
 descendant paint through transforms. Bounded opacity-only `@keyframes` and
 named timing functions now run on the retained clock. Remaining E3 work is
-remote resource loading, replaced-element image layout, full WPT reftest parity,
-broader transition-property lists and interpolation, and the cold-build
+remote resource loading, full WPT reftest parity, broader transition-property
+lists and interpolation beyond the bounded `all` path, and the cold-build
 comparison. The
 first audit invalidated the proposed 33-accessor full-crate seam.
 The second chose Cambium structural UI as the bounded first lane.
@@ -253,8 +253,8 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   default. Bounded opacity-only `@keyframes` declarations and linear, ease,
   ease-in, ease-out, and ease-in-out timing functions run on the retained
   clock. Bounded intrinsic tiling and position/repeat modes now have paint-list
-  receipts. Remaining: remote resource loading, replaced-element image layout,
-  broader transition-property lists and interpolation, full reftest parity, and
+  receipts. Remaining: remote resource loading, broader transition-property
+  lists and interpolation beyond the bounded `all` path, full reftest parity, and
   an apples-to-apples
   cold-build delta against the 30m35s baseline.
 - **E4 — first production lane.** One real lane (host chrome or
@@ -284,10 +284,9 @@ covered by the paint-list receipt. The gradient receipt and opacity clock are
   parser and retained opacity animation receipt cover named timing functions.
   Resource-backed images, broader transition-property lists and interpolation,
   full reftest parity, and the cold-build comparison remain explicit next gates.
-  The image receipt covers raster
-  `data:` URLs and host-resolved local bytes; remote loading and replaced
-  element layout still belong to the host fetch/cache and intrinsic-sizing
-  seams.
+  The image receipt covers raster `data:` URLs, host-resolved local bytes,
+  intrinsic `<img>` sizing, and aspect-ratio preservation; remote loading still
+  belongs to the host fetch/cache seam.
 
 ## The destination, named
 

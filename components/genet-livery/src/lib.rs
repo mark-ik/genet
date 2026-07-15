@@ -37,6 +37,10 @@ button, input, select, textarea {
     display: inline-block;
 }
 
+img {
+    display: inline-block;
+}
+
 head, title, meta, link, style, script, template {
     display: none;
 }

@@ -282,6 +282,103 @@ fn host_image_resource_resolves_a_non_data_background_url() {
 }
 
 #[test]
+fn replaced_img_uses_intrinsic_size_and_paints_a_neutral_image() {
+    use base64::Engine as _;
+
+    let blue = image::RgbaImage::from_pixel(2, 3, image::Rgba([0, 0, 255, 255]));
+    let mut png = Vec::new();
+    blue.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("encode test PNG");
+    let data_uri = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png)
+    );
+    let list = render(
+        &format!(r#"<html><body><img src="{data_uri}"></body></html>"#),
+        "body { margin: 0; }",
+        1,
+    );
+    let PaintCmd::DrawImage(image) = list
+        .commands()
+        .iter()
+        .find(|command| matches!(command, PaintCmd::DrawImage(_)))
+        .expect("replaced image lowers to a neutral image primitive")
+    else {
+        unreachable!();
+    };
+    assert_eq!(
+        image.placement.bounds.size(),
+        paint_list_api::LayoutSize::new(2.0, 3.0)
+    );
+    let resource = list
+        .images()
+        .iter()
+        .find(|resource| resource.key == image.image_key)
+        .expect("replaced image command resolves through the image side table");
+    assert_eq!((resource.width, resource.height), (2, 3));
+}
+
+#[test]
+fn replaced_img_width_preserves_intrinsic_ratio() {
+    use base64::Engine as _;
+
+    let blue = image::RgbaImage::from_pixel(2, 3, image::Rgba([0, 0, 255, 255]));
+    let mut png = Vec::new();
+    blue.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("encode test PNG");
+    let data_uri = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png)
+    );
+    let list = render(
+        &format!(r#"<html><body><img src="{data_uri}" class="scaled"></body></html>"#),
+        ".scaled { width: 10px; } body { margin: 0; }",
+        1,
+    );
+    let PaintCmd::DrawImage(image) = list
+        .commands()
+        .iter()
+        .find(|command| matches!(command, PaintCmd::DrawImage(_)))
+        .expect("sized replaced image lowers to a neutral image primitive")
+    else {
+        unreachable!();
+    };
+    assert_eq!(
+        image.placement.bounds.size(),
+        paint_list_api::LayoutSize::new(10.0, 15.0)
+    );
+}
+
+#[test]
+fn retained_replaced_img_uses_host_resolved_bytes_for_intrinsic_size() {
+    let blue = image::RgbaImage::from_pixel(2, 3, image::Rgba([0, 0, 255, 255]));
+    let mut png = Vec::new();
+    blue.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("encode test PNG");
+    let document =
+        StaticDocument::parse(r#"<html><body><img src="support/blue.png"></body></html>"#);
+    let mut retained = LiveryDocument::new(
+        document,
+        StyleSet::cambium(&["body { margin: 0; }"]),
+        Device::screen(320.0, 240.0),
+    );
+    retained.set_image_resource("support/blue.png", png);
+    let list = retained.frame(320, 240).expect("frame with host image");
+    let PaintCmd::DrawImage(image) = list
+        .commands()
+        .iter()
+        .find(|command| matches!(command, PaintCmd::DrawImage(_)))
+        .expect("host-resolved replaced image lowers to a neutral image primitive")
+    else {
+        unreachable!();
+    };
+    assert_eq!(
+        image.placement.bounds.size(),
+        paint_list_api::LayoutSize::new(2.0, 3.0)
+    );
+}
+
+#[test]
 fn retained_opacity_clock_samples_and_settles() {
     let document = StaticDocument::parse(r#"<html><body><div class="card"></div></body></html>"#);
     let card = document

@@ -156,8 +156,10 @@ chain to the viewport at their boundary. Raster `data:` background URLs reach
 the neutral image side-table, and host-resolved local image bytes now use the
 same side-table seam. Bounded intrinsic tiling and position/repeat modes now
 paint through that seam. The bounded `all` transition path now samples opacity
-and background-color together. Remote resource loading and replaced-element
-image layout remain open, along with full WPT reftest parity. Bounded
+and background-color together. Replaced `<img>` elements now use intrinsic
+data/local dimensions and preserve their aspect ratio under a bounded CSS
+width or height. Remote resource loading remains open, along with full WPT
+reftest parity. Bounded
 opacity-only `@keyframes` declarations
 with linear, ease, ease-in, ease-out, and ease-in-out timing functions now run
 on the retained clock. The WPT command surface now accepts

@@ -9,8 +9,9 @@
 //! The wgpu boot + netrender instance are created once
 //! ([`Renderer::boot`]) and reused across every test in a subset.
 //!
-//! Slice 1 renders inline `<style>` only (no linked CSS / external
-//! images); the runner skips tests that need those.
+//! The Livery route keeps the producer bounded: linked stylesheets and local
+//! image bytes are supplied by the host, while remote fetch remains outside
+//! the route.
 
 use std::path::Path;
 use std::rc::Rc;
@@ -25,6 +26,7 @@ use genet_layout::{
 };
 use genet_livery::{Device as LiveryDevice, LiveryDocument, StyleSet as LiveryStyleSet};
 use genet_static_dom::StaticDocument;
+use layout_dom_api::LayoutDom;
 use netrender::{NetrenderOptions, boot, create_netrender_instance};
 use paint::Paint;
 use paint_api::display_list::{AxesScrollSensitivity, PaintDisplayListInfo, ScrollType};
@@ -140,13 +142,14 @@ impl Renderer {
         let mut sheets = inline_stylesheets(&document);
         sheets.extend(linked_stylesheets(&document, &resolver));
         let sheet_refs = sheets.iter().map(String::as_str).collect::<Vec<_>>();
+        let dom_image_urls = livery_dom_image_urls(&document);
         let mut session = LiveryDocument::new(
             document,
             LiveryStyleSet::cambium(&sheet_refs),
             LiveryDevice::screen(width as f32, height as f32),
         );
         let image_loader = LocalFileImageLoader::new(resolver);
-        for url in livery_image_urls(&sheets) {
+        for url in livery_image_urls(&sheets).into_iter().chain(dom_image_urls) {
             if let Some(bytes) = image_loader.load(&url) {
                 session.set_image_resource(url, bytes);
             }
@@ -209,9 +212,33 @@ fn livery_image_urls(stylesheets: &[String]) -> Vec<String> {
     urls
 }
 
+fn livery_dom_image_urls(document: &StaticDocument) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut stack = vec![document.document()];
+    while let Some(id) = stack.pop() {
+        if document
+            .element_name(id)
+            .is_some_and(|name| name.local.as_ref().eq_ignore_ascii_case("img"))
+        {
+            for attribute in document.attributes(id) {
+                if attribute.name.ns.as_ref().is_empty()
+                    && attribute.name.local.as_ref().eq_ignore_ascii_case("src")
+                    && !attribute.value.is_empty()
+                    && !urls.iter().any(|url| url == attribute.value)
+                {
+                    urls.push(attribute.value.to_owned());
+                }
+            }
+        }
+        stack.extend(document.dom_children(id));
+    }
+    urls
+}
+
 #[cfg(test)]
 mod tests {
-    use super::livery_image_urls;
+    use super::{livery_dom_image_urls, livery_image_urls};
+    use genet_static_dom::StaticDocument;
 
     #[test]
     fn livery_image_urls_deduplicates_css_sources() {
@@ -221,6 +248,17 @@ mod tests {
         ];
         assert_eq!(
             livery_image_urls(&sheets),
+            vec!["a.png".to_owned(), "b.png".to_owned()]
+        );
+    }
+
+    #[test]
+    fn livery_dom_image_urls_collects_replaced_sources() {
+        let document = StaticDocument::parse(
+            r#"<html><body><img src="a.png"><img src="a.png"><img src="b.png"></body></html>"#,
+        );
+        assert_eq!(
+            livery_dom_image_urls(&document),
             vec!["a.png".to_owned(), "b.png".to_owned()]
         );
     }

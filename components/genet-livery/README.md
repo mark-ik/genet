@@ -63,7 +63,9 @@ boundaries to the viewport, and replay descendant paint through transforms.
 Bounded `@keyframes` declarations animate opacity through the same retained
 clock, with linear, ease, ease-in, ease-out, and ease-in-out timing functions.
 Host-resolved local image bytes use the same neutral image side-table, with
-bounded intrinsic tiling and position/repeat modes. Remote resource loading
-and replaced-element layout remain outside this first interaction gate.
+bounded intrinsic tiling and position/repeat modes. Replaced `<img>` elements
+now use intrinsic data/local dimensions, preserve their aspect ratio under a
+bounded CSS width or height, and paint through the neutral image side-table.
+Remote resource loading remains outside this first interaction gate.
 `genet.livery` therefore stays an explicit pin rather than the default static
 route.

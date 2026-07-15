@@ -358,12 +358,14 @@ where
                 .prepare_inline_children(text.frame, dom, styles, fragments, id, style);
             if matches!(style.display, Display::Inline | Display::InlineBlock) {
                 emit_inline_element_decoration(text.frame, fragments, id, style, list);
+                emit_inline_replaced_image(dom, text.frame, fragments, id, list);
             } else if let Some(fragment) = fragments
                 .get(id)
                 .filter(|fragment| paintable_fragment(fragment))
             {
                 emit_shadow(list, style, fragment);
                 emit_background(list, style, fragment);
+                emit_replaced_image(dom, list, id, style, fragment);
                 emit_border(list, style, fragment);
             }
             if !matches!(style.display, Display::Inline | Display::InlineBlock)
@@ -897,6 +899,98 @@ fn emit_inline_element_decoration<Id>(
         emit_background(list, style, fragment);
         emit_border(list, style, fragment);
     }
+}
+
+fn emit_inline_replaced_image<D>(
+    dom: &D,
+    frame: &TextFrame<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    id: D::NodeId,
+    list: &mut LiveryPaintList,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let Some(url) = replaced_image_url(dom, id) else {
+        return;
+    };
+    let Some(image_key) = list.image_key_for(&url) else {
+        return;
+    };
+    let paintable = frame
+        .inline_fragments(id)
+        .map(|fragments| fragments.to_vec())
+        .or_else(|| fragments.get(id).copied().map(|fragment| vec![fragment]))
+        .unwrap_or_default();
+    for fragment in paintable
+        .iter()
+        .filter(|fragment| paintable_fragment(fragment))
+    {
+        list.commands.push(PaintCmd::DrawImage(ImageItem {
+            placement: CommonPlacement::new(bounds(fragment)),
+            image_key,
+            image_rendering: ImageRendering::Auto,
+            alpha_type: AlphaType::Alpha,
+            color: ColorF::WHITE,
+        }));
+    }
+}
+
+fn emit_replaced_image<D>(
+    dom: &D,
+    list: &mut LiveryPaintList,
+    id: D::NodeId,
+    style: &ComputedValues,
+    fragment: &Fragment,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let Some(url) = replaced_image_url(dom, id) else {
+        return;
+    };
+    let Some(image_key) = list.image_key_for(&url) else {
+        return;
+    };
+    let radius = border_radius(style, fragment);
+    if !radius.is_zero() {
+        list.commands.push(PaintCmd::PushClip(ClipSpec {
+            kind: ClipKind::RoundedRect {
+                rect: bounds(fragment),
+                radius,
+                clip_out: false,
+            },
+        }));
+    }
+    list.commands.push(PaintCmd::DrawImage(ImageItem {
+        placement: CommonPlacement::new(bounds(fragment)),
+        image_key,
+        image_rendering: ImageRendering::Auto,
+        alpha_type: AlphaType::Alpha,
+        color: ColorF::WHITE,
+    }));
+    if !radius.is_zero() {
+        list.commands.push(PaintCmd::PopClip);
+    }
+}
+
+fn replaced_image_url<D>(dom: &D, id: D::NodeId) -> Option<String>
+where
+    D: LayoutDom,
+    D::NodeId: Copy,
+{
+    if dom.kind(id) != NodeKind::Element
+        || !dom
+            .element_name(id)
+            .is_some_and(|name| name.local.as_ref().eq_ignore_ascii_case("img"))
+    {
+        return None;
+    }
+    dom.attributes(id).find_map(|attribute| {
+        (attribute.name.ns.as_ref().is_empty()
+            && attribute.name.local.as_ref().eq_ignore_ascii_case("src"))
+        .then(|| attribute.value.to_owned())
+    })
 }
 
 fn is_inline_node<D>(dom: &D, styles: &StylePlane<D::NodeId>, id: D::NodeId) -> bool

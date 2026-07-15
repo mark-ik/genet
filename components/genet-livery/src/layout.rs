@@ -27,6 +27,8 @@ use taffy::{
     },
 };
 
+type ImageSources = HashMap<String, Vec<u8>>;
+
 use crate::{StylePlane, TextSystem};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -92,6 +94,7 @@ struct BuildState<'a, D: LayoutDom> {
     styles: &'a StylePlane<D::NodeId>,
     tree: TaffyTree<TextMeasure>,
     sources: HashMap<NodeId, D::NodeId>,
+    image_sources: &'a ImageSources,
 }
 
 #[derive(Clone, Debug)]
@@ -108,6 +111,7 @@ struct InlineBuildState<'a, D: LayoutDom> {
     preliminary: &'a FragmentPlane<D::NodeId>,
     tree: TaffyTree<InlineMeasure<D::NodeId>>,
     sources: HashMap<NodeId, Vec<D::NodeId>>,
+    image_sources: &'a ImageSources,
 }
 
 /// Lay out a Livery style plane through a standalone Taffy tree.
@@ -125,7 +129,8 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    layout_impl(dom, styles, viewport_width, viewport_height)
+    let image_sources = ImageSources::new();
+    layout_impl(dom, styles, viewport_width, viewport_height, &image_sources)
 }
 
 pub(crate) fn layout_with_text_system<D>(
@@ -134,12 +139,13 @@ pub(crate) fn layout_with_text_system<D>(
     viewport_width: f32,
     viewport_height: f32,
     text: &mut TextSystem,
+    image_sources: &ImageSources,
 ) -> Result<FragmentPlane<D::NodeId>, LayoutError>
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    let preliminary = layout_impl(dom, styles, viewport_width, viewport_height)?;
+    let preliminary = layout_impl(dom, styles, viewport_width, viewport_height, image_sources)?;
     layout_inline_groups(
         dom,
         styles,
@@ -147,6 +153,7 @@ where
         viewport_height,
         text,
         &preliminary,
+        image_sources,
     )
 }
 
@@ -155,6 +162,7 @@ fn layout_impl<D>(
     styles: &StylePlane<D::NodeId>,
     viewport_width: f32,
     viewport_height: f32,
+    image_sources: &ImageSources,
 ) -> Result<FragmentPlane<D::NodeId>, LayoutError>
 where
     D: LayoutDom,
@@ -165,6 +173,7 @@ where
         styles,
         tree: TaffyTree::new(),
         sources: HashMap::new(),
+        image_sources,
     };
     let document = state.build_node(dom.document(), None, 16.0)?;
     let children = document.into_iter().collect::<Vec<_>>();
@@ -228,6 +237,7 @@ fn layout_inline_groups<D>(
     viewport_height: f32,
     text: &mut TextSystem,
     preliminary: &FragmentPlane<D::NodeId>,
+    image_sources: &ImageSources,
 ) -> Result<FragmentPlane<D::NodeId>, LayoutError>
 where
     D: LayoutDom,
@@ -239,6 +249,7 @@ where
         preliminary,
         tree: TaffyTree::new(),
         sources: HashMap::new(),
+        image_sources,
     };
     let document = state.build_node(dom.document(), None, 16.0)?;
     let children = document.into_iter().collect::<Vec<_>>();
@@ -363,9 +374,18 @@ where
                 let computed = self.styles.get(id).cloned().unwrap_or_default();
                 let font_size = font_size_px(&computed.font_size, parent_font_size);
                 let children = self.build_children(id, &computed, font_size)?;
+                let mut taffy_style = to_taffy_style(&computed, font_size);
+                apply_replaced_image_size(
+                    &mut taffy_style,
+                    self.dom,
+                    id,
+                    &computed,
+                    self.image_sources,
+                    font_size,
+                );
                 let node = self
                     .tree
-                    .new_with_children(to_taffy_style(&computed, font_size), &children)
+                    .new_with_children(taffy_style, &children)
                     .map_err(taffy_error)?;
                 self.sources.insert(node, vec![id]);
                 Ok(Some(node))
@@ -490,9 +510,18 @@ where
                             .transpose()
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                let mut taffy_style = to_taffy_style(&computed, font_size);
+                apply_replaced_image_size(
+                    &mut taffy_style,
+                    self.dom,
+                    id,
+                    &computed,
+                    self.image_sources,
+                    font_size,
+                );
                 let node = self
                     .tree
-                    .new_with_children(to_taffy_style(&computed, font_size), &children)
+                    .new_with_children(taffy_style, &children)
                     .map_err(taffy_error)?;
                 self.sources.insert(node, id);
                 Ok(Some(node))
@@ -753,6 +782,93 @@ fn collect_hit_candidates<D>(
     }
     if pushed_clip.is_some() {
         state.clips.pop();
+    }
+}
+
+fn apply_replaced_image_size<D>(
+    style: &mut Style,
+    dom: &D,
+    id: D::NodeId,
+    computed: &ComputedValues,
+    image_sources: &ImageSources,
+    font_size: f32,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let Some((intrinsic_width, intrinsic_height)) = image_intrinsic_size(dom, id, image_sources)
+    else {
+        return;
+    };
+    if intrinsic_width <= 0.0 || intrinsic_height <= 0.0 {
+        return;
+    }
+    if style.aspect_ratio.is_none() {
+        style.aspect_ratio = Some(intrinsic_width / intrinsic_height);
+    }
+
+    let width_auto = matches!(computed.width, CssSize::Auto);
+    let height_auto = matches!(computed.height, CssSize::Auto);
+    match (
+        width_auto,
+        height_auto,
+        definite_size(computed.width, font_size),
+        definite_size(computed.height, font_size),
+    ) {
+        (true, true, _, _) => {
+            style.size.width = Dimension::length(intrinsic_width);
+            style.size.height = Dimension::length(intrinsic_height);
+        },
+        (true, false, _, Some(height)) if height > 0.0 => {
+            style.size.width = Dimension::length(height * intrinsic_width / intrinsic_height);
+        },
+        (false, true, Some(width), _) if width > 0.0 => {
+            style.size.height = Dimension::length(width * intrinsic_height / intrinsic_width);
+        },
+        _ => {},
+    }
+}
+
+fn image_intrinsic_size<D>(
+    dom: &D,
+    id: D::NodeId,
+    image_sources: &ImageSources,
+) -> Option<(f32, f32)>
+where
+    D: LayoutDom,
+    D::NodeId: Copy,
+{
+    if dom.kind(id) != NodeKind::Element
+        || !dom
+            .element_name(id)
+            .is_some_and(|name| name.local.as_ref().eq_ignore_ascii_case("img"))
+    {
+        return None;
+    }
+    let source = dom.attributes(id).find_map(|attribute| {
+        (attribute.name.ns.as_ref().is_empty()
+            && attribute.name.local.as_ref().eq_ignore_ascii_case("src"))
+        .then_some(attribute.value)
+    })?;
+    let bytes = if let Ok(data_url) = data_url::DataUrl::process(source) {
+        data_url.decode_to_vec().ok()?.0
+    } else {
+        image_sources.get(source)?.clone()
+    };
+    let image = image::load_from_memory(&bytes).ok()?;
+    Some((image.width() as f32, image.height() as f32))
+}
+
+fn definite_size(size: CssSize, font_size: f32) -> Option<f32> {
+    let CssSize::Value(value) = size else {
+        return None;
+    };
+    match value {
+        CssLengthPercentage::Length(length) => Some(absolute_length(length, font_size, 16.0)),
+        CssLengthPercentage::Calc(calc) if calc.percentage == 0.0 => {
+            Some(calc.px + calc.em * font_size + calc.rem * 16.0)
+        },
+        _ => None,
     }
 }
 

@@ -189,6 +189,7 @@ where
             width as f32,
             height as f32,
             &mut self.text,
+            &self.image_sources,
         )?;
         let (content_width, content_height) = self.document_content_extent(&styles, &fragments);
         self.layout = Some(LayoutState {
