@@ -411,7 +411,8 @@ fn css_transition_border_top_color_uses_the_retained_clock() {
         .first_with_class(document.document(), "card")
         .unwrap();
     let styles = StyleSet::cambium(&[r#"
-        .card { display: block; width: 100px; height: 20px; border-top: 4px solid red;
+        .card { display: block; width: 100px; height: 20px; border-top-width: 4px;
+                border-top-style: solid; border-top-color: red;
                 transition: border-top-color 100ms; }
         .card:hover { border-top-color: blue; }
     "#]);
