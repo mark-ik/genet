@@ -348,6 +348,62 @@ fn css_transition_color_uses_the_retained_clock() {
 }
 
 #[test]
+fn css_transition_three_property_list_shares_the_retained_clock() {
+    let document =
+        StaticDocument::parse(r#"<html><body><div class="label">label</div></body></html>"#);
+    let label = document
+        .first_with_class(document.document(), "label")
+        .unwrap();
+    let styles = StyleSet::cambium(&[r#"
+        .label { display: block; width: 100px; height: 20px; opacity: 0;
+                 background-color: red; color: red;
+                 transition: opacity 100ms, background-color 100ms, color 100ms; }
+        .label:hover { opacity: 1; background-color: blue; color: blue; }
+    "#]);
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(200.0, 100.0));
+    retained.frame(200, 100).unwrap();
+
+    retained
+        .interactions_mut()
+        .set(label, livery::selector::StatePseudoClass::Hover, true);
+    retained.frame(200, 100).unwrap();
+    assert!(!retained.settled());
+
+    retained.pump(50.0);
+    let middle = retained.frame(200, 100).unwrap();
+    let opacity = middle
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::PushLayer(layer) => Some(layer.opacity),
+            _ => None,
+        })
+        .expect("three-property transition keeps a compositing layer");
+    assert!((opacity - 0.5).abs() < 0.01);
+    let middle_color = middle.commands().iter().find_map(|command| match command {
+        PaintCmd::DrawRect(rect)
+            if rect.color.r > 0.4
+                && rect.color.r < 0.6
+                && rect.color.b > 0.4
+                && rect.color.b < 0.6 =>
+        {
+            Some(rect.color)
+        },
+        _ => None,
+    });
+    let middle_color = middle_color.expect("three-property transition paints an interpolated fill");
+    assert!((middle_color.r - 0.5).abs() < 0.01);
+    assert!((middle_color.b - 0.5).abs() < 0.01);
+    let middle_text = middle.commands().iter().find_map(|command| match command {
+        PaintCmd::DrawText(run) => Some(run.color),
+        _ => None,
+    });
+    let middle_text = middle_text.expect("three-property transition keeps a text run");
+    assert!((middle_text.r - 0.5).abs() < 0.01);
+    assert!((middle_text.b - 0.5).abs() < 0.01);
+}
+
+#[test]
 fn css_keyframes_opacity_use_the_retained_clock() {
     let document =
         StaticDocument::parse(r#"<html><body><div class="fade">fade</div></body></html>"#);
