@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add `HoverEvent`, `HoverPhase`, `on_hover`, and runner dispatch seams for
+  host-computed Enter, Leave, and Move transitions.
+- Expand the component catalog into an executable acceptance surface covering
+  controls, editors, action routing, overlays, grid virtualization, semantic
+  attributes, keyboard behavior, and Sprigging leaf painting.
+- Give data grids explicit grid, row, column-header, and cell semantics, with
+  keyboard activation for sortable headers.
 - Use the canonical `genet_scripted_dom` Rust crate name throughout Cambium,
   Cambium Nematic, tests, and examples.
 - Replace stale Serval-era crate documentation with the current Cambium,

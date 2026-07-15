@@ -24,3 +24,16 @@ inherited license layout is recorded in [LICENSES.md](LICENSES.md), and the
 claimed package names in [docs/namespace-claims.md](docs/namespace-claims.md).
 Standalone and sibling-checkout development are described in
 [docs/local-genet-development.md](docs/local-genet-development.md).
+
+## Component acceptance surface
+
+The executable component catalog covers Cambium's controls, hover routing,
+editors, action list, overlay menu, virtualized grid, and Sprigging glyph
+leaves. Run it with:
+
+```sh
+cargo run -p cambium --example component_catalog --all-features
+```
+
+The same assertions run in CI as an example test. See
+[docs/component-catalog.md](docs/component-catalog.md) for the coverage rule.

@@ -1,56 +1,106 @@
-/* Cambium's first engine-facing theme corpus.
+/* The catalog's application-owned acceptance theme.
  *
- * This is deliberately small: it themes the controls exercised by
- * component_catalog.rs without pretending to be an application theme.
+ * Consumers can replace these custom properties without changing component
+ * structure. The selectors intentionally cover every family in
+ * component_catalog.rs so missing classes are visible in a rendered host.
  */
 
 .component-catalog {
-    background-color: #f4f6fa;
-    color: #202733;
+    --catalog-bg: #f4f6fa;
+    --catalog-panel: #ffffff;
+    --catalog-text: #202733;
+    --catalog-muted: #5d6879;
+    --catalog-border: #cdd3de;
+    --catalog-control-border: #8b96a8;
+    --catalog-hover: #e8eef8;
+    --catalog-accent: #3568b8;
+    --catalog-accent-strong: #234b88;
+    --catalog-disabled: #9aa3b1;
+
+    background-color: var(--catalog-bg);
+    color: var(--catalog-text);
     font-family: system-ui;
     line-height: 1.5;
-    width: 42rem;
     margin: 1.5rem auto;
     padding: 1.5rem;
+    width: 48rem;
+}
+
+.component-catalog :focus-visible {
+    outline: 3px solid var(--catalog-accent);
+    outline-offset: 2px;
 }
 
 .catalog-title {
     font-size: 1.5rem;
     font-weight: 700;
+    margin: 0 0 0.25rem;
+}
+
+.catalog-intro {
+    color: var(--catalog-muted);
     margin: 0 0 1rem;
 }
 
 .catalog-section {
-    background-color: #ffffff;
-    border: 1px solid #cdd3de;
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-border);
     margin: 0 0 1rem;
     padding: 1rem;
 }
 
 .catalog-label {
     display: block;
+    font-size: 1rem;
     font-weight: 700;
-    margin: 0 0 0.5rem;
+    margin: 0 0 0.75rem;
 }
 
 .catalog-row {
     display: block;
-    margin: 0.5rem 0;
+    margin: 0.75rem 0;
+}
+
+.catalog-row > input,
+.catalog-row > textarea {
+    display: block;
+    margin-top: 0.25rem;
 }
 
 .catalog-button,
 .select-box,
-input {
-    background-color: #ffffff;
-    border: 1px solid #8b96a8;
-    color: #202733;
+input,
+textarea {
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-control-border);
+    color: var(--catalog-text);
     padding: 0.5rem 0.75rem;
+}
+
+textarea {
+    min-height: 5rem;
+    width: 30rem;
 }
 
 .catalog-button:hover,
 .select-box:hover,
-.select-option:hover {
-    background-color: #e8eef8;
+.select-option:hover,
+.action-item:hover,
+.menu-row:hover,
+.menu-row-active:hover {
+    background-color: var(--catalog-hover);
+}
+
+.catalog-hover {
+    border: 1px dashed var(--catalog-control-border);
+    display: inline-block;
+    margin-left: 0.75rem;
+    padding: 0.5rem 0.75rem;
+}
+
+.catalog-hover.active {
+    background-color: var(--catalog-hover);
+    border-color: var(--catalog-accent);
 }
 
 .checkbox,
@@ -71,8 +121,8 @@ input {
 }
 
 .select-list {
-    background-color: #ffffff;
-    border: 1px solid #8b96a8;
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-control-border);
     width: 16rem;
     z-index: 10;
 }
@@ -82,14 +132,117 @@ input {
 }
 
 .slider-track {
-    background-color: #cdd3de;
+    background-color: var(--catalog-border);
     height: 0.5rem;
     width: 16rem;
 }
 
 .slider-thumb {
-    background-color: #3568b8;
-    border: 1px solid #234b88;
+    background-color: var(--catalog-accent);
+    border: 1px solid var(--catalog-accent-strong);
     height: 1rem;
     width: 1rem;
+}
+
+.syntax-keyword {
+    color: #7a3ea1;
+    font-weight: 700;
+}
+
+.syntax-number {
+    color: #9a4b16;
+}
+
+.action-list {
+    border: 1px solid var(--catalog-control-border);
+    max-width: 24rem;
+}
+
+.action-list-query {
+    border-bottom: 1px solid var(--catalog-border);
+    color: var(--catalog-muted);
+    padding: 0.5rem 0.75rem;
+}
+
+.action-item {
+    padding: 0.5rem 0.75rem;
+    white-space: pre;
+}
+
+.action-item.selected {
+    background-color: var(--catalog-hover);
+    box-shadow: inset 3px 0 0 var(--catalog-accent);
+}
+
+.action-item[aria-disabled="true"] {
+    color: var(--catalog-disabled);
+}
+
+.catalog-overlay-stage {
+    min-height: 18rem;
+    position: relative;
+}
+
+.menu {
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-control-border);
+    min-width: 10rem;
+    z-index: 20;
+}
+
+.menu-row,
+.menu-row-active {
+    padding: 0.4rem 0.75rem;
+}
+
+.menu-row-active {
+    background-color: var(--catalog-hover);
+    font-weight: 700;
+}
+
+.grid {
+    border: 1px solid var(--catalog-border);
+}
+
+.grid-header {
+    background-color: var(--catalog-hover);
+    border-bottom: 1px solid var(--catalog-border);
+    font-weight: 700;
+}
+
+.grid-header-cell,
+.grid-cell {
+    overflow: hidden;
+    padding: 0.2rem 0.4rem;
+}
+
+.grid-row-odd {
+    background-color: #f8f9fc;
+}
+
+.grid-row-selected {
+    box-shadow: inset 3px 0 0 var(--catalog-accent);
+}
+
+.catalog-leaf-grid {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(4, 1fr);
+}
+
+.catalog-leaf-grid > .catalog-label {
+    grid-column: 1 / -1;
+}
+
+.catalog-leaf-card {
+    align-items: center;
+    background-color: var(--catalog-bg);
+    border: 1px solid var(--catalog-border);
+    display: flex;
+    justify-content: center;
+    min-height: 5rem;
+}
+
+custom-leaf {
+    display: inline-block;
 }

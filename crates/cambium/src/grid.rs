@@ -11,9 +11,13 @@
 //! [`VirtualWindow`](sprigging::VirtualWindow) rows exist as DOM; scrolling is
 //! caller state (wire [`on_wheel`](crate::on_wheel) around the grid, clamping
 //! with [`GridSpec::max_scroll`]), so the header is "sticky" by construction —
-//! it simply never scrolls. Header cells fire `on_header_click(col)` for
-//! sort-by-column, which is likewise caller state: the grid re-renders
-//! whatever order the cell function exposes.
+//! it simply never scrolls. Header cells fire `on_header_click(col)` on click,
+//! Enter, or Space for sort-by-column, which is likewise caller state: the grid
+//! re-renders whatever order the cell function exposes.
+//!
+//! The root, headers, rows, and cells expose the ARIA grid roles and indices.
+//! Only materialized rows exist in the DOM, while `aria-rowcount` reports the
+//! full model size.
 //!
 //! Theming rides classes (`grid`, `grid-header`, `grid-header-cell`,
 //! `grid-body`, `grid-row`, `grid-row-even` / `-odd`, `grid-cell`); inline
@@ -22,7 +26,9 @@
 use sprigging::{GridSpec, Placement};
 
 use crate::pod::GenetElement;
-use crate::{AnyView, GenetCtx, PointerClick, arrangement::placed_with, el, on_click};
+use crate::{
+    AnyView, GenetCtx, Key, NamedKey, PointerClick, arrangement::placed_with, el, on_click, on_key,
+};
 
 /// The erased view type grid cells (and the grid itself) use.
 pub type GridView<State, Action> = Box<dyn AnyView<State, Action, GenetCtx, GenetElement>>;
@@ -52,20 +58,34 @@ where
         .iter()
         .enumerate()
         .map(|(c, col)| {
-            let handler = on_header_click.clone();
-            Box::new(on_click(
-                placed_with(
-                    Placement::new(spec.col_x(c), 0.0),
-                    format!("width: {}px; height: {}px;", col.width, spec.header_height),
-                    col.title.clone(),
-                )
-                .attr("class", "grid-header-cell"),
-                move |s: &mut State, _: PointerClick| handler(s, c),
+            let click_handler = on_header_click.clone();
+            let key_handler = on_header_click.clone();
+            let header_cell = placed_with(
+                Placement::new(spec.col_x(c), 0.0),
+                format!("width: {}px; height: {}px;", col.width, spec.header_height),
+                col.title.clone(),
+            )
+            .attr("class", "grid-header-cell")
+            .attr("role", "columnheader")
+            .attr("aria-colindex", (c + 1).to_string())
+            .attr("tabindex", "0");
+            Box::new(on_key(
+                on_click(header_cell, move |s: &mut State, _: PointerClick| {
+                    click_handler(s, c)
+                }),
+                move |s: &mut State, event| {
+                    if matches!(event.key, Key::Named(NamedKey::Enter | NamedKey::Space)) {
+                        key_handler(s, c);
+                        event.prevent_default();
+                    }
+                },
             )) as GridView<State, Action>
         })
         .collect();
     let header = el::<_, State, Action>("div", header_cells)
         .attr("class", "grid-header")
+        .attr("role", "row")
+        .attr("aria-rowindex", "1")
         .attr(
             "style",
             format!(
@@ -91,7 +111,9 @@ where
                             format!("width: {}px; height: {}px;", col.width, spec.row_height),
                             cell(r, c),
                         )
-                        .attr("class", "grid-cell"),
+                        .attr("class", "grid-cell")
+                        .attr("role", "gridcell")
+                        .attr("aria-colindex", (c + 1).to_string()),
                     ) as GridView<State, Action>
                 })
                 .collect();
@@ -113,6 +135,8 @@ where
                     cells,
                 )
                 .attr("class", class)
+                .attr("role", "row")
+                .attr("aria-rowindex", (r + 2).to_string())
                 .attr("data-row", r.to_string()),
             ) as GridView<State, Action>
         })
@@ -127,6 +151,9 @@ where
     Box::new(
         el::<_, State, Action>("div", (header, body))
             .attr("class", "grid")
+            .attr("role", "grid")
+            .attr("aria-rowcount", (total_rows + 1).to_string())
+            .attr("aria-colcount", spec.columns.len().to_string())
             .attr("style", format!("display: block; width: {width}px;")),
     )
 }

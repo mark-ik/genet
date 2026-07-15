@@ -23,7 +23,7 @@ jobs:
           -p cambium -p cambium-winit -p cambium-nematic -p sprigging
           --all-features --all-targets --locked --
           -D warnings -A clippy::type-complexity
-      - run: cargo test --workspace --all-features --locked
+      - run: cargo test --workspace --all-features --all-targets --locked
 
   package:
     runs-on: ubuntu-latest
