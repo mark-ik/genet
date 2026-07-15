@@ -306,6 +306,48 @@ fn css_transition_explicit_pair_animates_opacity_and_background_color() {
 }
 
 #[test]
+fn css_transition_color_uses_the_retained_clock() {
+    let document =
+        StaticDocument::parse(r#"<html><body><div class="label">label</div></body></html>"#);
+    let label = document
+        .first_with_class(document.document(), "label")
+        .unwrap();
+    let styles = StyleSet::cambium(&[r#"
+        .label { display: block; width: 100px; height: 20px; color: red;
+                 transition: color 100ms; }
+        .label:hover { color: blue; }
+    "#]);
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(200.0, 100.0));
+    let initial = retained.frame(200, 100).unwrap();
+    assert!(initial.commands().iter().any(|command| {
+        matches!(command, PaintCmd::DrawText(run) if run.color == ColorF::new(1.0, 0.0, 0.0, 1.0))
+    }));
+
+    retained
+        .interactions_mut()
+        .set(label, livery::selector::StatePseudoClass::Hover, true);
+    retained.frame(200, 100).unwrap();
+    assert!(!retained.settled());
+
+    retained.pump(50.0);
+    let middle = retained.frame(200, 100).unwrap();
+    let middle_color = middle.commands().iter().find_map(|command| match command {
+        PaintCmd::DrawText(run) => Some(run.color),
+        _ => None,
+    });
+    let middle_color = middle_color.expect("color transition keeps a text run");
+    assert!((middle_color.r - 0.5).abs() < 0.01);
+    assert!((middle_color.b - 0.5).abs() < 0.01);
+
+    retained.pump(100.0);
+    assert!(retained.settled());
+    let final_frame = retained.frame(200, 100).unwrap();
+    assert!(final_frame.commands().iter().any(|command| {
+        matches!(command, PaintCmd::DrawText(run) if run.color == ColorF::new(0.0, 0.0, 1.0, 1.0))
+    }));
+}
+
+#[test]
 fn css_keyframes_opacity_use_the_retained_clock() {
     let document =
         StaticDocument::parse(r#"<html><body><div class="fade">fade</div></body></html>"#);

@@ -67,7 +67,9 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<TimingFunction>("ease-in-out");
     assert_round_trip::<TransitionProperty>("opacity");
     assert_round_trip::<TransitionProperty>("background-color");
+    assert_round_trip::<TransitionProperty>("color");
     assert_round_trip::<TransitionProperty>("opacity, background-color");
+    assert_round_trip::<TransitionProperty>("color, opacity, background-color");
     assert_round_trip::<Alignment>("space-between");
     assert_round_trip::<FlexDirection>("column");
     assert_round_trip::<FlexFactor>("1.5");
@@ -112,6 +114,8 @@ fn invalid_seed_values_are_rejected() {
     assert!("1100".parse::<FontWeight>().is_err());
     assert!("calc(100% 1px)".parse::<LengthPercentage>().is_err());
     assert!("rgb(300, 0, 0)".parse::<Color>().is_err());
+    assert!("all, color".parse::<TransitionProperty>().is_err());
+    assert!("opacity, opacity".parse::<TransitionProperty>().is_err());
     assert!("NaN".parse::<Opacity>().is_err());
     assert!("perspective(20px)".parse::<Transform>().is_err());
     assert_eq!("120%".parse::<Opacity>().unwrap().value(), 1.0);

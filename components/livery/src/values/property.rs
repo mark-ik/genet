@@ -252,31 +252,52 @@ impl fmt::Display for AnimationName {
 }
 
 /// The bounded transition-property set consumed by the retained paint clock.
-/// The pair variant accepts an explicit two-property list while sharing the
-/// same retained tick as `all`.
+/// Explicit lists are normalized into the small set of paint properties that
+/// Livery can sample from one retained tick.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum TransitionProperty {
     All,
     None,
     Opacity,
     BackgroundColor,
+    Color,
     OpacityAndBackgroundColor,
+    OpacityAndColor,
+    BackgroundColorAndColor,
+    OpacityAndBackgroundColorAndColor,
 }
 
 impl FromStr for TransitionProperty {
     type Err = ParseError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        match input.trim().to_ascii_lowercase().as_str() {
-            "all" => Ok(Self::All),
-            "none" => Ok(Self::None),
-            "opacity" => Ok(Self::Opacity),
-            "background-color" => Ok(Self::BackgroundColor),
-            "opacity, background-color" | "background-color, opacity" => {
-                Ok(Self::OpacityAndBackgroundColor)
-            },
-            _ => Err(ParseError::expected("a bounded transition-property list")),
+        let input = input.trim();
+        if input.eq_ignore_ascii_case("all") {
+            return Ok(Self::All);
         }
+        if input.eq_ignore_ascii_case("none") {
+            return Ok(Self::None);
+        }
+        let mut flags = 0_u8;
+        let mut saw_item = false;
+        for item in input.split(',') {
+            saw_item = true;
+            let bit = match item.trim().to_ascii_lowercase().as_str() {
+                "opacity" => 1,
+                "background-color" => 2,
+                "color" => 4,
+                _ => return Err(ParseError::expected("a bounded transition-property list")),
+            };
+            if flags & bit != 0 {
+                return Err(ParseError::expected("a bounded transition-property list"));
+            }
+            flags |= bit;
+        }
+        if !saw_item {
+            return Err(ParseError::expected("a bounded transition-property list"));
+        }
+        Self::from_flags(flags)
+            .ok_or_else(|| ParseError::expected("a bounded transition-property list"))
     }
 }
 
@@ -287,8 +308,82 @@ impl fmt::Display for TransitionProperty {
             Self::None => "none",
             Self::Opacity => "opacity",
             Self::BackgroundColor => "background-color",
+            Self::Color => "color",
             Self::OpacityAndBackgroundColor => "opacity, background-color",
+            Self::OpacityAndColor => "opacity, color",
+            Self::BackgroundColorAndColor => "background-color, color",
+            Self::OpacityAndBackgroundColorAndColor => "opacity, background-color, color",
         })
+    }
+}
+
+impl TransitionProperty {
+    fn from_flags(flags: u8) -> Option<Self> {
+        Some(match flags {
+            1 => Self::Opacity,
+            2 => Self::BackgroundColor,
+            4 => Self::Color,
+            3 => Self::OpacityAndBackgroundColor,
+            5 => Self::OpacityAndColor,
+            6 => Self::BackgroundColorAndColor,
+            7 => Self::OpacityAndBackgroundColorAndColor,
+            _ => return None,
+        })
+    }
+
+    pub fn includes_opacity(self) -> bool {
+        matches!(
+            self,
+            Self::All
+                | Self::Opacity
+                | Self::OpacityAndBackgroundColor
+                | Self::OpacityAndColor
+                | Self::OpacityAndBackgroundColorAndColor
+        )
+    }
+
+    pub fn includes_background_color(self) -> bool {
+        matches!(
+            self,
+            Self::All
+                | Self::BackgroundColor
+                | Self::OpacityAndBackgroundColor
+                | Self::BackgroundColorAndColor
+                | Self::OpacityAndBackgroundColorAndColor
+        )
+    }
+
+    pub fn includes_color(self) -> bool {
+        matches!(
+            self,
+            Self::All
+                | Self::Color
+                | Self::OpacityAndColor
+                | Self::BackgroundColorAndColor
+                | Self::OpacityAndBackgroundColorAndColor
+        )
+    }
+
+    fn flags(self) -> u8 {
+        match self {
+            Self::All | Self::None => 0,
+            Self::Opacity => 1,
+            Self::BackgroundColor => 2,
+            Self::Color => 4,
+            Self::OpacityAndBackgroundColor => 3,
+            Self::OpacityAndColor => 5,
+            Self::BackgroundColorAndColor => 6,
+            Self::OpacityAndBackgroundColorAndColor => 7,
+        }
+    }
+
+    pub(crate) fn merge(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::All, _) | (_, Self::All) => Self::All,
+            (Self::None, value) | (value, Self::None) => value,
+            (left, right) if left == right => left,
+            (left, right) => Self::from_flags(left.flags() | right.flags()).unwrap_or(Self::All),
+        }
     }
 }
 

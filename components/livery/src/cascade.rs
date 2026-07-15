@@ -337,18 +337,7 @@ fn merge_transition_properties(
     let Some(current) = current else {
         return next;
     };
-    match (current, next) {
-        (TransitionProperty::All, _) | (_, TransitionProperty::All) => TransitionProperty::All,
-        (TransitionProperty::None, value) | (value, TransitionProperty::None) => value,
-        (TransitionProperty::Opacity, TransitionProperty::BackgroundColor)
-        | (TransitionProperty::BackgroundColor, TransitionProperty::Opacity)
-        | (TransitionProperty::OpacityAndBackgroundColor, _)
-        | (_, TransitionProperty::OpacityAndBackgroundColor) => {
-            TransitionProperty::OpacityAndBackgroundColor
-        },
-        (left, right) if left == right => left,
-        _ => TransitionProperty::All,
-    }
+    current.merge(next)
 }
 
 fn expand_animation(block: &mut DeclarationBlock, value: &str, important: bool) {
