@@ -15,7 +15,7 @@
 //! them at its relayout boundary.
 //!
 //! [`GenetAppRunner`] retains application state and the view tree. Pointer,
-//! keyboard, and wheel events route through [`GenetCtx`] using Meristem's
+//! hover, keyboard, and wheel events route through [`GenetCtx`] using Meristem's
 //! message cycle. Focus, composition, standard form controls, keyed movement,
 //! overlays, grids, menus, and searchable action lists are provided here while
 //! platform event translation and presentation remain host responsibilities.
@@ -37,6 +37,7 @@ mod focusable;
 mod grid;
 #[cfg(feature = "highlight")]
 mod highlight;
+mod hover;
 mod key;
 mod keyed;
 mod menu;
@@ -81,6 +82,7 @@ pub use highlight::{
     Highlight, entity_styles, highlighted_text_field, highlighted_textarea, note_styles,
     role_class, styles_for, syntax_css,
 };
+pub use hover::{HoverEvent, HoverPhase, OnHover, OnHoverState, on_hover};
 pub use key::{Key, KeyEvent, Modifiers, NamedKey, OnKey, OnKeyState, on_key};
 pub use keyed::Keyed;
 pub use multi::{GenetMultiRunner, ProjectionId};

@@ -56,8 +56,8 @@ pub struct Handler {
 /// node's ancestors and routes messages down those retained paths.
 ///
 /// Key handlers and explicit [`focusable`](crate::focusable) markers together
-/// define the focus traversal set. Pointer and wheel handlers use the same
-/// context for direct drag capture and nearest-scroll-ancestor routing.
+/// define the focus traversal set. Pointer, hover, and wheel handlers use the
+/// same context for drag capture, hover transitions, and scroll routing.
 pub struct GenetCtx {
     id_path: Vec<ViewId>,
     environment: Environment,
@@ -87,6 +87,10 @@ pub struct GenetCtx {
     /// hit node's ancestor chain through this on `pointerdown` to find the
     /// element that captures the drag.
     pointer_handlers: HashMap<NodeId, Vec<ViewId>>,
+    /// `NodeId → routing path` for pointer-hover handlers
+    /// ([`OnHover`](crate::OnHover)). Hover routes directly to the nearest
+    /// registered ancestor selected by the host's hit-test transition.
+    hover_handlers: HashMap<NodeId, Vec<ViewId>>,
     /// `NodeId → routing path` for wheel/scroll handlers
     /// ([`OnWheel`](crate::OnWheel)). Like pointer there is no capture/bubble
     /// phase: a wheel routes to the nearest scroll-handling ancestor of the hit
@@ -180,6 +184,7 @@ impl GenetCtx {
             key_handlers: HashMap::new(),
             focusable: HashMap::new(),
             pointer_handlers: HashMap::new(),
+            hover_handlers: HashMap::new(),
             wheel_handlers: HashMap::new(),
             nursery: HashMap::new(),
         }
@@ -406,6 +411,21 @@ impl GenetCtx {
     /// this to find the drag-capturing element.
     pub fn pointer_handler(&self, node: NodeId) -> Option<&[ViewId]> {
         self.pointer_handlers.get(&node).map(Vec::as_slice)
+    }
+
+    /// Register `path` as the hover handler for `node`.
+    pub fn register_hover(&mut self, node: NodeId, path: Vec<ViewId>) {
+        self.hover_handlers.insert(node, path);
+    }
+
+    /// Drop the hover handler for `node` (teardown / re-key on node swap).
+    pub fn unregister_hover(&mut self, node: NodeId) {
+        self.hover_handlers.remove(&node);
+    }
+
+    /// The hover routing path on `node`, if one is registered.
+    pub fn hover_handler(&self, node: NodeId) -> Option<&[ViewId]> {
+        self.hover_handlers.get(&node).map(Vec::as_slice)
     }
 
     /// Register `path` as the wheel handler for `node`

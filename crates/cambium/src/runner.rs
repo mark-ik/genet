@@ -34,8 +34,8 @@ use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace};
 use meristem::{DynMessage, MessageCtx, MessageResult, View, ViewId};
 
 use crate::{
-    DomHandle, GenetCtx, GenetElement, GenetElementMut, Key, KeyEvent, NamedKey, PointerClick,
-    PointerEvent, WheelEvent,
+    DomHandle, GenetCtx, GenetElement, GenetElementMut, HoverEvent, Key, KeyEvent, NamedKey,
+    PointerClick, PointerEvent, WheelEvent,
 };
 
 /// The per-tree half of a runner: one `ScriptedDom` target, its [`GenetCtx`]
@@ -625,6 +625,76 @@ where
         None
     }
 
+    /// Route one host-computed hover transition to the nearest registered
+    /// ancestor of `target`.
+    pub(crate) fn dispatch_hover(
+        &mut self,
+        logic: &mut impl FnMut(&State) -> V,
+        state: &mut State,
+        target: NodeId,
+        event: HoverEvent,
+    ) -> Vec<Action> {
+        self.last_default_prevented = false;
+        match self.hover_target(target) {
+            Some(node) => self.route_hover(logic, state, node, event),
+            None => Vec::new(),
+        }
+    }
+
+    /// The nearest ancestor of `hit` (including itself) carrying a hover
+    /// handler.
+    pub(crate) fn hover_target(&self, hit: NodeId) -> Option<NodeId> {
+        let dom = self.dom.borrow();
+        let mut current = Some(hit);
+        while let Some(node) = current {
+            if self.ctx.hover_handler(node).is_some() {
+                return Some(node);
+            }
+            current = dom.parent(node);
+        }
+        None
+    }
+
+    /// Route a hover event down one registered view path, then rebuild.
+    fn route_hover(
+        &mut self,
+        logic: &mut impl FnMut(&State) -> V,
+        state: &mut State,
+        node: NodeId,
+        event: HoverEvent,
+    ) -> Vec<Action> {
+        let Some(path) = self.ctx.hover_handler(node).map(<[ViewId]>::to_vec) else {
+            return Vec::new();
+        };
+        let env = self.ctx.take_environment();
+        let mut actions = Vec::new();
+        let env = {
+            let Self {
+                view,
+                view_state,
+                root,
+                dom,
+                ..
+            } = self;
+            let mut message = MessageCtx::new(env, path, DynMessage::new(event.clone()));
+            let element = GenetElementMut {
+                node: &mut root.node,
+                dom: dom.clone(),
+                parent: Some(dom.borrow().document()),
+            };
+            if let MessageResult::Action(action) =
+                view.message(view_state, &mut message, element, state)
+            {
+                actions.push(action);
+            }
+            message.finish().0
+        };
+        self.ctx.set_environment(env);
+        self.last_default_prevented = event.prop.default_prevented();
+        self.rebuild(logic, state);
+        actions
+    }
+
     /// Route a [`PointerEvent`] down `node`'s registered pointer path through the
     /// faithful message cycle, then rebuild.
     fn route_pointer(
@@ -929,6 +999,23 @@ where
     /// would capture, resolved *without* starting a drag.
     pub fn pointer_target(&self, hit: NodeId) -> Option<NodeId> {
         self.tree.pointer_target(hit)
+    }
+
+    /// Route a hover Enter, Leave, or Move event from `target` to the nearest
+    /// ancestor carrying [`on_hover`](crate::on_hover).
+    ///
+    /// The host owns hit testing and transition detection. When its hovered
+    /// node changes it calls this once for Leave on the old hit and once for
+    /// Enter on the new hit; Move uses the current hit.
+    pub fn dispatch_hover(&mut self, target: NodeId, event: HoverEvent) -> Vec<Action> {
+        self.tree
+            .dispatch_hover(&mut self.logic, &mut self.state, target, event)
+    }
+
+    /// The nearest ancestor of `hit` (including itself) carrying an
+    /// [`on_hover`](crate::on_hover) handler.
+    pub fn hover_target(&self, hit: NodeId) -> Option<NodeId> {
+        self.tree.hover_target(hit)
     }
 
     /// Route a wheel/scroll notch to the nearest ancestor of `target` (including
