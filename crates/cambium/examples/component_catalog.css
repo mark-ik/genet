@@ -201,6 +201,25 @@ textarea {
     padding: 0.75rem;
 }
 
+.detail-popover-root {
+    display: inline-block;
+}
+
+.detail-popover-trigger {
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-control-border);
+    border-radius: 4px;
+    cursor: pointer;
+    padding: 0.45rem 0.75rem;
+}
+
+.detail-popover-preview,
+.detail-popover-content {
+    display: grid;
+    gap: 0.5rem;
+    padding: 0.75rem;
+}
+
 .menu {
     background-color: var(--catalog-panel);
     border: 1px solid var(--catalog-control-border);

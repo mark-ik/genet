@@ -103,6 +103,10 @@ pub struct GenetCtx {
     /// walks the hit node's ancestor chain through this on a wheel event to find
     /// the element that handles the scroll.
     wheel_handlers: HashMap<NodeId, Vec<ViewId>>,
+    /// One-shot programmatic focus requested by a view during build/rebuild.
+    /// The runner consumes this after the DOM mutation pass, once the target is
+    /// attached and its liveness can be checked.
+    focus_request: Option<NodeId>,
     /// The portable-child nursery (moveBefore plan S5, cross-parent): children a
     /// [`PortableKeyed`](crate::PortableKeyed) parked because their key left its
     /// list, waiting within the same rebuild pass to be claimed by the sequence
@@ -191,8 +195,17 @@ impl GenetCtx {
             pointer_handlers: HashMap::new(),
             hover_handlers: HashMap::new(),
             wheel_handlers: HashMap::new(),
+            focus_request: None,
             nursery: HashMap::new(),
         }
+    }
+
+    pub(crate) fn request_focus(&mut self, node: NodeId) {
+        self.focus_request = Some(node);
+    }
+
+    pub(crate) fn take_focus_request(&mut self) -> Option<NodeId> {
+        self.focus_request.take()
     }
 
     /// Park a portable child whose key left its [`PortableKeyed`](crate::PortableKeyed)

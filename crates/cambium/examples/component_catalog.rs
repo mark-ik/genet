@@ -9,14 +9,14 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use cambium::{
-    ActionItem, ActionListEvent, ActionListState, AnyView, DomHandle, GenetAppRunner, GenetCtx,
-    GenetElement, GraphCanvasEdge, GraphCanvasNode, GraphCanvasSubgraph, GraphCanvasSwatch,
-    GridColumn, GridSpec, GridView, HoverEvent, HoverPhase, Key, KeyEvent, NamedKey,
-    OverlayDismiss, OverlayRole, OverlaySurface, Placement, PointerClick, PointerEvent,
-    PointerPhase, RadioGroup, SelectState, Slider, StyleRange, TextInput, action_list, button,
-    button_with, checkbox, custom_leaf, data_grid, el, graph_canvas_swatch, lens, map_action, menu,
-    on_hover, on_pointer, overlay_surface, radio_group, select, slider, styled_textarea,
-    text_field_typed, textarea_typed, toggle,
+    ActionItem, ActionListEvent, ActionListState, AnyView, DetailPopoverMode, DetailPopoverState,
+    DomHandle, GenetAppRunner, GenetCtx, GenetElement, GraphCanvasEdge, GraphCanvasNode,
+    GraphCanvasSubgraph, GraphCanvasSwatch, GridColumn, GridSpec, GridView, HoverEvent, HoverPhase,
+    Key, KeyEvent, NamedKey, OverlayDismiss, OverlayRole, OverlaySurface, Placement, PointerClick,
+    PointerEvent, PointerPhase, RadioGroup, SelectState, Slider, StyleRange, TextInput,
+    action_list, button, button_with, checkbox, custom_leaf, data_grid, detail_popover, el,
+    graph_canvas_swatch, lens, map_action, menu, on_hover, on_pointer, overlay_surface,
+    radio_group, select, slider, styled_textarea, text_field_typed, textarea_typed, toggle,
 };
 use genet_scripted_dom::{NodeId, ScriptedDom};
 use layout_dom_api::{LayoutDom, LocalName, Namespace};
@@ -61,6 +61,8 @@ struct CatalogState {
     overlay_open: bool,
     overlay_inside_presses: usize,
     overlay_last_dismiss: Option<OverlayDismiss>,
+    detail_popover: DetailPopoverState,
+    detail_uses: usize,
 }
 
 impl Default for CatalogState {
@@ -92,6 +94,8 @@ impl Default for CatalogState {
             overlay_open: true,
             overlay_inside_presses: 0,
             overlay_last_dismiss: None,
+            detail_popover: DetailPopoverState::default(),
+            detail_uses: 0,
         }
     }
 }
@@ -394,6 +398,30 @@ fn catalog(state: &CatalogState) -> CatalogView {
                     },
                 )
             }),
+            detail_popover(
+                state.detail_popover,
+                &OverlaySurface::new(
+                    (404.0, 246.0, 128.0, 32.0),
+                    (208.0, 96.0),
+                    (0.0, 0.0, 640.0, 280.0),
+                )
+                .with_placement(Placement::Below)
+                .with_label("Marker detail"),
+                "Marker details",
+                el::<_, CatalogState, ()>(
+                    "span",
+                    "A short preview. Activate to pin the interactive detail.",
+                ),
+                (
+                    el::<_, CatalogState, ()>("strong", "Pinned marker detail"),
+                    button("Use marker", |state: &mut CatalogState, _| {
+                        state.detail_uses += 1;
+                    })
+                    .attr("id", "catalog-detail-use")
+                    .attr("class", "catalog-button"),
+                ),
+                |state: &mut CatalogState, event| state.detail_popover.apply(event),
+            ),
         ),
     )
     .attr("id", "navigation-section")
@@ -807,6 +835,39 @@ fn run_interactions(runner: &mut CatalogRunner) {
         runner.state().overlay_last_dismiss,
         Some(OverlayDismiss::Escape)
     );
+
+    let detail_trigger = find_class(&runner.dom().borrow(), root, "detail-popover-trigger");
+    runner.dispatch_hover(
+        detail_trigger,
+        HoverEvent::new(HoverPhase::Enter, (4.0, 4.0), (128.0, 32.0)),
+    );
+    assert_eq!(runner.state().detail_popover.mode, DetailPopoverMode::Peek);
+    let tooltip = find_where(&runner.dom().borrow(), root, &|dom, node| {
+        attr(dom, node, "role") == Some("tooltip")
+    })
+    .expect("detail tooltip");
+    assert!(
+        attr(&runner.dom().borrow(), tooltip, "style")
+            .is_some_and(|style| style.contains("top: 150px")),
+        "below placement flips above inside the catalog bounds"
+    );
+    runner.dispatch_click(detail_trigger, PointerClick::at((2.0, 2.0)));
+    assert_eq!(
+        runner.state().detail_popover.mode,
+        DetailPopoverMode::Pinned
+    );
+    let detail_use = find_id(&runner.dom().borrow(), root, "catalog-detail-use");
+    runner.dispatch_click(detail_use, PointerClick::at((2.0, 2.0)));
+    assert_eq!(runner.state().detail_uses, 1);
+    runner.set_focus(Some(detail_trigger));
+    runner.focus_traverse(true);
+    assert_eq!(runner.focus(), Some(detail_use));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::Escape)));
+    assert_eq!(
+        runner.state().detail_popover.mode,
+        DetailPopoverMode::Hidden
+    );
+    assert_eq!(runner.focus(), Some(detail_trigger));
 
     let header = find_class(&runner.dom().borrow(), root, "grid-header-cell");
     runner.set_focus(Some(header));

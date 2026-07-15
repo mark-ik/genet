@@ -30,9 +30,11 @@ mod action_list;
 mod arrangement;
 mod context;
 mod controls;
+mod detail_popover;
 mod editor;
 mod element;
 mod event;
+mod focus_request;
 mod focusable;
 mod graph_canvas;
 mod grid;
@@ -66,6 +68,9 @@ mod tests;
 pub use action_list::{ActionItem, ActionListEvent, ActionListState, action_list};
 pub use arrangement::{arrangement, placed, placed_with};
 pub use context::GenetCtx;
+pub use detail_popover::{
+    DetailPopoverEvent, DetailPopoverMode, DetailPopoverState, detail_popover,
+};
 pub use editor::{EditHistory, pair_close, wrap_selection};
 pub use graph_canvas::{
     GRAPH_CANVAS_SWATCH_CSS, GraphCanvasEdge, GraphCanvasNode, GraphCanvasSubgraph,
@@ -82,6 +87,7 @@ pub use controls::{
 };
 pub use element::{El, Element, ElementView, el};
 pub use event::{OnClick, OnClickState, PointerClick, clickable, on_click};
+pub use focus_request::{FocusRequest, FocusRequestState, request_focus};
 pub use focusable::{Focusable, FocusableState, focusable, focusable_if};
 #[cfg(feature = "highlight")]
 pub use highlight::{

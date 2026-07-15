@@ -97,6 +97,9 @@ where
         // Attach the produced root under the document root (append).
         let doc_root = dom.borrow().document();
         dom.borrow_mut().insert_before(doc_root, root.node, None);
+        let focus = ctx
+            .take_focus_request()
+            .filter(|&node| dom.borrow().is_live(node));
 
         Self {
             dom,
@@ -104,7 +107,7 @@ where
             view,
             view_state,
             root,
-            focus: None,
+            focus,
             pointer_capture: None,
             last_default_prevented: false,
             phantom: PhantomData,
@@ -160,6 +163,11 @@ where
         // Clear them at the publication boundary before the host can ask for
         // the next dispatch target or captured-element rect.
         self.scrub_dead_interaction_handles();
+        if let Some(node) = self.ctx.take_focus_request()
+            && self.node_is_live(node)
+        {
+            self.focus = Some(node);
+        }
     }
 
     fn node_is_live(&self, node: NodeId) -> bool {

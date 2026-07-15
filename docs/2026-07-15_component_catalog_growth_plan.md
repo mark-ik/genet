@@ -54,11 +54,12 @@ test.
 
 ### C1. Anchored overlay and detail popover
 
-**Substrate landed 2026-07-15.** `OverlaySurface` now owns clamped placement,
-role and label semantics, optional modal state, outside-click interception, and
-Escape dismissal through a passive ancestor key listener that adds no Tab stop.
-The catalog proves both dismissal paths. Remaining in C1 is the controlled
-hover-peek/click-pin `detail_popover` configuration and focus restoration.
+**Landed 2026-07-15.** `OverlaySurface` owns clamped placement, role and label
+semantics, optional modal state, outside-click interception, and Escape
+dismissal through a passive ancestor key listener that adds no Tab stop.
+`detail_popover` adds distinct informational preview and interactive pinned
+content, with hover-peek, click-pin, and focus return after dismissal. The
+catalog exercises the complete path.
 
 Build one positioned, dismissible surface over `overlay_at`, `overlay_rect`, and
 `anchor_point_clamped`. Its axes are anchor, edge placement, dismissal, and
