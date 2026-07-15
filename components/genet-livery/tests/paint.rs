@@ -197,6 +197,38 @@ fn data_uri_background_image_reaches_neutral_image_side_table() {
 }
 
 #[test]
+fn host_image_resource_resolves_a_non_data_background_url() {
+    let blue = image::RgbaImage::from_pixel(2, 3, image::Rgba([0, 0, 255, 255]));
+    let mut png = Vec::new();
+    blue.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("encode test PNG");
+    let document = StaticDocument::parse(r#"<html><body><div class="card"></div></body></html>"#);
+    let mut retained = LiveryDocument::new(
+        document,
+        StyleSet::cambium(&[
+            ".card { width: 80px; height: 40px; background-image: url(support/blue.png); }",
+        ]),
+        Device::screen(320.0, 240.0),
+    );
+    retained.set_image_resource("support/blue.png", png);
+    let list = retained.frame(320, 240).expect("frame with host image");
+    let PaintCmd::DrawImage(image) = list
+        .commands()
+        .iter()
+        .find(|command| matches!(command, PaintCmd::DrawImage(_)))
+        .expect("host image URL lowers to an image primitive")
+    else {
+        unreachable!();
+    };
+    let resource = list
+        .images()
+        .iter()
+        .find(|resource| resource.key == image.image_key)
+        .expect("host image command resolves through the paint side table");
+    assert_eq!((resource.width, resource.height), (2, 3));
+}
+
+#[test]
 fn retained_opacity_clock_samples_and_settles() {
     let document = StaticDocument::parse(r#"<html><body><div class="card"></div></body></html>"#);
     let card = document

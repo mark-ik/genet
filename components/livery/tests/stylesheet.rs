@@ -40,8 +40,14 @@ fn border_radius_shorthand_expands_to_corner_longhands() {
         .iter()
         .map(|declaration| declaration.value.clone())
         .collect::<Vec<_>>();
-    assert!(matches!(values[0], DeclaredValue::Value(PropertyValue::Radius(_))));
-    assert!(matches!(values[3], DeclaredValue::Value(PropertyValue::Radius(_))));
+    assert!(matches!(
+        values[0],
+        DeclaredValue::Value(PropertyValue::Radius(_))
+    ));
+    assert!(matches!(
+        values[3],
+        DeclaredValue::Value(PropertyValue::Radius(_))
+    ));
 }
 
 #[test]
@@ -51,4 +57,26 @@ fn malformed_tail_is_retained_as_a_diagnostic() {
     assert_eq!(sheet.rules().len(), 1);
     assert_eq!(sheet.diagnostics().len(), 1);
     assert_eq!(sheet.diagnostics()[0].message, "expected a rule block");
+}
+
+#[test]
+fn stylesheet_parser_retains_opacity_keyframes() {
+    let sheet = Stylesheet::parse(
+        "@keyframes fade { from { opacity: 0; } 50% { opacity: 0.5; } to { opacity: 1; } }",
+        Origin::Author,
+    );
+
+    assert!(sheet.diagnostics().is_empty(), "{:?}", sheet.diagnostics());
+    assert_eq!(sheet.keyframes().len(), 1);
+    let keyframes = &sheet.keyframes()[0];
+    assert_eq!(keyframes.name(), "fade");
+    assert_eq!(
+        keyframes
+            .frames()
+            .iter()
+            .map(|frame| frame.offset())
+            .collect::<Vec<_>>(),
+        vec![0.0, 0.5, 1.0]
+    );
+    assert_eq!(keyframes.frames()[0].declarations().declarations.len(), 1);
 }

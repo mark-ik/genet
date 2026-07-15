@@ -19,8 +19,9 @@ use dpi::PhysicalSize;
 use embedder_traits::ViewportDetails;
 use euclid::{Scale, Size2D};
 use genet_layout::{
-    BackgroundImagePlane, ImagePlane, LocalFileImageLoader, ResourceResolver, StylePlane,
-    emit_paint_list_with_layouts, inline_stylesheets, layout, linked_stylesheets, run_cascade,
+    BackgroundImagePlane, ImageLoader, ImagePlane, LocalFileImageLoader, ResourceResolver,
+    StylePlane, emit_paint_list_with_layouts, inline_stylesheets, layout, linked_stylesheets,
+    run_cascade,
 };
 use genet_livery::{Device as LiveryDevice, LiveryDocument, StyleSet as LiveryStyleSet};
 use genet_static_dom::StaticDocument;
@@ -115,8 +116,9 @@ impl Renderer {
     }
 
     /// Render through the clean-room Livery lane. This first WPT bridge is
-    /// intentionally bounded: it extracts inline and local linked stylesheets
-    /// and lets Livery handle its own declarations and data-URI image subset.
+    /// intentionally bounded: it extracts inline and local linked stylesheets,
+    /// supplies host-resolved local image bytes, and lets Livery handle its own
+    /// declarations and data-URI image subset.
     pub fn render_html_livery(
         &self,
         html: &str,
@@ -143,6 +145,12 @@ impl Renderer {
             LiveryStyleSet::cambium(&sheet_refs),
             LiveryDevice::screen(width as f32, height as f32),
         );
+        let image_loader = LocalFileImageLoader::new(resolver);
+        for url in livery_image_urls(&sheets) {
+            if let Some(bytes) = image_loader.load(&url) {
+                session.set_image_resource(url, bytes);
+            }
+        }
         let list = session
             .frame(width, height)
             .expect("Livery WPT reftest layout");
@@ -169,6 +177,52 @@ impl Renderer {
             ),
         )
         .expect("Livery master readback")
+    }
+}
+
+fn livery_image_urls(stylesheets: &[String]) -> Vec<String> {
+    let mut urls = Vec::new();
+    for stylesheet in stylesheets {
+        let lower = stylesheet.to_ascii_lowercase();
+        let mut cursor = 0;
+        while let Some(offset) = lower[cursor..].find("url(") {
+            let start = cursor + offset + 4;
+            let Some(close) = stylesheet[start..].find(')') else {
+                break;
+            };
+            let raw = stylesheet[start..start + close].trim();
+            let url = raw
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .or_else(|| {
+                    raw.strip_prefix('\'')
+                        .and_then(|value| value.strip_suffix('\''))
+                })
+                .unwrap_or(raw)
+                .trim();
+            if !url.is_empty() && !urls.iter().any(|seen| seen == url) {
+                urls.push(url.to_owned());
+            }
+            cursor = start + close + 1;
+        }
+    }
+    urls
+}
+
+#[cfg(test)]
+mod tests {
+    use super::livery_image_urls;
+
+    #[test]
+    fn livery_image_urls_deduplicates_css_sources() {
+        let sheets = vec![
+            ".a { background-image: url(\"a.png\"); }".to_owned(),
+            ".b { background-image: url(a.png); background: url(b.png); }".to_owned(),
+        ];
+        assert_eq!(
+            livery_image_urls(&sheets),
+            vec!["a.png".to_owned(), "b.png".to_owned()]
+        );
     }
 }
 

@@ -8,7 +8,7 @@ use livery::{
         parse_declaration_block,
     },
     media::Device,
-    stylesheet::{StyleRule, Stylesheet, StylesheetDiagnostic},
+    stylesheet::{Keyframes, StyleRule, Stylesheet, StylesheetDiagnostic},
     values::{FontSize, Length, LengthPercentage, LengthUnit, LineHeight},
 };
 
@@ -18,6 +18,7 @@ use crate::{CAMBIUM_UA_DEFAULTS, InteractionStates, SelectorTree};
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StyleSet {
     rules: Vec<StyleRule>,
+    keyframes: Vec<Keyframes>,
     diagnostics: Vec<StylesheetDiagnostic>,
 }
 
@@ -30,14 +31,16 @@ impl StyleSet {
         let mut result = Self::default();
         let ua = Stylesheet::parse(ua_sheet, Origin::UserAgent);
         result.diagnostics.extend_from_slice(ua.diagnostics());
-        result.rules.extend(ua.into_rules());
+        result.rules.extend(ua.rules().iter().cloned());
+        result.keyframes.extend(ua.keyframes().iter().cloned());
 
         let mut source_order = 0_u64;
         for source in author_sheets {
             let author = Stylesheet::parse_with_offset(source, Origin::Author, source_order);
             source_order = source_order.saturating_add(author.rules().len() as u64);
             result.diagnostics.extend_from_slice(author.diagnostics());
-            result.rules.extend(author.into_rules());
+            result.rules.extend(author.rules().iter().cloned());
+            result.keyframes.extend(author.keyframes().iter().cloned());
         }
         result
     }
@@ -48,6 +51,13 @@ impl StyleSet {
 
     pub fn diagnostics(&self) -> &[StylesheetDiagnostic] {
         &self.diagnostics
+    }
+
+    pub(crate) fn keyframes(&self, name: &str) -> Option<&Keyframes> {
+        self.keyframes
+            .iter()
+            .rev()
+            .find(|keyframes| keyframes.name().eq_ignore_ascii_case(name))
     }
 }
 

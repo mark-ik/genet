@@ -3,7 +3,8 @@
 use std::{cmp::Ordering, fmt};
 
 use crate::values::{
-    BorderStyle, BorderWidth, Color, Duration, Margin, Padding, Radius, TransitionProperty,
+    AnimationName, BorderStyle, BorderWidth, Color, Duration, Margin, Padding, Radius,
+    TimingFunction, TransitionProperty,
 };
 use crate::{ComputedValues, PropertyId, PropertyValue, ShorthandId};
 
@@ -306,6 +307,64 @@ fn expand_transition(block: &mut DeclarationBlock, value: &str, important: bool)
     });
 }
 
+fn expand_animation(block: &mut DeclarationBlock, value: &str, important: bool) {
+    let mut name = None;
+    let mut duration = None;
+    let mut timing = None;
+    for component in split_components(value) {
+        if duration.is_none()
+            && let Ok(parsed) = component.parse::<Duration>()
+        {
+            duration = Some(parsed);
+        } else if timing.is_none()
+            && let Ok(parsed) = component.parse::<TimingFunction>()
+        {
+            timing = Some(parsed);
+        } else if name.is_none()
+            && let Ok(parsed) = component.parse::<AnimationName>()
+        {
+            name = Some(parsed);
+        } else {
+            block.errors.push(DeclarationError {
+                name: "animation".to_owned(),
+                value: value.to_owned(),
+                kind: DeclarationErrorKind::InvalidValue,
+            });
+            return;
+        }
+    }
+    let Some(duration) = duration else {
+        block.errors.push(DeclarationError {
+            name: "animation".to_owned(),
+            value: value.to_owned(),
+            kind: DeclarationErrorKind::InvalidValue,
+        });
+        return;
+    };
+    let push = |block: &mut DeclarationBlock, property, value| {
+        block.declarations.push(Declaration {
+            property,
+            value: DeclaredValue::Value(value),
+            important,
+        });
+    };
+    push(
+        block,
+        PropertyId::AnimationName,
+        PropertyValue::AnimationName(name.unwrap_or(AnimationName::None)),
+    );
+    push(
+        block,
+        PropertyId::AnimationDuration,
+        PropertyValue::Duration(duration),
+    );
+    push(
+        block,
+        PropertyId::AnimationTimingFunction,
+        PropertyValue::TimingFunction(timing.unwrap_or(TimingFunction::Linear)),
+    );
+}
+
 fn expand_border(block: &mut DeclarationBlock, value: &str, important: bool) {
     let mut width = None;
     let mut style = None;
@@ -433,6 +492,8 @@ pub fn parse_declaration_block(input: &str) -> DeclarationBlock {
         } else if expand_box_shorthand(&mut block, shorthand, value, important) {
         } else if shorthand == ShorthandId::Transition {
             expand_transition(&mut block, value, important);
+        } else if shorthand == ShorthandId::Animation {
+            expand_animation(&mut block, value, important);
         } else if shorthand == ShorthandId::Border {
             expand_border(&mut block, value, important);
         } else if shorthand == ShorthandId::WhiteSpace {

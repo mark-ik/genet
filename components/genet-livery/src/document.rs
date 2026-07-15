@@ -3,16 +3,20 @@
 use std::{collections::HashMap, hash::Hash};
 
 use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
+use livery::PropertyId;
+use livery::cascade::DeclaredValue;
 use livery::media::Device;
 use livery::{
+    PropertyValue,
     selector::StatePseudoClass,
-    values::{Opacity, Overflow, TransitionProperty},
+    stylesheet::Keyframes,
+    values::{AnimationName, Opacity, Overflow, TimingFunction, TransitionProperty},
 };
 use paint_list_api::DeviceIntSize;
 
 use crate::{
     FragmentPlane, InteractionStates, LayoutError, LiveryPaintList, StylePlane, StyleSet,
-    TextSystem, emit_paint_list_with_text_system_scrolled, hit_test_with_scroll,
+    TextSystem, emit_paint_list_with_text_system_scrolled_with_images, hit_test_with_scroll,
     layout::layout_with_text_system, resolve_styles,
 };
 
@@ -50,6 +54,15 @@ struct OpacityTransition<Id> {
     automatic: bool,
 }
 
+#[derive(Clone)]
+struct KeyframeAnimation<Id> {
+    node: Id,
+    name: Box<str>,
+    start_ms: f64,
+    duration_ms: f64,
+    timing: TimingFunction,
+}
+
 /// A static DOM plus the Livery state that should survive between frames.
 ///
 /// Equal-size frames reuse the complete paint list. Resizes recascade media
@@ -73,7 +86,9 @@ where
     focused_chain: Vec<D::NodeId>,
     clock_ms: f64,
     opacity_transition: Option<OpacityTransition<D::NodeId>>,
+    keyframe_animation: Option<KeyframeAnimation<D::NodeId>>,
     nested_scroll: HashMap<D::NodeId, (f32, f32)>,
+    image_sources: HashMap<String, Vec<u8>>,
 }
 
 impl<D> LiveryDocument<D>
@@ -100,7 +115,9 @@ where
             focused_chain: Vec::new(),
             clock_ms: 0.0,
             opacity_transition: None,
+            keyframe_animation: None,
             nested_scroll: HashMap::new(),
+            image_sources: HashMap::new(),
         }
     }
 
@@ -126,6 +143,14 @@ where
         self.layout = None;
     }
 
+    /// Supply host-resolved image bytes for a non-data URL. The CSS engine
+    /// still owns decoding and paint-key allocation; the host owns URL
+    /// resolution and fetching.
+    pub fn set_image_resource(&mut self, url: impl Into<String>, bytes: Vec<u8>) {
+        self.image_sources.insert(url.into(), bytes);
+        self.cached = None;
+    }
+
     pub fn frame(&mut self, width: u32, height: u32) -> Result<LiveryPaintList, LayoutError> {
         if let Some((viewport, list)) = &self.cached
             && *viewport == (width, height)
@@ -140,7 +165,9 @@ where
         let mut styles =
             resolve_styles(&self.dom, &self.style_set, &self.device, &self.interactions);
         self.schedule_opacity_transition(&styles);
+        self.schedule_keyframe_animation(&styles);
         self.apply_opacity_transition(&mut styles);
+        self.apply_keyframe_animation(&mut styles);
         let fragments = layout_with_text_system(
             &self.dom,
             &styles,
@@ -159,7 +186,7 @@ where
         self.clamp_scroll();
         self.clamp_nested_scroll();
         self.generation = self.generation.saturating_add(1);
-        let list = emit_paint_list_with_text_system_scrolled(
+        let list = emit_paint_list_with_text_system_scrolled_with_images(
             &self.dom,
             &styles,
             &fragments,
@@ -167,6 +194,7 @@ where
             self.generation,
             &mut self.text,
             &self.nested_scroll,
+            &self.image_sources,
         );
         self.cached = Some(((width, height), list.clone()));
         Ok(list.translated(-self.scroll.0, -self.scroll.1))
@@ -213,7 +241,9 @@ where
     /// Advance retained animation time. A following frame samples the
     /// interpolated value without re-running layout.
     pub fn pump(&mut self, now_ms: f64) -> bool {
-        if self.opacity_transition.is_none() || !now_ms.is_finite() {
+        if (self.opacity_transition.is_none() && self.keyframe_animation.is_none())
+            || !now_ms.is_finite()
+        {
             return false;
         }
         let next = now_ms.max(self.clock_ms);
@@ -226,8 +256,14 @@ where
     }
 
     pub fn settled(&self) -> bool {
-        self.opacity_transition
-            .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms)
+        let opacity_settled = self
+            .opacity_transition
+            .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
+        let keyframe_settled = self
+            .keyframe_animation
+            .as_ref()
+            .is_none_or(|animation| self.clock_ms >= animation.start_ms + animation.duration_ms);
+        opacity_settled && keyframe_settled
     }
 
     /// Scroll the document viewport by device pixels. Wheel deltas that need
@@ -515,6 +551,75 @@ where
         }
     }
 
+    fn apply_keyframe_animation(&self, styles: &mut StylePlane<D::NodeId>) {
+        let Some(animation) = self.keyframe_animation.as_ref() else {
+            return;
+        };
+        let Some(keyframes) = self.style_set.keyframes(&animation.name) else {
+            return;
+        };
+        let progress = if animation.duration_ms == 0.0 {
+            1.0
+        } else {
+            ((self.clock_ms - animation.start_ms) / animation.duration_ms).clamp(0.0, 1.0) as f32
+        };
+        let progress = animation.timing.sample(progress);
+        let base = styles
+            .get(animation.node)
+            .map_or(1.0, |style| style.opacity.value());
+        if let Some(value) = keyframe_opacity(keyframes, progress, base)
+            && let Some(style) = styles.get_mut(animation.node)
+        {
+            style.opacity = Opacity::from_value(value);
+        }
+    }
+
+    fn schedule_keyframe_animation(&mut self, styles: &StylePlane<D::NodeId>) {
+        let candidate = self.find_keyframe_animation(self.dom.document(), styles);
+        let Some((node, name, duration_ms, timing)) = candidate else {
+            self.keyframe_animation = None;
+            return;
+        };
+        if self.keyframe_animation.as_ref().is_some_and(|animation| {
+            animation.node == node
+                && animation.name.as_ref() == name.as_str()
+                && animation.duration_ms == duration_ms
+                && animation.timing == timing
+        }) {
+            return;
+        }
+        self.keyframe_animation = Some(KeyframeAnimation {
+            node,
+            name: name.into_boxed_str(),
+            start_ms: self.clock_ms,
+            duration_ms,
+            timing,
+        });
+    }
+
+    fn find_keyframe_animation(
+        &self,
+        id: D::NodeId,
+        styles: &StylePlane<D::NodeId>,
+    ) -> Option<(D::NodeId, String, f64, TimingFunction)> {
+        if let Some(style) = styles.get(id)
+            && let AnimationName::Name(name) = &style.animation_name
+        {
+            let duration_ms = f64::from(style.animation_duration.milliseconds());
+            if duration_ms > 0.0 && self.style_set.keyframes(name).is_some() {
+                return Some((
+                    id,
+                    name.to_string(),
+                    duration_ms,
+                    style.animation_timing_function,
+                ));
+            }
+        }
+        self.dom
+            .dom_children(id)
+            .find_map(|child| self.find_keyframe_animation(child, styles))
+    }
+
     fn finish_completed_opacity_transition(&mut self) {
         let Some(transition) = self.opacity_transition else {
             return;
@@ -718,6 +823,43 @@ where
     pub fn into_dom(self) -> D {
         self.dom
     }
+}
+
+fn keyframe_opacity(keyframes: &Keyframes, progress: f32, fallback: f32) -> Option<f32> {
+    let samples = keyframes
+        .frames()
+        .iter()
+        .filter_map(|frame| {
+            frame
+                .declarations()
+                .declarations
+                .iter()
+                .find(|declaration| declaration.property == PropertyId::Opacity)
+                .and_then(|declaration| match &declaration.value {
+                    DeclaredValue::Value(PropertyValue::Opacity(value)) => {
+                        Some((frame.offset(), value.value()))
+                    },
+                    _ => None,
+                })
+        })
+        .collect::<Vec<_>>();
+    let Some(&(first_offset, first_value)) = samples.first() else {
+        return Some(fallback);
+    };
+    if progress <= first_offset {
+        return Some(first_value);
+    }
+    for pair in samples.windows(2) {
+        let [(left_offset, left_value), (right_offset, right_value)] = pair else {
+            continue;
+        };
+        if progress <= *right_offset {
+            let span = (*right_offset - *left_offset).max(f32::EPSILON);
+            let local = ((progress - *left_offset) / span).clamp(0.0, 1.0);
+            return Some(*left_value + (*right_value - *left_value) * local);
+        }
+    }
+    samples.last().map(|(_, value)| *value)
 }
 
 fn find_id<D: LayoutDom>(dom: &D, id: D::NodeId, target: &str) -> Option<D::NodeId> {

@@ -41,10 +41,20 @@ pub struct LiveryPaintList {
     images: Vec<ImageResource>,
     #[serde(skip)]
     image_keys: HashMap<String, ImageKey>,
+    #[serde(skip)]
+    image_sources: HashMap<String, Vec<u8>>,
 }
 
 impl LiveryPaintList {
     pub fn new(viewport: DeviceIntSize, generation: u64) -> Self {
+        Self::with_image_sources(viewport, generation, &HashMap::new())
+    }
+
+    fn with_image_sources(
+        viewport: DeviceIntSize,
+        generation: u64,
+        image_sources: &HashMap<String, Vec<u8>>,
+    ) -> Self {
         Self {
             viewport,
             generation,
@@ -52,6 +62,7 @@ impl LiveryPaintList {
             fonts: Vec::new(),
             images: Vec::new(),
             image_keys: HashMap::new(),
+            image_sources: image_sources.clone(),
         }
     }
 
@@ -59,8 +70,11 @@ impl LiveryPaintList {
         if let Some(key) = self.image_keys.get(url) {
             return Some(*key);
         }
-        let data_url = data_url::DataUrl::process(url).ok()?;
-        let (bytes, _) = data_url.decode_to_vec().ok()?;
+        let bytes = if let Ok(data_url) = data_url::DataUrl::process(url) {
+            data_url.decode_to_vec().ok()?.0
+        } else {
+            self.image_sources.get(url)?.clone()
+        };
         let rgba = image::load_from_memory(&bytes).ok()?.to_rgba8();
         let (width, height) = rgba.dimensions();
         let key = ImageKey::new(IdNamespace(0), self.images.len() as u32 + 1);
@@ -180,7 +194,34 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    let mut list = LiveryPaintList::new(viewport, generation);
+    emit_paint_list_with_text_system_scrolled_with_images(
+        dom,
+        styles,
+        fragments,
+        viewport,
+        generation,
+        text,
+        scroll_offsets,
+        &HashMap::new(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_paint_list_with_text_system_scrolled_with_images<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    viewport: DeviceIntSize,
+    generation: u64,
+    text: &mut TextSystem,
+    scroll_offsets: &HashMap<D::NodeId, (f32, f32)>,
+    image_sources: &HashMap<String, Vec<u8>>,
+) -> LiveryPaintList
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut list = LiveryPaintList::with_image_sources(viewport, generation, image_sources);
     let mut text_frame = text.begin_frame();
     let mut text_state = PaintText {
         system: text,

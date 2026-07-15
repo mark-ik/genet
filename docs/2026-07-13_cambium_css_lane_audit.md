@@ -4,9 +4,9 @@
 **Status:** E0b lane choice, themed catalog fixture, and original 40-property
 clean-room database landed. The E1 handoff into Livery and the first E3
 `genet-livery` integration slice have also landed. The native capability
-ratchet now contains 82 properties, including geometry, corner radii,
+ratchet now contains 85 properties, including geometry, corner radii,
 visibility, alignment, spacing, box shadows, two-stop linear-gradient
-backgrounds, flexbox, and bounded grid placement. Source
+backgrounds, bounded opacity keyframes, flexbox, and bounded grid placement. Source
 hashes are recorded below.
 
 Audited revisions: Cambium `a7c4603c` for the live catalog and Genet
@@ -153,17 +153,21 @@ focus state. A host-driven opacity clock, bounded CSS opacity transition
 metadata, and a native reftest-style paint pair are covered by package
 receipts. Nested scroll containers route wheel deltas into retained offsets and
 chain to the viewport at their boundary. Raster `data:` background URLs reach
-the neutral image side-table; external resource URLs and positioning remain
-open alongside CSS keyframes, timing functions, multi-property transitions,
-and full WPT reftest parity. The WPT command surface now accepts
+the neutral image side-table, and host-resolved local image bytes now use the
+same side-table seam. Remote resource loading, replaced-element image layout,
+and background positioning remain open alongside multi-property transitions,
+and full WPT reftest parity. Bounded opacity-only `@keyframes` declarations
+with linear, ease, ease-in, ease-out, and ease-in-out timing functions now run
+on the retained clock. The WPT command surface now accepts
 `--renderer livery` for a bounded producer route covering inline and local linked
-stylesheets plus raster `data:` backgrounds. Stylo remains the default, and
+stylesheets, local image URLs, and raster `data:` backgrounds. Stylo remains the default, and
 the route is a comparison seam rather than a full-corpus parity receipt.
 
 ## E0 closeout
 
 The 2026-07-15 capability receipt grows the original catalog plus the first
-two ratchet rows and bounded transition controls to 82 properties. Geometry,
+two ratchet rows, bounded transition controls, and opacity keyframe controls to
+85 properties. Geometry,
 flexbox, and bounded grid values
 are lowered into Taffy; corner radii, color fills, and two-stop gradients reach
 neutral paint commands; Parley consumes text alignment and spacing; and hidden
@@ -187,5 +191,6 @@ rows.
 This audit is complete when the checked-in names cover Cambium and Sprigging's
 production-generated declarations, Genet's baseline UA sheet, and the catalog
 theme after shorthand expansion; `properties.toml` must preserve those 40 rows
-plus explicitly tested capability-ratchet rows, currently thirty-nine. The executable
+plus explicitly tested capability-ratchet rows, including opacity, transform,
+transition, and keyframe controls. The executable
 guard and independent TOML check satisfy that condition.

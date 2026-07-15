@@ -1,12 +1,12 @@
 use std::fmt::Debug;
 
 use livery::values::{
-    Alignment, AspectRatio, BackgroundImage, BorderStyle, BorderWidth, BoxShadow, BoxSizing, Color,
-    CssValue, Display, Duration, FlexDirection, FlexFactor, FlexWrap, FontFamily, FontSize,
-    FontStyle, FontWeight, Gap, Inset, LengthPercentage, LineHeight, ListStyleType, Margin,
-    Opacity, Order, Overflow, Padding, PointerEvents, Position, Radius, Size, Spacing, TextAlign,
-    TextDecorationLine, TextWrapMode, Transform, TransitionProperty, Visibility,
-    WhiteSpaceCollapse, ZIndex,
+    Alignment, AnimationName, AspectRatio, BackgroundImage, BorderStyle, BorderWidth, BoxShadow,
+    BoxSizing, Color, CssValue, Display, Duration, FlexDirection, FlexFactor, FlexWrap, FontFamily,
+    FontSize, FontStyle, FontWeight, Gap, Inset, LengthPercentage, LineHeight, ListStyleType,
+    Margin, Opacity, Order, Overflow, Padding, PointerEvents, Position, Radius, Size, Spacing,
+    TextAlign, TextDecorationLine, TextWrapMode, TimingFunction, Transform, TransitionProperty,
+    Visibility, WhiteSpaceCollapse, ZIndex,
 };
 
 fn assert_round_trip<T>(css: &str)
@@ -61,6 +61,8 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<BackgroundImage>("linear-gradient(red, blue)");
     assert_round_trip::<BackgroundImage>("url(data:image/png;base64,seed)");
     assert_round_trip::<Duration>("100ms");
+    assert_round_trip::<AnimationName>("fade");
+    assert_round_trip::<TimingFunction>("ease-in-out");
     assert_round_trip::<TransitionProperty>("opacity");
     assert_round_trip::<Alignment>("space-between");
     assert_round_trip::<FlexDirection>("column");

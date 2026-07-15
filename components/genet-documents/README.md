@@ -18,12 +18,12 @@ session, take paint frames, scroll, click, settle).
   scene contract. It also routes bounded viewport scrolling, retained link
   rectangles, pointer hit testing, fragment navigation, and focus state. The
   session also exposes the retained animation clock for host-driven opacity
-  frames and bounded CSS opacity transitions. Nested scroll chaining is routed
-  through the retained session and chains at its boundary. Resource-backed
-  images and animation, CSS keyframes, timing functions, and multi-property
-  transitions remain open. Livery's image gate covers two-stop
-  gradients and raster `data:` URLs; external URL resources, positioning, and
-  repeat remain open.
+  frames, bounded CSS opacity transitions, and opacity-only `@keyframes` with
+  named timing functions. Nested scroll chaining is routed through the retained
+  session and chains at its boundary. Resource-backed images and multi-property
+  transitions remain open. Livery's image gate covers two-stop gradients,
+  raster `data:` URLs, and host-resolved local bytes; remote URL resources,
+  replaced-element layout, positioning, and repeat remain open.
 - `ScriptedDocument` sessions / `ScriptedSessionEngine<E, _>` (`scripted`
   feature): a live page whose JS runs on Boa (or Nova on the nova rung),
   with the tick + quiescence seam (`pump` / `settled`).

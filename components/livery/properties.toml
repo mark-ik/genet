@@ -46,6 +46,9 @@ url = "https://www.w3.org/TR/css-transforms-1/#transform-property"
 [sources.css_transitions_1]
 url = "https://www.w3.org/TR/css-transitions-1/"
 
+[sources.css_animations_1]
+url = "https://www.w3.org/TR/css-animations-1/"
+
 [sources.css_ui_4]
 url = "https://www.w3.org/TR/css-ui-4/"
 
@@ -108,6 +111,12 @@ longhands = ["transition-property", "transition-duration"]
 grammar = "[ none | all | opacity ] || <time>"
 seed_values = ["opacity 100ms"]
 source = "css_transitions_1"
+
+[shorthands.animation]
+longhands = ["animation-name", "animation-duration", "animation-timing-function"]
+grammar = "<single-animation-name> || <time> || <easing-function>"
+seed_values = ["fade 100ms linear"]
+source = "css_animations_1"
 
 [[property]]
 name = "aspect-ratio"
@@ -888,6 +897,36 @@ grammar = "<time>"
 seed_values = ["0s", "100ms"]
 animation = "discrete"
 source = "css_transitions_1"
+
+[[property]]
+name = "animation-duration"
+value_type = "duration"
+inherited = false
+initial = "0s"
+grammar = "<time>"
+seed_values = ["0s", "100ms"]
+animation = "discrete"
+source = "css_animations_1"
+
+[[property]]
+name = "animation-name"
+value_type = "animation-name"
+inherited = false
+initial = "none"
+grammar = "none | <custom-ident>"
+seed_values = ["none", "identifier"]
+animation = "discrete"
+source = "css_animations_1"
+
+[[property]]
+name = "animation-timing-function"
+value_type = "timing-function"
+inherited = false
+initial = "linear"
+grammar = "linear | ease | ease-in | ease-out | ease-in-out"
+seed_values = ["linear", "ease"]
+animation = "discrete"
+source = "css_animations_1"
 
 [[property]]
 name = "transition-property"

@@ -109,12 +109,93 @@ impl fmt::Display for Duration {
     }
 }
 
+/// A bounded CSS animation name. The first animation gate accepts one custom
+/// identifier or `none`; comma-separated animation lists remain outside the
+/// lane.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AnimationName {
+    None,
+    Name(Box<str>),
+}
+
+impl AnimationName {
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::None => None,
+            Self::Name(name) => Some(name),
+        }
+    }
+}
+
+impl FromStr for AnimationName {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let input = input.trim();
+        if input.eq_ignore_ascii_case("none") {
+            return Ok(Self::None);
+        }
+        let valid = !input.is_empty()
+            && input.chars().enumerate().all(|(index, ch)| {
+                ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-') && index > 0
+            })
+            && input
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphabetic() || matches!(ch, '_' | '-'));
+        if valid {
+            Ok(Self::Name(input.into()))
+        } else {
+            Err(ParseError::expected("none or a custom animation name"))
+        }
+    }
+}
+
+impl fmt::Display for AnimationName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => formatter.write_str("none"),
+            Self::Name(name) => formatter.write_str(name),
+        }
+    }
+}
+
 keyword_value! {
     /// The bounded transition-property set consumed by the opacity clock.
     pub enum TransitionProperty {
         All => "all",
         None => "none",
         Opacity => "opacity",
+    }
+}
+
+keyword_value! {
+    /// Timing functions used by the first keyframe animation gate.
+    pub enum TimingFunction {
+        Linear => "linear",
+        Ease => "ease",
+        EaseIn => "ease-in",
+        EaseOut => "ease-out",
+        EaseInOut => "ease-in-out",
+    }
+}
+
+impl TimingFunction {
+    pub fn sample(self, progress: f32) -> f32 {
+        let progress = progress.clamp(0.0, 1.0);
+        match self {
+            Self::Linear => progress,
+            Self::Ease => progress * progress * (3.0 - 2.0 * progress),
+            Self::EaseIn => progress * progress,
+            Self::EaseOut => 1.0 - (1.0 - progress).powi(2),
+            Self::EaseInOut => {
+                if progress < 0.5 {
+                    2.0 * progress * progress
+                } else {
+                    1.0 - (-2.0 * progress + 2.0).powi(2) / 2.0
+                }
+            },
+        }
     }
 }
 

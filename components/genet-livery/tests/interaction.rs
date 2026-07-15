@@ -177,6 +177,45 @@ fn css_transition_opacity_uses_the_retained_clock() {
 }
 
 #[test]
+fn css_keyframes_opacity_use_the_retained_clock() {
+    let document =
+        StaticDocument::parse(r#"<html><body><div class="fade">fade</div></body></html>"#);
+    let styles = StyleSet::cambium(&[r#"
+        @keyframes fade-in {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        .fade { display: block; width: 100px; height: 20px;
+                animation: fade-in 100ms ease-in-out; }
+    "#]);
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(200.0, 100.0));
+
+    let initial = retained.frame(200, 100).unwrap();
+    assert!(!retained.settled());
+    assert!(
+        initial
+            .commands()
+            .iter()
+            .any(|command| matches!(command, PaintCmd::PushLayer(layer) if layer.opacity == 0.0))
+    );
+
+    retained.pump(50.0);
+    let middle = retained.frame(200, 100).unwrap();
+    let opacity = middle
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::PushLayer(layer) => Some(layer.opacity),
+            _ => None,
+        })
+        .expect("mid-keyframe frame keeps a compositing layer");
+    assert!((opacity - 0.5).abs() < 0.01);
+
+    retained.pump(100.0);
+    assert!(retained.settled());
+}
+
+#[test]
 fn nested_scroll_chains_into_paint_and_then_the_viewport() {
     let document = StaticDocument::parse(
         r#"<html><body>

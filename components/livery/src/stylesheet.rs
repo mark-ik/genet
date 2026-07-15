@@ -21,6 +21,7 @@ pub struct StylesheetDiagnostic {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Stylesheet {
     rules: Vec<StyleRule>,
+    keyframes: Vec<Keyframes>,
     diagnostics: Vec<StylesheetDiagnostic>,
 }
 
@@ -48,8 +49,52 @@ impl Stylesheet {
         &self.diagnostics
     }
 
+    pub fn keyframes(&self) -> &[Keyframes] {
+        &self.keyframes
+    }
+
     pub fn into_rules(self) -> Vec<StyleRule> {
         self.rules
+    }
+
+    pub fn into_keyframes(self) -> Vec<Keyframes> {
+        self.keyframes
+    }
+}
+
+/// One named keyframe block. The first animation gate consumes the opacity
+/// declaration from these frames; other declarations remain available for
+/// later property ratchets.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Keyframes {
+    name: Box<str>,
+    frames: Vec<Keyframe>,
+}
+
+impl Keyframes {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn frames(&self) -> &[Keyframe] {
+        &self.frames
+    }
+}
+
+/// A keyframe declaration block at a normalized offset in the animation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Keyframe {
+    offset: f32,
+    declarations: DeclarationBlock,
+}
+
+impl Keyframe {
+    pub fn offset(&self) -> f32 {
+        self.offset
+    }
+
+    pub fn declarations(&self) -> &DeclarationBlock {
+        &self.declarations
     }
 }
 
@@ -232,6 +277,91 @@ fn find_close_brace(input: &str, open: usize) -> Option<usize> {
     None
 }
 
+fn keyframes_name(prelude: &str) -> Option<&str> {
+    let mut parts = prelude.split_whitespace();
+    let at_rule = parts.next()?;
+    if !(at_rule.eq_ignore_ascii_case("@keyframes")
+        || at_rule.eq_ignore_ascii_case("@-webkit-keyframes"))
+    {
+        return None;
+    }
+    let name = parts.next()?.trim();
+    (parts.next().is_none() && !name.is_empty()).then_some(name)
+}
+
+fn keyframe_offset(prelude: &str) -> Option<f32> {
+    match prelude.trim().to_ascii_lowercase().as_str() {
+        "from" => Some(0.0),
+        "to" => Some(1.0),
+        value => value
+            .strip_suffix('%')
+            .and_then(|value| value.trim().parse::<f32>().ok())
+            .filter(|value| value.is_finite() && (0.0..=100.0).contains(value))
+            .map(|value| value / 100.0),
+    }
+}
+
+fn parse_keyframes(name: &str, input: &str, sheet: &mut Stylesheet) -> Option<Keyframes> {
+    let mut frames = Vec::new();
+    let mut cursor = 0;
+    while cursor < input.len() {
+        let Some(non_space) = input[cursor..]
+            .char_indices()
+            .find(|(_, ch)| !ch.is_whitespace())
+            .map(|(offset, _)| cursor + offset)
+        else {
+            break;
+        };
+        cursor = non_space;
+        let Some(open) = find_open_brace(input, cursor) else {
+            let tail = input[cursor..].trim();
+            if !tail.is_empty() {
+                sheet.diagnostics.push(StylesheetDiagnostic {
+                    prelude: tail.to_owned(),
+                    message: "expected a keyframe block".to_owned(),
+                });
+            }
+            break;
+        };
+        let prelude = input[cursor..open].trim();
+        let Some(close) = find_close_brace(input, open) else {
+            sheet.diagnostics.push(StylesheetDiagnostic {
+                prelude: prelude.to_owned(),
+                message: "unclosed keyframe block".to_owned(),
+            });
+            break;
+        };
+        let body = &input[open + 1..close];
+        let offsets = prelude
+            .split(',')
+            .filter_map(keyframe_offset)
+            .collect::<Vec<_>>();
+        if offsets.is_empty() {
+            sheet.diagnostics.push(StylesheetDiagnostic {
+                prelude: prelude.to_owned(),
+                message: "invalid keyframe selector".to_owned(),
+            });
+        } else {
+            let declarations = parse_declaration_block(body);
+            for offset in offsets {
+                frames.push(Keyframe {
+                    offset,
+                    declarations: declarations.clone(),
+                });
+            }
+        }
+        cursor = close + 1;
+    }
+    if frames.is_empty() {
+        return None;
+    }
+    frames.sort_by(|left, right| left.offset.total_cmp(&right.offset));
+    Some(Keyframes {
+        name: name.into(),
+        frames,
+    })
+}
+
 fn parse_rule_list(
     input: &str,
     origin: Origin,
@@ -270,7 +400,16 @@ fn parse_rule_list(
         };
         let body = &input[open + 1..close];
 
-        if let Some(condition) = prelude
+        if let Some(name) = keyframes_name(prelude) {
+            if media.is_some() {
+                sheet.diagnostics.push(StylesheetDiagnostic {
+                    prelude: prelude.to_owned(),
+                    message: "keyframes inside media groups are outside the first lane".to_owned(),
+                });
+            } else if let Some(keyframes) = parse_keyframes(name, body, sheet) {
+                sheet.keyframes.push(keyframes);
+            }
+        } else if let Some(condition) = prelude
             .get(..6)
             .filter(|prefix| prefix.eq_ignore_ascii_case("@media"))
             .and_then(|_| prelude.get(6..))

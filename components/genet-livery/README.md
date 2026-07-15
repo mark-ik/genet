@@ -59,8 +59,10 @@ fill and share the rounded clip. Raster `data:` background URLs now lower into
 the neutral image side-table and stretch to the element box. Nested scroll
 containers route wheel deltas into their retained offsets, chain at their
 boundaries to the viewport, and replay descendant paint through transforms.
-External resource URLs/background positioning and repeat, CSS keyframes, timing
-functions, and multi-property transitions remain outside this first
-interaction gate.
+Bounded `@keyframes` declarations animate opacity through the same retained
+clock, with linear, ease, ease-in, ease-out, and ease-in-out timing functions.
+Host-resolved local image bytes use the same neutral image side-table. Remote
+resource loading, replaced-element layout, background positioning and repeat,
+and multi-property transitions remain outside this first interaction gate.
 `genet.livery` therefore stays an explicit pin rather than the default static
 route.

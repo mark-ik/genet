@@ -80,6 +80,8 @@ fn rust_field(css_name: &str) -> String {
 fn value_type_path(value_type: &str) -> &'static str {
     match value_type {
         "alignment" => "crate::values::Alignment",
+        "animation-name" => "crate::values::AnimationName",
+        "timing-function" => "crate::values::TimingFunction",
         "aspect-ratio" => "crate::values::AspectRatio",
         "background-image" => "crate::values::BackgroundImage",
         "border-style" => "crate::values::BorderStyle",
@@ -129,7 +131,12 @@ fn value_type_path(value_type: &str) -> &'static str {
 fn value_type_is_copy(value_type: &str) -> bool {
     !matches!(
         value_type,
-        "background-image" | "box-shadow" | "font-family" | "grid-template" | "transform"
+        "animation-name"
+            | "background-image"
+            | "box-shadow"
+            | "font-family"
+            | "grid-template"
+            | "transform"
     )
 }
 
@@ -137,6 +144,8 @@ fn initial_expression(property: &Property) -> &'static str {
     match (property.value_type.as_str(), property.initial.as_str()) {
         ("alignment", "start") => "crate::values::Alignment::Start",
         ("alignment", "stretch") => "crate::values::Alignment::Stretch",
+        ("animation-name", "none") => "crate::values::AnimationName::None",
+        ("timing-function", "linear") => "crate::values::TimingFunction::Linear",
         ("aspect-ratio", "auto") => "crate::values::AspectRatio::Auto",
         ("background-image", "none") => "crate::values::BackgroundImage::None",
         ("border-style", "none") => "crate::values::BorderStyle::None",
@@ -193,8 +202,8 @@ fn initial_expression(property: &Property) -> &'static str {
 fn validate(db: &Database) {
     assert_eq!(db.schema, 1, "unsupported properties.toml schema");
     assert!(
-        db.property.len() >= 82,
-        "the native Cambium lane must retain at least the 82-property receipt"
+        db.property.len() >= 85,
+        "the native Cambium lane must retain at least the 85-property receipt"
     );
 
     let mut names = BTreeSet::new();
