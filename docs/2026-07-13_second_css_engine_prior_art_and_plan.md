@@ -17,7 +17,8 @@ viewport scroll, pointer-events hit testing, link rectangles, fragment
 navigation, focus state, rounded fills, and two-stop gradient layering. A
 host-driven opacity clock supplies intermediate frames, and bounded
 `transition-property`/`transition-duration` metadata starts opacity,
-background-color, and text-color transitions on that same clock, so
+background-color, text-color, and border-top-color transitions on that same
+clock, so
 `transition: all` and the bounded explicit two- and three-property lists can
 paint those changes in one retained tick. Nested scroll containers now route wheel deltas
 into retained offsets, chain at their boundary to the viewport, and replay
@@ -25,7 +26,7 @@ descendant paint through transforms. Bounded opacity-only `@keyframes` and
 named timing functions now run on the retained clock. Host-owned remote image
 fetching now feeds the same resource seam. Remaining E3 work is full WPT
 reftest parity, additional transition-property lists and interpolation beyond
-the bounded opacity/background-color/color paths, and the cold-build
+the bounded opacity/background-color/color/border-top-color paths, and the cold-build
 comparison. The
 first audit invalidated the proposed 33-accessor full-crate seam.
 The second chose Cambium structural UI as the bounded first lane.
@@ -244,7 +245,7 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   Rounded backgrounds are clipped through the neutral paint stack. Two-stop
   linear-gradient backgrounds paint as an ordered neutral layer over the color
   fill under that clip. The retained session also has a host-driven opacity
-  clock and bounded CSS opacity/background-color/color transitions, with
+  clock and bounded CSS opacity/background-color/color/border-top-color transitions, with
   intermediate-frame receipts proving `transition: all` and the explicit
   two- and three-property lists update their paint properties from the same
   clock.
@@ -285,8 +286,8 @@ covered by the paint-list receipt. The gradient receipt and opacity clock are
   covered by the paint-list, cascade, and interaction suites. The keyframe
   parser and retained opacity animation receipt cover named timing functions.
   Additional transition-property lists and interpolation beyond the new color
-  lane, full reftest parity, and the cold-build comparison remain explicit next
-  gates. The image receipt covers raster `data:` URLs, host-resolved local and
+  and border-top-color lanes, full reftest parity, and the cold-build comparison
+  remain explicit next gates. The image receipt covers raster `data:` URLs, host-resolved local and
   remote-looking bytes, intrinsic `<img>` sizing, and aspect-ratio preservation;
   the session now exercises the host fetcher for a remote image while keeping
   URL policy and caching host-owned.
@@ -297,6 +298,9 @@ The bounded explicit `opacity, background-color` and
 `opacity, background-color, color` transition lists now have cascade, value
 round-trip, and retained mid-frame receipts. A standalone `color` transition
 also paints an interpolated Parley text run through the same retained clock.
+The standalone `border-top-color` transition likewise paints the neutral top
+border through that clock; the fixture uses the supported physical border
+longhands rather than the unimplemented `border-top` shorthand.
 The Livery session now resolves a CSS/DOM image URL against the document
 address, asks the host `ResourceFetcher` for bytes, and paints the returned
 remote image; URL policy and caching remain host-owned.
@@ -322,7 +326,8 @@ apples-to-apples replacement for the 30m35s whole-workspace cold-build
 baseline.
 
 Full WPT reftest parity, broader transition lists and interpolation beyond
-color, and the E4 default production-lane switch remain open. The standalone
+color and border-top-color, and the E4 default production-lane switch remain
+open. The standalone
 Cambium WebGPU smoke now passes a native `cargo check` after local
 `genet-scripted-dom` and `layout-dom-api` patching; the checkout does not have
 the `wasm32-unknown-unknown` target installed, so that target remains

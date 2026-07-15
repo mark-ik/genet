@@ -11,8 +11,9 @@ typed `ComputedValues`. The current ratchet adds box geometry (`right`,
 `bottom`, min/max sizing, `box-sizing`, and `aspect-ratio`), corner radii,
 visibility and pointer-event state, text alignment and spacing, box shadows,
 two-stop linear-gradient and raster `data:` backgrounds, bounded opacity,
-background-color, and color transition metadata (including simultaneous `all`
-sampling and explicit two- and three-property lists),
+background-color, text color, and border-top-color transition metadata
+(including simultaneous `all` sampling and explicit two- and three-property
+lists),
 a bounded `@keyframes` opacity animation with linear and named easing
 functions, intrinsic image tiling with bounded position/repeat modes, flexbox,
 and a bounded grid track/placement family.
