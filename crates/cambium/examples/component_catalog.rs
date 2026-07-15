@@ -11,10 +11,11 @@ use std::rc::Rc;
 use cambium::{
     ActionItem, ActionListEvent, ActionListState, AnyView, DomHandle, GenetAppRunner, GenetCtx,
     GenetElement, GraphCanvasEdge, GraphCanvasNode, GraphCanvasSubgraph, GraphCanvasSwatch,
-    GridColumn, GridSpec, GridView, HoverEvent, HoverPhase, Key, KeyEvent, NamedKey, PointerClick,
-    PointerEvent, PointerPhase, RadioGroup, SelectState, Slider, StyleRange, TextInput,
-    action_list, button, button_with, checkbox, custom_leaf, data_grid, el, graph_canvas_swatch,
-    lens, map_action, menu, on_hover, on_pointer, radio_group, select, slider, styled_textarea,
+    GridColumn, GridSpec, GridView, HoverEvent, HoverPhase, Key, KeyEvent, NamedKey,
+    OverlayDismiss, OverlayRole, OverlaySurface, Placement, PointerClick, PointerEvent,
+    PointerPhase, RadioGroup, SelectState, Slider, StyleRange, TextInput, action_list, button,
+    button_with, checkbox, custom_leaf, data_grid, el, graph_canvas_swatch, lens, map_action, menu,
+    on_hover, on_pointer, overlay_surface, radio_group, select, slider, styled_textarea,
     text_field_typed, textarea_typed, toggle,
 };
 use genet_scripted_dom::{NodeId, ScriptedDom};
@@ -57,6 +58,9 @@ struct CatalogState {
     graph_swatch_selected: u8,
     graph_swatch_hovered: Option<u8>,
     graph_swatch_expanded: bool,
+    overlay_open: bool,
+    overlay_inside_presses: usize,
+    overlay_last_dismiss: Option<OverlayDismiss>,
 }
 
 impl Default for CatalogState {
@@ -85,6 +89,9 @@ impl Default for CatalogState {
             graph_swatch_selected: 1,
             graph_swatch_hovered: None,
             graph_swatch_expanded: false,
+            overlay_open: true,
+            overlay_inside_presses: 0,
+            overlay_last_dismiss: None,
         }
     }
 }
@@ -353,6 +360,40 @@ fn catalog(state: &CatalogState) -> CatalogView {
                 state.menu_selected,
                 |state: &mut CatalogState, index| state.menu_selected = index,
             ),
+            button("Open detail surface", |state: &mut CatalogState, _| {
+                state.overlay_open = true;
+                state.overlay_last_dismiss = None;
+            })
+            .attr("id", "catalog-overlay-open")
+            .attr("class", "catalog-button"),
+            state.overlay_open.then(|| {
+                overlay_surface(
+                    &OverlaySurface::new(
+                        (260.0, 34.0, 120.0, 32.0),
+                        (220.0, 104.0),
+                        (0.0, 0.0, 640.0, 280.0),
+                    )
+                    .with_placement(Placement::Below)
+                    .with_role(OverlayRole::Dialog)
+                    .with_label("Catalog detail"),
+                    el(
+                        "div",
+                        (
+                            el::<_, CatalogState, ()>("strong", "Anchored detail"),
+                            button("Use detail", |state: &mut CatalogState, _| {
+                                state.overlay_inside_presses += 1;
+                            })
+                            .attr("id", "catalog-overlay-inside")
+                            .attr("class", "catalog-button"),
+                        ),
+                    )
+                    .attr("class", "catalog-overlay-content"),
+                    |state: &mut CatalogState, reason| {
+                        state.overlay_open = false;
+                        state.overlay_last_dismiss = Some(reason);
+                    },
+                )
+            }),
         ),
     )
     .attr("id", "navigation-section")
@@ -740,6 +781,32 @@ fn run_interactions(runner: &mut CatalogRunner) {
     let menu_row = find_class(&runner.dom().borrow(), root, "menu-row");
     runner.dispatch_click(menu_row, PointerClick::at((4.0, 4.0)));
     assert_eq!(runner.state().menu_selected, 1);
+
+    let inside_overlay = find_id(&runner.dom().borrow(), root, "catalog-overlay-inside");
+    runner.dispatch_click(inside_overlay, PointerClick::at((2.0, 2.0)));
+    assert!(runner.state().overlay_open);
+    assert_eq!(runner.state().overlay_inside_presses, 1);
+    let dismiss_layer = find_class(
+        &runner.dom().borrow(),
+        root,
+        "overlay-surface-dismiss-layer",
+    );
+    runner.dispatch_click(dismiss_layer, PointerClick::at((2.0, 2.0)));
+    assert!(!runner.state().overlay_open);
+    assert_eq!(
+        runner.state().overlay_last_dismiss,
+        Some(OverlayDismiss::OutsideClick)
+    );
+    let open_overlay = find_id(&runner.dom().borrow(), root, "catalog-overlay-open");
+    runner.dispatch_click(open_overlay, PointerClick::at((2.0, 2.0)));
+    let inside_overlay = find_id(&runner.dom().borrow(), root, "catalog-overlay-inside");
+    runner.set_focus(Some(inside_overlay));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::Escape)));
+    assert!(!runner.state().overlay_open);
+    assert_eq!(
+        runner.state().overlay_last_dismiss,
+        Some(OverlayDismiss::Escape)
+    );
 
     let header = find_class(&runner.dom().borrow(), root, "grid-header-cell");
     runner.set_focus(Some(header));

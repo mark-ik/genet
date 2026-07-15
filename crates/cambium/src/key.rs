@@ -175,13 +175,16 @@ impl KeyEvent {
 ///
 /// The propagation phase is the `capture` field, exactly as
 /// [`OnClick`](crate::OnClick): `false` (default) = bubble (`focus → root`),
-/// `true` (via [`OnKey::capture`]) = capture (`root → focus`). Registering a key
-/// handler marks the element focusable in *either* phase.
+/// `true` (via [`OnKey::capture`]) = capture (`root → focus`). A listener is
+/// focusable in either phase unless [`OnKey::focusable`] opts it out.
 pub struct OnKey<V, State, Action, F> {
     child: V,
     handler: F,
     /// The propagation phase: `true` = capture, `false` = bubble (default).
     capture: bool,
+    /// Whether this listener also puts its element in the focus traversal set.
+    /// Ancestor listeners can opt out while still receiving bubbled keys.
+    focusable: bool,
     phantom: PhantomData<fn() -> (State, Action)>,
 }
 
@@ -194,14 +197,23 @@ impl<V, State, Action, F> OnKey<V, State, Action, F> {
     /// A capture key listener on an ancestor fires *before* a bubble listener on
     /// the focused node (or a descendant). A listener fires in exactly one
     /// phase, so switching this never double-fires the same handler.
-    /// Focusability is unaffected: the element is focusable in either phase.
+    /// Focusability is unaffected by phase.
     pub fn capture(mut self, value: bool) -> Self {
         self.capture = value;
         self
     }
+
+    /// Set whether this key listener makes its own element focusable. Default
+    /// `true`. Set `false` for an ancestor listener that observes keys from
+    /// focused descendants, such as Escape dismissal on an overlay container.
+    pub fn focusable(mut self, value: bool) -> Self {
+        self.focusable = value;
+        self
+    }
 }
 
-/// Attach a native key handler to `child`, making `child`'s element focusable.
+/// Attach a native key handler to `child`, making `child`'s element focusable
+/// by default.
 ///
 /// `handler` runs when [`dispatch_key`](crate::GenetAppRunner::dispatch_key)
 /// routes a [`KeyEvent`] to this view — i.e. when this view's node is the focus
@@ -211,9 +223,10 @@ impl<V, State, Action, F> OnKey<V, State, Action, F> {
 /// [`MessageResult::Action`]. The runner rebuilds the view tree afterwards so
 /// any state change reaches the DOM.
 ///
-/// Registering a key handler is also what makes `child`'s node *focusable*
-/// (in either phase): [`GenetCtx::is_focusable`](crate::GenetCtx::is_focusable)
-/// returns `true` for it, and a click on it (or a descendant) focuses it.
+/// Registering a key handler also makes `child`'s node focusable unless
+/// [`OnKey::focusable(false)`](OnKey::focusable) opts out. The passive form is
+/// for composite ancestors that receive bubbled keys without becoming an
+/// extra Tab stop.
 pub fn on_key<V, State, Action, OA, F>(child: V, handler: F) -> OnKey<V, State, Action, F>
 where
     State: 'static,
@@ -227,6 +240,7 @@ where
         handler,
         // Default to the bubble phase, matching the browser and `OnClick`.
         capture: false,
+        focusable: true,
         phantom: PhantomData,
     }
 }
@@ -267,7 +281,7 @@ where
             // phase (`self.capture`) is stored alongside it so dispatch routes
             // this listener in the matching pass.
             let path = ctx.view_path().to_vec();
-            ctx.register_key(node, path.clone(), self.capture);
+            ctx.register_key(node, path.clone(), self.capture, self.focusable);
             (
                 element,
                 OnKeyState {
@@ -300,10 +314,14 @@ where
             // as `OnClick::rebuild` (the path changes when this subtree was
             // adopted into a different position — moveBefore plan S5).
             let node = *element.node;
-            if node != prev_node || ctx.view_path() != view_state.path.as_slice() {
+            if node != prev_node
+                || ctx.view_path() != view_state.path.as_slice()
+                || self.capture != prev.capture
+                || self.focusable != prev.focusable
+            {
                 ctx.unregister_key(prev_node, &view_state.path);
                 let path = ctx.view_path().to_vec();
-                ctx.register_key(node, path.clone(), self.capture);
+                ctx.register_key(node, path.clone(), self.capture, self.focusable);
                 view_state.node = node;
                 view_state.path = path;
             }

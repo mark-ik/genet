@@ -1275,6 +1275,50 @@ mod keyboard {
         assert_eq!(runner.focus(), Some(b), "Shift+Tab goes backward (wraps)");
     }
 
+    /// A key listener on a composite ancestor can observe Escape bubbling from
+    /// a focused child without creating an extra Tab stop of its own.
+    #[test]
+    fn passive_ancestor_key_listener_is_not_a_tab_stop() {
+        #[derive(Default)]
+        struct State {
+            dismissed: bool,
+        }
+
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            |_: &State| {
+                on_key(
+                    el::<_, State, ()>(
+                        "section",
+                        focusable(on_click(
+                            el::<_, State, ()>("button", "inside"),
+                            |_state: &mut State, _| {},
+                        )),
+                    ),
+                    |state: &mut State, event: KeyEvent| {
+                        if matches!(event.key, Key::Named(NamedKey::Escape)) {
+                            state.dismissed = true;
+                        }
+                    },
+                )
+                .focusable(false)
+            },
+            State::default(),
+        );
+        let root = runner.root();
+        let button = find_element_by_name(&dom.borrow(), root, "button").expect("button");
+
+        runner.dispatch_key(tab(false));
+        assert_eq!(
+            runner.focus(),
+            Some(button),
+            "the ancestor is skipped by Tab"
+        );
+        runner.dispatch_key(named(NamedKey::Escape));
+        assert!(runner.state().dismissed, "Escape bubbled to the ancestor");
+    }
+
     // --- focus routing --------------------------------------------------------
 
     /// `<div><input on_key=edit/><span/></div>`: a focusable `<input>` (carries a

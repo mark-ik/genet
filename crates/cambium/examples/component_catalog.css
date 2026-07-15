@@ -183,6 +183,24 @@ textarea {
     position: relative;
 }
 
+.overlay-surface-dismiss-layer {
+    background-color: transparent;
+    z-index: 30;
+}
+
+.overlay-surface-panel {
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-control-border);
+    box-shadow: 0 0.35rem 1rem rgba(24, 32, 48, 0.18);
+    z-index: 31;
+}
+
+.catalog-overlay-content {
+    display: grid;
+    gap: 0.75rem;
+    padding: 0.75rem;
+}
+
 .menu {
     background-color: var(--catalog-panel);
     border: 1px solid var(--catalog-control-border);

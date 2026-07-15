@@ -45,6 +45,10 @@ pub struct Handler {
     pub path: Vec<ViewId>,
     /// The phase this listener fires in: `true` = capture, `false` = bubble.
     pub capture: bool,
+    /// Whether this handler makes its node a Tab/click focus target. Click
+    /// handlers set this to `false`; key handlers default to `true` and may opt
+    /// out when they only observe keys bubbling from descendants.
+    pub focusable: bool,
 }
 
 /// The [`ViewPathTracker`] context for all Genet views.
@@ -70,9 +74,10 @@ pub struct GenetCtx {
     /// `NodeId → `[`Handler`]s for key handlers, the parallel of
     /// [`click_handlers`](Self::click_handlers). Each path is the `view_path()`
     /// captured inside an [`OnKey`](crate::OnKey)'s `with_id`, ending in
-    /// `ON_KEY_ID`. A non-empty entry here is one source of *focusable*
-    /// (**regardless of phase**); the other is an explicit [`focusable`](crate::focusable)
-    /// marker, tracked in [`focusable`](Self::focusable).
+    /// `ON_KEY_ID`. Handlers whose [`Handler::focusable`] bit is true contribute
+    /// to the focus set regardless of phase; the other source is an explicit
+    /// [`focusable`](crate::focusable) marker, tracked in
+    /// [`focusable`](Self::focusable).
     key_handlers: HashMap<NodeId, Vec<Handler>>,
     /// Nodes marked focusable by an explicit [`focusable`](crate::focusable) view,
     /// independent of any key handler — so a plain `on_click` button (no `on_key`)
@@ -306,7 +311,11 @@ impl GenetCtx {
     pub fn register_click(&mut self, node: NodeId, path: Vec<ViewId>, capture: bool) {
         let handlers = self.click_handlers.entry(node).or_default();
         handlers.retain(|h| h.path != path);
-        handlers.push(Handler { path, capture });
+        handlers.push(Handler {
+            path,
+            capture,
+            focusable: false,
+        });
     }
 
     /// Drop the click handler with `path` from `node` (teardown, or before a
@@ -328,8 +337,9 @@ impl GenetCtx {
         self.click_handlers.get(&node).map_or(&[], Vec::as_slice)
     }
 
-    /// Register `path` (in phase `capture`) as *a* key handler for `node`, which
-    /// also makes `node` focusable. Appended after any already there.
+    /// Register `path` (in phase `capture`) as *a* key handler for `node`.
+    /// `focusable` controls whether this listener also puts the node in the
+    /// focus traversal set. Appended after any already there.
     ///
     /// Called by [`OnKey::build`](crate::OnKey) (and on rebuild when the wrapped
     /// node changes). `path` is the `view_path()` captured *inside* the handler's
@@ -337,15 +347,25 @@ impl GenetCtx {
     /// `message`; `capture` is the per-listener phase
     /// ([`OnKey::capture`](crate::OnKey::capture), default `false` = bubble).
     /// Idempotent per `path`, like [`register_click`](Self::register_click).
-    pub fn register_key(&mut self, node: NodeId, path: Vec<ViewId>, capture: bool) {
+    pub fn register_key(
+        &mut self,
+        node: NodeId,
+        path: Vec<ViewId>,
+        capture: bool,
+        focusable: bool,
+    ) {
         let handlers = self.key_handlers.entry(node).or_default();
         handlers.retain(|h| h.path != path);
-        handlers.push(Handler { path, capture });
+        handlers.push(Handler {
+            path,
+            capture,
+            focusable,
+        });
     }
 
     /// Drop the key handler with `path` from `node`, leaving any siblings. When
-    /// the last key handler goes, `node` is no longer focusable *via a handler*
-    /// (an explicit [`focusable`](crate::focusable) marker still counts).
+    /// the last focusable key handler goes, `node` is no longer focusable via a
+    /// handler (an explicit [`focusable`](crate::focusable) marker still counts).
     pub fn unregister_key(&mut self, node: NodeId, path: &[ViewId]) {
         if let Some(handlers) = self.key_handlers.get_mut(&node) {
             handlers.retain(|h| h.path != path);
@@ -357,8 +377,8 @@ impl GenetCtx {
 
     /// The key handlers on `node`, in registration order (empty if none).
     ///
-    /// A non-empty result also means `node` is *focusable* via a handler —
-    /// independent of phase: the runner's
+    /// A handler whose [`Handler::focusable`] is true also makes `node`
+    /// focusable, independent of phase. The runner's
     /// [`dispatch_click`](crate::GenetAppRunner::dispatch_click) uses
     /// [`is_focusable`](Self::is_focusable) to find the focus target (nearest
     /// focusable ancestor of a click), and
@@ -386,12 +406,13 @@ impl GenetCtx {
         }
     }
 
-    /// Whether `node` is *focusable*: it carries a key handler (in **either**
-    /// phase) **or** an explicit [`focusable`](crate::focusable) marker. Must not
-    /// depend on a handler's capture/bubble phase, so click-to-focus keeps working
-    /// for a capture-phase key listener too.
+    /// Whether `node` is *focusable*: it carries a focusable key handler (in
+    /// either phase) or an explicit [`focusable`](crate::focusable) marker.
     pub fn is_focusable(&self, node: NodeId) -> bool {
-        self.key_handlers.contains_key(&node) || self.focusable.contains_key(&node)
+        self.key_handlers
+            .get(&node)
+            .is_some_and(|handlers| handlers.iter().any(|handler| handler.focusable))
+            || self.focusable.contains_key(&node)
     }
 
     /// Register `path` as the pointer-drag handler for `node`

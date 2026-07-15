@@ -19,6 +19,7 @@ The ordered expansion and promotion rules live in
 | Text fields | Single-line editing, multiline structure, styled runs |
 | Action list | Combobox/listbox linkage, disabled-item skipping, action routing |
 | Overlay menu | Positioned menu rendering and pointer selection |
+| Overlay surface | Edge-aware placement, dialog semantics, outside-click dismissal, passive Escape routing |
 | Data grid | Grid/row/header/cell semantics, keyboard-sortable headers, and bounded DOM rows for a 10,000-row model |
 | Graph-canvas swatch | Shared graph paint path, native node targets, click/hover routing, selected/focus state, expand action |
 | Sprigging leaves | Five catalog leaf elements, retained registry entries, paint commands, clean repaint gate |
