@@ -3,7 +3,7 @@
 **Date:** 2026-07-13
 **Status:** E0a full-path audit, E0b Cambium lane choice/40-property catalog,
 E1 values/codegen, E2 style resolution, and the first E3 integration slice are
-landed. `genet-livery` now adapts `LayoutDom` into Livery's selector and cascade
+landed. The catalog has since ratcheted to 79 properties. `genet-livery` now adapts `LayoutDom` into Livery's selector and cascade
 path, retains a concrete Livery style plane, lowers the bounded box model into
 a standalone Taffy tree, and emits backgrounds and borders through the neutral
 `PaintList` API. Consecutive text and inline-element children now shape in one
@@ -12,9 +12,9 @@ font resources, and cached frame. The opt-in `genet.livery` session route
 lowers that PaintList into `netrender::Scene`; the existing default remains
 `genet.web`. The integration crate's normal/build dependency graph excludes
 Stylo. Parley's positioned lines now supply multi-fragment span paint geometry
-and atomic `inline-block` placement. Full E3 parity remains open at feeding
-shaped height into parent block flow, inline box-edge decoration, bidi paint
-order, clipping and stacking, interaction semantics, and reftest coverage. The
+and atomic `inline-block` placement. Full E3 parity remains open at hit-test
+routing, layered background/image fidelity, animation/transition runtime, and
+reftest coverage. The
 first audit invalidated the proposed 33-accessor full-crate seam.
 The second chose Cambium structural UI as the bounded first lane.
 Mark's framing: "grow a rust alternative using firefox, chrome, servo,
@@ -209,7 +209,8 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
 - **E3 - lane integration: partial.** The `genet-livery` integration crate now
   adapts any `LayoutDom` to Livery selectors, combines clean-room UA rules,
   author sheets, inline declarations, media, and host interaction state into a
-  concrete style plane, and lowers the 40-property box subset into standalone
+  concrete style plane, and lowers the ratcheted geometry, flex, and grid
+  subset into standalone
   Taffy fragments. The audited Cambium catalog resolves and lays out through
   this path. A cross-engine receipt agrees on explicit/available widths and
   explicit heights for the catalog's structural boxes. The lane now emits box
@@ -224,10 +225,10 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   unchanged. Parley's positioned output now gives wrapped inline elements one
   paint fragment per line and places `inline-block` children atomically in the
   shared line. `cargo tree` proves the `genet-livery` normal/build graph
-  contains neither `genet-layout` nor Stylo. Remaining: shaped-height feedback
-  into Taffy's parent block flow, inline box-edge decoration, bidi paint
-  ordering, clipping and stacking, link/scroll/focus semantics, full reftest
-  parity, and an apples-to-apples cold-build delta against the 30m35s baseline.
+  contains neither `genet-layout` nor Stylo. Remaining: hit-test routing for
+  pointer events and links, scroll/focus semantics, layered background/image
+  fidelity, animation/transition runtime, full reftest parity, and an
+  apples-to-apples cold-build delta against the 30m35s baseline.
 - **E4 — first production lane.** One real lane (host chrome or
   smolweb) ships on Livery by default. Receipt: the lane's
   existing suites green + capture receipts.
@@ -235,10 +236,53 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   WPT/reftest additions, Ladybird-style. Fullweb stays stylo until the
   audit says otherwise.
 
+### 2026-07-15 capability-ratchet receipt
+
+The executable growth pass expands Livery from the original 40-property
+catalog plus the earlier opacity/transform rows to 79 properties. It adds
+`right`/`bottom`, min/max sizing, `box-sizing`, `aspect-ratio`, the four
+physical corner-radius longhands and `border-radius`, visibility and
+pointer-events state, text alignment and spacing, text-decoration color,
+box-shadow, flexbox, and a bounded grid track/placement family. Taffy consumes
+the geometry, flex, and grid values; Parley consumes alignment and spacing; the
+neutral border and shadow primitives carry radii and shadows; hidden boxes
+retain layout space while suppressing paint. The receipt is the Livery and
+genet-livery test suites. Hit-test routing, layered backgrounds/images, and
+animation/transition runtime remain explicit next gates.
+
+## The destination, named
+
+*(Amended 2026-07-14.)* Livery's document profile grinds toward full browser
+conformance: every longhand, on the WPT ratchet, Ladybird-style. That is a
+destination, not a schedule. The stages above are unchanged, fullweb ships on
+genet-stylo, and the switch happens per lane when receipts beat the incumbent
+rather than by decree. Naming the destination costs four decisions made now so
+that day stays reachable:
+
+- **ComputedValues plans a grouping layer.** A flat 40-field struct is right
+  for the seed and wrong at 450; all three majors partition computed style
+  into shared groups with copy-on-write rare data. The generator reserves the
+  grouping seam now, even while every profile emits a single group.
+- **Custom properties get their slot early.** `var()` substitution forces an
+  unparsed-value deferral through the parsing path, and retrofitting that slot
+  is the classic pain. The declaration representation carries the slot before
+  any lane implements it; chisel theming remains the implementation trigger.
+- **The schema is written for 450, populated with 40.** `properties.toml`
+  stays shaped like the full property space (the same TOML shape upstream
+  stylo migrated to); lane-specific shortcuts live in profiles, never in the
+  schema.
+- **Spec-illegal extensions get a namespace.** Host-lane inventions (spring
+  timing functions, field-bound values, host cascade origins) live behind a
+  host profile or a prefixed lane, so the document profile stays WPT-clean
+  from day one. The two identities, host GUI engine and future fullweb engine,
+  never share a namespace and so never conflict.
+
 ## Non-goals, named
 
-- Not a stylo replacement on the fullweb lane — the fork plan stands,
-  including realignment onto upstream releases.
+- Not a near-term stylo replacement on the fullweb lane: the fork plan
+  stands, including realignment onto upstream releases. The destination
+  section above names the long grind; genet-stylo carries fullweb until
+  the receipts say otherwise.
 - No parallel traversal, no style sharing cache, no rule tree in the
   first cut — small-DOM-first; add sharing/memoization
   (MatchedPropertiesCache shape first) only when a measured consumer

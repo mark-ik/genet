@@ -4,7 +4,9 @@
 **Status:** E0b lane choice, themed catalog fixture, and original 40-property
 clean-room database landed. The E1 handoff into Livery and the first E3
 `genet-livery` integration slice have also landed. The native capability
-ratchet now contains 42 properties with `opacity` and `transform`. Source
+ratchet now contains 79 properties, including geometry, corner radii,
+visibility, alignment, spacing, box shadows, flexbox, and bounded grid
+placement. Source
 hashes are recorded below.
 
 Audited revisions: Cambium `a7c4603c` for the live catalog and Genet
@@ -150,6 +152,13 @@ reftest parity remain the gate for production selection.
 
 ## E0 closeout
 
+The 2026-07-15 capability receipt grows the original catalog plus the first
+two ratchet rows to 79 properties. Geometry, flexbox, and bounded grid values
+are lowered into Taffy; corner radii and box shadows reach neutral paint
+commands; Parley consumes text alignment and spacing; and hidden boxes retain
+layout space while suppressing paint. This is an E3 capability ratchet, not a
+change to the original catalog census.
+
 The lane choice, themed fixture, expanded database, and executable coverage
 guard are landed. `components/livery/tests/catalog_contract.rs` checks the
 catalog declarations against Livery's generated property and shorthand tables
@@ -167,5 +176,5 @@ rows.
 This audit is complete when the checked-in names cover Cambium and Sprigging's
 production-generated declarations, Genet's baseline UA sheet, and the catalog
 theme after shorthand expansion; `properties.toml` must preserve those 40 rows
-plus explicitly tested capability-ratchet rows, currently two. The executable
+plus explicitly tested capability-ratchet rows, currently thirty-nine. The executable
 guard and independent TOML check satisfy that condition.

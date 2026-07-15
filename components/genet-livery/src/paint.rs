@@ -7,15 +7,16 @@ use layout_dom_api::{LayoutDom, NodeKind};
 use livery::{
     ComputedValues,
     values::{
-        BorderStyle as CssBorderStyle, Color, Display, FontSize, Length, LengthPercentage,
-        LengthUnit, Overflow as CssOverflow, Position, TransformFunction, ZIndex,
+        BorderStyle as CssBorderStyle, BoxShadow as CssBoxShadow, Color, Display, FontSize,
+        Length, LengthPercentage, LengthUnit, Overflow as CssOverflow, Position, Radius,
+        TransformFunction, Visibility, ZIndex,
     },
 };
 use paint_list_api::{
-    BorderDetails, BorderItem, BorderRadius, BorderSide, BorderStyle, ClipKind, ClipSpec, ColorF,
-    CommonPlacement, DeviceIntSize, EngineId, FontResource, LayerSpec, LayoutPoint, LayoutRect,
-    LayoutSideOffsets, LayoutTransform, NormalBorder, PaintCmd, PaintList, RectItem, TransformKind,
-    TransformSpec,
+    BorderDetails, BorderItem, BorderRadius, BorderSide, BorderStyle, BoxShadowClipMode, ClipKind,
+    ClipSpec, ColorF, CommonPlacement, DeviceIntSize, EngineId, FontResource, LayerSpec,
+    LayoutPoint, LayoutRect, LayoutSideOffsets, LayoutSize, LayoutTransform, LayoutVector2D,
+    NormalBorder, PaintCmd, PaintList, RectItem, ShadowItem, TransformKind, TransformSpec,
 };
 use serde::{Deserialize, Serialize};
 
@@ -143,7 +144,7 @@ fn emit_node<D>(
 {
     let transform = styles
         .get(id)
-        .filter(|style| style.display != Display::None)
+        .filter(|style| style.display != Display::None && style.visibility == Visibility::Visible)
         .and_then(|style| {
             fragments
                 .get(id)
@@ -155,7 +156,7 @@ fn emit_node<D>(
     }
     let opacity = styles
         .get(id)
-        .filter(|style| style.display != Display::None)
+        .filter(|style| style.display != Display::None && style.visibility == Visibility::Visible)
         .map(|style| style.opacity.value())
         .filter(|opacity| *opacity < 1.0);
     if let Some(opacity) = opacity {
@@ -208,7 +209,7 @@ where
     let inherited = match dom.kind(id) {
         NodeKind::Element => {
             let style = styles.get(id)?;
-            if style.display == Display::None {
+            if style.display == Display::None || style.visibility != Visibility::Visible {
                 return None;
             }
             text.system
@@ -219,6 +220,7 @@ where
                 .get(id)
                 .filter(|fragment| paintable_fragment(fragment))
             {
+                emit_shadow(list, style, fragment);
                 emit_background(list, style, fragment);
                 emit_border(list, style, fragment);
             }
@@ -664,6 +666,7 @@ fn emit_inline_element_decoration<Id>(
         }
         let last = paintable.len().saturating_sub(1);
         for (index, fragment) in paintable.iter().enumerate() {
+            emit_shadow(list, style, fragment);
             emit_background(list, style, fragment);
             emit_inline_border(list, style, fragment, index == 0, index == last);
         }
@@ -673,6 +676,7 @@ fn emit_inline_element_decoration<Id>(
             .filter(|fragment| paintable_fragment(fragment))
         && frame.mark_decoration_painted(id)
     {
+        emit_shadow(list, style, fragment);
         emit_background(list, style, fragment);
         emit_border(list, style, fragment);
     }
@@ -717,6 +721,35 @@ fn emit_background(list: &mut LiveryPaintList, style: &ComputedValues, fragment:
     }));
 }
 
+fn emit_shadow(list: &mut LiveryPaintList, style: &ComputedValues, fragment: &Fragment) {
+    let CssBoxShadow::Value(shadow) = &style.box_shadow else {
+        return;
+    };
+    let em = used_font_size(style);
+    let length = |value: Length| {
+        value.value
+            * match value.unit {
+                LengthUnit::Px => 1.0,
+                LengthUnit::Em => em,
+                LengthUnit::Rem => 16.0,
+            }
+    };
+    list.commands.push(PaintCmd::DrawShadow(ShadowItem {
+        placement: CommonPlacement::new(bounds(fragment)),
+        box_bounds: bounds(fragment),
+        offset: LayoutVector2D::new(length(shadow.offset_x), length(shadow.offset_y)),
+        color: resolve_color(shadow.color, used_text_color(style)),
+        blur_radius: length(shadow.blur_radius).max(0.0),
+        spread_radius: length(shadow.spread_radius),
+        border_radius: border_radius(style, fragment),
+        clip_mode: if shadow.inset {
+            BoxShadowClipMode::Inset
+        } else {
+            BoxShadowClipMode::Outset
+        },
+    }));
+}
+
 fn emit_border(list: &mut LiveryPaintList, style: &ComputedValues, fragment: &Fragment) {
     emit_inline_border(list, style, fragment, true, true);
 }
@@ -750,7 +783,7 @@ fn emit_inline_border(
     list.commands.push(PaintCmd::DrawBorder(BorderItem {
         placement: CommonPlacement::new(bounds(fragment)),
         widths,
-        details: BorderDetails::Normal(NormalBorder {
+            details: BorderDetails::Normal(NormalBorder {
             left: border_side(style.border_left_style, style.border_left_color, current),
             right: border_side(style.border_right_style, style.border_right_color, current),
             top: border_side(style.border_top_style, style.border_top_color, current),
@@ -759,10 +792,26 @@ fn emit_inline_border(
                 style.border_bottom_color,
                 current,
             ),
-            radius: BorderRadius::zero(),
+            radius: border_radius(style, fragment),
             do_aa: true,
         }),
     }));
+}
+
+fn border_radius(style: &ComputedValues, fragment: &Fragment) -> BorderRadius {
+    let em = used_font_size(style);
+    let corner = |x: Radius, y: Radius| {
+        LayoutSize::new(
+            super::layout::length_percentage_px(x.0, em, fragment.width),
+            super::layout::length_percentage_px(y.0, em, fragment.height),
+        )
+    };
+    BorderRadius {
+        top_left: corner(style.border_top_left_radius, style.border_top_left_radius),
+        top_right: corner(style.border_top_right_radius, style.border_top_right_radius),
+        bottom_left: corner(style.border_bottom_left_radius, style.border_bottom_left_radius),
+        bottom_right: corner(style.border_bottom_right_radius, style.border_bottom_right_radius),
+    }
 }
 
 fn border_side(style: CssBorderStyle, color: Color, current: ColorF) -> BorderSide {

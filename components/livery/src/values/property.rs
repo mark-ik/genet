@@ -1,6 +1,6 @@
 use std::{fmt, str::FromStr};
 
-use super::{Length, LengthPercentage, ParseError, format_number, keyword_value};
+use super::{Color, Length, LengthPercentage, ParseError, format_number, keyword_value};
 
 keyword_value! {
     /// CSS border line style.
@@ -25,11 +25,116 @@ keyword_value! {
         Inline => "inline",
         Block => "block",
         InlineBlock => "inline-block",
+        Flex => "flex",
+        Grid => "grid",
         Table => "table",
         TableRowGroup => "table-row-group",
         TableRow => "table-row",
         TableCell => "table-cell",
         TableCaption => "table-caption",
+    }
+}
+
+keyword_value! {
+    /// CSS box sizing mode used by the layout adapter.
+    pub enum BoxSizing {
+        ContentBox => "content-box",
+        BorderBox => "border-box",
+    }
+}
+
+keyword_value! {
+    /// Whether a box participates in hit testing and event dispatch.
+    pub enum PointerEvents {
+        Auto => "auto",
+        None => "none",
+    }
+}
+
+keyword_value! {
+    /// Visibility state. Hidden boxes retain layout space but are not painted.
+    pub enum Visibility {
+        Visible => "visible",
+        Hidden => "hidden",
+        Collapse => "collapse",
+    }
+}
+
+keyword_value! {
+    /// Inline-axis text alignment keywords used by Parley.
+    pub enum TextAlign {
+        Start => "start",
+        End => "end",
+        Left => "left",
+        Right => "right",
+        Center => "center",
+        Justify => "justify",
+    }
+}
+
+keyword_value! {
+    /// Flex and grid main/cross-axis alignment keywords.
+    pub enum Alignment {
+        Start => "start",
+        End => "end",
+        FlexStart => "flex-start",
+        FlexEnd => "flex-end",
+        Center => "center",
+        Baseline => "baseline",
+        Stretch => "stretch",
+        SpaceBetween => "space-between",
+        SpaceAround => "space-around",
+        SpaceEvenly => "space-evenly",
+    }
+}
+
+keyword_value! {
+    pub enum FlexDirection {
+        Row => "row",
+        RowReverse => "row-reverse",
+        Column => "column",
+        ColumnReverse => "column-reverse",
+    }
+}
+
+keyword_value! {
+    pub enum FlexWrap {
+        NoWrap => "nowrap",
+        Wrap => "wrap",
+        WrapReverse => "wrap-reverse",
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GridAutoFlow {
+    Row,
+    Column,
+    RowDense,
+    ColumnDense,
+}
+
+impl FromStr for GridAutoFlow {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        match input.trim().to_ascii_lowercase().as_str() {
+            "row" => Ok(Self::Row),
+            "column" => Ok(Self::Column),
+            "row dense" => Ok(Self::RowDense),
+            "column dense" => Ok(Self::ColumnDense),
+            _ => Err(ParseError::expected("grid-auto-flow keywords")),
+        }
+    }
+}
+
+impl fmt::Display for GridAutoFlow {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Row => "row",
+            Self::Column => "column",
+            Self::RowDense => "row dense",
+            Self::ColumnDense => "column dense",
+        })
     }
 }
 
@@ -231,6 +336,7 @@ impl fmt::Display for FontWeight {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Size {
     Auto,
+    None,
     MinContent,
     MaxContent,
     FitContent(LengthPercentage),
@@ -244,6 +350,9 @@ impl FromStr for Size {
         let input = input.trim();
         if input.eq_ignore_ascii_case("auto") {
             return Ok(Self::Auto);
+        }
+        if input.eq_ignore_ascii_case("none") {
+            return Ok(Self::None);
         }
         if input.eq_ignore_ascii_case("min-content") {
             return Ok(Self::MinContent);
@@ -267,10 +376,184 @@ impl fmt::Display for Size {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Auto => formatter.write_str("auto"),
+            Self::None => formatter.write_str("none"),
             Self::MinContent => formatter.write_str("min-content"),
             Self::MaxContent => formatter.write_str("max-content"),
             Self::FitContent(value) => write!(formatter, "fit-content({value})"),
             Self::Value(value) => value.fmt(formatter),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GridTrack {
+    Auto,
+    MinContent,
+    MaxContent,
+    Px(f32),
+    Percent(f32),
+    Fr(f32),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum GridTemplate {
+    None,
+    Tracks(Vec<GridTrack>),
+}
+
+impl FromStr for GridTemplate {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let input = input.trim();
+        if input.eq_ignore_ascii_case("none") {
+            return Ok(Self::None);
+        }
+        let mut tracks = Vec::new();
+        for component in input.split_ascii_whitespace() {
+            let track = if component.eq_ignore_ascii_case("auto") {
+                GridTrack::Auto
+            } else if component.eq_ignore_ascii_case("min-content") {
+                GridTrack::MinContent
+            } else if component.eq_ignore_ascii_case("max-content") {
+                GridTrack::MaxContent
+            } else if let Some(value) = component.strip_suffix("fr") {
+                GridTrack::Fr(parse_non_negative(value)?)
+            } else if let Some(value) = component.strip_suffix('%') {
+                GridTrack::Percent(parse_non_negative(value)? / 100.0)
+            } else {
+                GridTrack::Px(
+                    component
+                        .parse::<Length>()
+                        .map_err(|_| ParseError::expected("grid track sizes"))?
+                        .value,
+                )
+            };
+            tracks.push(track);
+        }
+        if tracks.is_empty() {
+            Err(ParseError::expected("one or more grid tracks"))
+        } else {
+            Ok(Self::Tracks(tracks))
+        }
+    }
+}
+
+impl fmt::Display for GridTemplate {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => formatter.write_str("none"),
+            Self::Tracks(tracks) => {
+                for (index, track) in tracks.iter().enumerate() {
+                    if index > 0 {
+                        formatter.write_str(" ")?;
+                    }
+                    track.fmt(formatter)?;
+                }
+                Ok(())
+            },
+        }
+    }
+}
+
+impl fmt::Display for GridTrack {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Auto => formatter.write_str("auto"),
+            Self::MinContent => formatter.write_str("min-content"),
+            Self::MaxContent => formatter.write_str("max-content"),
+            Self::Px(value) => write!(formatter, "{}px", format_number(*value)),
+            Self::Percent(value) => write!(formatter, "{}%", format_number(*value * 100.0)),
+            Self::Fr(value) => write!(formatter, "{}fr", format_number(*value)),
+        }
+    }
+}
+
+fn parse_non_negative(input: &str) -> Result<f32, ParseError> {
+    input
+        .parse::<f32>()
+        .ok()
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .ok_or_else(|| ParseError::expected("a non-negative grid track number"))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GridPlacement {
+    Auto,
+    Line(i16),
+    Span(u16),
+}
+
+impl FromStr for GridPlacement {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let input = input.trim();
+        if input.eq_ignore_ascii_case("auto") {
+            return Ok(Self::Auto);
+        }
+        if let Some(span) = input.strip_prefix("span ") {
+            return span
+                .parse::<u16>()
+                .ok()
+                .filter(|value| *value > 0)
+                .map(Self::Span)
+                .ok_or_else(|| ParseError::expected("a positive grid span"));
+        }
+        input
+            .parse::<i16>()
+            .map(Self::Line)
+            .map_err(|_| ParseError::expected("auto, span, or a grid line number"))
+    }
+}
+
+impl fmt::Display for GridPlacement {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Auto => formatter.write_str("auto"),
+            Self::Line(value) => value.fmt(formatter),
+            Self::Span(value) => write!(formatter, "span {value}"),
+        }
+    }
+}
+
+/// CSS `aspect-ratio`, represented as width divided by height.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AspectRatio {
+    Auto,
+    Ratio(f32),
+}
+
+impl FromStr for AspectRatio {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let input = input.trim();
+        if input.eq_ignore_ascii_case("auto") {
+            return Ok(Self::Auto);
+        }
+        let (width, height) = input
+            .split_once('/')
+            .map_or((input, "1"), |(width, height)| (width.trim(), height.trim()));
+        let width = width
+            .parse::<f32>()
+            .ok()
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .ok_or_else(|| ParseError::expected("a positive aspect-ratio"))?;
+        let height = height
+            .parse::<f32>()
+            .ok()
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .ok_or_else(|| ParseError::expected("a positive aspect-ratio"))?;
+        Ok(Self::Ratio(width / height))
+    }
+}
+
+impl fmt::Display for AspectRatio {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Auto => formatter.write_str("auto"),
+            Self::Ratio(value) => formatter.write_str(&format_number(*value)),
         }
     }
 }
@@ -308,6 +591,164 @@ macro_rules! auto_length_percentage {
 
 auto_length_percentage!(Inset);
 auto_length_percentage!(Margin);
+
+/// A non-negative border corner radius component.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Radius(pub LengthPercentage);
+
+impl Radius {
+    pub const ZERO: Self = Self(LengthPercentage::ZERO);
+}
+
+impl FromStr for Radius {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let value = input.parse::<LengthPercentage>()?;
+        let negative = match value {
+            LengthPercentage::Zero => false,
+            LengthPercentage::Length(length) => length.value < 0.0,
+            LengthPercentage::Percentage(value) => value < 0.0,
+            LengthPercentage::Calc(calc) => calc.px < 0.0 || calc.em < 0.0 || calc.rem < 0.0,
+        };
+        if negative {
+            return Err(ParseError::expected("a non-negative border radius"));
+        }
+        Ok(Self(value))
+    }
+}
+
+impl fmt::Display for Radius {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// A non-negative flex/grid gap component.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Gap(pub LengthPercentage);
+
+impl Gap {
+    pub const ZERO: Self = Self(LengthPercentage::ZERO);
+}
+
+impl FromStr for Gap {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let value = input.parse::<LengthPercentage>()?;
+        let negative = match value {
+            LengthPercentage::Zero => false,
+            LengthPercentage::Length(length) => length.value < 0.0,
+            LengthPercentage::Percentage(value) => value < 0.0,
+            LengthPercentage::Calc(calc) => calc.px < 0.0 || calc.em < 0.0 || calc.rem < 0.0,
+        };
+        if negative {
+            return Err(ParseError::expected("a non-negative gap"));
+        }
+        Ok(Self(value))
+    }
+}
+
+impl fmt::Display for Gap {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FlexFactor(f32);
+
+impl FlexFactor {
+    pub const ZERO: Self = Self(0.0);
+    pub const ONE: Self = Self(1.0);
+
+    pub const fn value(self) -> f32 {
+        self.0
+    }
+}
+
+impl FromStr for FlexFactor {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        input
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .map(Self)
+            .ok_or_else(|| ParseError::expected("a non-negative flex factor"))
+    }
+}
+
+impl fmt::Display for FlexFactor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&format_number(self.0))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Order(i32);
+
+impl Order {
+    pub const ZERO: Self = Self(0);
+
+    pub const fn value(self) -> i32 {
+        self.0
+    }
+}
+
+impl FromStr for Order {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        input
+            .trim()
+            .parse::<i32>()
+            .map(Self)
+            .map_err(|_| ParseError::expected("an integer order"))
+    }
+}
+
+impl fmt::Display for Order {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// A CSS spacing value, with `normal` represented explicitly.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Spacing {
+    Normal,
+    Length(Length),
+}
+
+impl FromStr for Spacing {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        if input.trim().eq_ignore_ascii_case("normal") {
+            Ok(Self::Normal)
+        } else {
+            input
+                .parse::<Length>()
+                .map(Self::Length)
+                .map_err(|_| ParseError::expected("normal or a length"))
+        }
+    }
+}
+
+impl fmt::Display for Spacing {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Normal => formatter.write_str("normal"),
+            Self::Length(length) => length.fmt(formatter),
+        }
+    }
+}
+
+pub type TextDecorationColor = super::Color;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum LineHeight {
@@ -382,6 +823,114 @@ impl fmt::Display for Opacity {
 pub enum Transform {
     None,
     Functions(Vec<TransformFunction>),
+}
+
+/// A bounded single-layer CSS box shadow.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BoxShadow {
+    None,
+    Value(BoxShadowValue),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BoxShadowValue {
+    pub inset: bool,
+    pub offset_x: Length,
+    pub offset_y: Length,
+    pub blur_radius: Length,
+    pub spread_radius: Length,
+    pub color: Color,
+}
+
+impl FromStr for BoxShadow {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let input = input.trim();
+        if input.eq_ignore_ascii_case("none") {
+            return Ok(Self::None);
+        }
+        let mut inset = false;
+        let mut color = None;
+        let mut lengths = Vec::new();
+        for component in shadow_components(input) {
+            if component.eq_ignore_ascii_case("inset") {
+                if inset {
+                    return Err(ParseError::expected("one inset box-shadow keyword"));
+                }
+                inset = true;
+            } else if let Ok(value) = component.parse::<Color>() {
+                if color.replace(value).is_some() {
+                    return Err(ParseError::expected("one box-shadow color"));
+                }
+            } else if let Ok(value) = component.parse::<Length>() {
+                lengths.push(value);
+            } else {
+                return Err(ParseError::expected("a bounded box-shadow component"));
+            }
+        }
+        if !(2..=4).contains(&lengths.len()) {
+            return Err(ParseError::expected("two through four box-shadow lengths"));
+        }
+        Ok(Self::Value(BoxShadowValue {
+            inset,
+            offset_x: lengths[0],
+            offset_y: lengths[1],
+            blur_radius: lengths.get(2).copied().unwrap_or(Length::ZERO),
+            spread_radius: lengths.get(3).copied().unwrap_or(Length::ZERO),
+            color: color.unwrap_or(Color::CurrentColor),
+        }))
+    }
+}
+
+impl fmt::Display for BoxShadow {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => formatter.write_str("none"),
+            Self::Value(value) => {
+                write!(
+                    formatter,
+                    "{} {} {} {} {}",
+                    value.offset_x,
+                    value.offset_y,
+                    value.blur_radius,
+                    value.spread_radius,
+                    value.color
+                )?;
+                if value.inset {
+                    formatter.write_str(" inset")?;
+                }
+                Ok(())
+            },
+        }
+    }
+}
+
+fn shadow_components(input: &str) -> Vec<&str> {
+    let mut components = Vec::new();
+    let mut start = None;
+    let mut depth = 0_u32;
+    for (index, ch) in input.char_indices() {
+        match ch {
+            '(' => {
+                start.get_or_insert(index);
+                depth += 1;
+            },
+            ')' => depth = depth.saturating_sub(1),
+            _ if ch.is_ascii_whitespace() && depth == 0 => {
+                if let Some(offset) = start.take() {
+                    components.push(&input[offset..index]);
+                }
+            },
+            _ => {
+                start.get_or_insert(index);
+            },
+        }
+    }
+    if let Some(offset) = start {
+        components.push(&input[offset..]);
+    }
+    components
 }
 
 impl Transform {

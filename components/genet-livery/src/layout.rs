@@ -4,16 +4,26 @@ use layout_dom_api::{LayoutDom, NodeKind};
 use livery::{
     ComputedValues,
     values::{
-        BorderStyle, BorderWidth, Display as CssDisplay, FontSize, Inset, Length,
+        Alignment as CssAlignment, AspectRatio, BorderStyle, BorderWidth, BoxSizing as CssBoxSizing,
+        Display as CssDisplay, FlexDirection as CssFlexDirection, FlexWrap as CssFlexWrap,
+        FontSize, Gap as CssGap, GridAutoFlow as CssGridAutoFlow, GridPlacement as CssGridPlacement,
+        GridTemplate as CssGridTemplate, GridTrack as CssGridTrack, Inset, Length,
         LengthPercentage as CssLengthPercentage, LengthUnit, LineHeight, Margin,
         Overflow as CssOverflow, Position as CssPosition, Size as CssSize,
     },
 };
 use taffy::{
     TaffyTree,
-    geometry::{Point, Rect, Size},
-    prelude::{AvailableSpace, Dimension, LengthPercentage, LengthPercentageAuto, NodeId},
-    style::{BoxSizing, Display, Overflow, Position, Style},
+    geometry::{Line, Point, Rect, Size},
+    prelude::{
+        auto, fr, length, line, max_content, min_content, percent, span, AvailableSpace, Dimension,
+        LengthPercentage, LengthPercentageAuto, NodeId,
+    },
+    style::{
+        AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyword, BoxSizing, Display,
+        FlexDirection, FlexWrap, GridAutoFlow, GridPlacement, GridTemplateComponent, JustifyContent,
+        Overflow, Position, Style,
+    },
 };
 
 use crate::{StylePlane, TextSystem};
@@ -603,9 +613,14 @@ fn to_taffy_style(computed: &ComputedValues, font_size: f32) -> Style {
     Style {
         display: match computed.display {
             CssDisplay::None => Display::None,
+            CssDisplay::Flex => Display::Flex,
+            CssDisplay::Grid => Display::Grid,
             _ => Display::Block,
         },
-        box_sizing: BoxSizing::ContentBox,
+        box_sizing: match computed.box_sizing {
+            CssBoxSizing::ContentBox => BoxSizing::ContentBox,
+            CssBoxSizing::BorderBox => BoxSizing::BorderBox,
+        },
         overflow: Point {
             x: overflow(computed.overflow_x),
             y: overflow(computed.overflow_y),
@@ -616,14 +631,41 @@ fn to_taffy_style(computed: &ComputedValues, font_size: f32) -> Style {
         },
         inset: Rect {
             left: inset(computed.left, font_size),
-            right: LengthPercentageAuto::auto(),
+            right: inset(computed.right, font_size),
             top: inset(computed.top, font_size),
-            bottom: LengthPercentageAuto::auto(),
+            bottom: inset(computed.bottom, font_size),
         },
         size: Size {
             width: dimension(computed.width, font_size),
             height: dimension(computed.height, font_size),
         },
+        min_size: Size {
+            width: dimension(computed.min_width, font_size),
+            height: dimension(computed.min_height, font_size),
+        },
+        max_size: Size {
+            width: dimension(computed.max_width, font_size),
+            height: dimension(computed.max_height, font_size),
+        },
+        aspect_ratio: match computed.aspect_ratio {
+            AspectRatio::Auto => None,
+            AspectRatio::Ratio(value) => Some(value),
+        },
+        flex_direction: match computed.flex_direction {
+            CssFlexDirection::Row => FlexDirection::Row,
+            CssFlexDirection::RowReverse => FlexDirection::RowReverse,
+            CssFlexDirection::Column => FlexDirection::Column,
+            CssFlexDirection::ColumnReverse => FlexDirection::ColumnReverse,
+        },
+        flex_wrap: match computed.flex_wrap {
+            CssFlexWrap::NoWrap => FlexWrap::NoWrap,
+            CssFlexWrap::Wrap => FlexWrap::Wrap,
+            CssFlexWrap::WrapReverse => FlexWrap::WrapReverse,
+        },
+        flex_basis: dimension(computed.flex_basis, font_size),
+        flex_grow: computed.flex_grow.value(),
+        flex_shrink: computed.flex_shrink.value(),
+        order: computed.order.value(),
         margin: Rect {
             left: margin(computed.margin_left, font_size),
             right: margin(computed.margin_right, font_size),
@@ -658,8 +700,96 @@ fn to_taffy_style(computed: &ComputedValues, font_size: f32) -> Style {
                 font_size,
             ),
         },
+        gap: Size {
+            width: gap(computed.column_gap, font_size),
+            height: gap(computed.row_gap, font_size),
+        },
+        align_items: Some(align_items(computed.align_items)),
+        align_content: Some(align_content(computed.align_content)),
+        justify_content: Some(justify_content(computed.justify_content)),
+        grid_template_columns: grid_template(&computed.grid_template_columns, font_size),
+        grid_template_rows: grid_template(&computed.grid_template_rows, font_size),
+        grid_auto_flow: grid_auto_flow(computed.grid_auto_flow),
+        grid_column: Line {
+            start: grid_placement(computed.grid_column_start),
+            end: grid_placement(computed.grid_column_end),
+        },
+        grid_row: Line {
+            start: grid_placement(computed.grid_row_start),
+            end: grid_placement(computed.grid_row_end),
+        },
         ..Style::default()
     }
+}
+
+fn grid_auto_flow(value: CssGridAutoFlow) -> GridAutoFlow {
+    match value {
+        CssGridAutoFlow::Row => GridAutoFlow::Row,
+        CssGridAutoFlow::Column => GridAutoFlow::Column,
+        CssGridAutoFlow::RowDense => GridAutoFlow::RowDense,
+        CssGridAutoFlow::ColumnDense => GridAutoFlow::ColumnDense,
+    }
+}
+
+fn grid_placement(value: CssGridPlacement) -> GridPlacement {
+    match value {
+        CssGridPlacement::Auto => GridPlacement::Auto,
+        CssGridPlacement::Line(value) => line(value),
+        CssGridPlacement::Span(value) => span(value),
+    }
+}
+
+fn grid_template(value: &CssGridTemplate, _em: f32) -> Vec<GridTemplateComponent<String>> {
+    match value {
+        CssGridTemplate::None => Vec::new(),
+        CssGridTemplate::Tracks(tracks) => tracks
+            .iter()
+            .map(|track| match track {
+                CssGridTrack::Auto => auto(),
+                CssGridTrack::MinContent => min_content(),
+                CssGridTrack::MaxContent => max_content(),
+                CssGridTrack::Px(value) => length(*value),
+                CssGridTrack::Percent(value) => percent(*value),
+                CssGridTrack::Fr(value) => fr(*value),
+            })
+            .collect(),
+    }
+}
+
+fn align_items(value: CssAlignment) -> AlignItems {
+    AlignItems {
+        keyword: match value {
+            CssAlignment::Start => AlignItemsKeyword::Start,
+            CssAlignment::End => AlignItemsKeyword::End,
+            CssAlignment::FlexStart => AlignItemsKeyword::FlexStart,
+            CssAlignment::FlexEnd => AlignItemsKeyword::FlexEnd,
+            CssAlignment::Center => AlignItemsKeyword::Center,
+            CssAlignment::Baseline => AlignItemsKeyword::Baseline,
+            _ => AlignItemsKeyword::Stretch,
+        },
+        safety: taffy::style::AlignmentSafety::Unsafe,
+    }
+}
+
+fn align_content(value: CssAlignment) -> AlignContent {
+    AlignContent {
+        keyword: match value {
+            CssAlignment::Start => AlignContentKeyword::Start,
+            CssAlignment::End => AlignContentKeyword::End,
+            CssAlignment::FlexStart => AlignContentKeyword::FlexStart,
+            CssAlignment::FlexEnd => AlignContentKeyword::FlexEnd,
+            CssAlignment::Center => AlignContentKeyword::Center,
+            CssAlignment::SpaceBetween => AlignContentKeyword::SpaceBetween,
+            CssAlignment::SpaceAround => AlignContentKeyword::SpaceAround,
+            CssAlignment::SpaceEvenly => AlignContentKeyword::SpaceEvenly,
+            _ => AlignContentKeyword::Stretch,
+        },
+        safety: taffy::style::AlignmentSafety::Unsafe,
+    }
+}
+
+fn justify_content(value: CssAlignment) -> JustifyContent {
+    align_content(value)
 }
 
 fn font_size_px(size: &FontSize, parent: f32) -> f32 {
@@ -714,6 +844,10 @@ fn length_percentage(value: CssLengthPercentage, em: f32) -> LengthPercentage {
         CssLengthPercentage::Percentage(value) => LengthPercentage::percent(value),
         _ => LengthPercentage::length(absolute_length_percentage(value, em, 16.0, 0.0)),
     }
+}
+
+fn gap(value: CssGap, em: f32) -> LengthPercentage {
+    length_percentage(value.0, em)
 }
 
 fn absolute_length_percentage(

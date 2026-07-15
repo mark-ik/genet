@@ -1,4 +1,8 @@
-use livery::{cascade::Origin, stylesheet::Stylesheet};
+use livery::{
+    PropertyValue,
+    cascade::{DeclaredValue, Origin, parse_declaration_block},
+    stylesheet::Stylesheet,
+};
 
 #[test]
 fn stylesheet_parser_recovers_rules_and_media_groups() {
@@ -24,6 +28,20 @@ fn stylesheet_parser_recovers_rules_and_media_groups() {
             .iter()
             .any(|error| error.message == "unsupported at-rule")
     );
+}
+
+#[test]
+fn border_radius_shorthand_expands_to_corner_longhands() {
+    let block = parse_declaration_block("border-radius: 2px 4px 6px 8px");
+    assert!(block.errors.is_empty(), "{:?}", block.errors);
+    assert_eq!(block.declarations.len(), 4);
+    let values = block
+        .declarations
+        .iter()
+        .map(|declaration| declaration.value.clone())
+        .collect::<Vec<_>>();
+    assert!(matches!(values[0], DeclaredValue::Value(PropertyValue::Radius(_))));
+    assert!(matches!(values[3], DeclaredValue::Value(PropertyValue::Radius(_))));
 }
 
 #[test]

@@ -95,7 +95,10 @@ fn cambium_catalog_declarations_are_covered_by_the_native_seed() {
         }
     }
 
-    assert_eq!(properties.len(), 42, "the native lane count changed");
+    assert!(
+        properties.len() >= 79,
+        "the native lane must retain the 79-property receipt"
+    );
     assert!(
         missing.is_empty(),
         "Cambium catalog declarations missing from properties.toml: {missing:?}"
@@ -104,7 +107,7 @@ fn cambium_catalog_declarations_are_covered_by_the_native_seed() {
 
 #[test]
 fn generated_property_names_round_trip() {
-    assert_eq!(PropertyId::ALL.len(), 42);
+    assert!(PropertyId::ALL.len() >= 79);
     for &property in PropertyId::ALL {
         let metadata = property.metadata();
         assert_eq!(PropertyId::from_css_name(metadata.name), Some(property));
@@ -117,7 +120,7 @@ fn generated_property_names_round_trip() {
 
 #[test]
 fn generated_shorthand_names_round_trip() {
-    assert_eq!(ShorthandId::ALL.len(), 4);
+    assert!(ShorthandId::ALL.len() >= 6);
     for &shorthand in ShorthandId::ALL {
         let metadata = shorthand.metadata();
         assert_eq!(ShorthandId::from_css_name(metadata.name), Some(shorthand));

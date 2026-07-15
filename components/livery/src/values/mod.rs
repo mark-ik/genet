@@ -9,9 +9,12 @@ mod property;
 pub use color::Color;
 pub use length::{CalcLengthPercentage, Length, LengthPercentage, LengthUnit};
 pub use property::{
-    BorderStyle, BorderWidth, Display, FontFamily, FontSize, FontStyle, FontWeight, Inset,
-    LineHeight, ListStyleType, Margin, Opacity, Overflow, Padding, Position, Size,
-    TextDecorationLine, TextWrapMode, Transform, TransformFunction, WhiteSpaceCollapse, ZIndex,
+    Alignment, AspectRatio, BorderStyle, BorderWidth, BoxShadow, BoxShadowValue, BoxSizing,
+    Display, FlexDirection, FlexFactor, FlexWrap, FontFamily, FontSize, FontStyle, FontWeight,
+    Gap, GridAutoFlow, GridPlacement, GridTemplate, GridTrack, Inset, LineHeight, ListStyleType, Margin, Opacity, Order, Overflow, Padding,
+    PointerEvents, Position, Radius, Size, Spacing, TextAlign,
+    TextDecorationColor, TextDecorationLine, TextWrapMode, Visibility, Transform,
+    TransformFunction, WhiteSpaceCollapse, ZIndex,
 };
 
 /// A rejected CSS value from Livery's bounded first-lane grammar.

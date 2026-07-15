@@ -2,7 +2,7 @@
 
 use std::{cmp::Ordering, fmt};
 
-use crate::values::{BorderStyle, BorderWidth, Color, Margin, Padding};
+use crate::values::{BorderStyle, BorderWidth, Color, Margin, Padding, Radius};
 use crate::{ComputedValues, PropertyId, PropertyValue, ShorthandId};
 
 /// A parsed longhand value, including the CSS-wide keywords supported by the
@@ -227,6 +227,20 @@ fn expand_box_shorthand(
             .ok()
             .and_then(|values| box_sides(&values))
             .map(|values| values.map(|value| DeclaredValue::Value(PropertyValue::Padding(value)))),
+        ShorthandId::BorderRadius => split_components(value)
+            .into_iter()
+            .map(str::parse::<Radius>)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()
+            .and_then(|values| box_sides(&values))
+            .map(|values| values.map(|value| DeclaredValue::Value(PropertyValue::Radius(value)))),
+        ShorthandId::Gap => split_components(value)
+            .into_iter()
+            .map(str::parse::<crate::values::Gap>)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()
+            .and_then(|values| box_sides(&values))
+            .map(|values| values.map(|value| DeclaredValue::Value(PropertyValue::Gap(value)))),
         _ => return false,
     };
     let Some(values) = parsed else {

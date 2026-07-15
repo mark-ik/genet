@@ -685,6 +685,8 @@ pub fn to_taffy_style(style: &stylo::ComputedValues) -> taffy::Style<Atom> {
         flex_shrink: pos.flex_shrink.0,
         #[cfg(feature = "flexbox")]
         flex_basis: self::flex_basis(&pos.flex_basis),
+        #[cfg(feature = "flexbox")]
+        order: 0,
 
         // Grid
         #[cfg(feature = "grid")]

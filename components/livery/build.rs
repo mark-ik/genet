@@ -79,26 +79,44 @@ fn rust_field(css_name: &str) -> String {
 
 fn value_type_path(value_type: &str) -> &'static str {
     match value_type {
+        "alignment" => "crate::values::Alignment",
+        "aspect-ratio" => "crate::values::AspectRatio",
         "border-style" => "crate::values::BorderStyle",
         "border-width" => "crate::values::BorderWidth",
+        "box-shadow" => "crate::values::BoxShadow",
+        "box-sizing" => "crate::values::BoxSizing",
         "color" => "crate::values::Color",
         "display" => "crate::values::Display",
         "font-family" => "crate::values::FontFamily",
         "font-size" => "crate::values::FontSize",
         "font-style" => "crate::values::FontStyle",
         "font-weight" => "crate::values::FontWeight",
+        "flex-direction" => "crate::values::FlexDirection",
+        "flex-factor" => "crate::values::FlexFactor",
+        "flex-wrap" => "crate::values::FlexWrap",
+        "gap" => "crate::values::Gap",
+        "grid-auto-flow" => "crate::values::GridAutoFlow",
+        "grid-placement" => "crate::values::GridPlacement",
+        "grid-template" => "crate::values::GridTemplate",
         "inset" => "crate::values::Inset",
         "line-height" => "crate::values::LineHeight",
         "list-style-type" => "crate::values::ListStyleType",
         "margin" => "crate::values::Margin",
         "opacity" => "crate::values::Opacity",
+        "order" => "crate::values::Order",
         "overflow" => "crate::values::Overflow",
         "padding" => "crate::values::Padding",
+        "pointer-events" => "crate::values::PointerEvents",
         "position" => "crate::values::Position",
+        "radius" => "crate::values::Radius",
         "size" => "crate::values::Size",
+        "spacing" => "crate::values::Spacing",
+        "text-align" => "crate::values::TextAlign",
+        "text-decoration-color" => "crate::values::Color",
         "text-decoration-line" => "crate::values::TextDecorationLine",
         "text-wrap-mode" => "crate::values::TextWrapMode",
         "transform" => "crate::values::Transform",
+        "visibility" => "crate::values::Visibility",
         "white-space-collapse" => "crate::values::WhiteSpaceCollapse",
         "z-index" => "crate::values::ZIndex",
         _ => panic!("unsupported value_type {value_type}"),
@@ -106,13 +124,21 @@ fn value_type_path(value_type: &str) -> &'static str {
 }
 
 fn value_type_is_copy(value_type: &str) -> bool {
-    !matches!(value_type, "font-family" | "transform")
+    !matches!(
+        value_type,
+        "box-shadow" | "font-family" | "grid-template" | "transform"
+    )
 }
 
 fn initial_expression(property: &Property) -> &'static str {
     match (property.value_type.as_str(), property.initial.as_str()) {
+        ("alignment", "start") => "crate::values::Alignment::Start",
+        ("alignment", "stretch") => "crate::values::Alignment::Stretch",
+        ("aspect-ratio", "auto") => "crate::values::AspectRatio::Auto",
         ("border-style", "none") => "crate::values::BorderStyle::None",
         ("border-width", "medium") => "crate::values::BorderWidth::Medium",
+        ("box-shadow", "none") => "crate::values::BoxShadow::None",
+        ("box-sizing", "content-box") => "crate::values::BoxSizing::ContentBox",
         ("color", "transparent") => "crate::values::Color::Transparent",
         ("color", "currentcolor") => "crate::values::Color::CurrentColor",
         ("color", "CanvasText") => "crate::values::Color::CanvasText",
@@ -121,18 +147,34 @@ fn initial_expression(property: &Property) -> &'static str {
         ("font-size", "medium") => "crate::values::FontSize::Medium",
         ("font-style", "normal") => "crate::values::FontStyle::Normal",
         ("font-weight", "normal") => "crate::values::FontWeight::Normal",
+        ("flex-direction", "row") => "crate::values::FlexDirection::Row",
+        ("flex-factor", "0") => "crate::values::FlexFactor::ZERO",
+        ("flex-factor", "1") => "crate::values::FlexFactor::ONE",
+        ("flex-wrap", "nowrap") => "crate::values::FlexWrap::NoWrap",
+        ("gap", "0") => "crate::values::Gap::ZERO",
+        ("grid-auto-flow", "row") => "crate::values::GridAutoFlow::Row",
+        ("grid-placement", "auto") => "crate::values::GridPlacement::Auto",
+        ("grid-template", "none") => "crate::values::GridTemplate::None",
         ("inset", "auto") => "crate::values::Inset::Auto",
         ("line-height", "normal") => "crate::values::LineHeight::Normal",
         ("list-style-type", "disc") => "crate::values::ListStyleType::Disc",
         ("margin", "0") => "crate::values::Margin::Value(crate::values::LengthPercentage::ZERO)",
         ("opacity", "1") => "crate::values::Opacity::ONE",
+        ("order", "0") => "crate::values::Order::ZERO",
         ("overflow", "visible") => "crate::values::Overflow::Visible",
         ("padding", "0") => "crate::values::Padding::ZERO",
+        ("pointer-events", "auto") => "crate::values::PointerEvents::Auto",
         ("position", "static") => "crate::values::Position::Static",
+        ("radius", "0") => "crate::values::Radius::ZERO",
         ("size", "auto") => "crate::values::Size::Auto",
+        ("size", "none") => "crate::values::Size::None",
+        ("spacing", "normal") => "crate::values::Spacing::Normal",
+        ("text-align", "start") => "crate::values::TextAlign::Start",
+        ("text-decoration-color", "currentcolor") => "crate::values::Color::CurrentColor",
         ("text-decoration-line", "none") => "crate::values::TextDecorationLine::NONE",
         ("text-wrap-mode", "wrap") => "crate::values::TextWrapMode::Wrap",
         ("transform", "none") => "crate::values::Transform::None",
+        ("visibility", "visible") => "crate::values::Visibility::Visible",
         ("white-space-collapse", "collapse") => "crate::values::WhiteSpaceCollapse::Collapse",
         ("z-index", "auto") => "crate::values::ZIndex::Auto",
         _ => panic!(
@@ -144,10 +186,9 @@ fn initial_expression(property: &Property) -> &'static str {
 
 fn validate(db: &Database) {
     assert_eq!(db.schema, 1, "unsupported properties.toml schema");
-    assert_eq!(
-        db.property.len(),
-        42,
-        "the native Cambium lane must contain exactly 42 properties"
+    assert!(
+        db.property.len() >= 79,
+        "the native Cambium lane must retain at least the 79-property receipt"
     );
 
     let mut names = BTreeSet::new();

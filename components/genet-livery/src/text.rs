@@ -13,7 +13,7 @@ use livery::{
     ComputedValues,
     values::{
         Display, FontFamily as CssFontFamily, FontStyle as CssFontStyle,
-        FontWeight as CssFontWeight, LineHeight as CssLineHeight, TextWrapMode,
+        FontWeight as CssFontWeight, LineHeight as CssLineHeight, Spacing, TextAlign, TextWrapMode,
     },
 };
 use paint_list_api::{
@@ -413,7 +413,7 @@ impl TextSystem {
             .then_some(width)
             .filter(|width| width.is_finite() && *width > 0.0);
         layout.break_all_lines(wrap_width);
-        layout.align(Alignment::Start, AlignmentOptions::default());
+        layout.align(text_alignment(root_style.text_align), AlignmentOptions::default());
 
         let mut result = Vec::new();
         for line in layout.lines() {
@@ -861,6 +861,12 @@ fn push_defaults(builder: &mut parley::RangedBuilder<'_, Brush>, style: &Compute
     builder.push_default(StyleProperty::FontStyle(font_style(style)));
     builder.push_default(StyleProperty::Brush(brush(style, 0)));
     builder.push_default(line_height(style));
+    if let Some(letter_spacing) = spacing_px(style.letter_spacing) {
+        builder.push_default(StyleProperty::LetterSpacing(letter_spacing));
+    }
+    if let Some(word_spacing) = spacing_px(style.word_spacing) {
+        builder.push_default(StyleProperty::WordSpacing(word_spacing));
+    }
 }
 
 fn push_span(
@@ -883,7 +889,37 @@ fn push_span(
         StyleProperty::Brush(brush(style, source_index)),
         range.clone(),
     );
-    builder.push(line_height(style), range);
+    builder.push(line_height(style), range.clone());
+    if let Some(letter_spacing) = spacing_px(style.letter_spacing) {
+        builder.push(StyleProperty::LetterSpacing(letter_spacing), range.clone());
+    }
+    if let Some(word_spacing) = spacing_px(style.word_spacing) {
+        builder.push(StyleProperty::WordSpacing(word_spacing), range);
+    }
+}
+
+fn text_alignment(style: TextAlign) -> Alignment {
+    match style {
+        TextAlign::Start => Alignment::Start,
+        TextAlign::End => Alignment::End,
+        TextAlign::Left => Alignment::Left,
+        TextAlign::Right => Alignment::Right,
+        TextAlign::Center => Alignment::Center,
+        TextAlign::Justify => Alignment::Justify,
+    }
+}
+
+fn spacing_px(spacing: Spacing) -> Option<f32> {
+    match spacing {
+        Spacing::Normal => None,
+        Spacing::Length(length) => Some(
+            length.value
+                * match length.unit {
+                    livery::values::LengthUnit::Px => 1.0,
+                    livery::values::LengthUnit::Em | livery::values::LengthUnit::Rem => 16.0,
+                },
+        ),
+    }
 }
 
 fn brush(style: &ComputedValues, source_index: usize) -> Brush {

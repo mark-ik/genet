@@ -546,6 +546,9 @@ pub struct Style<S: CheapCloneStr = DefaultCheapStr> {
     /// 1.0 is the default value, and this value must be positive.
     #[cfg(feature = "flexbox")]
     pub flex_shrink: f32,
+    /// CSS `order` used to form the order-modified flex item sequence.
+    #[cfg(feature = "flexbox")]
+    pub order: i32,
 
     // Grid container properies
     /// Defines the track sizing functions (heights) of the grid rows
@@ -635,6 +638,8 @@ impl<S: CheapCloneStr> Style<S> {
         flex_grow: 0.0,
         #[cfg(feature = "flexbox")]
         flex_shrink: 1.0,
+        #[cfg(feature = "flexbox")]
+        order: 0,
         #[cfg(feature = "flexbox")]
         flex_basis: Dimension::AUTO,
         // Grid
@@ -946,6 +951,10 @@ impl<S: CheapCloneStr> FlexboxItemStyle for Style<S> {
         self.flex_shrink
     }
     #[inline(always)]
+    fn order(&self) -> i32 {
+        self.order
+    }
+    #[inline(always)]
     fn align_self(&self) -> Option<AlignSelf> {
         self.align_self
     }
@@ -964,6 +973,10 @@ impl<T: FlexboxItemStyle> FlexboxItemStyle for &'_ T {
     #[inline(always)]
     fn flex_shrink(&self) -> f32 {
         (*self).flex_shrink()
+    }
+    #[inline(always)]
+    fn order(&self) -> i32 {
+        (*self).order()
     }
     #[inline(always)]
     fn align_self(&self) -> Option<AlignSelf> {
@@ -1244,6 +1257,8 @@ mod tests {
             flex_grow: 0.0,
             #[cfg(feature = "flexbox")]
             flex_shrink: 1.0,
+            #[cfg(feature = "flexbox")]
+            order: 0,
             #[cfg(feature = "flexbox")]
             flex_basis: super::Dimension::AUTO,
             size: Size::auto(),

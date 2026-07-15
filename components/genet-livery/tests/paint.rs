@@ -78,6 +78,120 @@ fn backgrounds_and_borders_follow_dom_paint_order() {
 }
 
 #[test]
+fn border_radii_reach_the_neutral_border_primitive() {
+    let list = render(
+        r#"<html><body><div class="card"></div></body></html>"#,
+        ".card { width: 80px; height: 40px; background-color: lime; \
+                 border: 2px solid blue; border-top-left-radius: 8px; \
+                 border-bottom-right-radius: 12px; }",
+        1,
+    );
+    let radius = list
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::DrawBorder(border) => match &border.details {
+                BorderDetails::Normal(border) => Some(border.radius),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("rounded border paints through the neutral primitive");
+    assert_eq!(radius.top_left.width, 8.0);
+    assert_eq!(radius.top_left.height, 8.0);
+    assert_eq!(radius.bottom_right.width, 12.0);
+    assert_eq!(radius.bottom_right.height, 12.0);
+    assert_eq!((radius.top_right.width, radius.top_right.height), (0.0, 0.0));
+}
+
+#[test]
+fn box_shadow_reaches_the_neutral_shadow_primitive() {
+    let list = render(
+        r#"<html><body><div class="card"></div></body></html>"#,
+        ".card { width: 80px; height: 40px; background-color: white; \
+                 border-radius: 6px; box-shadow: 2px 3px 4px #00000080; }",
+        1,
+    );
+    let shadow = list
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::DrawShadow(shadow) => Some(shadow),
+            _ => None,
+        })
+        .expect("box-shadow lowers through the neutral primitive");
+    assert_eq!((shadow.offset.x, shadow.offset.y), (2.0, 3.0));
+    assert_eq!(shadow.blur_radius, 4.0);
+    assert_eq!(shadow.border_radius.top_left.width, 6.0);
+    assert_eq!(shadow.color.a, 128.0 / 255.0);
+}
+
+#[test]
+fn hidden_visibility_keeps_layout_space_but_suppresses_paint() {
+    let document = StaticDocument::parse(
+        r#"<html><body><div class="hidden"></div><div class="after"></div></body></html>"#,
+    );
+    let mut document = LiveryDocument::new(
+        document,
+        StyleSet::cambium(&[
+            ".hidden { width: 40px; height: 30px; visibility: hidden; background-color: red; } \
+             .after { width: 10px; height: 10px; background-color: lime; }",
+        ]),
+        Device::screen(320.0, 240.0),
+    );
+    let frame = document.frame(320, 240).unwrap();
+    let green = frame
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::DrawRect(rect) if rect.color == ColorF::new(0.0, 1.0, 0.0, 1.0) => {
+                Some(rect.placement.bounds.min.y)
+            },
+            _ => None,
+        })
+        .expect("visible following box paints");
+    assert!(green >= 30.0);
+    assert!(!frame.commands().iter().any(|command| {
+        matches!(command, PaintCmd::DrawRect(rect) if rect.color == ColorF::new(1.0, 0.0, 0.0, 1.0))
+    }));
+}
+
+#[test]
+fn text_alignment_and_spacing_reach_parley() {
+    fn first_glyph(css: &str) -> (f32, f32) {
+        let list = render(
+            r#"<html><body><div class="label">word word</div></body></html>"#,
+            css,
+            1,
+        );
+        let run = list
+            .commands()
+            .iter()
+            .find_map(|command| match command {
+                PaintCmd::DrawText(run) => Some(run),
+                _ => None,
+            })
+            .expect("text run paints");
+        let first = run.glyphs.first().expect("glyphs paint");
+        let last = run.glyphs.last().expect("multiple glyphs paint");
+        (first.point.x, last.point.x)
+    }
+
+    let start = first_glyph(
+        ".label { width: 200px; font-size: 16px; text-align: start; }",
+    );
+    let centered = first_glyph(
+        ".label { width: 200px; font-size: 16px; text-align: center; }",
+    );
+    let spaced = first_glyph(
+        ".label { width: 200px; font-size: 16px; letter-spacing: 2px; word-spacing: 3px; }",
+    );
+
+    assert!(centered.0 > start.0 + 20.0);
+    assert!(spaced.1 > start.1 + 8.0);
+}
+
+#[test]
 fn positioned_children_paint_in_stable_z_index_order() {
     let list = render(
         r#"<html><body><div class="stage"><div class="high"></div><div class="normal"></div><div class="low"><div class="escape"></div></div><div class="negative"></div><div class="tie"></div></div></body></html>"#,

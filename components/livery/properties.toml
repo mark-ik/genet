@@ -43,6 +43,18 @@ url = "https://www.w3.org/TR/css-text-4/"
 [sources.css_transforms_1]
 url = "https://www.w3.org/TR/css-transforms-1/#transform-property"
 
+[sources.css_ui_4]
+url = "https://www.w3.org/TR/css-ui-4/"
+
+[sources.css_box_alignment_3]
+url = "https://www.w3.org/TR/css-align-3/"
+
+[sources.css_flexbox_1]
+url = "https://www.w3.org/TR/css-flexbox-1/"
+
+[sources.css_grid_1]
+url = "https://www.w3.org/TR/css-grid-1/"
+
 [shorthands.margin]
 longhands = ["margin-top", "margin-right", "margin-bottom", "margin-left"]
 grammar = "<length-percentage> | auto, one to four values"
@@ -72,6 +84,32 @@ grammar = "normal | pre | pre-wrap | pre-line | <white-space-collapse> || <text-
 seed_values = ["normal", "pre"]
 source = "css_text_4"
 
+[shorthands.border_radius]
+css_name = "border-radius"
+longhands = [
+    "border-top-left-radius", "border-top-right-radius",
+    "border-bottom-right-radius", "border-bottom-left-radius",
+]
+grammar = "<length-percentage>, one to four values"
+seed_values = ["0", "px", "percentage"]
+source = "css_backgrounds_3"
+
+[shorthands.gap]
+longhands = ["row-gap", "column-gap"]
+grammar = "<length-percentage>{1,2}"
+seed_values = ["0", "px", "percentage"]
+source = "css_box_alignment_3"
+
+[[property]]
+name = "aspect-ratio"
+value_type = "aspect-ratio"
+inherited = false
+initial = "auto"
+grammar = "auto | <ratio>"
+seed_values = ["auto", "16 / 9"]
+animation = "by-computed-value"
+source = "css_sizing_3"
+
 [[property]]
 name = "background-color"
 value_type = "color"
@@ -79,6 +117,26 @@ inherited = false
 initial = "transparent"
 grammar = "<color>"
 seed_values = ["hex"]
+animation = "by-computed-value"
+source = "css_backgrounds_3"
+
+[[property]]
+name = "border-bottom-left-radius"
+value_type = "radius"
+inherited = false
+initial = "0"
+grammar = "<length-percentage>"
+seed_values = ["0", "px", "percentage"]
+animation = "by-computed-value"
+source = "css_backgrounds_3"
+
+[[property]]
+name = "border-bottom-right-radius"
+value_type = "radius"
+inherited = false
+initial = "0"
+grammar = "<length-percentage>"
+seed_values = ["0", "px", "percentage"]
 animation = "by-computed-value"
 source = "css_backgrounds_3"
 
@@ -173,6 +231,26 @@ animation = "by-computed-value"
 source = "css_backgrounds_3"
 
 [[property]]
+name = "border-top-left-radius"
+value_type = "radius"
+inherited = false
+initial = "0"
+grammar = "<length-percentage>"
+seed_values = ["0", "px", "percentage"]
+animation = "by-computed-value"
+source = "css_backgrounds_3"
+
+[[property]]
+name = "border-top-right-radius"
+value_type = "radius"
+inherited = false
+initial = "0"
+grammar = "<length-percentage>"
+seed_values = ["0", "px", "percentage"]
+animation = "by-computed-value"
+source = "css_backgrounds_3"
+
+[[property]]
 name = "border-top-color"
 value_type = "color"
 inherited = false
@@ -203,6 +281,36 @@ animation = "by-computed-value"
 source = "css_backgrounds_3"
 
 [[property]]
+name = "box-sizing"
+value_type = "box-sizing"
+inherited = false
+initial = "content-box"
+grammar = "content-box | border-box"
+seed_values = ["content-box", "border-box"]
+animation = "discrete"
+source = "css_box_4"
+
+[[property]]
+name = "box-shadow"
+value_type = "box-shadow"
+inherited = false
+initial = "none"
+grammar = "none | [ <color>? && <length>{2,4} && inset? ]"
+seed_values = ["none", "0 2px 4px #00000055"]
+animation = "by-computed-value"
+source = "css_backgrounds_3"
+
+[[property]]
+name = "bottom"
+value_type = "inset"
+inherited = false
+initial = "auto"
+grammar = "auto | <length-percentage>"
+seed_values = ["auto", "px", "percentage"]
+animation = "by-computed-value"
+source = "css_position_3"
+
+[[property]]
 name = "color"
 value_type = "color"
 inherited = true
@@ -218,9 +326,39 @@ value_type = "display"
 inherited = false
 initial = "inline"
 grammar = "[ <display-outside> || <display-inside> ] | <display-listitem> | <display-internal> | <display-box> | <display-legacy>"
-seed_values = ["inline", "block", "inline-block", "none", "table", "table-row-group", "table-row", "table-cell", "table-caption"]
+seed_values = ["inline", "block", "inline-block", "none", "flex", "grid", "table", "table-row-group", "table-row", "table-cell", "table-caption"]
 animation = "discrete"
 source = "css_display_3"
+
+[[property]]
+name = "align-content"
+value_type = "alignment"
+inherited = false
+initial = "stretch"
+grammar = "start | end | flex-start | flex-end | center | stretch | space-between | space-around | space-evenly"
+seed_values = ["stretch", "center", "space-between"]
+animation = "discrete"
+source = "css_box_alignment_3"
+
+[[property]]
+name = "align-items"
+value_type = "alignment"
+inherited = false
+initial = "stretch"
+grammar = "start | end | flex-start | flex-end | center | baseline | stretch"
+seed_values = ["stretch", "center", "baseline"]
+animation = "discrete"
+source = "css_box_alignment_3"
+
+[[property]]
+name = "column-gap"
+value_type = "gap"
+inherited = false
+initial = "0"
+grammar = "normal | <length-percentage>"
+seed_values = ["0", "px", "percentage"]
+animation = "by-computed-value"
+source = "css_box_alignment_3"
 
 [[property]]
 name = "font-family"
@@ -231,6 +369,56 @@ grammar = "[ <font-family-name> | <generic-font-family> ]#"
 seed_values = ["system-ui"]
 animation = "discrete"
 source = "css_fonts_4"
+
+[[property]]
+name = "flex-basis"
+value_type = "size"
+inherited = false
+initial = "auto"
+grammar = "auto | <length-percentage> | content"
+seed_values = ["auto", "px", "percentage"]
+animation = "by-computed-value"
+source = "css_flexbox_1"
+
+[[property]]
+name = "flex-direction"
+value_type = "flex-direction"
+inherited = false
+initial = "row"
+grammar = "row | row-reverse | column | column-reverse"
+seed_values = ["row", "column"]
+animation = "discrete"
+source = "css_flexbox_1"
+
+[[property]]
+name = "flex-grow"
+value_type = "flex-factor"
+inherited = false
+initial = "0"
+grammar = "<number [0,∞]>"
+seed_values = ["0", "1"]
+animation = "by-computed-value"
+source = "css_flexbox_1"
+
+[[property]]
+name = "flex-shrink"
+value_type = "flex-factor"
+inherited = false
+initial = "1"
+grammar = "<number [0,∞]>"
+seed_values = ["0", "1"]
+animation = "by-computed-value"
+source = "css_flexbox_1"
+
+[[property]]
+name = "flex-wrap"
+value_type = "flex-wrap"
+inherited = false
+initial = "nowrap"
+grammar = "nowrap | wrap | wrap-reverse"
+seed_values = ["nowrap", "wrap"]
+animation = "discrete"
+source = "css_flexbox_1"
 
 [[property]]
 name = "font-size"
@@ -263,6 +451,76 @@ animation = "by-computed-value"
 source = "css_fonts_4"
 
 [[property]]
+name = "grid-auto-flow"
+value_type = "grid-auto-flow"
+inherited = false
+initial = "row"
+grammar = "row | column | dense"
+seed_values = ["row", "column", "row dense"]
+animation = "discrete"
+source = "css_grid_1"
+
+[[property]]
+name = "grid-column-end"
+value_type = "grid-placement"
+inherited = false
+initial = "auto"
+grammar = "auto | <integer> | span <integer>"
+seed_values = ["auto", "2", "span 2"]
+animation = "discrete"
+source = "css_grid_1"
+
+[[property]]
+name = "grid-column-start"
+value_type = "grid-placement"
+inherited = false
+initial = "auto"
+grammar = "auto | <integer> | span <integer>"
+seed_values = ["auto", "1", "span 2"]
+animation = "discrete"
+source = "css_grid_1"
+
+[[property]]
+name = "grid-row-end"
+value_type = "grid-placement"
+inherited = false
+initial = "auto"
+grammar = "auto | <integer> | span <integer>"
+seed_values = ["auto", "2", "span 2"]
+animation = "discrete"
+source = "css_grid_1"
+
+[[property]]
+name = "grid-row-start"
+value_type = "grid-placement"
+inherited = false
+initial = "auto"
+grammar = "auto | <integer> | span <integer>"
+seed_values = ["auto", "1", "span 2"]
+animation = "discrete"
+source = "css_grid_1"
+
+[[property]]
+name = "grid-template-columns"
+value_type = "grid-template"
+inherited = false
+initial = "none"
+grammar = "none | <track-list>"
+seed_values = ["none", "1fr 1fr", "100px 1fr"]
+animation = "by-computed-value"
+source = "css_grid_1"
+
+[[property]]
+name = "grid-template-rows"
+value_type = "grid-template"
+inherited = false
+initial = "none"
+grammar = "none | <track-list>"
+seed_values = ["none", "auto auto", "40px 1fr"]
+animation = "by-computed-value"
+source = "css_grid_1"
+
+[[property]]
 name = "height"
 value_type = "size"
 inherited = false
@@ -283,6 +541,26 @@ animation = "by-computed-value"
 source = "css_position_3"
 
 [[property]]
+name = "justify-content"
+value_type = "alignment"
+inherited = false
+initial = "start"
+grammar = "start | end | flex-start | flex-end | center | space-between | space-around | space-evenly"
+seed_values = ["start", "center", "space-between"]
+animation = "discrete"
+source = "css_box_alignment_3"
+
+[[property]]
+name = "letter-spacing"
+value_type = "spacing"
+inherited = true
+initial = "normal"
+grammar = "normal | <length>"
+seed_values = ["normal", "px", "em"]
+animation = "by-computed-value"
+source = "css_text_4"
+
+[[property]]
 name = "line-height"
 value_type = "line-height"
 inherited = true
@@ -301,6 +579,26 @@ grammar = "<counter-style> | <string> | none"
 seed_values = ["disc", "decimal"]
 animation = "discrete"
 source = "css_lists_3"
+
+[[property]]
+name = "max-height"
+value_type = "size"
+inherited = false
+initial = "none"
+grammar = "none | <length-percentage> | min-content | max-content | fit-content(<length-percentage>)"
+seed_values = ["auto", "px", "percentage"]
+animation = "by-computed-value"
+source = "css_sizing_3"
+
+[[property]]
+name = "max-width"
+value_type = "size"
+inherited = false
+initial = "none"
+grammar = "none | <length-percentage> | min-content | max-content | fit-content(<length-percentage>)"
+seed_values = ["auto", "px", "percentage"]
+animation = "by-computed-value"
+source = "css_sizing_3"
 
 [[property]]
 name = "margin-bottom"
@@ -343,6 +641,26 @@ animation = "by-computed-value"
 source = "css_box_4"
 
 [[property]]
+name = "min-height"
+value_type = "size"
+inherited = false
+initial = "auto"
+grammar = "<length-percentage> | min-content | max-content | fit-content(<length-percentage>)"
+seed_values = ["auto", "px", "percentage"]
+animation = "by-computed-value"
+source = "css_sizing_3"
+
+[[property]]
+name = "min-width"
+value_type = "size"
+inherited = false
+initial = "auto"
+grammar = "<length-percentage> | min-content | max-content | fit-content(<length-percentage>)"
+seed_values = ["auto", "px", "percentage"]
+animation = "by-computed-value"
+source = "css_sizing_3"
+
+[[property]]
 name = "opacity"
 value_type = "opacity"
 inherited = false
@@ -351,6 +669,16 @@ grammar = "<opacity-value>"
 seed_values = ["number", "percentage"]
 animation = "by-computed-value"
 source = "css_color_4"
+
+[[property]]
+name = "order"
+value_type = "order"
+inherited = false
+initial = "0"
+grammar = "<integer>"
+seed_values = ["0", "1", "-1"]
+animation = "by-computed-value"
+source = "css_flexbox_1"
 
 [[property]]
 name = "overflow-x"
@@ -371,6 +699,16 @@ grammar = "visible | hidden | clip | scroll | auto"
 seed_values = ["visible", "hidden"]
 animation = "discrete"
 source = "css_overflow_3"
+
+[[property]]
+name = "row-gap"
+value_type = "gap"
+inherited = false
+initial = "0"
+grammar = "normal | <length-percentage>"
+seed_values = ["0", "px", "percentage"]
+animation = "by-computed-value"
+source = "css_box_alignment_3"
 
 [[property]]
 name = "padding-bottom"
@@ -413,6 +751,16 @@ animation = "by-computed-value"
 source = "css_box_4"
 
 [[property]]
+name = "pointer-events"
+value_type = "pointer-events"
+inherited = true
+initial = "auto"
+grammar = "auto | none"
+seed_values = ["auto", "none"]
+animation = "discrete"
+source = "css_ui_4"
+
+[[property]]
 name = "position"
 value_type = "position"
 inherited = false
@@ -420,6 +768,16 @@ initial = "static"
 grammar = "static | relative | absolute | sticky | fixed"
 seed_values = ["static", "relative", "absolute"]
 animation = "discrete"
+source = "css_position_3"
+
+[[property]]
+name = "right"
+value_type = "inset"
+inherited = false
+initial = "auto"
+grammar = "auto | <length-percentage>"
+seed_values = ["auto", "px", "percentage"]
+animation = "by-computed-value"
 source = "css_position_3"
 
 [[property]]
@@ -431,6 +789,46 @@ grammar = "none | [ underline || overline || line-through || blink ]"
 seed_values = ["none", "underline"]
 animation = "discrete"
 source = "css_text_decor_4"
+
+[[property]]
+name = "text-decoration-color"
+value_type = "color"
+inherited = false
+initial = "currentcolor"
+grammar = "<color>"
+seed_values = ["currentcolor", "hex"]
+animation = "by-computed-value"
+source = "css_text_decor_4"
+
+[[property]]
+name = "text-align"
+value_type = "text-align"
+inherited = true
+initial = "start"
+grammar = "start | end | left | right | center | justify"
+seed_values = ["start", "left", "center"]
+animation = "discrete"
+source = "css_box_alignment_3"
+
+[[property]]
+name = "visibility"
+value_type = "visibility"
+inherited = true
+initial = "visible"
+grammar = "visible | hidden | collapse"
+seed_values = ["visible", "hidden"]
+animation = "discrete"
+source = "css_ui_4"
+
+[[property]]
+name = "word-spacing"
+value_type = "spacing"
+inherited = true
+initial = "normal"
+grammar = "normal | <length>"
+seed_values = ["normal", "px", "em"]
+animation = "by-computed-value"
+source = "css_text_4"
 
 [[property]]
 name = "text-wrap-mode"

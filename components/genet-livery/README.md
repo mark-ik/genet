@@ -18,7 +18,9 @@ spans, and collapsed whitespace. Parley's positioned output also supplies the
 paint geometry for inline elements: wrapped spans receive one fragment per
 line, and `inline-block` children occupy atomic space in that line.
 `genet-documents` can register this path as the opt-in `genet.livery` static
-session rung.
+session rung. Flex and grid containers lower their bounded direction, track,
+gap, alignment, order, and placement values into Taffy. Box shadows lower into
+the neutral shadow primitive before backgrounds.
 
 Retained sessions first use Taffy to resolve atomic `inline-block` sizes, then
 represent each consecutive inline group as one Parley-measured Taffy leaf. The
@@ -43,6 +45,10 @@ compositing layer. Non-`none` transforms on block and inline-block boxes also
 establish an atomic level-zero context and emit a neutral coordinate-space
 scope around the subtree. The first transform grammar supports 2D translate,
 scale, and rotate functions composed around the default center origin; ordinary
-inline spans remain non-transformable. Links, scrolling, and focus remain open.
+inline spans remain non-transformable. The current property ratchet also
+lowers inset and min/max geometry into Taffy, carries corner radii through
+neutral border commands, applies Parley text alignment and spacing, and keeps
+hidden boxes in layout while suppressing their paint. Links, scrolling, and
+focus remain open.
 `genet.livery` therefore stays an explicit pin rather than the default static
 route.
