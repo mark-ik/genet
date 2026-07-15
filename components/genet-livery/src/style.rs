@@ -75,6 +75,10 @@ where
         self.values.get(&id)
     }
 
+    pub(crate) fn get_mut(&mut self, id: Id) -> Option<&mut ComputedValues> {
+        self.values.get_mut(&id)
+    }
+
     pub fn inline_diagnostics(&self, id: Id) -> &[DeclarationError] {
         self.inline_diagnostics.get(&id).map_or(&[], Vec::as_slice)
     }

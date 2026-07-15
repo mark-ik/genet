@@ -7,9 +7,9 @@ use layout_dom_api::{LayoutDom, NodeKind};
 use livery::{
     ComputedValues,
     values::{
-        BorderStyle as CssBorderStyle, BoxShadow as CssBoxShadow, Color, Display, FontSize,
-        Length, LengthPercentage, LengthUnit, Overflow as CssOverflow, Position, Radius,
-        TransformFunction, Visibility, ZIndex,
+        BorderStyle as CssBorderStyle, BoxShadow as CssBoxShadow, Color, Display, FontSize, Length,
+        LengthPercentage, LengthUnit, Overflow as CssOverflow, Position, Radius, TransformFunction,
+        Visibility, ZIndex,
     },
 };
 use paint_list_api::{
@@ -43,6 +43,20 @@ impl LiveryPaintList {
             commands: Vec::new(),
             fonts: Vec::new(),
         }
+    }
+
+    pub(crate) fn translated(mut self, x: f32, y: f32) -> Self {
+        if x == 0.0 && y == 0.0 {
+            return self;
+        }
+        let transform = TransformSpec {
+            origin: LayoutPoint::new(0.0, 0.0),
+            transform: LayoutTransform::translation(x, y, 0.0),
+            kind: TransformKind::Standard,
+        };
+        self.commands.insert(0, PaintCmd::PushTransform(transform));
+        self.commands.push(PaintCmd::PopTransform);
+        self
     }
 }
 
@@ -715,10 +729,23 @@ fn emit_background(list: &mut LiveryPaintList, style: &ComputedValues, fragment:
     if color.a <= 0.0 {
         return;
     }
+    let radius = border_radius(style, fragment);
+    if !radius.is_zero() {
+        list.commands.push(PaintCmd::PushClip(ClipSpec {
+            kind: ClipKind::RoundedRect {
+                rect: bounds(fragment),
+                radius,
+                clip_out: false,
+            },
+        }));
+    }
     list.commands.push(PaintCmd::DrawRect(RectItem {
         placement: CommonPlacement::new(bounds(fragment)),
         color,
     }));
+    if !radius.is_zero() {
+        list.commands.push(PaintCmd::PopClip);
+    }
 }
 
 fn emit_shadow(list: &mut LiveryPaintList, style: &ComputedValues, fragment: &Fragment) {
@@ -783,7 +810,7 @@ fn emit_inline_border(
     list.commands.push(PaintCmd::DrawBorder(BorderItem {
         placement: CommonPlacement::new(bounds(fragment)),
         widths,
-            details: BorderDetails::Normal(NormalBorder {
+        details: BorderDetails::Normal(NormalBorder {
             left: border_side(style.border_left_style, style.border_left_color, current),
             right: border_side(style.border_right_style, style.border_right_color, current),
             top: border_side(style.border_top_style, style.border_top_color, current),
@@ -809,8 +836,14 @@ fn border_radius(style: &ComputedValues, fragment: &Fragment) -> BorderRadius {
     BorderRadius {
         top_left: corner(style.border_top_left_radius, style.border_top_left_radius),
         top_right: corner(style.border_top_right_radius, style.border_top_right_radius),
-        bottom_left: corner(style.border_bottom_left_radius, style.border_bottom_left_radius),
-        bottom_right: corner(style.border_bottom_right_radius, style.border_bottom_right_radius),
+        bottom_left: corner(
+            style.border_bottom_left_radius,
+            style.border_bottom_left_radius,
+        ),
+        bottom_right: corner(
+            style.border_bottom_right_radius,
+            style.border_bottom_right_radius,
+        ),
     }
 }
 

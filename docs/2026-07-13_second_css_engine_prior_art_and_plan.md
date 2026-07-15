@@ -225,9 +225,15 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   unchanged. Parley's positioned output now gives wrapped inline elements one
   paint fragment per line and places `inline-block` children atomically in the
   shared line. `cargo tree` proves the `genet-livery` normal/build graph
-  contains neither `genet-layout` nor Stylo. Remaining: hit-test routing for
-  pointer events and links, scroll/focus semantics, layered background/image
-  fidelity, animation/transition runtime, full reftest parity, and an
+  contains neither `genet-layout` nor Stylo. Livery now routes a bounded
+  viewport scroll offset through the retained PaintList, performs
+  pointer-events-aware hit testing, retains link rectangles, handles fragment
+  navigation, and feeds focus/focus-within state back into the cascade.
+  Rounded backgrounds are clipped through the neutral paint stack. The
+  retained session also has a host-driven opacity clock and an intermediate
+  frame receipt. Remaining:
+  nested scroll chaining, layered image/gradient backgrounds,
+  CSS transition/keyframe declarations, full reftest parity, and an
   apples-to-apples cold-build delta against the 30m35s baseline.
 - **E4 — first production lane.** One real lane (host chrome or
   smolweb) ships on Livery by default. Receipt: the lane's
@@ -247,8 +253,13 @@ box-shadow, flexbox, and a bounded grid track/placement family. Taffy consumes
 the geometry, flex, and grid values; Parley consumes alignment and spacing; the
 neutral border and shadow primitives carry radii and shadows; hidden boxes
 retain layout space while suppressing paint. The receipt is the Livery and
-genet-livery test suites. Hit-test routing, layered backgrounds/images, and
-animation/transition runtime remain explicit next gates.
+genet-livery test suites. The retained interaction receipt now covers viewport
+scrolling, link rectangles, pointer-events hit testing, fragment navigation,
+and focus routing through genet-documents. Rounded background clipping is
+covered by the paint-list receipt. Nested scroll chaining, layered
+image/gradient backgrounds, CSS transition/keyframe declarations, full reftest
+parity, and the cold-build comparison remain explicit next gates. The retained
+opacity clock is covered by the interaction receipt.
 
 ## The destination, named
 

@@ -13,9 +13,9 @@ mod paint;
 mod style;
 mod text;
 
-pub use document::LiveryDocument;
+pub use document::{ClickOutcome, LinkTarget, LiveryDocument};
 pub use dom::{ElementRef, InteractionStates, SelectorTree};
-pub use layout::{Fragment, FragmentPlane, LayoutError, layout};
+pub use layout::{Fragment, FragmentPlane, LayoutError, hit_test, layout};
 pub use livery::media::Device;
 pub use paint::{LiveryPaintList, emit_paint_list, emit_paint_list_with_text_system};
 pub use style::{StylePlane, StyleSet, resolve_styles};

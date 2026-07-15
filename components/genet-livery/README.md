@@ -48,7 +48,12 @@ scale, and rotate functions composed around the default center origin; ordinary
 inline spans remain non-transformable. The current property ratchet also
 lowers inset and min/max geometry into Taffy, carries corner radii through
 neutral border commands, applies Parley text alignment and spacing, and keeps
-hidden boxes in layout while suppressing their paint. Links, scrolling, and
-focus remain open.
+hidden boxes in layout while suppressing their paint. The retained document
+now supplies bounded viewport scrolling, pointer-events-aware hit testing,
+retained link rectangles, fragment scrolling, and focus-state routing. A
+host-driven opacity clock can invalidate and repaint intermediate frames through
+the same retained session. Nested scroll chaining, layered image/gradient
+backgrounds, and CSS transition/keyframe declarations remain outside this
+first interaction gate.
 `genet.livery` therefore stays an explicit pin rather than the default static
 route.

@@ -4,6 +4,7 @@ use genet_livery::{
     Device, InteractionStates, LiveryDocument, StyleSet, emit_paint_list, layout, resolve_styles,
 };
 use genet_static_dom::StaticDocument;
+use layout_dom_api::LayoutDom;
 use paint_list_api::{
     BorderDetails, ClipKind, ColorF, DeviceIntSize, EngineId, PaintCmd, PaintEnvelope, PaintList,
 };
@@ -101,7 +102,73 @@ fn border_radii_reach_the_neutral_border_primitive() {
     assert_eq!(radius.top_left.height, 8.0);
     assert_eq!(radius.bottom_right.width, 12.0);
     assert_eq!(radius.bottom_right.height, 12.0);
-    assert_eq!((radius.top_right.width, radius.top_right.height), (0.0, 0.0));
+    assert_eq!(
+        (radius.top_right.width, radius.top_right.height),
+        (0.0, 0.0)
+    );
+}
+
+#[test]
+fn border_radii_clip_background_fills() {
+    let list = render(
+        r#"<html><body><div class="card"></div></body></html>"#,
+        ".card { width: 80px; height: 40px; background-color: lime; border-radius: 8px; }",
+        1,
+    );
+    let rounded = list
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::PushClip(spec) => match &spec.kind {
+                ClipKind::RoundedRect { radius, .. } => Some(*radius),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("rounded background emits a rounded clip");
+    assert_eq!(rounded.top_left.width, 8.0);
+    assert!(
+        list.commands()
+            .iter()
+            .any(|command| matches!(command, PaintCmd::PopClip))
+    );
+}
+
+#[test]
+fn retained_opacity_clock_samples_and_settles() {
+    let document = StaticDocument::parse(r#"<html><body><div class="card"></div></body></html>"#);
+    let card = document.first_with_class(document.document(), "card").unwrap();
+    let mut retained = LiveryDocument::new(
+        document,
+        StyleSet::cambium(&[".card { width: 40px; height: 20px; background-color: lime; }"]),
+        Device::screen(320.0, 240.0),
+    );
+    retained.frame(320, 240).unwrap();
+    assert!(retained.animate_opacity(card, 0.0, 1.0, 0.0, 1_000.0));
+    assert!(!retained.settled());
+
+    let start = retained.frame(320, 240).unwrap();
+    let start_layer = start.commands().iter().find_map(|command| match command {
+        PaintCmd::PushLayer(layer) => Some(layer.opacity),
+        _ => None,
+    });
+    assert_eq!(start_layer, Some(0.0));
+
+    assert!(retained.pump(500.0));
+    let halfway = retained.frame(320, 240).unwrap();
+    let halfway_layer = halfway.commands().iter().find_map(|command| match command {
+        PaintCmd::PushLayer(layer) => Some(layer.opacity),
+        _ => None,
+    });
+    assert_eq!(halfway_layer, Some(0.5));
+
+    assert!(retained.pump(1_000.0));
+    assert!(retained.settled());
+    let end = retained.frame(320, 240).unwrap();
+    assert!(!end
+        .commands()
+        .iter()
+        .any(|command| matches!(command, PaintCmd::PushLayer(_))));
 }
 
 #[test]
@@ -177,12 +244,8 @@ fn text_alignment_and_spacing_reach_parley() {
         (first.point.x, last.point.x)
     }
 
-    let start = first_glyph(
-        ".label { width: 200px; font-size: 16px; text-align: start; }",
-    );
-    let centered = first_glyph(
-        ".label { width: 200px; font-size: 16px; text-align: center; }",
-    );
+    let start = first_glyph(".label { width: 200px; font-size: 16px; text-align: start; }");
+    let centered = first_glyph(".label { width: 200px; font-size: 16px; text-align: center; }");
     let spaced = first_glyph(
         ".label { width: 200px; font-size: 16px; letter-spacing: 2px; word-spacing: 3px; }",
     );

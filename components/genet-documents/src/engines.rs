@@ -178,8 +178,8 @@ impl<Fetch: ResourceFetcher + Send + Sync> SessionEngine<Scene> for LiverySessio
     }
 }
 
-/// Retained Livery document session. Interaction remains deliberately empty
-/// until the Cambium lane owns link, scroll, and focus semantics.
+/// Retained Livery document session. The document owns the resolved style and
+/// fragment planes, so this adapter only translates the session contract.
 #[cfg(feature = "livery")]
 pub struct LiveryDocumentSession {
     doc: genet_livery::LiveryDocument<genet_static_dom::StaticDocument>,
@@ -212,20 +212,68 @@ impl DocumentSession<Scene> for LiveryDocumentSession {
         }
     }
 
-    fn scroll_by(&mut self, _dx: f32, _dy: f32) -> bool {
-        false
+    fn scroll_by(&mut self, dx: f32, dy: f32) -> bool {
+        self.doc.scroll_by(dx, dy)
     }
 
-    fn scroll_for_key(&mut self, _key: SessionScrollKey) -> bool {
-        false
+    fn scroll_at(&mut self, x: f32, y: f32, dx: f32, dy: f32) -> bool {
+        self.doc.scroll_at(x, y, dx, dy)
     }
 
-    fn click_at(&mut self, _x: f32, _y: f32) -> SessionClick {
-        SessionClick::Miss
+    fn scroll_for_key(&mut self, key: SessionScrollKey) -> bool {
+        match key {
+            SessionScrollKey::LineUp => self.doc.scroll_line(-1),
+            SessionScrollKey::LineDown => self.doc.scroll_line(1),
+            SessionScrollKey::PageUp => self.doc.scroll_page(-1),
+            SessionScrollKey::PageDown => self.doc.scroll_page(1),
+            SessionScrollKey::Home => {
+                let before = self.doc.scroll();
+                self.doc.scroll_to(0.0);
+                before != self.doc.scroll()
+            },
+            SessionScrollKey::End => {
+                let before = self.doc.scroll();
+                self.doc.scroll_to(f32::MAX);
+                before != self.doc.scroll()
+            },
+        }
+    }
+
+    fn scroll_to(&mut self, y: f32) {
+        self.doc.scroll_to(y);
+    }
+
+    fn click_at(&mut self, x: f32, y: f32) -> SessionClick {
+        match self.doc.click_at(x, y) {
+            genet_livery::ClickOutcome::None => SessionClick::Miss,
+            genet_livery::ClickOutcome::Focused | genet_livery::ClickOutcome::Scrolled => {
+                SessionClick::Handled
+            },
+            genet_livery::ClickOutcome::Navigate(href) => SessionClick::Navigate(href),
+        }
     }
 
     fn links(&self) -> Vec<SessionLink> {
-        Vec::new()
+        self.doc
+            .links()
+            .into_iter()
+            .map(|link| SessionLink {
+                url: link.url,
+                rect: link.rect,
+            })
+            .collect()
+    }
+
+    fn content_height(&mut self, _width: u32, height: u32) -> u32 {
+        self.doc.content_height(height)
+    }
+
+    fn pump(&mut self, now_ms: f64) {
+        self.doc.pump(now_ms);
+    }
+
+    fn settled(&mut self) -> bool {
+        self.doc.settled()
     }
 
     fn as_any(&mut self) -> &mut dyn Any {
@@ -577,5 +625,34 @@ mod tests {
         assert_eq!(concrete.document().text_system().shape_count(), shape_count);
         assert!(!session.scroll_by(0.0, 100.0));
         assert_eq!(session.click_at(20.0, 20.0), SessionClick::Miss);
+    }
+
+    #[cfg(feature = "livery")]
+    #[test]
+    fn livery_session_routes_scroll_focus_and_links() {
+        let engine = LiverySessionEngine::new(NoFetch);
+        let request = SessionSpawnRequest::new("https://example.test/")
+            .with_body(
+                r##"<html><head><style>
+                    html, body { margin: 0; padding: 0; }
+                    .link, .target { display: block; width: 100px; height: 20px; }
+                    .spacer { height: 500px; }
+                </style></head><body>
+                    <a class="link" href="#target">top</a>
+                    <div class="spacer"></div>
+                    <div id="target" class="target">target</div>
+                </body></html>"##,
+            )
+            .with_viewport(320, 240);
+        let mut session = engine.spawn(&request).expect("spawns");
+        let _scene = session.frame(320, 240);
+
+        assert!(session.content_height(320, 240) > 240);
+        let link = session.links().into_iter().next().expect("retained link");
+        let click = session.click_at(link.rect[0] + 5.0, link.rect[1] + 5.0);
+        assert_eq!(click, SessionClick::Handled);
+        assert!(session.scroll_for_key(SessionScrollKey::Home));
+        assert!(session.scroll_by(0.0, 100.0));
+        assert!(session.scroll_at(10.0, 10.0, 0.0, -100.0));
     }
 }

@@ -15,7 +15,11 @@ session, take paint frames, scroll, click, settle).
 - `LiveryDocument` / `LiverySessionEngine` (`livery` feature,
   `genet.livery`): the opt-in clean-room static implementation. It retains
   style/layout/text paint state and lowers the neutral PaintList into the same
-  scene contract. Links, scrolling, and focus are still intentionally absent.
+  scene contract. It also routes bounded viewport scrolling, retained link
+  rectangles, pointer hit testing, fragment navigation, and focus state. The
+  session also exposes the retained animation clock for host-driven opacity
+  frames. Nested scroll chaining, resource-backed animation, and CSS
+  transition/keyframe declarations remain open.
 - `ScriptedDocument` sessions / `ScriptedSessionEngine<E, _>` (`scripted`
   feature): a live page whose JS runs on Boa (or Nova on the nova rung),
   with the tick + quiescence seam (`pump` / `settled`).

@@ -2,14 +2,52 @@
 
 use std::hash::Hash;
 
-use layout_dom_api::LayoutDom;
+use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
 use livery::media::Device;
+use livery::{
+    selector::StatePseudoClass,
+    values::{Opacity, Overflow},
+};
 use paint_list_api::DeviceIntSize;
 
 use crate::{
-    InteractionStates, LayoutError, LiveryPaintList, StyleSet, TextSystem,
-    emit_paint_list_with_text_system, layout::layout_with_text_system, resolve_styles,
+    FragmentPlane, InteractionStates, LayoutError, LiveryPaintList, StylePlane, StyleSet,
+    TextSystem, emit_paint_list_with_text_system, hit_test, layout::layout_with_text_system,
+    resolve_styles,
 };
+
+/// What a Livery click resolved to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ClickOutcome {
+    None,
+    Focused,
+    Scrolled,
+    Navigate(String),
+}
+
+/// A link rectangle retained from the last layout pass.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinkTarget {
+    pub url: String,
+    pub rect: [f32; 4],
+}
+
+struct LayoutState<Id> {
+    viewport: (u32, u32),
+    styles: StylePlane<Id>,
+    fragments: FragmentPlane<Id>,
+    content_width: f32,
+    content_height: f32,
+}
+
+#[derive(Clone, Copy)]
+struct OpacityTransition<Id> {
+    node: Id,
+    from: f32,
+    to: f32,
+    start_ms: f64,
+    duration_ms: f64,
+}
 
 /// A static DOM plus the Livery state that should survive between frames.
 ///
@@ -28,6 +66,12 @@ where
     text: TextSystem,
     generation: u64,
     cached: Option<((u32, u32), LiveryPaintList)>,
+    layout: Option<LayoutState<D::NodeId>>,
+    viewport: (u32, u32),
+    scroll: (f32, f32),
+    focused_chain: Vec<D::NodeId>,
+    clock_ms: f64,
+    opacity_transition: Option<OpacityTransition<D::NodeId>>,
 }
 
 impl<D> LiveryDocument<D>
@@ -36,6 +80,10 @@ where
     D::NodeId: Copy + Eq + Hash,
 {
     pub fn new(dom: D, style_set: StyleSet, device: Device) -> Self {
+        let viewport = (
+            device.viewport_width.max(0.0) as u32,
+            device.viewport_height.max(0.0) as u32,
+        );
         Self {
             dom,
             style_set,
@@ -44,6 +92,12 @@ where
             text: TextSystem::new(),
             generation: 0,
             cached: None,
+            layout: None,
+            viewport,
+            scroll: (0.0, 0.0),
+            focused_chain: Vec::new(),
+            clock_ms: 0.0,
+            opacity_transition: None,
         }
     }
 
@@ -66,18 +120,22 @@ where
 
     pub fn invalidate(&mut self) {
         self.cached = None;
+        self.layout = None;
     }
 
     pub fn frame(&mut self, width: u32, height: u32) -> Result<LiveryPaintList, LayoutError> {
         if let Some((viewport, list)) = &self.cached
             && *viewport == (width, height)
         {
-            return Ok(list.clone());
+            return Ok(list.clone().translated(-self.scroll.0, -self.scroll.1));
         }
 
+        self.viewport = (width, height);
         self.device.viewport_width = width as f32;
         self.device.viewport_height = height as f32;
-        let styles = resolve_styles(&self.dom, &self.style_set, &self.device, &self.interactions);
+        let mut styles =
+            resolve_styles(&self.dom, &self.style_set, &self.device, &self.interactions);
+        self.apply_opacity_transition(&mut styles);
         let fragments = layout_with_text_system(
             &self.dom,
             &styles,
@@ -85,6 +143,15 @@ where
             height as f32,
             &mut self.text,
         )?;
+        let (content_width, content_height) = fragments.content_extent();
+        self.layout = Some(LayoutState {
+            viewport: (width, height),
+            styles: styles.clone(),
+            fragments: fragments.clone(),
+            content_width,
+            content_height,
+        });
+        self.clamp_scroll();
         self.generation = self.generation.saturating_add(1);
         let list = emit_paint_list_with_text_system(
             &self.dom,
@@ -95,10 +162,319 @@ where
             &mut self.text,
         );
         self.cached = Some(((width, height), list.clone()));
-        Ok(list)
+        Ok(list.translated(-self.scroll.0, -self.scroll.1))
+    }
+
+    /// Return the current viewport scroll offset.
+    pub fn scroll(&self) -> (f32, f32) {
+        self.scroll
+    }
+
+    /// Start a host-driven opacity transition for one retained element. This
+    /// is the runtime clock seam; CSS transition declarations and keyframes
+    /// remain a later property-ratchet layer.
+    pub fn animate_opacity(
+        &mut self,
+        node: D::NodeId,
+        from: f32,
+        to: f32,
+        start_ms: f64,
+        duration_ms: f64,
+    ) -> bool {
+        if !from.is_finite()
+            || !to.is_finite()
+            || !start_ms.is_finite()
+            || !duration_ms.is_finite()
+            || duration_ms < 0.0
+        {
+            return false;
+        }
+        self.clock_ms = start_ms;
+        self.opacity_transition = Some(OpacityTransition {
+            node,
+            from: from.clamp(0.0, 1.0),
+            to: to.clamp(0.0, 1.0),
+            start_ms,
+            duration_ms,
+        });
+        self.cached = None;
+        true
+    }
+
+    /// Advance retained animation time. A following frame samples the
+    /// interpolated value without re-running layout.
+    pub fn pump(&mut self, now_ms: f64) -> bool {
+        if self.opacity_transition.is_none() || !now_ms.is_finite() {
+            return false;
+        }
+        let next = now_ms.max(self.clock_ms);
+        let changed = next != self.clock_ms;
+        self.clock_ms = next;
+        if changed {
+            self.cached = None;
+        }
+        changed
+    }
+
+    pub fn settled(&self) -> bool {
+        self.opacity_transition
+            .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms)
+    }
+
+    /// Scroll the viewport by device pixels. Nested scroll containers are not
+    /// routed yet, so this is deliberately the document viewport only.
+    pub fn scroll_by(&mut self, dx: f32, dy: f32) -> bool {
+        let before = self.scroll;
+        self.scroll.0 += dx;
+        self.scroll.1 += dy;
+        self.clamp_scroll();
+        before != self.scroll
+    }
+
+    pub fn scroll_at(&mut self, _x: f32, _y: f32, dx: f32, dy: f32) -> bool {
+        self.scroll_by(dx, dy)
+    }
+
+    pub fn scroll_to(&mut self, y: f32) {
+        self.scroll.1 = y;
+        self.clamp_scroll();
+    }
+
+    pub fn scroll_line(&mut self, direction: i8) -> bool {
+        self.scroll_by(0.0, 40.0 * f32::from(direction))
+    }
+
+    pub fn scroll_page(&mut self, direction: i8) -> bool {
+        let amount = self.viewport.1 as f32 * 0.9;
+        self.scroll_by(0.0, amount * f32::from(direction))
+    }
+
+    pub fn content_height(&self, fallback: u32) -> u32 {
+        self.layout
+            .as_ref()
+            .map_or(fallback, |layout| layout.content_height.ceil() as u32)
+    }
+
+    pub fn hit_test(&self, x: f32, y: f32) -> Option<D::NodeId> {
+        let layout = self.layout.as_ref()?;
+        hit_test(
+            &self.dom,
+            &layout.styles,
+            &layout.fragments,
+            x + self.scroll.0,
+            y + self.scroll.1,
+        )
+    }
+
+    pub fn links(&self) -> Vec<LinkTarget> {
+        let Some(layout) = self.layout.as_ref() else {
+            return Vec::new();
+        };
+        let mut links = Vec::new();
+        self.collect_links(self.dom.document(), layout, &mut links);
+        links
+    }
+
+    pub fn click_at(&mut self, x: f32, y: f32) -> ClickOutcome {
+        let Some(target) = self.hit_test(x, y) else {
+            return ClickOutcome::None;
+        };
+        let focus_target = self.focusable_ancestor(target);
+        let focused = focus_target.is_some_and(|id| self.focus(id));
+        let href = self.link_ancestor(target);
+        if let Some(href) = href {
+            if let Some(fragment) = href
+                .strip_prefix('#')
+                .filter(|fragment| !fragment.is_empty())
+                && self.scroll_to_fragment(fragment)
+            {
+                return ClickOutcome::Scrolled;
+            }
+            return ClickOutcome::Navigate(href);
+        }
+        if focused {
+            ClickOutcome::Focused
+        } else {
+            ClickOutcome::None
+        }
+    }
+
+    fn clamp_scroll(&mut self) {
+        let Some(layout) = self.layout.as_ref() else {
+            self.scroll = (0.0, 0.0);
+            return;
+        };
+        let (scroll_x, scroll_y) = self.scrollable_axes(layout);
+        let max_x = if scroll_x {
+            (layout.content_width - layout.viewport.0 as f32).max(0.0)
+        } else {
+            0.0
+        };
+        let max_y = if scroll_y {
+            (layout.content_height - layout.viewport.1 as f32).max(0.0)
+        } else {
+            0.0
+        };
+        self.scroll.0 = self.scroll.0.clamp(0.0, max_x);
+        self.scroll.1 = self.scroll.1.clamp(0.0, max_y);
+    }
+
+    fn apply_opacity_transition(&self, styles: &mut StylePlane<D::NodeId>) {
+        let Some(transition) = self.opacity_transition else {
+            return;
+        };
+        let progress = if transition.duration_ms == 0.0 {
+            1.0
+        } else {
+            ((self.clock_ms - transition.start_ms) / transition.duration_ms).clamp(0.0, 1.0) as f32
+        };
+        let value = transition.from + (transition.to - transition.from) * progress;
+        if let Some(style) = styles.get_mut(transition.node) {
+            style.opacity = Opacity::from_value(value);
+        }
+    }
+
+    fn scrollable_axes(&self, layout: &LayoutState<D::NodeId>) -> (bool, bool) {
+        let root = self
+            .dom
+            .dom_children(self.dom.document())
+            .find(|id| self.dom.kind(*id) == NodeKind::Element);
+        let Some(root) = root else {
+            return (true, true);
+        };
+        let Some(style) = layout.styles.get(root) else {
+            return (true, true);
+        };
+        (
+            !matches!(style.overflow_x, Overflow::Hidden | Overflow::Clip),
+            !matches!(style.overflow_y, Overflow::Hidden | Overflow::Clip),
+        )
+    }
+
+    fn focus(&mut self, id: D::NodeId) -> bool {
+        for old in self.focused_chain.drain(..) {
+            self.interactions.set(old, StatePseudoClass::Focus, false);
+            self.interactions
+                .set(old, StatePseudoClass::FocusWithin, false);
+        }
+        self.interactions.set(id, StatePseudoClass::Focus, true);
+        let mut chain = vec![id];
+        let mut parent = self.dom.parent(id);
+        while let Some(ancestor) = parent {
+            if self.dom.kind(ancestor) == NodeKind::Element {
+                self.interactions
+                    .set(ancestor, StatePseudoClass::FocusWithin, true);
+                chain.push(ancestor);
+            }
+            parent = self.dom.parent(ancestor);
+        }
+        self.focused_chain = chain;
+        self.cached = None;
+        true
+    }
+
+    fn focusable_ancestor(&self, mut id: D::NodeId) -> Option<D::NodeId> {
+        loop {
+            if self.is_focusable(id) {
+                return Some(id);
+            }
+            id = self.dom.parent(id)?;
+        }
+    }
+
+    fn is_focusable(&self, id: D::NodeId) -> bool {
+        if self.dom.kind(id) != NodeKind::Element {
+            return false;
+        }
+        let Some(name) = self.dom.element_name(id) else {
+            return false;
+        };
+        let local = name.local.as_ref();
+        local.eq_ignore_ascii_case("a") && self.attribute(id, "href").is_some()
+            || matches!(
+                local.to_ascii_lowercase().as_str(),
+                "button" | "input" | "select" | "textarea"
+            )
+            || self.attribute(id, "tabindex").is_some()
+    }
+
+    fn link_ancestor(&self, mut id: D::NodeId) -> Option<String> {
+        loop {
+            if self.dom.kind(id) == NodeKind::Element
+                && self
+                    .dom
+                    .element_name(id)
+                    .is_some_and(|name| name.local.as_ref().eq_ignore_ascii_case("a"))
+                && let Some(href) = self.attribute(id, "href")
+            {
+                return Some(href.to_owned());
+            }
+            id = self.dom.parent(id)?;
+        }
+    }
+
+    fn scroll_to_fragment(&mut self, fragment: &str) -> bool {
+        let Some(target) = find_id(&self.dom, self.dom.document(), fragment) else {
+            return false;
+        };
+        let Some(y) = self
+            .layout
+            .as_ref()
+            .and_then(|layout| layout.fragments.get(target).map(|fragment| fragment.y))
+        else {
+            return false;
+        };
+        self.scroll_to(y);
+        true
+    }
+
+    fn collect_links(
+        &self,
+        id: D::NodeId,
+        layout: &LayoutState<D::NodeId>,
+        links: &mut Vec<LinkTarget>,
+    ) {
+        if self.dom.kind(id) == NodeKind::Element
+            && let Some(href) = self.attribute(id, "href")
+            && let Some(fragment) = layout.fragments.get(id)
+            && let Some(style) = layout.styles.get(id)
+            && style.display != livery::values::Display::None
+            && style.visibility == livery::values::Visibility::Visible
+            && style.pointer_events == livery::values::PointerEvents::Auto
+        {
+            links.push(LinkTarget {
+                url: href.to_owned(),
+                rect: [
+                    fragment.x - self.scroll.0,
+                    fragment.y - self.scroll.1,
+                    fragment.width,
+                    fragment.height,
+                ],
+            });
+        }
+        for child in self.dom.dom_children(id) {
+            self.collect_links(child, layout, links);
+        }
+    }
+
+    fn attribute(&self, id: D::NodeId, local: &str) -> Option<&str> {
+        self.dom
+            .attribute(id, &Namespace::from(""), &LocalName::from(local))
     }
 
     pub fn into_dom(self) -> D {
         self.dom
     }
+}
+
+fn find_id<D: LayoutDom>(dom: &D, id: D::NodeId, target: &str) -> Option<D::NodeId> {
+    if dom.kind(id) == NodeKind::Element
+        && dom
+            .attribute(id, &Namespace::from(""), &LocalName::from("id"))
+            .is_some_and(|value| value == target)
+    {
+        return Some(id);
+    }
+    dom.dom_children(id)
+        .find_map(|child| find_id(dom, child, target))
 }

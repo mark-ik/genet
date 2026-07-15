@@ -4,25 +4,26 @@ use layout_dom_api::{LayoutDom, NodeKind};
 use livery::{
     ComputedValues,
     values::{
-        Alignment as CssAlignment, AspectRatio, BorderStyle, BorderWidth, BoxSizing as CssBoxSizing,
-        Display as CssDisplay, FlexDirection as CssFlexDirection, FlexWrap as CssFlexWrap,
-        FontSize, Gap as CssGap, GridAutoFlow as CssGridAutoFlow, GridPlacement as CssGridPlacement,
-        GridTemplate as CssGridTemplate, GridTrack as CssGridTrack, Inset, Length,
-        LengthPercentage as CssLengthPercentage, LengthUnit, LineHeight, Margin,
-        Overflow as CssOverflow, Position as CssPosition, Size as CssSize,
+        Alignment as CssAlignment, AspectRatio, BorderStyle, BorderWidth,
+        BoxSizing as CssBoxSizing, Display as CssDisplay, FlexDirection as CssFlexDirection,
+        FlexWrap as CssFlexWrap, FontSize, Gap as CssGap, GridAutoFlow as CssGridAutoFlow,
+        GridPlacement as CssGridPlacement, GridTemplate as CssGridTemplate,
+        GridTrack as CssGridTrack, Inset, Length, LengthPercentage as CssLengthPercentage,
+        LengthUnit, LineHeight, Margin, Overflow as CssOverflow, Position as CssPosition,
+        Size as CssSize,
     },
 };
 use taffy::{
     TaffyTree,
     geometry::{Line, Point, Rect, Size},
     prelude::{
-        auto, fr, length, line, max_content, min_content, percent, span, AvailableSpace, Dimension,
-        LengthPercentage, LengthPercentageAuto, NodeId,
+        AvailableSpace, Dimension, LengthPercentage, LengthPercentageAuto, NodeId, auto, fr,
+        length, line, max_content, min_content, percent, span,
     },
     style::{
         AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyword, BoxSizing, Display,
-        FlexDirection, FlexWrap, GridAutoFlow, GridPlacement, GridTemplateComponent, JustifyContent,
-        Overflow, Position, Style,
+        FlexDirection, FlexWrap, GridAutoFlow, GridPlacement, GridTemplateComponent,
+        JustifyContent, Overflow, Position, Style,
     },
 };
 
@@ -66,6 +67,17 @@ impl<Id: Eq + Hash> FragmentPlane<Id> {
 
     pub fn is_empty(&self) -> bool {
         self.fragments.is_empty()
+    }
+
+    pub(crate) fn content_extent(&self) -> (f32, f32) {
+        self.fragments
+            .values()
+            .fold((0.0, 0.0), |(right, bottom), fragment| {
+                (
+                    right.max(fragment.x + fragment.width),
+                    bottom.max(fragment.y + fragment.height),
+                )
+            })
     }
 }
 
@@ -606,6 +618,117 @@ where
             matches!(style.display, CssDisplay::Inline | CssDisplay::InlineBlock)
         }),
         _ => false,
+    }
+}
+
+/// Return the topmost pointer-events-enabled element whose layout fragment
+/// contains a scene point. The walk mirrors the lane's DOM paint order for the
+/// bounded stacking subset: numeric z-index first, then source order.
+pub fn hit_test<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    x: f32,
+    y: f32,
+) -> Option<D::NodeId>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut state = HitTestState {
+        dom,
+        styles,
+        fragments,
+        x,
+        y,
+        clips: Vec::new(),
+        order: 0,
+        candidates: Vec::new(),
+    };
+    collect_hit_candidates(&mut state, dom.document());
+    state
+        .candidates
+        .into_iter()
+        .max_by_key(|candidate| (candidate.level, candidate.order))
+        .map(|candidate| candidate.id)
+}
+
+struct HitCandidate<Id> {
+    id: Id,
+    level: i32,
+    order: u64,
+}
+
+struct HitTestState<'a, D>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    dom: &'a D,
+    styles: &'a StylePlane<D::NodeId>,
+    fragments: &'a FragmentPlane<D::NodeId>,
+    x: f32,
+    y: f32,
+    clips: Vec<(f32, f32, f32, f32)>,
+    order: u64,
+    candidates: Vec<HitCandidate<D::NodeId>>,
+}
+
+fn collect_hit_candidates<D>(state: &mut HitTestState<'_, D>, id: D::NodeId)
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let style = state.styles.get(id);
+    let fragment = state.fragments.get(id);
+    let inside_clips = state.clips.iter().all(|(left, top, right, bottom)| {
+        state.x >= *left && state.x <= *right && state.y >= *top && state.y <= *bottom
+    });
+    if state.dom.kind(id) == NodeKind::Element
+        && let (Some(style), Some(fragment)) = (style, fragment)
+        && style.display != CssDisplay::None
+        && style.visibility == livery::values::Visibility::Visible
+        && style.pointer_events == livery::values::PointerEvents::Auto
+        && inside_clips
+        && state.x >= fragment.x
+        && state.x <= fragment.x + fragment.width
+        && state.y >= fragment.y
+        && state.y <= fragment.y + fragment.height
+    {
+        let level = match style.z_index {
+            livery::values::ZIndex::Integer(level) => level,
+            livery::values::ZIndex::Auto => 0,
+        };
+        state.candidates.push(HitCandidate {
+            id,
+            level,
+            order: state.order,
+        });
+    }
+    state.order = state.order.saturating_add(1);
+
+    let pushed_clip = style
+        .zip(fragment)
+        .filter(|(style, _)| {
+            style.overflow_x != CssOverflow::Visible || style.overflow_y != CssOverflow::Visible
+        })
+        .map(|(_, fragment)| {
+            (
+                fragment.x,
+                fragment.y,
+                fragment.x + fragment.width,
+                fragment.y + fragment.height,
+            )
+        });
+    if let Some(clip) = pushed_clip.as_ref() {
+        state.clips.push(*clip);
+    }
+    let children = state.dom.dom_children(id).collect::<Vec<_>>();
+    for child in children {
+        collect_hit_candidates(state, child);
+    }
+    if pushed_clip.is_some() {
+        state.clips.pop();
     }
 }
 

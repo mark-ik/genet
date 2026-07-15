@@ -791,6 +791,10 @@ pub struct Opacity(f32);
 impl Opacity {
     pub const ONE: Self = Self(1.0);
 
+    pub const fn from_value(value: f32) -> Self {
+        Self(value.clamp(0.0, 1.0))
+    }
+
     pub const fn value(self) -> f32 {
         self.0
     }
