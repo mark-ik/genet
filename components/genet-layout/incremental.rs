@@ -449,13 +449,23 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             .with_viewport_scroll(self.viewport.scroll);
         let hit = view.hit_test(Point::new(x, y))?;
         let node = view.find_by_source_id(hit.source_node)?;
+        // A retained fragment can outlive the DOM node it names between the
+        // host's DOM publication and its next layout apply. `find_by_source_id`
+        // currently walks the live tree, but keep the public query boundary
+        // explicit about LayoutDom's dangle contract: hit-test never publishes
+        // a retired id even if its reverse-lookup implementation changes.
+        if !dom.is_live(node) {
+            return None;
+        }
         // Inline refinement: a `display:inline` element (`<a>`, `<span>`, …)
         // establishes no box, so the block walk above can only resolve its
         // containing inline-formatting leaf. Descend into that leaf's cached text to
         // recover the inline element under the point — the `elementFromPoint`
         // granularity links and inline interactivity need. Over the leaf's
         // inter-run / empty space this yields `None` and the block leaf stands.
-        self.inline_hit_at(node, hit.local_point).or(Some(node))
+        self.inline_hit_at(node, hit.local_point)
+            .filter(|&inline| dom.is_live(inline))
+            .or(Some(node))
     }
 
     /// Resolve a point inside inline-formatting leaf `node` to the inline element
@@ -4587,6 +4597,18 @@ mod tests {
         let _ = drain(&mut dom);
         dom.remove(gone);
         let muts = drain(&mut dom);
+        assert!(!dom.is_live(gone));
+        // The host can observe the new DOM before it applies the queued layout
+        // batch. The retained fragment plane may still mention `gone`, but the
+        // public query boundary must not publish that retired id.
+        let scroll = ScrollOffsets::default();
+        for y in (0..80).step_by(4) {
+            assert_ne!(
+                layout.hit_test(&dom, 5.0, y as f32, &scroll),
+                Some(gone),
+                "pre-apply hit at y={y} returned a retired node",
+            );
+        }
         let applied = layout.apply(&dom, SHEET, &muts);
         assert!(
             matches!(applied, Applied::Spliced | Applied::FullRecompute),
@@ -4594,6 +4616,13 @@ mod tests {
         );
         assert!(layout.paint_ready());
         assert_emit_matches_fresh(&layout, &dom, SHEET, "removal splice");
+        for y in (0..80).step_by(4) {
+            assert_ne!(
+                layout.hit_test(&dom, 5.0, y as f32, &scroll),
+                Some(gone),
+                "post-apply hit at y={y} returned a retired node",
+            );
+        }
     }
 
     /// A theme flip is a media re-evaluation over the live session (W3C plan
