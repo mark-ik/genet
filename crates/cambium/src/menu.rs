@@ -2,6 +2,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+//! Compatibility wrapper for the original click-only overlay menu.
+//!
+//! New command and context menus should use [`crate::command_menu`], which adds
+//! menu semantics, shared keyboard state, disabled reasons, and submenus. This
+//! wrapper remains for source compatibility and for completion popups whose
+//! keyboard state is still owned by their editor.
+//!
 //! A small reusable overlay menu: a positioned vertical list of labelled rows with one
 //! marked active and each clicking a host handler. It is the shape every Genet host
 //! reaches for — a completion popup, a slash / command menu, a context menu, a picker —

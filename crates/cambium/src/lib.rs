@@ -28,6 +28,7 @@ use layout_dom_api::{LocalName, Namespace, QualName};
 
 mod action_list;
 mod arrangement;
+mod command_surface;
 mod context;
 mod controls;
 mod detail_popover;
@@ -67,6 +68,10 @@ mod tests;
 
 pub use action_list::{ActionItem, ActionListEvent, ActionListState, action_list};
 pub use arrangement::{arrangement, placed, placed_with};
+pub use command_surface::{
+    CommandEvent, CommandItem, CommandState, CommandSurfaceKind, command_menu, command_palette,
+    command_picker, command_surface,
+};
 pub use context::GenetCtx;
 pub use detail_popover::{
     DetailPopoverEvent, DetailPopoverMode, DetailPopoverState, detail_popover,

@@ -178,6 +178,53 @@ textarea {
     color: var(--catalog-disabled);
 }
 
+.command-surface {
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-control-border);
+    max-width: 24rem;
+    min-width: 12rem;
+    position: relative;
+    z-index: 22;
+}
+
+.command-query {
+    border-bottom: 1px solid var(--catalog-border);
+    color: var(--catalog-muted);
+    padding: 0.5rem 0.75rem;
+}
+
+.command-item {
+    display: grid;
+    gap: 0.5rem;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    padding: 0.5rem 0.75rem;
+}
+
+.command-item.selected {
+    background-color: var(--catalog-hover);
+    box-shadow: inset 3px 0 0 var(--catalog-accent);
+}
+
+.command-item[aria-disabled="true"] {
+    color: var(--catalog-disabled);
+}
+
+.command-disabled-reason {
+    font-size: 0.8em;
+    grid-column: 1 / -1;
+}
+
+.command-shortcut,
+.command-submenu-mark {
+    color: var(--catalog-muted);
+}
+
+.command-submenu {
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-control-border);
+    min-width: 12rem;
+}
+
 .catalog-overlay-stage {
     min-height: 18rem;
     position: relative;

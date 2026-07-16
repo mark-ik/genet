@@ -75,9 +75,25 @@ Escape, outside click, and keyboard reachability.
 
 ### C2. Command surface
 
+**Landed 2026-07-16.** `CommandState` and `CommandItem` now drive three named
+configurations. The palette uses combobox/listbox semantics and owns filtering;
+the picker uses listbox semantics; the positioned context menu uses
+menu/menuitem semantics with a depth-one submenu. All three share active-item,
+Home/End, Arrow, Enter, and Escape handling. Palette and picker navigation skip
+disabled options; menus keep disabled commands focusable but inert, matching
+the WAI-ARIA menu pattern. Disabled commands may carry a visible and accessible
+reason. The old `action_list` names and DOM classes delegate to the palette
+engine, while the old click-only `menu` remains source-compatible for Mere's
+completion popup.
+Semantic and keyboard choices follow the W3C WAI-ARIA
+[combobox](https://www.w3.org/WAI/ARIA/apg/patterns/combobox/),
+[listbox](https://www.w3.org/WAI/ARIA/apg/patterns/listbox/), and
+[menu](https://www.w3.org/WAI/ARIA/apg/patterns/menubar/) patterns.
+
 Unify the filtering and keyboard state in `action_list` with the positioning in
-`menu`. The shared engine owns query, active item, disabled-item skipping, and
-submenu navigation. Named configurations retain their own semantics: command
+`menu`. The shared engine owns query, active item, pattern-appropriate disabled
+navigation, and submenu navigation. Named configurations retain their own
+semantics: command
 palette and picker are combobox/listbox patterns; context and application menus
 are menu/menuitem patterns.
 

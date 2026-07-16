@@ -9,14 +9,15 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use cambium::{
-    ActionItem, ActionListEvent, ActionListState, AnyView, DetailPopoverMode, DetailPopoverState,
+    AnyView, CommandEvent, CommandItem, CommandState, DetailPopoverMode, DetailPopoverState,
     DomHandle, GenetAppRunner, GenetCtx, GenetElement, GraphCanvasEdge, GraphCanvasNode,
     GraphCanvasSubgraph, GraphCanvasSwatch, GridColumn, GridSpec, GridView, HoverEvent, HoverPhase,
     Key, KeyEvent, NamedKey, OverlayDismiss, OverlayRole, OverlaySurface, Placement, PointerClick,
-    PointerEvent, PointerPhase, RadioGroup, SelectState, Slider, StyleRange, TextInput,
-    action_list, button, button_with, checkbox, custom_leaf, data_grid, detail_popover, el,
-    graph_canvas_swatch, lens, map_action, menu, on_hover, on_pointer, overlay_surface,
-    radio_group, select, slider, styled_textarea, text_field_typed, textarea_typed, toggle,
+    PointerEvent, PointerPhase, RadioGroup, SelectState, Slider, StyleRange, TextInput, button,
+    button_with, checkbox, command_menu, command_palette, command_picker, custom_leaf, data_grid,
+    detail_popover, el, graph_canvas_swatch, lens, map_action, on_hover, on_pointer,
+    overlay_surface, radio_group, select, slider, styled_textarea, text_field_typed,
+    textarea_typed, toggle,
 };
 use genet_scripted_dom::{NodeId, ScriptedDom};
 use layout_dom_api::{LayoutDom, LocalName, Namespace};
@@ -45,9 +46,12 @@ struct CatalogState {
     text: TextInput,
     multiline: TextInput,
     styled: TextInput,
-    actions: ActionListState,
+    actions: CommandState,
     last_action: String,
-    menu_selected: usize,
+    picker_commands: CommandState,
+    last_picker: String,
+    menu_commands: CommandState,
+    last_menu: String,
     grid_scroll: f32,
     grid_sort: usize,
     grid_descending: bool,
@@ -76,11 +80,18 @@ impl Default for CatalogState {
             text: TextInput::new("merecat"),
             multiline: TextInput::new("First line\nSecond line"),
             styled: TextInput::new("let answer = 42;"),
-            actions: ActionListState::default()
+            actions: CommandState::default()
                 .with_label("Catalog actions")
                 .with_id("catalog-actions"),
             last_action: "none".into(),
-            menu_selected: 0,
+            picker_commands: CommandState::default()
+                .with_label("Open mode")
+                .with_id("catalog-command-picker"),
+            last_picker: "none".into(),
+            menu_commands: CommandState::default()
+                .with_label("Canvas commands")
+                .with_id("catalog-command-menu"),
+            last_menu: "none".into(),
             grid_scroll: 0.0,
             grid_sort: 0,
             grid_descending: false,
@@ -147,12 +158,36 @@ fn graph_kind_color(kind: &&str) -> ColorF {
     }
 }
 
-fn action_items() -> Vec<ActionItem> {
+fn command_items() -> Vec<CommandItem> {
     vec![
-        ActionItem::new("Open graph").with_shortcut("Ctrl+O"),
-        ActionItem::new("Unavailable action").disabled(true),
-        ActionItem::new("Close tab").with_shortcut("Ctrl+W"),
+        CommandItem::new("Open graph")
+            .with_id("open-graph")
+            .with_shortcut("Ctrl+O"),
+        CommandItem::new("Unavailable action")
+            .with_id("unavailable")
+            .disabled_because("Connect a writable graph first"),
+        CommandItem::new("Close tab")
+            .with_id("close-tab")
+            .with_shortcut("Ctrl+W"),
+        CommandItem::new("Export").with_id("export").with_children([
+            CommandItem::new("Plain text"),
+            CommandItem::new("PDF").disabled_because("PDF export is not installed"),
+            CommandItem::new("JSON"),
+        ]),
     ]
+}
+
+fn command_result(event: CommandEvent) -> String {
+    match event {
+        CommandEvent::Activate(path) => format!(
+            "activate:{}",
+            path.iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join("/")
+        ),
+        CommandEvent::Dismiss => "dismiss".into(),
+    }
 }
 
 fn grid_spec() -> GridSpec {
@@ -340,14 +375,31 @@ fn catalog(state: &CatalogState) -> CatalogView {
 
     let actions = map_action(
         lens(
-            |action_state: &mut ActionListState| action_list(action_state, &action_items()),
+            |command_state: &mut CommandState| command_palette(command_state, &command_items()),
             |state: &mut CatalogState| &mut state.actions,
         ),
-        |state: &mut CatalogState, event: ActionListEvent| {
-            state.last_action = match event {
-                ActionListEvent::Activate(index) => format!("activate:{index}"),
-                ActionListEvent::Dismiss => "dismiss".into(),
-            };
+        |state: &mut CatalogState, event: CommandEvent| {
+            state.last_action = command_result(event);
+        },
+    );
+    let picker = map_action(
+        lens(
+            |command_state: &mut CommandState| command_picker(command_state, &command_items()),
+            |state: &mut CatalogState| &mut state.picker_commands,
+        ),
+        |state: &mut CatalogState, event: CommandEvent| {
+            state.last_picker = command_result(event);
+        },
+    );
+    let context_menu = map_action(
+        lens(
+            |command_state: &mut CommandState| {
+                command_menu(command_state, &command_items(), 12.0, 128.0)
+            },
+            |state: &mut CatalogState| &mut state.menu_commands,
+        ),
+        |state: &mut CatalogState, event: CommandEvent| {
+            state.last_menu = command_result(event);
         },
     );
     let navigation = el::<_, CatalogState, ()>(
@@ -357,13 +409,8 @@ fn catalog(state: &CatalogState) -> CatalogView {
             el("div", actions)
                 .attr("id", "catalog-action-list")
                 .attr("class", "catalog-row"),
-            menu(
-                12.0,
-                12.0,
-                ["Inspect".into(), "Duplicate".into(), "Close".into()],
-                state.menu_selected,
-                |state: &mut CatalogState, index| state.menu_selected = index,
-            ),
+            el("div", picker).attr("class", "catalog-row"),
+            context_menu,
             button("Open detail surface", |state: &mut CatalogState, _| {
                 state.overlay_open = true;
                 state.overlay_last_dismiss = None;
@@ -709,6 +756,18 @@ fn assert_initial_surface(dom: &ScriptedDom, root: NodeId) {
         "aria-controls",
         "catalog-actions-options",
     );
+    assert_attr(
+        dom,
+        find_id(dom, root, "catalog-command-picker"),
+        "role",
+        "listbox",
+    );
+    assert_attr(
+        dom,
+        find_id(dom, root, "catalog-command-menu"),
+        "role",
+        "menu",
+    );
 
     let mut rows = Vec::new();
     let data_root = find_id(dom, root, "data-section");
@@ -806,9 +865,42 @@ fn run_interactions(runner: &mut CatalogRunner) {
     runner.dispatch_click(apply, PointerClick::at((4.0, 4.0)));
     assert_eq!(runner.state().presses, 1);
 
-    let menu_row = find_class(&runner.dom().borrow(), root, "menu-row");
-    runner.dispatch_click(menu_row, PointerClick::at((4.0, 4.0)));
-    assert_eq!(runner.state().menu_selected, 1);
+    let disabled_command = find_where(&runner.dom().borrow(), root, &|dom, node| {
+        attr(dom, node, "aria-description") == Some("Connect a writable graph first")
+    })
+    .expect("disabled command reason");
+    assert_eq!(
+        attr(&runner.dom().borrow(), disabled_command, "aria-disabled"),
+        Some("true")
+    );
+
+    let picker = find_id(&runner.dom().borrow(), root, "catalog-command-picker");
+    assert_eq!(
+        attr(&runner.dom().borrow(), picker, "role"),
+        Some("listbox")
+    );
+    runner.set_focus(Some(picker));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::End)));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::Enter)));
+    assert_eq!(runner.state().last_picker, "activate:3");
+
+    let command_menu = find_id(&runner.dom().borrow(), root, "catalog-command-menu");
+    assert_eq!(
+        attr(&runner.dom().borrow(), command_menu, "role"),
+        Some("menu")
+    );
+    runner.set_focus(Some(command_menu));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::End)));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::ArrowRight)));
+    assert_eq!(runner.state().menu_commands.submenu, Some(3));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::ArrowDown)));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::ArrowDown)));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::Enter)));
+    assert_eq!(runner.state().last_menu, "activate:3/2");
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::ArrowLeft)));
+    assert_eq!(runner.state().menu_commands.submenu, None);
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::Escape)));
+    assert_eq!(runner.state().last_menu, "dismiss");
 
     let inside_overlay = find_id(&runner.dom().borrow(), root, "catalog-overlay-inside");
     runner.dispatch_click(inside_overlay, PointerClick::at((2.0, 2.0)));
