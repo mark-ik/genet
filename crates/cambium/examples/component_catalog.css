@@ -116,6 +116,58 @@ textarea {
     font-weight: 700;
 }
 
+.selection-bar {
+    display: flex;
+    gap: 0.25rem;
+}
+
+.selection-item {
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-control-border);
+    cursor: pointer;
+    padding: 0.4rem 0.7rem;
+}
+
+.selection-item.selected {
+    background-color: var(--catalog-hover);
+    border-color: var(--catalog-accent);
+}
+
+.selection-item[aria-disabled="true"] {
+    color: var(--catalog-disabled);
+    cursor: default;
+}
+
+.selection-disabled-reason {
+    display: block;
+    font-size: 0.8em;
+}
+
+.tab-bar {
+    border-bottom: 1px solid var(--catalog-border);
+}
+
+.tab-bar .selection-item {
+    border-bottom: 0;
+}
+
+.segmented-control .selection-item + .selection-item {
+    margin-left: -1px;
+}
+
+.filter-chips .selection-item {
+    border-radius: 999px;
+}
+
+.catalog-tab-panel {
+    border: 1px solid var(--catalog-border);
+    padding: 0.75rem;
+}
+
+.catalog-tab-panel[hidden="true"] {
+    display: none;
+}
+
 .select {
     width: 16rem;
 }

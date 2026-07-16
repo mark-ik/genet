@@ -103,6 +103,19 @@ and a disabled action can expose its reason.
 
 ### C3. Selection bar
 
+**Landed 2026-07-16.** `SelectionState` and `SelectionItem` now drive tabs,
+segmented controls, and filter chips through one roving-focus engine. Tabs
+support configurable automatic or manual activation and tab/tabpanel linkage;
+segmented controls use radiogroup/radio semantics and select on movement;
+filter chips use a toolbar of toggle buttons and move focus independently of
+their multi-selection. Every configuration covers Arrow keys, Home/End,
+pointer or keyboard activation, focus transfer, and disabled-item skipping.
+The behavior follows the W3C WAI-ARIA
+[tabs](https://www.w3.org/WAI/ARIA/apg/patterns/tabs/),
+[radio group](https://www.w3.org/WAI/ARIA/apg/patterns/radio/),
+[toolbar](https://www.w3.org/WAI/ARIA/apg/patterns/toolbar/), and
+[toggle button](https://www.w3.org/WAI/ARIA/apg/patterns/button/) patterns.
+
 Extract one selection engine with tab, segmented-control, and filter-chip
 configurations. Reuse radio-group movement where possible, while keeping the
 distinct roles and activation behavior.

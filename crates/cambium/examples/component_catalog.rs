@@ -13,11 +13,12 @@ use cambium::{
     DomHandle, GenetAppRunner, GenetCtx, GenetElement, GraphCanvasEdge, GraphCanvasNode,
     GraphCanvasSubgraph, GraphCanvasSwatch, GridColumn, GridSpec, GridView, HoverEvent, HoverPhase,
     Key, KeyEvent, NamedKey, OverlayDismiss, OverlayRole, OverlaySurface, Placement, PointerClick,
-    PointerEvent, PointerPhase, RadioGroup, SelectState, Slider, StyleRange, TextInput, button,
-    button_with, checkbox, command_menu, command_palette, command_picker, custom_leaf, data_grid,
-    detail_popover, el, graph_canvas_swatch, lens, map_action, on_hover, on_pointer,
-    overlay_surface, radio_group, select, slider, styled_textarea, text_field_typed,
-    textarea_typed, toggle,
+    PointerEvent, PointerPhase, RadioGroup, SelectState, SelectionItem, SelectionState, Slider,
+    StyleRange, TabActivation, TextInput, button, button_with, checkbox, command_menu,
+    command_palette, command_picker, custom_leaf, data_grid, detail_popover, el, filter_chips,
+    graph_canvas_swatch, lens, map_action, on_hover, on_pointer, overlay_surface, radio_group,
+    segmented_control, select, slider, styled_textarea, tab_bar, text_field_typed, textarea_typed,
+    toggle,
 };
 use genet_scripted_dom::{NodeId, ScriptedDom};
 use layout_dom_api::{LayoutDom, LocalName, Namespace};
@@ -41,6 +42,9 @@ struct CatalogState {
     checked: bool,
     toggled: bool,
     radio: RadioGroup,
+    tabs: SelectionState,
+    segments: SelectionState,
+    chips: SelectionState,
     select: SelectState,
     slider: Slider,
     text: TextInput,
@@ -75,6 +79,15 @@ impl Default for CatalogState {
             checked: false,
             toggled: false,
             radio: RadioGroup::new(0).with_label("Detail density"),
+            tabs: SelectionState::single(0)
+                .with_label("Related panel")
+                .with_id("catalog-tabs"),
+            segments: SelectionState::single(0)
+                .with_label("Card density")
+                .with_id("catalog-segments"),
+            chips: SelectionState::multiple([0])
+                .with_label("Visible node kinds")
+                .with_id("catalog-chips"),
             select: SelectState::new(1).with_label("Rendering mode"),
             slider: Slider::new(0.35).with_steps(0.05, 0.2).with_label("Zoom"),
             text: TextInput::new("merecat"),
@@ -174,6 +187,37 @@ fn command_items() -> Vec<CommandItem> {
             CommandItem::new("PDF").disabled_because("PDF export is not installed"),
             CommandItem::new("JSON"),
         ]),
+    ]
+}
+
+fn tab_items() -> Vec<SelectionItem> {
+    vec![
+        SelectionItem::new("Overview")
+            .with_id("overview")
+            .controls("catalog-panel-overview"),
+        SelectionItem::new("History")
+            .with_id("history")
+            .controls("catalog-panel-history")
+            .disabled_because("History is still loading"),
+        SelectionItem::new("Links")
+            .with_id("links")
+            .controls("catalog-panel-links"),
+    ]
+}
+
+fn segment_items() -> Vec<SelectionItem> {
+    vec![
+        SelectionItem::new("Compact"),
+        SelectionItem::new("Balanced"),
+        SelectionItem::new("Wide").disabled_because("Wide needs a larger window"),
+    ]
+}
+
+fn chip_items() -> Vec<SelectionItem> {
+    vec![
+        SelectionItem::new("Documents"),
+        SelectionItem::new("People").disabled_because("People index is unavailable"),
+        SelectionItem::new("Tags"),
     ]
 }
 
@@ -312,6 +356,67 @@ fn catalog(state: &CatalogState) -> CatalogView {
         ),
     )
     .attr("id", "controls-section")
+    .attr("class", "catalog-section");
+
+    let selected_tab = state.tabs.selected.first().copied().unwrap_or(0);
+    let mut overview_panel = el::<_, CatalogState, ()>("div", "Overview of the selected node")
+        .attr("id", "catalog-panel-overview")
+        .attr("class", "catalog-tab-panel")
+        .attr("role", "tabpanel")
+        .attr("aria-labelledby", "catalog-tabs-item-overview");
+    if selected_tab != 0 {
+        overview_panel = overview_panel.attr("hidden", "true");
+    }
+    let mut history_panel = el::<_, CatalogState, ()>("div", "History for the selected node")
+        .attr("id", "catalog-panel-history")
+        .attr("class", "catalog-tab-panel")
+        .attr("role", "tabpanel")
+        .attr("aria-labelledby", "catalog-tabs-item-history");
+    if selected_tab != 1 {
+        history_panel = history_panel.attr("hidden", "true");
+    }
+    let mut links_panel = el::<_, CatalogState, ()>("div", "Links for the selected node")
+        .attr("id", "catalog-panel-links")
+        .attr("class", "catalog-tab-panel")
+        .attr("role", "tabpanel")
+        .attr("aria-labelledby", "catalog-tabs-item-links");
+    if selected_tab != 2 {
+        links_panel = links_panel.attr("hidden", "true");
+    }
+    let selection = el::<_, CatalogState, ()>(
+        "section",
+        (
+            el::<_, CatalogState, ()>("h2", "Selection bars").attr("class", "catalog-label"),
+            el(
+                "div",
+                lens(
+                    |state: &mut SelectionState| {
+                        tab_bar(state, &tab_items(), TabActivation::Automatic)
+                    },
+                    |state: &mut CatalogState| &mut state.tabs,
+                ),
+            )
+            .attr("class", "catalog-row"),
+            (overview_panel, history_panel, links_panel),
+            el(
+                "div",
+                lens(
+                    |state: &mut SelectionState| segmented_control(state, &segment_items()),
+                    |state: &mut CatalogState| &mut state.segments,
+                ),
+            )
+            .attr("class", "catalog-row"),
+            el(
+                "div",
+                lens(
+                    |state: &mut SelectionState| filter_chips(state, &chip_items()),
+                    |state: &mut CatalogState| &mut state.chips,
+                ),
+            )
+            .attr("class", "catalog-row"),
+        ),
+    )
+    .attr("id", "selection-section")
     .attr("class", "catalog-section");
 
     let editors = el::<_, CatalogState, ()>(
@@ -539,6 +644,7 @@ fn catalog(state: &CatalogState) -> CatalogView {
                 )
                 .attr("class", "catalog-intro"),
                 controls,
+                selection,
                 editors,
                 navigation,
                 data,
@@ -680,6 +786,7 @@ fn assert_initial_surface(dom: &ScriptedDom, root: NodeId) {
     );
     for section in [
         "controls-section",
+        "selection-section",
         "editors-section",
         "navigation-section",
         "data-section",
@@ -706,6 +813,34 @@ fn assert_initial_surface(dom: &ScriptedDom, root: NodeId) {
     })
     .expect("radio group semantics");
     assert_attr(dom, radio_group, "aria-label", "Detail density");
+
+    let tabs = find_id(dom, root, "catalog-tabs");
+    assert_attr(dom, tabs, "role", "tablist");
+    let selected_tab = find_where(dom, tabs, &|dom, node| {
+        attr(dom, node, "role") == Some("tab") && attr(dom, node, "aria-selected") == Some("true")
+    })
+    .expect("selected tab");
+    assert_attr(dom, selected_tab, "aria-controls", "catalog-panel-overview");
+    let panel = find_id(dom, root, "catalog-panel-overview");
+    assert_attr(dom, panel, "role", "tabpanel");
+    assert_eq!(attr(dom, panel, "hidden"), None);
+    assert_attr(
+        dom,
+        find_id(dom, root, "catalog-panel-history"),
+        "hidden",
+        "true",
+    );
+    assert_attr(
+        dom,
+        find_id(dom, root, "catalog-panel-links"),
+        "hidden",
+        "true",
+    );
+
+    let segments = find_id(dom, root, "catalog-segments");
+    assert_attr(dom, segments, "role", "radiogroup");
+    let chips = find_id(dom, root, "catalog-chips");
+    assert_attr(dom, chips, "role", "toolbar");
 
     let select_root = find_id(dom, root, "catalog-select");
     let select = find_where(dom, select_root, &|dom, node| {
@@ -819,6 +954,58 @@ fn run_interactions(runner: &mut CatalogRunner) {
     runner.set_focus(Some(selected_radio));
     runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::ArrowRight)));
     assert_eq!(runner.state().radio.selected, 1);
+
+    let selected_tab = find_where(&runner.dom().borrow(), root, &|dom, node| {
+        attr(dom, node, "role") == Some("tab") && attr(dom, node, "aria-selected") == Some("true")
+    })
+    .expect("selected tab");
+    runner.set_focus(Some(selected_tab));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::ArrowRight)));
+    assert_eq!(runner.state().tabs.active, 2);
+    assert_eq!(runner.state().tabs.selected, [2]);
+    let links_panel = find_id(&runner.dom().borrow(), root, "catalog-panel-links");
+    assert_eq!(attr(&runner.dom().borrow(), links_panel, "hidden"), None);
+    let overview_panel = find_id(&runner.dom().borrow(), root, "catalog-panel-overview");
+    assert_eq!(
+        attr(&runner.dom().borrow(), overview_panel, "hidden"),
+        Some("true")
+    );
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::Home)));
+    assert_eq!(runner.state().tabs.selected, [0]);
+
+    let selected_segment = find_where(&runner.dom().borrow(), root, &|dom, node| {
+        attr(dom, node, "role") == Some("radio")
+            && attr(dom, node, "aria-checked") == Some("true")
+            && has_class(dom, node, "selection-item")
+    })
+    .expect("selected segment");
+    runner.set_focus(Some(selected_segment));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::End)));
+    assert_eq!(
+        runner.state().segments.selected,
+        [1],
+        "disabled end is skipped"
+    );
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::Home)));
+    assert_eq!(runner.state().segments.selected, [0]);
+    let balanced_segment =
+        find_id(&runner.dom().borrow(), root, "catalog-segments-item-Balanced");
+    runner.dispatch_click(balanced_segment, PointerClick::at((4.0, 4.0)));
+    assert_eq!(
+        runner.state().segments.selected,
+        [1],
+        "pointer activation uses the shared selection path"
+    );
+
+    let first_chip = find_id(&runner.dom().borrow(), root, "catalog-chips-item-Documents");
+    runner.set_focus(Some(first_chip));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::End)));
+    assert_eq!(runner.state().chips.active, 2);
+    assert_eq!(runner.state().chips.selected, [0]);
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::Space)));
+    assert_eq!(runner.state().chips.selected, [0, 2]);
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::Home)));
+    assert_eq!(runner.state().chips.active, 0);
 
     let select_root = find_id(&runner.dom().borrow(), root, "catalog-select");
     let select = find_where(&runner.dom().borrow(), select_root, &|dom, node| {

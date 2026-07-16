@@ -56,6 +56,7 @@ mod propagation;
 mod radio;
 mod runner;
 mod select;
+mod selection_bar;
 mod slider;
 mod splice;
 mod styled_field;
@@ -113,6 +114,10 @@ pub use propagation::Propagation;
 pub use radio::{RadioGroup, radio_group};
 pub use runner::GenetAppRunner;
 pub use select::{SelectState, select};
+pub use selection_bar::{
+    Orientation, SelectionBarConfig, SelectionBarKind, SelectionItem, SelectionState,
+    TabActivation, filter_chips, segmented_control, selection_bar, tab_bar,
+};
 pub use slider::{Slider, slider};
 pub use splice::GenetChildrenSplice;
 pub use sprigging::{GraphCanvas, GraphViewport, GridColumn, GridSpec};
