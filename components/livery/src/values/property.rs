@@ -278,6 +278,7 @@ pub enum TransitionProperty {
     BorderRadius,
     Transform,
     BackgroundPosition,
+    BoxShadow,
     List(u16),
     OpacityAndBackgroundColor,
     OpacityAndColor,
@@ -311,6 +312,7 @@ impl FromStr for TransitionProperty {
                 "border-radius" => 128,
                 "transform" => 256,
                 "background-position" => 512,
+                "box-shadow" => 1024,
                 _ => return Err(ParseError::expected("a bounded transition-property list")),
             };
             if flags & bit != 0 {
@@ -341,6 +343,7 @@ impl fmt::Display for TransitionProperty {
             Self::BorderRadius => "border-radius",
             Self::Transform => "transform",
             Self::BackgroundPosition => "background-position",
+            Self::BoxShadow => "box-shadow",
             Self::OpacityAndBackgroundColor => "opacity, background-color",
             Self::OpacityAndColor => "opacity, color",
             Self::BackgroundColorAndColor => "background-color, color",
@@ -358,6 +361,7 @@ impl fmt::Display for TransitionProperty {
                     (128, "border-radius"),
                     (256, "transform"),
                     (512, "background-position"),
+                    (1024, "box-shadow"),
                 ] {
                     if flags & bit == 0 {
                         continue;
@@ -388,6 +392,7 @@ impl TransitionProperty {
             128 => Self::BorderRadius,
             256 => Self::Transform,
             512 => Self::BackgroundPosition,
+            1024 => Self::BoxShadow,
             3 => Self::OpacityAndBackgroundColor,
             5 => Self::OpacityAndColor,
             6 => Self::BackgroundColorAndColor,
@@ -441,6 +446,10 @@ impl TransitionProperty {
         self.includes_flag(512)
     }
 
+    pub fn includes_box_shadow(self) -> bool {
+        self.includes_flag(1024)
+    }
+
     fn flags(self) -> u16 {
         match self {
             Self::All | Self::None => 0,
@@ -454,6 +463,7 @@ impl TransitionProperty {
             Self::BorderRadius => 128,
             Self::Transform => 256,
             Self::BackgroundPosition => 512,
+            Self::BoxShadow => 1024,
             Self::List(flags) => flags,
             Self::OpacityAndBackgroundColor => 3,
             Self::OpacityAndColor => 5,
@@ -1381,6 +1391,43 @@ pub struct BoxShadowValue {
     pub blur_radius: Length,
     pub spread_radius: Length,
     pub color: Color,
+}
+
+impl BoxShadow {
+    /// Interpolate the bounded single-shadow form used by the retained paint
+    /// lane. Matching length units and inset mode are required; `none`, mixed
+    /// units, and mode changes stay discrete until the shadow-list ratchet.
+    pub fn interpolate(&self, other: &Self, progress: f32) -> Self {
+        let progress = progress.clamp(0.0, 1.0);
+        let value = match (self, other) {
+            (Self::Value(from), Self::Value(to)) if from.inset == to.inset => {
+                interpolate_box_shadow_value(*from, *to, progress).map(Self::Value)
+            },
+            _ => None,
+        };
+        value.unwrap_or_else(|| {
+            if progress < 0.5 {
+                self.clone()
+            } else {
+                other.clone()
+            }
+        })
+    }
+}
+
+fn interpolate_box_shadow_value(
+    from: BoxShadowValue,
+    to: BoxShadowValue,
+    progress: f32,
+) -> Option<BoxShadowValue> {
+    Some(BoxShadowValue {
+        inset: from.inset,
+        offset_x: interpolate_length(from.offset_x, to.offset_x, progress)?,
+        offset_y: interpolate_length(from.offset_y, to.offset_y, progress)?,
+        blur_radius: interpolate_length(from.blur_radius, to.blur_radius, progress)?,
+        spread_radius: interpolate_length(from.spread_radius, to.spread_radius, progress)?,
+        color: from.color.interpolate(to.color, progress),
+    })
 }
 
 impl FromStr for BoxShadow {

@@ -75,6 +75,7 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<TransitionProperty>("border-radius");
     assert_round_trip::<TransitionProperty>("transform");
     assert_round_trip::<TransitionProperty>("background-position");
+    assert_round_trip::<TransitionProperty>("box-shadow");
     assert_round_trip::<TransitionProperty>("opacity, background-color");
     assert_round_trip::<TransitionProperty>("color, opacity, background-color");
     assert_round_trip::<TransitionProperty>("opacity, border-left-color, border-right-color");
@@ -142,6 +143,18 @@ fn background_position_interpolation_preserves_each_component() {
         .parse::<BackgroundPosition>()
         .expect("to position");
     assert_eq!(from.interpolate(to, 0.5).to_string(), "50% 50%");
+}
+
+#[test]
+fn box_shadow_interpolation_preserves_matching_shape() {
+    let from = "0 0 0 red".parse::<BoxShadow>().expect("from shadow");
+    let to = "20px 4px 10px blue"
+        .parse::<BoxShadow>()
+        .expect("to shadow");
+    assert_eq!(
+        from.interpolate(&to, 0.5).to_string(),
+        "10px 2px 5px 0 #800080"
+    );
 }
 
 #[test]

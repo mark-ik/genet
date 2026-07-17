@@ -701,6 +701,61 @@ fn css_transition_background_position_uses_the_retained_clock() {
 }
 
 #[test]
+fn css_transition_box_shadow_uses_the_retained_clock() {
+    let document =
+        StaticDocument::parse(r#"<html><body><div class="card">card</div></body></html>"#);
+    let card = document
+        .first_with_class(document.document(), "card")
+        .unwrap();
+    let styles = StyleSet::cambium(&[r#"
+        .card { display: block; width: 100px; height: 20px; background-color: white;
+                box-shadow: 0 0 0 red; transition: box-shadow 100ms; }
+        .card:hover { box-shadow: 20px 4px 10px blue; }
+    "#]);
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(200.0, 100.0));
+    let shadow = |frame: &genet_livery::LiveryPaintList| {
+        frame.commands().iter().find_map(|command| match command {
+            PaintCmd::DrawShadow(shadow) => Some((
+                shadow.offset.x,
+                shadow.offset.y,
+                shadow.blur_radius,
+                shadow.color,
+            )),
+            _ => None,
+        })
+    };
+
+    let initial = retained.frame(200, 100).unwrap();
+    assert_eq!(
+        shadow(&initial),
+        Some((0.0, 0.0, 0.0, ColorF::new(1.0, 0.0, 0.0, 1.0)))
+    );
+
+    retained
+        .interactions_mut()
+        .set(card, livery::selector::StatePseudoClass::Hover, true);
+    retained.frame(200, 100).unwrap();
+    assert!(!retained.settled());
+
+    retained.pump(50.0);
+    let middle = retained.frame(200, 100).unwrap();
+    let (offset_x, offset_y, blur, color) = shadow(&middle).expect("shadow transition paints");
+    assert!((offset_x - 10.0).abs() < 0.01);
+    assert!((offset_y - 2.0).abs() < 0.01);
+    assert!((blur - 5.0).abs() < 0.01);
+    assert!((color.r - 0.5).abs() < 0.01);
+    assert!((color.b - 0.5).abs() < 0.01);
+
+    retained.pump(100.0);
+    assert!(retained.settled());
+    let final_frame = retained.frame(200, 100).unwrap();
+    assert_eq!(
+        shadow(&final_frame),
+        Some((20.0, 4.0, 10.0, ColorF::new(0.0, 0.0, 1.0, 1.0)))
+    );
+}
+
+#[test]
 fn css_keyframes_opacity_use_the_retained_clock() {
     let document =
         StaticDocument::parse(r#"<html><body><div class="fade">fade</div></body></html>"#);

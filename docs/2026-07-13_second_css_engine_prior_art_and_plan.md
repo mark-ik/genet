@@ -26,7 +26,7 @@ named timing functions now run on the retained clock. Host-owned remote image
 fetching now feeds the same resource seam. Remaining E3 work is full WPT
 reftest parity and interpolation beyond the bounded
 opacity/background-color/color/four-side-border-color/border-radius/transform/
-background-position paths. A fresh
+background-position/box-shadow paths. A fresh
 workspace cold-build receipt is recorded below. The
 first audit invalidated the proposed 33-accessor full-crate seam.
 The second chose Cambium structural UI as the bounded first lane.
@@ -260,7 +260,7 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   clock. Bounded intrinsic tiling and position/repeat modes now have paint-list
   receipts. Remaining: interpolation beyond the bounded
   opacity/background-color/color/four-side-border-color/border-radius/transform/
-  background-position paths and full reftest parity.
+  background-position/box-shadow paths and full reftest parity.
   The cold-build delta against the 30m35s baseline is recorded below.
 - **E4 — first production lane.** One real lane (host chrome or
   smolweb) ships on Livery by default. Receipt: the lane's
@@ -288,8 +288,8 @@ covered by the paint-list receipt. The gradient receipt and opacity clock are
   covered by the paint-list, cascade, and interaction suites. The keyframe
   parser and retained opacity animation receipt cover named timing functions.
   Additional transition-property lists and interpolation beyond the bounded
-  color, four physical border-color, radius, transform, and background-position
-  lanes, plus full reftest parity, remain explicit next gates.
+  color, four physical border-color, radius, transform, background-position, and
+  box-shadow lanes, plus full reftest parity, remain explicit next gates.
   The image receipt covers raster `data:` URLs, host-resolved local and
   remote-looking bytes, intrinsic `<img>` sizing, and aspect-ratio preservation;
   the session now exercises the host fetcher for a remote image while keeping
@@ -367,7 +367,7 @@ linebox mismatches open for the next layout/paint slices. Full WPT parity
 remains an explicit gate.
 
 Full WPT reftest parity and interpolation beyond the bounded color, four
-physical border-color, radius, transform, and background-position lanes, plus
+physical border-color, radius, transform, background-position, and box-shadow lanes, plus
 the E4 default production-lane switch, remain open. The standalone Cambium
 WebGPU smoke now passes native `cargo check` plus wasm32 `cargo check` and
 `cargo build` after local `genet-scripted-dom` and `layout-dom-api` patching;
@@ -437,6 +437,17 @@ and `calc()` expressions remain discrete. A retained interaction test moves a
 39px/18.5px midpoint and the settled 78px/37px placement. The focused Livery
 value wall has 7 tests, the cascade wall 14, and the genet-livery interaction
 wall 17; all pass with the paint wall.
+
+### 2026-07-17 retained box-shadow interpolation receipt
+
+The retained transition clock now accepts the bounded single-layer
+`box-shadow` lane. Matching length units, inset mode, and the serializable RGBA
+color subset interpolate through the existing neutral `ShadowItem`; `none`,
+mixed units, and mode changes remain discrete. A retained interaction test
+observes a 10px/2px, 5px-blur, midpoint shadow between the red zero shadow and
+the settled 20px/4px, 10px-blur blue shadow. The focused Livery value wall has
+8 tests, the cascade wall 15, and the genet-livery interaction wall 18; all
+pass with the 41-test paint wall.
 
 ## The destination, named
 
