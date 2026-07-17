@@ -64,6 +64,7 @@ mod slider;
 mod splice;
 mod styled_field;
 mod summary_body;
+mod split;
 mod tabs;
 mod tags;
 mod text;
@@ -140,6 +141,7 @@ pub use summary_body::{SummaryBody, summary_body};
 // Per-tag element-view helpers: `div`, `span`, `p`, `input`, `label`, `a`,
 // `h1`/`h2`/`h3`, `ul`/`ol`/`li`. (No `button` here — `controls::button` is the
 // button view, with a handler.)
+pub use split::{Split, SplitAxis, split};
 pub use tabs::{TabStrip, tab_strip};
 pub use tags::*;
 pub use text::text;
