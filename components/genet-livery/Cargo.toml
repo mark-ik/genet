@@ -17,7 +17,7 @@ paint_list_api.workspace = true
 parley.workspace = true
 selectors = "0.39"
 serde.workspace = true
-    taffy = { version = "0.12.1", default-features = false, features = ["std", "taffy_tree", "block_layout", "flexbox", "grid", "calc"] }
+    taffy = { version = "0.12.1", default-features = false, features = ["std", "taffy_tree", "block_layout", "float_layout", "flexbox", "grid", "calc"] }
 
 [dev-dependencies]
 base64.workspace = true

@@ -222,8 +222,8 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
 - **E3 - lane integration: partial.** The `genet-livery` integration crate now
   adapts any `LayoutDom` to Livery selectors, combines clean-room UA rules,
   author sheets, inline declarations, media, and host interaction state into a
-  concrete style plane, and lowers the ratcheted geometry, flex, and grid
-  subset into standalone
+  concrete style plane, and lowers the ratcheted geometry, flex, grid, and
+  bounded float subset into standalone
   Taffy fragments. The audited Cambium catalog resolves and lays out through
   this path. A cross-engine receipt agrees on explicit/available widths and
   explicit heights for the catalog's structural boxes. The lane now emits box
@@ -272,7 +272,7 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
 
 The executable growth pass expands Livery from the original 40-property
 catalog plus the earlier opacity/transform rows and bounded transition
-controls to 87 properties. It adds
+controls to 88 properties. It adds
   `right`/`bottom`, min/max sizing, `box-sizing`, `aspect-ratio`, the four
 physical corner-radius longhands and `border-radius`, visibility and
 pointer-events state, text alignment and spacing, text-decoration color,
@@ -382,10 +382,26 @@ advance from paintable padding and border edges, so an inline margin shifts the
 following glyph without extending the inline background into the margin; the
 41-test genet-livery paint wall remains green.
 
-The six CSS2 inline-formatting probes used for this slice remain localized
-Livery mismatches. Their reference fixtures depend on float and viewport
-background behavior that is outside this bounded lane, so the parser and atom
-receipts are landed without treating those probes as parity passes.
+The six CSS2 inline-formatting probes used for this slice now exercise the
+bounded float direction in the reference fixture. Four pass through Livery;
+the two margin probes remain localized line-height mismatches. The parser and
+inline-atom receipts are landed without treating the remaining two probes as
+parity passes.
+
+### 2026-07-17 bounded float-layout receipt
+
+Livery now admits the `float` longhand with `none`, `left`, and `right` values.
+The generated value family round-trips through the catalog, and
+`genet-livery` maps it into the fork's existing Taffy `float_layout` lane.
+The focused inline-formatting probes for left/right borders and padding pass
+through the clean-room renderer (4/6); the two margin probes remain localized
+because their explicit `line-height: 1em` fixture still differs from the
+reference block's normal line-height.
+
+The walk-discovery `css/CSS2/linebox` run now reports 142 passed, 48 failed,
+120 skipped, and 0 errored. The remaining failures are the existing line-height,
+vertical-align, empty-inline, and inline-box groups plus the two margin probes;
+the float reference dependency is no longer an unimplemented-property failure.
 
 ## The destination, named
 

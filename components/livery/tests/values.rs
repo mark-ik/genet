@@ -3,8 +3,8 @@ use std::fmt::Debug;
 use livery::values::{
     Alignment, AnimationName, AspectRatio, BackgroundImage, BackgroundPosition, BackgroundRepeat,
     BorderStyle, BorderWidth, BoxShadow, BoxSizing, Color, CssValue, Display, Duration,
-    FlexDirection, FlexFactor, FlexWrap, FontFamily, FontSize, FontStyle, FontWeight, Gap, Inset,
-    LengthPercentage, LineHeight, ListStyleType, Margin, Opacity, Order, Overflow, Padding,
+    FlexDirection, FlexFactor, FlexWrap, Float, FontFamily, FontSize, FontStyle, FontWeight, Gap,
+    Inset, LengthPercentage, LineHeight, ListStyleType, Margin, Opacity, Order, Overflow, Padding,
     PointerEvents, Position, Radius, Size, Spacing, TextAlign, TextDecorationLine, TextWrapMode,
     TimingFunction, Transform, TransitionProperty, Visibility, WhiteSpaceCollapse, ZIndex,
 };
@@ -79,6 +79,7 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<FlexDirection>("column");
     assert_round_trip::<FlexFactor>("1.5");
     assert_round_trip::<FlexWrap>("wrap");
+    assert_round_trip::<Float>("left");
     assert_round_trip::<Gap>("12px");
     assert_round_trip::<FontFamily>("system-ui");
     assert_round_trip::<FontFamily>("\"Atkinson Hyperlegible\"");

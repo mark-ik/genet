@@ -505,6 +505,16 @@ animation = "discrete"
 source = "css_flexbox_1"
 
 [[property]]
+name = "float"
+value_type = "float"
+inherited = false
+initial = "none"
+grammar = "none | left | right"
+seed_values = ["none", "left", "right"]
+animation = "discrete"
+source = "css_box_4"
+
+[[property]]
 name = "font-size"
 value_type = "font-size"
 inherited = true

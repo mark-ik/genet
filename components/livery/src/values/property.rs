@@ -515,6 +515,15 @@ keyword_value! {
 }
 
 keyword_value! {
+    /// Floating directions consumed by Taffy's bounded block float lane.
+    pub enum Float {
+        None => "none",
+        Left => "left",
+        Right => "right",
+    }
+}
+
+keyword_value! {
     /// CSS box sizing mode used by the layout adapter.
     pub enum BoxSizing {
         ContentBox => "content-box",

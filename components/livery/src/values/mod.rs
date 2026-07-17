@@ -12,7 +12,7 @@ pub use property::{
     Alignment, AnimationName, AspectRatio, BackgroundImage, BackgroundPosition, BackgroundRepeat,
     BorderStyle, BorderWidth, BoxShadow, BoxShadowValue, BoxSizing, Display, Duration,
     FlexDirection, FlexFactor, FlexWrap, FontFamily, FontSize, FontStyle, FontWeight, Gap,
-    GridAutoFlow, GridPlacement, GridTemplate, GridTrack, Inset, LineHeight, ListStyleType, Margin,
+    Float, GridAutoFlow, GridPlacement, GridTemplate, GridTrack, Inset, LineHeight, ListStyleType, Margin,
     Opacity, Order, Overflow, Padding, PointerEvents, Position, Radius, Size, Spacing, TextAlign,
     TextDecorationColor, TextDecorationLine, TextWrapMode, TimingFunction, Transform,
     TransformFunction, TransitionProperty, Visibility, WhiteSpaceCollapse, ZIndex,

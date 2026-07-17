@@ -6,7 +6,8 @@ use livery::{
     values::{
         Alignment as CssAlignment, AspectRatio, BorderStyle, BorderWidth,
         BoxSizing as CssBoxSizing, Display as CssDisplay, FlexDirection as CssFlexDirection,
-        FlexWrap as CssFlexWrap, FontSize, Gap as CssGap, GridAutoFlow as CssGridAutoFlow,
+        FlexWrap as CssFlexWrap, Float as CssFloat, FontSize, Gap as CssGap,
+        GridAutoFlow as CssGridAutoFlow,
         GridPlacement as CssGridPlacement, GridTemplate as CssGridTemplate,
         GridTrack as CssGridTrack, Inset, Length, LengthPercentage as CssLengthPercentage,
         LengthUnit, LineHeight, Margin, Overflow as CssOverflow, Position as CssPosition,
@@ -22,7 +23,8 @@ use taffy::{
     },
     style::{
         AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyword, BoxSizing, Display,
-        FlexDirection, FlexWrap, GridAutoFlow, GridPlacement, GridTemplateComponent,
+        Float as TaffyFloat, FlexDirection, FlexWrap, GridAutoFlow, GridPlacement,
+        GridTemplateComponent,
         JustifyContent, Overflow, Position, Style,
     },
 };
@@ -885,6 +887,11 @@ fn to_taffy_style(computed: &ComputedValues, font_size: f32) -> Style {
             CssDisplay::Flex => Display::Flex,
             CssDisplay::Grid => Display::Grid,
             _ => Display::Block,
+        },
+        float: match computed.float {
+            CssFloat::None => TaffyFloat::None,
+            CssFloat::Left => TaffyFloat::Left,
+            CssFloat::Right => TaffyFloat::Right,
         },
         box_sizing: match computed.box_sizing {
             CssBoxSizing::ContentBox => BoxSizing::ContentBox,
