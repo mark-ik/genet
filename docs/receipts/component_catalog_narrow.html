@@ -1,0 +1,721 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cambium component catalog: narrow</title>
+<style>
+html { background: #dfe4ec; }
+body { margin: 0; min-width: 420px; }
+/* The catalog's application-owned acceptance theme.
+ *
+ * Consumers can replace these custom properties without changing component
+ * structure. The selectors intentionally cover every family in
+ * component_catalog.rs so missing classes are visible in a rendered host.
+ */
+
+.component-catalog {
+    --catalog-bg: #f4f6fa;
+    --catalog-panel: #ffffff;
+    --catalog-text: #202733;
+    --catalog-muted: #5d6879;
+    --catalog-border: #cdd3de;
+    --catalog-control-border: #8b96a8;
+    --catalog-hover: #e8eef8;
+    --catalog-accent: #3568b8;
+    --catalog-accent-strong: #234b88;
+    --catalog-disabled: #9aa3b1;
+
+    background-color: var(--catalog-bg);
+    color: var(--catalog-text);
+    font-family: system-ui;
+    line-height: 1.5;
+    margin: 1.5rem auto;
+    padding: 1.5rem;
+    box-sizing: border-box;
+    width: min(var(--catalog-specimen-width), calc(100% - 2rem));
+}
+
+.catalog-width-narrow {
+    --catalog-specimen-width: 22rem;
+    padding: 1rem;
+}
+
+.catalog-width-regular {
+    --catalog-specimen-width: 48rem;
+}
+
+.component-catalog :focus-visible {
+    outline: 3px solid var(--catalog-accent);
+    outline-offset: 2px;
+}
+
+.catalog-title {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin: 0 0 0.25rem;
+}
+
+.catalog-intro {
+    color: var(--catalog-muted);
+    margin: 0 0 1rem;
+}
+
+.catalog-section {
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-border);
+    margin: 0 0 1rem;
+    padding: 1rem;
+}
+
+.catalog-label {
+    display: block;
+    font-size: 1rem;
+    font-weight: 700;
+    margin: 0 0 0.75rem;
+}
+
+.catalog-row {
+    display: block;
+    margin: 0.75rem 0;
+}
+
+.catalog-row > input,
+.catalog-row > textarea {
+    display: block;
+    margin-top: 0.25rem;
+}
+
+.catalog-button,
+.select-box,
+input,
+textarea {
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-control-border);
+    color: var(--catalog-text);
+    padding: 0.5rem 0.75rem;
+}
+
+textarea {
+    min-height: 5rem;
+    box-sizing: border-box;
+    max-width: 100%;
+    width: 30rem;
+}
+
+.catalog-button:hover,
+.select-box:hover,
+.select-option:hover,
+.action-item:hover,
+.menu-row:hover,
+.menu-row-active:hover {
+    background-color: var(--catalog-hover);
+}
+
+.catalog-hover {
+    border: 1px dashed var(--catalog-control-border);
+    display: inline-block;
+    margin-left: 0.75rem;
+    padding: 0.5rem 0.75rem;
+}
+
+.catalog-hover.active {
+    background-color: var(--catalog-hover);
+    border-color: var(--catalog-accent);
+}
+
+.checkbox,
+.toggle,
+.radio {
+    color: #33415a;
+    display: block;
+    padding: 0.25rem 0;
+}
+
+.checked,
+.selected {
+    font-weight: 700;
+}
+
+.selection-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+}
+
+.selection-item {
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-control-border);
+    cursor: pointer;
+    padding: 0.4rem 0.7rem;
+}
+
+.selection-item.selected {
+    background-color: var(--catalog-hover);
+    border-color: var(--catalog-accent);
+}
+
+.selection-item[aria-disabled="true"] {
+    color: var(--catalog-disabled);
+    cursor: default;
+}
+
+.selection-disabled-reason {
+    display: block;
+    font-size: 0.8em;
+}
+
+.tab-bar {
+    border-bottom: 1px solid var(--catalog-border);
+}
+
+.tab-bar .selection-item {
+    border-bottom: 0;
+}
+
+.segmented-control .selection-item + .selection-item {
+    margin-left: -1px;
+}
+
+.filter-chips .selection-item {
+    border-radius: 999px;
+}
+
+.catalog-tab-panel {
+    border: 1px solid var(--catalog-border);
+    padding: 0.75rem;
+}
+
+.catalog-tab-panel[hidden="true"] {
+    display: none;
+}
+
+.reorderable-list {
+    max-width: 24rem;
+}
+
+.reorder-instructions,
+.reorder-status,
+.catalog-note {
+    color: var(--catalog-muted);
+    font-size: 0.85rem;
+    margin: 0.35rem 0;
+}
+
+.reorder-items {
+    list-style: none;
+    margin: 0.75rem 0 0;
+    padding: 0;
+}
+
+.reorder-item {
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-border);
+    cursor: grab;
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: minmax(0, 1fr) auto;
+    margin-top: -1px;
+    padding: 0.6rem 0.75rem;
+    position: relative;
+    touch-action: none;
+}
+
+.reorder-item.dragging {
+    background-color: var(--catalog-hover);
+    border-color: var(--catalog-accent);
+    cursor: grabbing;
+}
+
+.reorder-position {
+    color: var(--catalog-muted);
+    font-size: 0.8rem;
+}
+
+.reorder-drop-indicator {
+    background-color: var(--catalog-accent);
+    height: 3px;
+    left: 0;
+    position: absolute;
+    right: 0;
+}
+
+.reorder-drop-indicator[data-position="before"] {
+    top: -2px;
+}
+
+.reorder-drop-indicator[data-position="after"] {
+    bottom: -2px;
+}
+
+.disclosure-trigger,
+.accordion-trigger {
+    background-color: transparent;
+    border: 0;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 700;
+    padding: 0.4rem 0;
+    text-align: left;
+    width: 100%;
+}
+
+.disclosure-trigger::before,
+.accordion-trigger::before,
+.tree-item[aria-expanded] > .tree-label::before {
+    content: "▸";
+    display: inline-block;
+    margin-right: 0.4rem;
+}
+
+.disclosure-trigger[aria-expanded="true"]::before,
+.accordion-trigger[aria-expanded="true"]::before,
+.tree-item[aria-expanded="true"] > .tree-label::before {
+    content: "▾";
+}
+
+.disclosure-panel,
+.accordion-panel {
+    border-left: 2px solid var(--catalog-border);
+    padding: 0.4rem 0.75rem 0.75rem;
+}
+
+.disclosure-panel[hidden="true"],
+.accordion-panel[hidden="true"],
+.tree-group[hidden="true"] {
+    display: none;
+}
+
+.accordion {
+    border-top: 1px solid var(--catalog-border);
+    margin: 1rem 0;
+    max-width: 30rem;
+}
+
+.accordion-item {
+    border-bottom: 1px solid var(--catalog-border);
+}
+
+.tree-view,
+.tree-group {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.tree-view {
+    border: 1px solid var(--catalog-border);
+    margin: 1rem 0;
+    max-width: 22rem;
+    padding: 0.35rem;
+}
+
+.tree-group {
+    padding-left: 1.1rem;
+}
+
+.tree-item {
+    border-radius: 0.2rem;
+    cursor: pointer;
+    padding: 0.25rem 0.4rem;
+}
+
+.tree-item.active {
+    background-color: var(--catalog-hover);
+}
+
+.summary-body {
+    display: grid;
+    gap: 0.2rem;
+}
+
+.summary-eyebrow {
+    color: var(--catalog-muted);
+    font-size: 0.75rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.summary-title {
+    font-weight: 700;
+}
+
+.summary-description {
+    color: var(--catalog-muted);
+    margin: 0;
+}
+
+.summary-facts {
+    display: flex;
+    gap: 1rem;
+    margin: 0.25rem 0 0;
+}
+
+.summary-fact {
+    display: grid;
+    font-size: 0.8rem;
+}
+
+.summary-fact dt {
+    color: var(--catalog-muted);
+}
+
+.summary-fact dd {
+    margin: 0;
+}
+
+.catalog-summary-card,
+.catalog-summary-row {
+    border: 1px solid var(--catalog-border);
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+}
+
+.catalog-summary-card {
+    max-width: 22rem;
+}
+
+.catalog-summary-row {
+    max-width: 30rem;
+}
+
+.select {
+    width: 16rem;
+}
+
+.select-list {
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-control-border);
+    width: 16rem;
+    z-index: 10;
+}
+
+.select-option {
+    padding: 0.5rem 0.75rem;
+}
+
+.slider-track {
+    background-color: var(--catalog-border);
+    height: 0.5rem;
+    width: 16rem;
+}
+
+.slider-thumb {
+    background-color: var(--catalog-accent);
+    border: 1px solid var(--catalog-accent-strong);
+    height: 1rem;
+    width: 1rem;
+}
+
+.syntax-keyword {
+    color: #7a3ea1;
+    font-weight: 700;
+}
+
+.syntax-number {
+    color: #9a4b16;
+}
+
+.action-list {
+    border: 1px solid var(--catalog-control-border);
+    max-width: 24rem;
+}
+
+.action-list-query {
+    border-bottom: 1px solid var(--catalog-border);
+    color: var(--catalog-muted);
+    padding: 0.5rem 0.75rem;
+}
+
+.action-item {
+    padding: 0.5rem 0.75rem;
+    white-space: pre;
+}
+
+.action-item.selected {
+    background-color: var(--catalog-hover);
+    box-shadow: inset 3px 0 0 var(--catalog-accent);
+}
+
+.action-item[aria-disabled="true"] {
+    color: var(--catalog-disabled);
+}
+
+.command-surface {
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-control-border);
+    max-width: 24rem;
+    min-width: 12rem;
+    position: relative;
+    z-index: 22;
+}
+
+.command-query {
+    border-bottom: 1px solid var(--catalog-border);
+    color: var(--catalog-muted);
+    padding: 0.5rem 0.75rem;
+}
+
+.command-item {
+    display: grid;
+    gap: 0.5rem;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    padding: 0.5rem 0.75rem;
+}
+
+.command-item.selected {
+    background-color: var(--catalog-hover);
+    box-shadow: inset 3px 0 0 var(--catalog-accent);
+}
+
+.command-item[aria-disabled="true"] {
+    color: var(--catalog-disabled);
+}
+
+.command-disabled-reason {
+    font-size: 0.8em;
+    grid-column: 1 / -1;
+}
+
+.command-shortcut,
+.command-submenu-mark {
+    color: var(--catalog-muted);
+}
+
+.command-submenu {
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-control-border);
+    min-width: 12rem;
+}
+
+.catalog-overlay-stage {
+    min-height: 18rem;
+    position: relative;
+}
+
+.overlay-surface-dismiss-layer {
+    background-color: transparent;
+    z-index: 30;
+}
+
+.overlay-surface-panel {
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-control-border);
+    box-shadow: 0 0.35rem 1rem rgba(24, 32, 48, 0.18);
+    z-index: 31;
+}
+
+.catalog-overlay-content {
+    display: grid;
+    gap: 0.75rem;
+    padding: 0.75rem;
+}
+
+.detail-popover-root {
+    display: inline-block;
+}
+
+.detail-popover-trigger {
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-control-border);
+    border-radius: 4px;
+    cursor: pointer;
+    padding: 0.45rem 0.75rem;
+}
+
+.detail-popover-preview,
+.detail-popover-content {
+    display: grid;
+    gap: 0.5rem;
+    padding: 0.75rem;
+}
+
+.menu {
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-control-border);
+    min-width: 10rem;
+    z-index: 20;
+}
+
+.menu-row,
+.menu-row-active {
+    padding: 0.4rem 0.75rem;
+}
+
+.menu-row-active {
+    background-color: var(--catalog-hover);
+    font-weight: 700;
+}
+
+.grid {
+    border: 1px solid var(--catalog-border);
+    max-width: 100%;
+    overflow-x: auto;
+}
+
+.grid-header {
+    background-color: var(--catalog-hover);
+    border-bottom: 1px solid var(--catalog-border);
+    font-weight: 700;
+}
+
+.grid-header-cell,
+.grid-cell {
+    overflow: hidden;
+    padding: 0.2rem 0.4rem;
+}
+
+.grid-row-odd {
+    background-color: #f8f9fc;
+}
+
+.grid-row-selected {
+    box-shadow: inset 3px 0 0 var(--catalog-accent);
+}
+
+.catalog-leaf-grid {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(4, 1fr);
+}
+
+.catalog-leaf-grid > .catalog-label {
+    grid-column: 1 / -1;
+}
+
+.catalog-leaf-card {
+    align-items: center;
+    background-color: var(--catalog-bg);
+    border: 1px solid var(--catalog-border);
+    display: flex;
+    justify-content: center;
+    min-height: 5rem;
+}
+
+.catalog-graph-swatch-card {
+    grid-column: span 2;
+}
+
+.catalog-graph-variant-crowded {
+    grid-column: span 2;
+}
+
+.catalog-knob-card {
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.catalog-knob-card output {
+    color: var(--catalog-muted);
+    font-size: 0.8rem;
+}
+
+.catalog-state-grid {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.catalog-state-grid > .catalog-label {
+    grid-column: 1 / -1;
+}
+
+.catalog-state {
+    border: 1px solid var(--catalog-border);
+    box-sizing: border-box;
+    margin: 0;
+    min-width: 0;
+    padding: 0.65rem;
+}
+
+.catalog-state-disabled {
+    color: var(--catalog-disabled);
+}
+
+.catalog-state-empty {
+    color: var(--catalog-muted);
+    font-style: italic;
+}
+
+.catalog-state-error {
+    background-color: #fff0f0;
+    border-color: #c87979;
+    color: #7f2525;
+}
+
+.catalog-state-overflow {
+    max-height: 7rem;
+    overflow: auto;
+    padding-left: 1.8rem;
+}
+
+.catalog-state-dense {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.2rem;
+    padding: 0.35rem;
+}
+
+.catalog-dense-token {
+    background: var(--catalog-hover);
+    padding: 0.15rem 0.35rem;
+}
+
+.catalog-state-long-label {
+    background: var(--catalog-panel);
+    color: var(--catalog-text);
+    text-align: left;
+    white-space: normal;
+}
+
+.catalog-width-narrow .catalog-state-grid,
+.catalog-width-narrow .catalog-leaf-grid {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.catalog-width-narrow .catalog-graph-swatch-card,
+.catalog-width-narrow .catalog-graph-variant-crowded,
+.catalog-width-narrow .catalog-leaf-grid > .catalog-label {
+    grid-column: 1;
+}
+
+.catalog-width-narrow .command-surface,
+.catalog-width-narrow .action-list,
+.catalog-width-narrow .select,
+.catalog-width-narrow .select-list,
+.catalog-width-narrow .slider-track {
+    box-sizing: border-box;
+    max-width: 100%;
+}
+
+.graph-canvas-swatch {
+    background-color: var(--catalog-bg);
+    border: 1px solid var(--catalog-border);
+    border-radius: 7px;
+}
+
+.graph-canvas-swatch-node {
+    background-color: transparent;
+    border: 0;
+    border-radius: 999px;
+    cursor: pointer;
+    padding: 0;
+}
+
+.graph-canvas-swatch-expand {
+    background-color: var(--catalog-panel);
+    border: 1px solid var(--catalog-border);
+    border-radius: 4px;
+    color: var(--catalog-muted);
+    cursor: pointer;
+    font-size: 10px;
+    padding: 2px 5px;
+}
+
+custom-leaf {
+    display: inline-block;
+    outline: 1px dotted var(--catalog-border);
+}
+
+</style>
+<main class="component-catalog catalog-width-narrow" data-specimen-width="narrow"><h1 class="catalog-title">Cambium component catalog</h1><p class="catalog-intro">Executable coverage for controls, editors, actions, data, and custom paint.</p><section id="controls-section" class="catalog-section"><h2 class="catalog-label">Controls</h2><div class="catalog-row"><span role="checkbox" aria-label="Checkbox" aria-checked="false" class="checkbox" id="catalog-checkbox">[ ]</span></div><div class="catalog-row"><span role="switch" aria-label="Toggle" aria-checked="false" class="toggle" id="catalog-switch">[ ]</span></div><div id="catalog-radio" class="catalog-row"><div role="radiogroup" aria-label="Detail density"><div role="radio" aria-checked="true" tabindex="0" class="radio selected">(o) Quiet</div><div role="radio" aria-checked="false" tabindex="-1" class="radio">( ) Balanced</div><div role="radio" aria-checked="false" tabindex="-1" class="radio">( ) Detailed</div></div></div><div id="catalog-select" class="catalog-row"><div class="select" role="combobox" aria-label="Rendering mode" aria-expanded="false" tabindex="0" style="position: relative;"><div class="select-box">Balanced</div></div></div><div id="catalog-slider" class="catalog-row"><div class="slider-track" role="slider" aria-label="Zoom" aria-valuemin="0" aria-valuemax="1" aria-valuenow="0.35" aria-valuetext="35%" tabindex="0" style="position: relative;"><div class="slider-thumb" style="position: absolute; left: 35%;"></div></div></div><button id="catalog-apply" class="catalog-button">Apply</button><div id="catalog-hover" class="catalog-hover">Hover target</div></section><section id="selection-section" class="catalog-section"><h2 class="catalog-label">Selection bars</h2><div class="catalog-row"><div id="catalog-tabs" class="selection-bar tab-bar" role="tablist" aria-label="Related panel" aria-orientation="horizontal"><div id="catalog-tabs-item-overview" class="selection-item selected" role="tab" tabindex="0" aria-disabled="false" aria-selected="true" aria-controls="catalog-panel-overview"><span class="selection-label">Overview</span></div><div id="catalog-tabs-item-history" class="selection-item" role="tab" tabindex="-1" aria-disabled="true" aria-selected="false" aria-controls="catalog-panel-history" aria-description="History is still loading"><span class="selection-label">History</span><span class="selection-disabled-reason" aria-hidden="true">History is still loading</span></div><div id="catalog-tabs-item-links" class="selection-item" role="tab" tabindex="-1" aria-disabled="false" aria-selected="false" aria-controls="catalog-panel-links"><span class="selection-label">Links</span></div></div></div><div id="catalog-panel-overview" class="catalog-tab-panel" role="tabpanel" aria-labelledby="catalog-tabs-item-overview">Overview of the selected node</div><div id="catalog-panel-history" class="catalog-tab-panel" role="tabpanel" aria-labelledby="catalog-tabs-item-history" hidden="true">History for the selected node</div><div id="catalog-panel-links" class="catalog-tab-panel" role="tabpanel" aria-labelledby="catalog-tabs-item-links" hidden="true">Links for the selected node</div><div class="catalog-row"><div id="catalog-segments" class="selection-bar segmented-control" role="radiogroup" aria-label="Card density" aria-orientation="horizontal"><div id="catalog-segments-item-Compact" class="selection-item selected" role="radio" tabindex="0" aria-disabled="false" aria-checked="true"><span class="selection-label">Compact</span></div><div id="catalog-segments-item-Balanced" class="selection-item" role="radio" tabindex="-1" aria-disabled="false" aria-checked="false"><span class="selection-label">Balanced</span></div><div id="catalog-segments-item-Wide" class="selection-item" role="radio" tabindex="-1" aria-disabled="true" aria-checked="false" aria-description="Wide needs a larger window"><span class="selection-label">Wide</span><span class="selection-disabled-reason" aria-hidden="true">Wide needs a larger window</span></div></div></div><div class="catalog-row"><div id="catalog-chips" class="selection-bar filter-chips" role="toolbar" aria-label="Visible node kinds" aria-orientation="horizontal"><div id="catalog-chips-item-Documents" class="selection-item selected" role="button" tabindex="0" aria-disabled="false" aria-pressed="true"><span class="selection-label">Documents</span></div><div id="catalog-chips-item-People" class="selection-item" role="button" tabindex="-1" aria-disabled="true" aria-pressed="false" aria-description="People index is unavailable"><span class="selection-label">People</span><span class="selection-disabled-reason" aria-hidden="true">People index is unavailable</span></div><div id="catalog-chips-item-Tags" class="selection-item" role="button" tabindex="-1" aria-disabled="false" aria-pressed="false"><span class="selection-label">Tags</span></div></div></div></section><section id="reorder-section" class="catalog-section"><h2 class="catalog-label">Reorderable list</h2><p class="catalog-note">Drag a row, or pick it up with Space and move it with the arrow keys.</p><div id="catalog-reorder" class="reorderable-list" role="group" aria-label="Related panel order"><p id="catalog-reorder-instructions" class="reorder-instructions">Press Space or Enter to pick up an item. Use Arrow keys, Home, or End to move it. Press Space or Enter to drop, or Escape to cancel. Alt plus Arrow moves immediately.</p><p class="reorder-status" role="status" aria-live="polite"></p><ol class="reorder-items"><li id="catalog-reorder-item-notes" class="reorder-item" role="listitem" tabindex="0" aria-describedby="catalog-reorder-instructions" aria-label="Notes, position 1 of 3"><span class="reorder-label">Notes</span><span class="reorder-position" aria-hidden="true">1 of 3</span></li><li id="catalog-reorder-item-people" class="reorder-item" role="listitem" tabindex="-1" aria-describedby="catalog-reorder-instructions" aria-label="People, position 2 of 3"><span class="reorder-label">People</span><span class="reorder-position" aria-hidden="true">2 of 3</span></li><li id="catalog-reorder-item-places" class="reorder-item" role="listitem" tabindex="-1" aria-describedby="catalog-reorder-instructions" aria-label="Places, position 3 of 3"><span class="reorder-label">Places</span><span class="reorder-position" aria-hidden="true">3 of 3</span></li></ol></div></section><section id="disclosure-section" class="catalog-section"><h2 class="catalog-label">Disclosure and summaries</h2><div class="catalog-row"><div id="catalog-disclosure" class="disclosure"><button id="catalog-disclosure-trigger" class="disclosure-trigger" type="button" data-disclosure-control="true" aria-controls="catalog-disclosure-panel" aria-expanded="false">Node details</button><div id="catalog-disclosure-panel" class="disclosure-panel" aria-labelledby="catalog-disclosure-trigger" hidden="true">Controlled detail content</div></div></div><div id="catalog-accordion" class="accordion" role="group" aria-label="Node record sections"><section class="accordion-item"><div class="accordion-heading" role="heading" aria-level="3"><button id="catalog-accordion-item-identity-trigger" class="accordion-trigger" type="button" data-disclosure-control="true" aria-controls="catalog-accordion-item-identity-panel" aria-expanded="true">Identity</button></div><div id="catalog-accordion-item-identity-panel" class="accordion-panel" aria-labelledby="catalog-accordion-item-identity-trigger" role="region"><div id="catalog-accordion-summary-identity" class="summary-body" role="group" aria-labelledby="catalog-accordion-summary-identity-title"><span class="summary-eyebrow">Document</span><span id="catalog-accordion-summary-identity-title" class="summary-title">Identity</span><p class="summary-description">A quiet reusable body for the selected graph record.</p><dl class="summary-facts"><div class="summary-fact"><dt>Links</dt><dd>12</dd></div><div class="summary-fact"><dt>Updated</dt><dd>Today</dd></div></dl></div></div></section><section class="accordion-item"><div class="accordion-heading" role="heading" aria-level="3"><button id="catalog-accordion-item-activity-trigger" class="accordion-trigger" type="button" data-disclosure-control="true" aria-controls="catalog-accordion-item-activity-panel" aria-expanded="false">Activity</button></div><div id="catalog-accordion-item-activity-panel" class="accordion-panel" aria-labelledby="catalog-accordion-item-activity-trigger" role="region" hidden="true"><div id="catalog-accordion-summary-activity" class="summary-body" role="group" aria-labelledby="catalog-accordion-summary-activity-title"><span class="summary-eyebrow">Document</span><span id="catalog-accordion-summary-activity-title" class="summary-title">Activity</span><p class="summary-description">A quiet reusable body for the selected graph record.</p><dl class="summary-facts"><div class="summary-fact"><dt>Links</dt><dd>12</dd></div><div class="summary-fact"><dt>Updated</dt><dd>Today</dd></div></dl></div></div></section></div><ul id="catalog-tree" class="tree-view" role="tree" aria-label="Workspace outline"><li id="catalog-tree-item-workspace" class="tree-item active" role="treeitem" tabindex="0" aria-level="1" aria-posinset="1" aria-setsize="2" aria-selected="true" data-disclosure-control="true" aria-controls="catalog-tree-item-workspace-group" aria-expanded="true"><span class="tree-label">Workspace</span><ul id="catalog-tree-item-workspace-group" class="tree-group" role="group"><li id="catalog-tree-item-notes" class="tree-item" role="treeitem" tabindex="-1" aria-level="2" aria-posinset="1" aria-setsize="2" aria-selected="false" data-disclosure-control="true"><span class="tree-label">Notes</span></li><li id="catalog-tree-item-people" class="tree-item" role="treeitem" tabindex="-1" aria-level="2" aria-posinset="2" aria-setsize="2" aria-selected="false" data-disclosure-control="true" aria-controls="catalog-tree-item-people-group" aria-expanded="false"><span class="tree-label">People</span><ul id="catalog-tree-item-people-group" class="tree-group" role="group" hidden="true"><li id="catalog-tree-item-collaborators" class="tree-item" role="treeitem" tabindex="-1" aria-level="3" aria-posinset="1" aria-setsize="2" aria-selected="false" data-disclosure-control="true"><span class="tree-label">Collaborators</span></li><li id="catalog-tree-item-authors" class="tree-item" role="treeitem" tabindex="-1" aria-level="3" aria-posinset="2" aria-setsize="2" aria-selected="false" data-disclosure-control="true"><span class="tree-label">Authors</span></li></ul></li></ul></li><li id="catalog-tree-item-archive" class="tree-item" role="treeitem" tabindex="-1" aria-level="1" aria-posinset="2" aria-setsize="2" aria-selected="false" data-disclosure-control="true"><span class="tree-label">Archive</span></li></ul><article id="catalog-summary-card" class="catalog-summary-card"><div id="catalog-summary-card-body" class="summary-body" role="group" aria-labelledby="catalog-summary-card-body-title"><span class="summary-eyebrow">Document</span><span id="catalog-summary-card-body-title" class="summary-title">Field notes</span><p class="summary-description">A quiet reusable body for the selected graph record.</p><dl class="summary-facts"><div class="summary-fact"><dt>Links</dt><dd>12</dd></div><div class="summary-fact"><dt>Updated</dt><dd>Today</dd></div></dl></div></article><div id="catalog-summary-row" class="catalog-summary-row"><div id="catalog-summary-row-body" class="summary-body" role="group" aria-labelledby="catalog-summary-row-body-title"><span class="summary-eyebrow">Document</span><span id="catalog-summary-row-body-title" class="summary-title">Field notes</span><p class="summary-description">A quiet reusable body for the selected graph record.</p><dl class="summary-facts"><div class="summary-fact"><dt>Links</dt><dd>12</dd></div><div class="summary-fact"><dt>Updated</dt><dd>Today</dd></div></dl></div></div></section><section id="editors-section" class="catalog-section"><h2 class="catalog-label">Editors</h2><label id="catalog-text" class="catalog-row">Single line<input>merecat</label><label id="catalog-textarea" class="catalog-row">Multiline<textarea>First line
+Second line</textarea></label><label id="catalog-styled-editor" class="catalog-row">Styled editor<textarea><span class="syntax-keyword">let</span> answer = <span class="syntax-number">42</span>;</textarea></label></section><section id="navigation-section" class="catalog-section catalog-overlay-stage"><h2 class="catalog-label">Actions and overlays</h2><div id="catalog-action-list" class="catalog-row"><div id="catalog-actions" class="command-surface command-palette action-list" role="combobox" aria-label="Catalog actions" aria-activedescendant="catalog-actions-option-0" tabindex="0" aria-autocomplete="list" aria-expanded="true" aria-controls="catalog-actions-options"><div id="catalog-actions-options" class="command-items action-list-options" role="listbox"><div id="catalog-actions-option-0" class="command-item action-item selected" role="option" aria-disabled="false" aria-selected="true"><span class="command-label">Open graph</span><span class="command-shortcut" aria-hidden="true">Ctrl+O</span></div><div id="catalog-actions-option-1" class="command-item action-item" role="option" aria-disabled="true" aria-selected="false" aria-description="Connect a writable graph first"><span class="command-label">Unavailable action</span><span class="command-disabled-reason" aria-hidden="true">Connect a writable graph first</span></div><div id="catalog-actions-option-2" class="command-item action-item" role="option" aria-disabled="false" aria-selected="false"><span class="command-label">Close tab</span><span class="command-shortcut" aria-hidden="true">Ctrl+W</span></div><div id="catalog-actions-option-3" class="command-item action-item" role="option" aria-disabled="false" aria-selected="false"><span class="command-label">Export</span><span class="command-submenu-mark" aria-hidden="true">›</span></div></div></div></div><div class="catalog-row"><div id="catalog-command-picker" class="command-surface command-picker" role="listbox" aria-label="Open mode" aria-activedescendant="catalog-command-picker-item-0" tabindex="0"><div id="catalog-command-picker-items" class="command-items" role="presentation"><div id="catalog-command-picker-item-0" class="command-item selected" role="option" aria-disabled="false" aria-selected="true"><span class="command-label">Open graph</span><span class="command-shortcut" aria-hidden="true">Ctrl+O</span></div><div id="catalog-command-picker-item-1" class="command-item" role="option" aria-disabled="true" aria-selected="false" aria-description="Connect a writable graph first"><span class="command-label">Unavailable action</span><span class="command-disabled-reason" aria-hidden="true">Connect a writable graph first</span></div><div id="catalog-command-picker-item-2" class="command-item" role="option" aria-disabled="false" aria-selected="false"><span class="command-label">Close tab</span><span class="command-shortcut" aria-hidden="true">Ctrl+W</span></div><div id="catalog-command-picker-item-3" class="command-item" role="option" aria-disabled="false" aria-selected="false"><span class="command-label">Export</span><span class="command-submenu-mark" aria-hidden="true">›</span></div></div></div></div><div id="catalog-command-menu" class="command-surface command-menu" role="menu" aria-label="Canvas commands" aria-activedescendant="catalog-command-menu-item-0" tabindex="0" style="position: absolute; left: 12px; top: 128px;"><div id="catalog-command-menu-items" class="command-items" role="presentation"><div id="catalog-command-menu-item-0" class="command-item selected" role="menuitem" aria-disabled="false"><span class="command-label">Open graph</span><span class="command-shortcut" aria-hidden="true">Ctrl+O</span></div><div id="catalog-command-menu-item-1" class="command-item" role="menuitem" aria-disabled="true" aria-description="Connect a writable graph first"><span class="command-label">Unavailable action</span><span class="command-disabled-reason" aria-hidden="true">Connect a writable graph first</span></div><div id="catalog-command-menu-item-2" class="command-item" role="menuitem" aria-disabled="false"><span class="command-label">Close tab</span><span class="command-shortcut" aria-hidden="true">Ctrl+W</span></div><div id="catalog-command-menu-item-3" class="command-item" role="menuitem" aria-disabled="false" aria-haspopup="menu" aria-expanded="false"><span class="command-label">Export</span><span class="command-submenu-mark" aria-hidden="true">›</span></div></div></div><button id="catalog-overlay-open" class="catalog-button">Open detail surface</button><div class="overlay-surface-root" style="position:absolute;left:0;top:0;width:0;height:0;"><div class="overlay-surface-dismiss-layer" aria-hidden="true" style="position:absolute;left:0px;top:0px;width:640px;height:280px;"></div><div style="position: absolute; left: 260px; top: 66px; width: 220px; height: 104px;" class="overlay-surface-panel" role="dialog" aria-label="Catalog detail"><div class="catalog-overlay-content"><strong>Anchored detail</strong><button id="catalog-overlay-inside" class="catalog-button">Use detail</button></div></div></div><div class="detail-popover-root"><div class="detail-popover-trigger" role="button" aria-expanded="false" aria-haspopup="dialog">Marker details</div></div></section><section id="data-section" class="catalog-section"><h2 class="catalog-label">Virtualized data grid</h2><div class="grid" role="grid" aria-rowcount="10001" aria-colcount="3" style="display: block; width: 360px;"><div class="grid-header" role="row" aria-rowindex="1" style="position: relative; width: 360px; height: 28px;"><div class="grid-header-cell" style="position: absolute; left: -0px; top: 0px; z-index: 0; width: 150px; height: 28px;" role="columnheader" aria-colindex="1" tabindex="0">Name</div><div class="grid-header-cell" style="position: absolute; left: 150px; top: 0px; z-index: 0; width: 110px; height: 28px;" role="columnheader" aria-colindex="2" tabindex="0">Kind</div><div class="grid-header-cell" style="position: absolute; left: 260px; top: 0px; z-index: 0; width: 100px; height: 28px;" role="columnheader" aria-colindex="3" tabindex="0">Status</div></div><div class="grid-body" style="position: relative; overflow-x: hidden; overflow-y: hidden; width: 360px; height: 144px;"><div class="grid-row grid-row-even grid-row-selected" style="position: absolute; left: 0px; top: 0px; z-index: 0; width: 360px; height: 24px;" role="row" aria-rowindex="2" data-row="0"><div class="grid-cell" style="position: absolute; left: -0px; top: 0px; z-index: 0; width: 150px; height: 24px;" role="gridcell" aria-colindex="1"><span>Node 0</span></div><div class="grid-cell" style="position: absolute; left: 150px; top: 0px; z-index: 0; width: 110px; height: 24px;" role="gridcell" aria-colindex="2"><span>document</span></div><div class="grid-cell" style="position: absolute; left: 260px; top: 0px; z-index: 0; width: 100px; height: 24px;" role="gridcell" aria-colindex="3"><span>ready</span></div></div><div class="grid-row grid-row-odd" style="position: absolute; left: 0px; top: 24px; z-index: 0; width: 360px; height: 24px;" role="row" aria-rowindex="3" data-row="1"><div class="grid-cell" style="position: absolute; left: -0px; top: 0px; z-index: 0; width: 150px; height: 24px;" role="gridcell" aria-colindex="1"><span>Node 1</span></div><div class="grid-cell" style="position: absolute; left: 150px; top: 0px; z-index: 0; width: 110px; height: 24px;" role="gridcell" aria-colindex="2"><span>document</span></div><div class="grid-cell" style="position: absolute; left: 260px; top: 0px; z-index: 0; width: 100px; height: 24px;" role="gridcell" aria-colindex="3"><span>syncing</span></div></div><div class="grid-row grid-row-even" style="position: absolute; left: 0px; top: 48px; z-index: 0; width: 360px; height: 24px;" role="row" aria-rowindex="4" data-row="2"><div class="grid-cell" style="position: absolute; left: -0px; top: 0px; z-index: 0; width: 150px; height: 24px;" role="gridcell" aria-colindex="1"><span>Node 2</span></div><div class="grid-cell" style="position: absolute; left: 150px; top: 0px; z-index: 0; width: 110px; height: 24px;" role="gridcell" aria-colindex="2"><span>document</span></div><div class="grid-cell" style="position: absolute; left: 260px; top: 0px; z-index: 0; width: 100px; height: 24px;" role="gridcell" aria-colindex="3"><span>ready</span></div></div><div class="grid-row grid-row-odd" style="position: absolute; left: 0px; top: 72px; z-index: 0; width: 360px; height: 24px;" role="row" aria-rowindex="5" data-row="3"><div class="grid-cell" style="position: absolute; left: -0px; top: 0px; z-index: 0; width: 150px; height: 24px;" role="gridcell" aria-colindex="1"><span>Node 3</span></div><div class="grid-cell" style="position: absolute; left: 150px; top: 0px; z-index: 0; width: 110px; height: 24px;" role="gridcell" aria-colindex="2"><span>document</span></div><div class="grid-cell" style="position: absolute; left: 260px; top: 0px; z-index: 0; width: 100px; height: 24px;" role="gridcell" aria-colindex="3"><span>syncing</span></div></div><div class="grid-row grid-row-even" style="position: absolute; left: 0px; top: 96px; z-index: 0; width: 360px; height: 24px;" role="row" aria-rowindex="6" data-row="4"><div class="grid-cell" style="position: absolute; left: -0px; top: 0px; z-index: 0; width: 150px; height: 24px;" role="gridcell" aria-colindex="1"><span>Node 4</span></div><div class="grid-cell" style="position: absolute; left: 150px; top: 0px; z-index: 0; width: 110px; height: 24px;" role="gridcell" aria-colindex="2"><span>document</span></div><div class="grid-cell" style="position: absolute; left: 260px; top: 0px; z-index: 0; width: 100px; height: 24px;" role="gridcell" aria-colindex="3"><span>ready</span></div></div><div class="grid-row grid-row-odd" style="position: absolute; left: 0px; top: 120px; z-index: 0; width: 360px; height: 24px;" role="row" aria-rowindex="7" data-row="5"><div class="grid-cell" style="position: absolute; left: -0px; top: 0px; z-index: 0; width: 150px; height: 24px;" role="gridcell" aria-colindex="1"><span>Node 5</span></div><div class="grid-cell" style="position: absolute; left: 150px; top: 0px; z-index: 0; width: 110px; height: 24px;" role="gridcell" aria-colindex="2"><span>document</span></div><div class="grid-cell" style="position: absolute; left: 260px; top: 0px; z-index: 0; width: 100px; height: 24px;" role="gridcell" aria-colindex="3"><span>syncing</span></div></div><div class="grid-row grid-row-even" style="position: absolute; left: 0px; top: 144px; z-index: 0; width: 360px; height: 24px;" role="row" aria-rowindex="8" data-row="6"><div class="grid-cell" style="position: absolute; left: -0px; top: 0px; z-index: 0; width: 150px; height: 24px;" role="gridcell" aria-colindex="1"><span>Node 6</span></div><div class="grid-cell" style="position: absolute; left: 150px; top: 0px; z-index: 0; width: 110px; height: 24px;" role="gridcell" aria-colindex="2"><span>document</span></div><div class="grid-cell" style="position: absolute; left: 260px; top: 0px; z-index: 0; width: 100px; height: 24px;" role="gridcell" aria-colindex="3"><span>ready</span></div></div><div class="grid-row grid-row-odd" style="position: absolute; left: 0px; top: 168px; z-index: 0; width: 360px; height: 24px;" role="row" aria-rowindex="9" data-row="7"><div class="grid-cell" style="position: absolute; left: -0px; top: 0px; z-index: 0; width: 150px; height: 24px;" role="gridcell" aria-colindex="1"><span>Node 7</span></div><div class="grid-cell" style="position: absolute; left: 150px; top: 0px; z-index: 0; width: 110px; height: 24px;" role="gridcell" aria-colindex="2"><span>document</span></div><div class="grid-cell" style="position: absolute; left: 260px; top: 0px; z-index: 0; width: 100px; height: 24px;" role="gridcell" aria-colindex="3"><span>syncing</span></div></div><div class="grid-row grid-row-even" style="position: absolute; left: 0px; top: 192px; z-index: 0; width: 360px; height: 24px;" role="row" aria-rowindex="10" data-row="8"><div class="grid-cell" style="position: absolute; left: -0px; top: 0px; z-index: 0; width: 150px; height: 24px;" role="gridcell" aria-colindex="1"><span>Node 8</span></div><div class="grid-cell" style="position: absolute; left: 150px; top: 0px; z-index: 0; width: 110px; height: 24px;" role="gridcell" aria-colindex="2"><span>document</span></div><div class="grid-cell" style="position: absolute; left: 260px; top: 0px; z-index: 0; width: 100px; height: 24px;" role="gridcell" aria-colindex="3"><span>ready</span></div></div></div></div></section><section id="states-section" class="catalog-section catalog-state-grid"><h2 class="catalog-label">State specimens</h2><div class="catalog-state catalog-state-disabled" data-state="disabled" aria-disabled="true">Unavailable while the graph is read-only</div><div class="catalog-state catalog-state-empty" data-state="empty" role="status">No related records</div><div class="catalog-state catalog-state-error" data-state="error" role="alert">The remote record could not be loaded</div><ul class="catalog-state catalog-state-overflow" data-state="overflow"><li>Overflow row 1: a deliberately long record label for clipping</li><li>Overflow row 2: a deliberately long record label for clipping</li><li>Overflow row 3: a deliberately long record label for clipping</li><li>Overflow row 4: a deliberately long record label for clipping</li><li>Overflow row 5: a deliberately long record label for clipping</li><li>Overflow row 6: a deliberately long record label for clipping</li><li>Overflow row 7: a deliberately long record label for clipping</li><li>Overflow row 8: a deliberately long record label for clipping</li></ul><div class="catalog-state catalog-state-dense" data-state="dense"><span class="catalog-dense-token">Notes</span><span class="catalog-dense-token">People</span><span class="catalog-dense-token">Places</span><span class="catalog-dense-token">Tags</span><span class="catalog-dense-token">Sessions</span><span class="catalog-dense-token">Archive</span></div><button class="catalog-state catalog-state-long-label" data-state="long-label" type="button">Open the related record with a label long enough to wrap across narrow cards</button></section><section id="leaves-section" class="catalog-section catalog-leaf-grid"><h2 class="catalog-label">Sprigging leaves</h2><div class="catalog-leaf-card"><custom-leaf key="101" style="display:block;width:32px;height:32px" aria-label="Color swatch"></custom-leaf></div><button id="catalog-graph-button" class="catalog-leaf-card" aria-label="Open graph"><custom-leaf key="102" style="display:block;width:48px;height:32px"></custom-leaf></button><div id="catalog-graph-swatch" class="catalog-graph-swatch-card"><div class="graph-canvas-swatch" role="group" aria-label="Related nodes" style="position:relative;display:block;width:260px;height:128px;max-width:100%;"><custom-leaf key="105" style="display:block;width:260px;height:128px" aria-hidden="true"></custom-leaf><div class="graph-canvas-swatch-targets" style="position:absolute;left:0;top:0;width:260px;height:128px;"><button class="graph-canvas-swatch-node selected" type="button" aria-label="Selected document" data-node-index="0" style="position:absolute;left:25.760002px;top:56.32px;width:20px;height:20px;" aria-current="true"></button><button class="graph-canvas-swatch-node" type="button" aria-label="Related person" data-node-index="1" style="position:absolute;left:127.43999px;top:16.880001px;width:20px;height:20px;"></button><button class="graph-canvas-swatch-node" type="button" aria-label="Related place" data-node-index="2" style="position:absolute;left:214.24px;top:77.2px;width:20px;height:20px;"></button></div><button class="graph-canvas-swatch-expand" type="button" aria-label="Expand graph" style="position:absolute;right:5px;top:5px;">Expand</button></div></div><div id="catalog-graph-empty" class="catalog-graph-variant"><div class="graph-canvas-swatch" role="group" aria-label="Empty related graph" style="position:relative;display:block;width:220px;height:104px;max-width:100%;"><custom-leaf key="106" style="display:block;width:220px;height:104px" aria-hidden="true"></custom-leaf><div class="graph-canvas-swatch-targets" style="position:absolute;left:0;top:0;width:220px;height:104px;"></div><button class="graph-canvas-swatch-expand" type="button" aria-label="Expand graph" style="position:absolute;right:5px;top:5px;">Expand</button></div></div><div id="catalog-graph-single" class="catalog-graph-variant"><div class="graph-canvas-swatch" role="group" aria-label="Single-node related graph" style="position:relative;display:block;width:220px;height:104px;max-width:100%;"><custom-leaf key="107" style="display:block;width:220px;height:104px" aria-hidden="true"></custom-leaf><div class="graph-canvas-swatch-targets" style="position:absolute;left:0;top:0;width:220px;height:104px;"><button class="graph-canvas-swatch-node" type="button" aria-label="Only node" data-node-index="0" style="position:absolute;left:100px;top:42px;width:20px;height:20px;"></button></div><button class="graph-canvas-swatch-expand" type="button" aria-label="Expand graph" style="position:absolute;right:5px;top:5px;">Expand</button></div></div><div id="catalog-graph-crowded" class="catalog-graph-variant catalog-graph-variant-crowded"><div class="graph-canvas-swatch" role="group" aria-label="Crowded related graph" style="position:relative;display:block;width:300px;height:144px;max-width:100%;"><custom-leaf key="108" style="display:block;width:300px;height:144px" aria-hidden="true"></custom-leaf><div class="graph-canvas-swatch-targets" style="position:absolute;left:0;top:0;width:300px;height:144px;"><button class="graph-canvas-swatch-node" type="button" aria-label="Crowded node 1" data-node-index="0" style="position:absolute;left:19.039995px;top:11.84px;width:20px;height:20px;"></button><button class="graph-canvas-swatch-node" type="button" aria-label="Crowded node 2" data-node-index="1" style="position:absolute;left:99.68001px;top:11.84px;width:20px;height:20px;"></button><button class="graph-canvas-swatch-node" type="button" aria-label="Crowded node 3" data-node-index="2" style="position:absolute;left:180.31999px;top:11.84px;width:20px;height:20px;"></button><button class="graph-canvas-swatch-node" type="button" aria-label="Crowded node 4" data-node-index="3" style="position:absolute;left:260.96px;top:11.84px;width:20px;height:20px;"></button><button class="graph-canvas-swatch-node" type="button" aria-label="Crowded node 5" data-node-index="4" style="position:absolute;left:19.039995px;top:59.36px;width:20px;height:20px;"></button><button class="graph-canvas-swatch-node" type="button" aria-label="Crowded node 6" data-node-index="5" style="position:absolute;left:99.68001px;top:59.36px;width:20px;height:20px;"></button><button class="graph-canvas-swatch-node" type="button" aria-label="Crowded node 7" data-node-index="6" style="position:absolute;left:180.31999px;top:59.36px;width:20px;height:20px;"></button><button class="graph-canvas-swatch-node" type="button" aria-label="Crowded node 8" data-node-index="7" style="position:absolute;left:260.96px;top:59.36px;width:20px;height:20px;"></button><button class="graph-canvas-swatch-node" type="button" aria-label="Crowded node 9" data-node-index="8" style="position:absolute;left:19.039995px;top:106.880005px;width:20px;height:20px;"></button><button class="graph-canvas-swatch-node" type="button" aria-label="Crowded node 10" data-node-index="9" style="position:absolute;left:99.68001px;top:106.880005px;width:20px;height:20px;"></button><button class="graph-canvas-swatch-node" type="button" aria-label="Crowded node 11" data-node-index="10" style="position:absolute;left:180.31999px;top:106.880005px;width:20px;height:20px;"></button><button class="graph-canvas-swatch-node" type="button" aria-label="Crowded node 12" data-node-index="11" style="position:absolute;left:260.96px;top:106.880005px;width:20px;height:20px;"></button></div><button class="graph-canvas-swatch-expand" type="button" aria-label="Expand graph" style="position:absolute;right:5px;top:5px;">Expand</button></div></div><div class="catalog-leaf-card"><custom-leaf key="103" style="display:block;width:96px;height:18px" aria-label="Level"></custom-leaf></div><div class="catalog-leaf-card catalog-knob-card"><custom-leaf key="104" style="display:block;width:48px;height:48px" id="catalog-knob" aria-label="Gain"></custom-leaf><output id="catalog-knob-value" for="catalog-knob">62%</output></div></section></main>

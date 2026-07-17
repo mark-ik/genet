@@ -18,9 +18,9 @@ use cambium::{
     SelectionState, Slider, StyleRange, SummaryBody, TabActivation, TextInput, TreeItem, TreeState,
     accordion_with, button, button_with, checkbox, command_menu, command_palette, command_picker,
     custom_leaf, data_grid, detail_popover, disclosure, el, filter_chips, graph_canvas_swatch,
-    lens, map_action, on_hover, on_pointer, overlay_surface, radio_group, reorderable_list,
-    segmented_control, select, slider, styled_textarea, summary_body, tab_bar, text_field_typed,
-    textarea_typed, toggle, tree_view,
+    graph_canvas_swatch_with_focus, lens, map_action, on_hover, on_pointer, overlay_surface,
+    radio_group, reorderable_list, segmented_control, select, slider, styled_textarea,
+    summary_body, tab_bar, text_field_typed, textarea_typed, toggle, tree_view,
 };
 use genet_scripted_dom::{NodeId, ScriptedDom};
 use layout_dom_api::{LayoutDom, LocalName, Namespace};
@@ -35,12 +35,55 @@ const GRAPH_KEY: u64 = 102;
 const METER_KEY: u64 = 103;
 const KNOB_KEY: u64 = 104;
 const GRAPH_SWATCH_KEY: u64 = 105;
+const GRAPH_EMPTY_KEY: u64 = 106;
+const GRAPH_SINGLE_KEY: u64 = 107;
+const GRAPH_CROWDED_KEY: u64 = 108;
+const LEAF_KEYS: [u64; 8] = [
+    SWATCH_KEY,
+    GRAPH_KEY,
+    METER_KEY,
+    KNOB_KEY,
+    GRAPH_SWATCH_KEY,
+    GRAPH_EMPTY_KEY,
+    GRAPH_SINGLE_KEY,
+    GRAPH_CROWDED_KEY,
+];
 
 type CatalogView = Box<dyn AnyView<CatalogState, (), GenetCtx, GenetElement>>;
 type CatalogLogic = fn(&CatalogState) -> CatalogView;
 type CatalogRunner = GenetAppRunner<CatalogState, CatalogLogic, CatalogView, ()>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CatalogWidth {
+    Narrow,
+    Regular,
+}
+
+impl CatalogWidth {
+    const fn class(self) -> &'static str {
+        match self {
+            Self::Narrow => "component-catalog catalog-width-narrow",
+            Self::Regular => "component-catalog catalog-width-regular",
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Narrow => "narrow",
+            Self::Regular => "regular",
+        }
+    }
+
+    const fn viewport(self) -> (u32, u32) {
+        match self {
+            Self::Narrow => (420, 5200),
+            Self::Regular => (900, 3600),
+        }
+    }
+}
+
 struct CatalogState {
+    width: CatalogWidth,
     checked: bool,
     toggled: bool,
     radio: RadioGroup,
@@ -73,7 +116,9 @@ struct CatalogState {
     hover_moves: usize,
     graph_swatch_selected: u8,
     graph_swatch_hovered: Option<u8>,
+    graph_swatch_focused: Option<u8>,
     graph_swatch_expanded: bool,
+    knob_value: f32,
     overlay_open: bool,
     overlay_inside_presses: usize,
     overlay_last_dismiss: Option<OverlayDismiss>,
@@ -84,6 +129,7 @@ struct CatalogState {
 impl Default for CatalogState {
     fn default() -> Self {
         Self {
+            width: CatalogWidth::Regular,
             checked: false,
             toggled: false,
             radio: RadioGroup::new(0).with_label("Detail density"),
@@ -138,7 +184,9 @@ impl Default for CatalogState {
             hover_moves: 0,
             graph_swatch_selected: 1,
             graph_swatch_hovered: None,
+            graph_swatch_focused: None,
             graph_swatch_expanded: false,
+            knob_value: 0.62,
             overlay_open: true,
             overlay_inside_presses: 0,
             overlay_last_dismiss: None,
@@ -148,7 +196,20 @@ impl Default for CatalogState {
     }
 }
 
-fn graph_swatch(selected: u8, hovered: Option<u8>) -> GraphCanvasSwatch<u8, &'static str> {
+impl CatalogState {
+    fn at_width(width: CatalogWidth) -> Self {
+        Self {
+            width,
+            ..Self::default()
+        }
+    }
+}
+
+fn graph_swatch(
+    selected: u8,
+    hovered: Option<u8>,
+    focused: Option<u8>,
+) -> GraphCanvasSwatch<u8, &'static str> {
     let mut swatch = GraphCanvasSwatch::new(
         GRAPH_SWATCH_KEY,
         GraphCanvasSubgraph {
@@ -182,9 +243,69 @@ fn graph_swatch(selected: u8, hovered: Option<u8>) -> GraphCanvasSwatch<u8, &'st
     .with_size(260, 128)
     .with_label("Related nodes");
     swatch.selected = Some(selected);
-    swatch.focus = Some(selected);
+    swatch.focus = focused;
     swatch.hovered = hovered;
     swatch
+}
+
+fn empty_graph_swatch() -> GraphCanvasSwatch<u8, &'static str> {
+    GraphCanvasSwatch::new(
+        GRAPH_EMPTY_KEY,
+        GraphCanvasSubgraph {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        },
+    )
+    .with_size(220, 104)
+    .with_label("Empty related graph")
+}
+
+fn single_graph_swatch() -> GraphCanvasSwatch<u8, &'static str> {
+    GraphCanvasSwatch::new(
+        GRAPH_SINGLE_KEY,
+        GraphCanvasSubgraph {
+            nodes: vec![GraphCanvasNode {
+                id: 10,
+                kind: "document",
+                position: (0.5, 0.5),
+                label: "Only node".into(),
+            }],
+            edges: Vec::new(),
+        },
+    )
+    .with_size(220, 104)
+    .with_label("Single-node related graph")
+}
+
+fn crowded_graph_swatch() -> GraphCanvasSwatch<u8, &'static str> {
+    let nodes = (0..12)
+        .map(|index| GraphCanvasNode {
+            id: 20 + index,
+            kind: match index % 3 {
+                0 => "document",
+                1 => "person",
+                _ => "place",
+            },
+            position: (
+                0.08 + (index % 4) as f32 * 0.28,
+                0.12 + (index / 4) as f32 * 0.36,
+            ),
+            label: format!("Crowded node {}", index + 1),
+        })
+        .collect();
+    let edges = (0..11)
+        .map(|index| GraphCanvasEdge {
+            from: 20 + index,
+            to: 21 + index,
+        })
+        .chain((0..8).map(|index| GraphCanvasEdge {
+            from: 20 + index,
+            to: 24 + index,
+        }))
+        .collect();
+    GraphCanvasSwatch::new(GRAPH_CROWDED_KEY, GraphCanvasSubgraph { nodes, edges })
+        .with_size(300, 144)
+        .with_label("Crowded related graph")
 }
 
 fn graph_kind_color(kind: &&str) -> ColorF {
@@ -744,6 +865,61 @@ fn catalog(state: &CatalogState) -> CatalogView {
     .attr("id", "data-section")
     .attr("class", "catalog-section");
 
+    let overflow_rows: Vec<_> = (1..=8)
+        .map(|index| {
+            el::<_, CatalogState, ()>(
+                "li",
+                format!("Overflow row {index}: a deliberately long record label for clipping"),
+            )
+        })
+        .collect();
+    let dense_tokens: Vec<_> = ["Notes", "People", "Places", "Tags", "Sessions", "Archive"]
+        .into_iter()
+        .map(|label| el::<_, CatalogState, ()>("span", label).attr("class", "catalog-dense-token"))
+        .collect();
+    let states = el::<_, CatalogState, ()>(
+        "section",
+        (
+            el::<_, CatalogState, ()>("h2", "State specimens").attr("class", "catalog-label"),
+            el("div", "Unavailable while the graph is read-only")
+                .attr("class", "catalog-state catalog-state-disabled")
+                .attr("data-state", "disabled")
+                .attr("aria-disabled", "true"),
+            el("div", "No related records")
+                .attr("class", "catalog-state catalog-state-empty")
+                .attr("data-state", "empty")
+                .attr("role", "status"),
+            el("div", "The remote record could not be loaded")
+                .attr("class", "catalog-state catalog-state-error")
+                .attr("data-state", "error")
+                .attr("role", "alert"),
+            el("ul", overflow_rows)
+                .attr("class", "catalog-state catalog-state-overflow")
+                .attr("data-state", "overflow"),
+            el("div", dense_tokens)
+                .attr("class", "catalog-state catalog-state-dense")
+                .attr("data-state", "dense"),
+            el::<_, CatalogState, ()>(
+                "button",
+                "Open the related record with a label long enough to wrap across narrow cards",
+            )
+            .attr("class", "catalog-state catalog-state-long-label")
+            .attr("data-state", "long-label")
+            .attr("type", "button"),
+        ),
+    )
+    .attr("id", "states-section")
+    .attr("class", "catalog-section catalog-state-grid");
+
+    let primary_graph = graph_swatch(
+        state.graph_swatch_selected,
+        state.graph_swatch_hovered,
+        state.graph_swatch_focused,
+    );
+    let empty_graph = empty_graph_swatch();
+    let single_graph = single_graph_swatch();
+    let crowded_graph = crowded_graph_swatch();
+
     let leaves = el::<_, CatalogState, ()>(
         "section",
         (
@@ -763,10 +939,11 @@ fn catalog(state: &CatalogState) -> CatalogView {
             .attr("aria-label", "Open graph"),
             el(
                 "div",
-                graph_canvas_swatch(
-                    &graph_swatch(state.graph_swatch_selected, state.graph_swatch_hovered),
+                graph_canvas_swatch_with_focus(
+                    &primary_graph,
                     |state: &mut CatalogState, id| state.graph_swatch_selected = id,
                     |state: &mut CatalogState, id| state.graph_swatch_hovered = id,
+                    |state: &mut CatalogState, id| state.graph_swatch_focused = id,
                     |state: &mut CatalogState| state.graph_swatch_expanded = true,
                 ),
             )
@@ -774,14 +951,67 @@ fn catalog(state: &CatalogState) -> CatalogView {
             .attr("class", "catalog-graph-swatch-card"),
             el(
                 "div",
+                graph_canvas_swatch(
+                    &empty_graph,
+                    |_: &mut CatalogState, _: u8| {},
+                    |_: &mut CatalogState, _: Option<u8>| {},
+                    |_: &mut CatalogState| {},
+                ),
+            )
+            .attr("id", "catalog-graph-empty")
+            .attr("class", "catalog-graph-variant"),
+            el(
+                "div",
+                graph_canvas_swatch(
+                    &single_graph,
+                    |_: &mut CatalogState, _: u8| {},
+                    |_: &mut CatalogState, _: Option<u8>| {},
+                    |_: &mut CatalogState| {},
+                ),
+            )
+            .attr("id", "catalog-graph-single")
+            .attr("class", "catalog-graph-variant"),
+            el(
+                "div",
+                graph_canvas_swatch(
+                    &crowded_graph,
+                    |_: &mut CatalogState, _: u8| {},
+                    |_: &mut CatalogState, _: Option<u8>| {},
+                    |_: &mut CatalogState| {},
+                ),
+            )
+            .attr("id", "catalog-graph-crowded")
+            .attr(
+                "class",
+                "catalog-graph-variant catalog-graph-variant-crowded",
+            ),
+            el(
+                "div",
                 custom_leaf::<CatalogState, ()>(METER_KEY, 96, 18).attr("aria-label", "Level"),
             )
             .attr("class", "catalog-leaf-card"),
             el(
                 "div",
-                custom_leaf::<CatalogState, ()>(KNOB_KEY, 48, 48).attr("aria-label", "Gain"),
+                (
+                    on_pointer(
+                        custom_leaf::<CatalogState, ()>(KNOB_KEY, 48, 48)
+                            .attr("id", "catalog-knob")
+                            .attr("aria-label", "Gain"),
+                        |state: &mut CatalogState, event: PointerEvent| {
+                            if event.phase != PointerPhase::Up && event.size.0 > 0.0 {
+                                state.knob_value = (event.local.0 / event.size.0).clamp(0.0, 1.0);
+                            }
+                        },
+                    ),
+                    el::<_, CatalogState, ()>(
+                        "output",
+                        format!("{:.0}%", state.knob_value * 100.0),
+                    )
+                    .attr("id", "catalog-knob-value")
+                    .attr("for", "catalog-knob"),
+                ),
             )
-            .attr("class", "catalog-leaf-card"),
+            .attr("class", "catalog-leaf-card catalog-knob-card"),
         ),
     )
     .attr("id", "leaves-section")
@@ -805,10 +1035,12 @@ fn catalog(state: &CatalogState) -> CatalogView {
                 editors,
                 navigation,
                 data,
+                states,
                 leaves,
             ),
         )
-        .attr("class", "component-catalog"),
+        .attr("class", state.width.class())
+        .attr("data-specimen-width", state.width.name()),
     )
 }
 
@@ -816,7 +1048,7 @@ fn color(r: f32, g: f32, b: f32) -> ColorF {
     ColorF { r, g, b, a: 1.0 }
 }
 
-fn catalog_leaves() -> LeafRegistry<u64> {
+fn catalog_leaves(state: &CatalogState) -> LeafRegistry<u64> {
     let mut registry = LeafRegistry::new();
     registry.insert(
         SWATCH_KEY,
@@ -857,7 +1089,26 @@ fn catalog_leaves() -> LeafRegistry<u64> {
     );
     registry.insert(
         GRAPH_SWATCH_KEY,
-        Box::new(graph_swatch(1, None).paint_leaf(graph_kind_color)),
+        Box::new(
+            graph_swatch(
+                state.graph_swatch_selected,
+                state.graph_swatch_hovered,
+                state.graph_swatch_focused,
+            )
+            .paint_leaf(graph_kind_color),
+        ),
+    );
+    registry.insert(
+        GRAPH_EMPTY_KEY,
+        Box::new(empty_graph_swatch().paint_leaf(graph_kind_color)),
+    );
+    registry.insert(
+        GRAPH_SINGLE_KEY,
+        Box::new(single_graph_swatch().paint_leaf(graph_kind_color)),
+    );
+    registry.insert(
+        GRAPH_CROWDED_KEY,
+        Box::new(crowded_graph_swatch().paint_leaf(graph_kind_color)),
     );
     let mut meter = Meter::new(
         false,
@@ -872,7 +1123,7 @@ fn catalog_leaves() -> LeafRegistry<u64> {
         width: 48.0,
         height: 48.0,
     });
-    knob.set_value(0.62);
+    knob.set_value(state.knob_value);
     registry.insert(KNOB_KEY, Box::new(knob));
     registry
 }
@@ -936,7 +1187,13 @@ fn assert_attr(dom: &ScriptedDom, node: NodeId, name: &str, expected: &str) {
     assert_eq!(attr(dom, node, name), Some(expected), "attribute {name}");
 }
 
-fn assert_initial_surface(dom: &ScriptedDom, root: NodeId) {
+fn node_text(dom: &ScriptedDom, node: NodeId) -> String {
+    dom.dom_children(node)
+        .filter_map(|child| dom.text(child))
+        .collect()
+}
+
+fn assert_initial_surface(dom: &ScriptedDom, root: NodeId, width: CatalogWidth) {
     assert_eq!(
         dom.element_name(root).map(|name| name.local.to_string()),
         Some("main".to_string())
@@ -949,10 +1206,20 @@ fn assert_initial_surface(dom: &ScriptedDom, root: NodeId) {
         "editors-section",
         "navigation-section",
         "data-section",
+        "states-section",
         "leaves-section",
     ] {
         find_id(dom, root, section);
     }
+    assert_attr(dom, root, "data-specimen-width", width.name());
+    assert!(has_class(
+        dom,
+        root,
+        match width {
+            CatalogWidth::Narrow => "catalog-width-narrow",
+            CatalogWidth::Regular => "catalog-width-regular",
+        }
+    ));
 
     let checkbox = find_id(dom, root, "catalog-checkbox");
     assert_attr(dom, checkbox, "role", "checkbox");
@@ -1151,6 +1418,40 @@ fn assert_initial_surface(dom: &ScriptedDom, root: NodeId) {
     let cell = find_class(dom, grid, "grid-cell");
     assert_attr(dom, cell, "role", "gridcell");
 
+    for state in [
+        "disabled",
+        "empty",
+        "error",
+        "overflow",
+        "dense",
+        "long-label",
+    ] {
+        find_where(dom, find_id(dom, root, "states-section"), &|dom, node| {
+            attr(dom, node, "data-state") == Some(state)
+        })
+        .unwrap_or_else(|| panic!("state specimen {state} is missing"));
+    }
+    let error = find_where(dom, root, &|dom, node| {
+        attr(dom, node, "data-state") == Some("error")
+    })
+    .expect("error specimen");
+    assert_attr(dom, error, "role", "alert");
+
+    for graph in [
+        ("catalog-graph-empty", "Empty related graph", 0),
+        ("catalog-graph-single", "Single-node related graph", 1),
+        ("catalog-graph-crowded", "Crowded related graph", 12),
+    ] {
+        let graph_root = find_id(dom, root, graph.0);
+        let group = find_where(dom, graph_root, &|dom, node| {
+            attr(dom, node, "aria-label") == Some(graph.1)
+        })
+        .expect("graph variant group");
+        let mut targets = Vec::new();
+        collect_class(dom, group, "graph-canvas-swatch-node", &mut targets);
+        assert_eq!(targets.len(), graph.2, "{} node targets", graph.0);
+    }
+
     let mut leaves = Vec::new();
     collect_named(
         dom,
@@ -1158,7 +1459,11 @@ fn assert_initial_surface(dom: &ScriptedDom, root: NodeId) {
         "custom-leaf",
         &mut leaves,
     );
-    assert_eq!(leaves.len(), 5);
+    assert_eq!(leaves.len(), 8);
+    assert_eq!(
+        node_text(dom, find_id(dom, root, "catalog-knob-value")),
+        "62%"
+    );
     assert!(THEME.contains("--catalog-accent"));
     assert!(THEME.contains(":focus-visible"));
 }
@@ -1489,6 +1794,15 @@ fn run_interactions(runner: &mut CatalogRunner) {
         attr(dom, node, "aria-label") == Some("Related person")
     })
     .expect("interactive graph node");
+    let selected_document = find_where(&runner.dom().borrow(), graph_swatch, &|dom, node| {
+        attr(dom, node, "aria-label") == Some("Selected document")
+    })
+    .expect("selected graph node");
+    runner.set_focus(Some(selected_document));
+    assert_eq!(runner.state().graph_swatch_focused, Some(1));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::Tab)));
+    assert_eq!(runner.focus(), Some(related_person));
+    assert_eq!(runner.state().graph_swatch_focused, Some(2));
     runner.dispatch_hover(
         related_person,
         HoverEvent::new(HoverPhase::Enter, (4.0, 4.0), (20.0, 20.0)),
@@ -1496,12 +1810,39 @@ fn run_interactions(runner: &mut CatalogRunner) {
     assert_eq!(runner.state().graph_swatch_hovered, Some(2));
     runner.dispatch_click(related_person, PointerClick::at((4.0, 4.0)));
     assert_eq!(runner.state().graph_swatch_selected, 2);
+    assert_eq!(runner.focus(), Some(related_person));
+    assert_eq!(runner.state().graph_swatch_focused, Some(2));
+    assert!(has_class(&runner.dom().borrow(), related_person, "focused"));
     let expand = find_where(&runner.dom().borrow(), graph_swatch, &|dom, node| {
         attr(dom, node, "aria-label") == Some("Expand graph")
     })
     .expect("graph expand affordance");
     runner.dispatch_click(expand, PointerClick::at((4.0, 4.0)));
     assert!(runner.state().graph_swatch_expanded);
+
+    let knob = find_id(&runner.dom().borrow(), root, "catalog-knob");
+    runner.dispatch_pointer_down(
+        knob,
+        PointerEvent::new(PointerPhase::Down, (12.0, 24.0), (48.0, 48.0)),
+    );
+    runner.dispatch_pointer_move(PointerEvent::new(
+        PointerPhase::Move,
+        (36.0, 24.0),
+        (48.0, 48.0),
+    ));
+    runner.dispatch_pointer_up(PointerEvent::new(
+        PointerPhase::Up,
+        (36.0, 24.0),
+        (48.0, 48.0),
+    ));
+    assert!((runner.state().knob_value - 0.75).abs() < f32::EPSILON);
+    assert_eq!(
+        node_text(
+            &runner.dom().borrow(),
+            find_id(&runner.dom().borrow(), root, "catalog-knob-value")
+        ),
+        "75%"
+    );
 
     let hover = find_id(&runner.dom().borrow(), root, "catalog-hover");
     runner.dispatch_hover(
@@ -1536,7 +1877,7 @@ fn run_interactions(runner: &mut CatalogRunner) {
     );
 }
 
-fn assert_leaf_pipeline() {
+fn assert_leaf_pipeline(state: &CatalogState) {
     fn size(key: u64) -> Option<Size> {
         match key {
             SWATCH_KEY => Some(Size {
@@ -1559,25 +1900,34 @@ fn assert_leaf_pipeline() {
                 width: 260.0,
                 height: 128.0,
             }),
+            GRAPH_EMPTY_KEY | GRAPH_SINGLE_KEY => Some(Size {
+                width: 220.0,
+                height: 104.0,
+            }),
+            GRAPH_CROWDED_KEY => Some(Size {
+                width: 300.0,
+                height: 144.0,
+            }),
             _ => None,
         }
     }
 
-    let mut registry = catalog_leaves();
-    for key in [SWATCH_KEY, GRAPH_KEY, METER_KEY, KNOB_KEY, GRAPH_SWATCH_KEY] {
+    let mut registry = catalog_leaves(state);
+    for key in LEAF_KEYS {
         assert!(registry.contains(&key));
     }
     let mut rendered = RenderedLeaves::new();
     let painted = registry.render_into(size, &mut rendered);
-    assert_eq!(painted, 5);
-    assert_eq!(rendered.len(), 5);
-    for key in [SWATCH_KEY, GRAPH_KEY, METER_KEY, KNOB_KEY, GRAPH_SWATCH_KEY] {
+    assert_eq!(painted, LEAF_KEYS.len());
+    assert_eq!(rendered.len(), LEAF_KEYS.len());
+    for key in LEAF_KEYS.into_iter().filter(|key| *key != GRAPH_EMPTY_KEY) {
         assert!(
             rendered
                 .get(key)
                 .is_some_and(|commands| !commands.is_empty())
         );
     }
+    assert!(rendered.get(GRAPH_EMPTY_KEY).is_some());
     assert_eq!(registry.render_into(size, &mut rendered), 0);
 }
 
@@ -1647,21 +1997,53 @@ fn assert_retained_lifecycle_wall() {
     assert_eq!(capture_runner.pointer_capture(), None);
 }
 
-fn run_acceptance() {
+fn catalog_runner(width: CatalogWidth) -> CatalogRunner {
     let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
-    let mut runner = CatalogRunner::new(
-        dom.clone(),
-        catalog as CatalogLogic,
-        CatalogState::default(),
-    );
-    assert_initial_surface(&dom.borrow(), runner.root());
+    CatalogRunner::new(dom, catalog as CatalogLogic, CatalogState::at_width(width))
+}
+
+fn receipt_html(width: CatalogWidth) -> String {
+    let runner = catalog_runner(width);
+    let markup = runner.dom().borrow().outer_html(runner.root());
+    let (viewport_width, _) = width.viewport();
+    format!(
+        "<!doctype html>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Cambium component catalog: {name}</title>\n<style>\nhtml {{ background: #dfe4ec; }}\nbody {{ margin: 0; min-width: {viewport_width}px; }}\n{THEME}\n</style>\n{markup}\n",
+        name = width.name(),
+    )
+}
+
+fn write_receipts() -> std::io::Result<()> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("cambium crate lives under workspace/crates");
+    let directory = root.join("docs").join("receipts");
+    std::fs::create_dir_all(&directory)?;
+    for width in [CatalogWidth::Narrow, CatalogWidth::Regular] {
+        std::fs::write(
+            directory.join(format!("component_catalog_{}.html", width.name())),
+            receipt_html(width),
+        )?;
+    }
+    Ok(())
+}
+
+fn run_acceptance() {
+    let mut runner = catalog_runner(CatalogWidth::Regular);
+    assert_initial_surface(&runner.dom().borrow(), runner.root(), CatalogWidth::Regular);
     run_interactions(&mut runner);
-    assert_leaf_pipeline();
+    assert_leaf_pipeline(runner.state());
+
+    let narrow = catalog_runner(CatalogWidth::Narrow);
+    assert_initial_surface(&narrow.dom().borrow(), narrow.root(), CatalogWidth::Narrow);
     assert_retained_lifecycle_wall();
 }
 
 fn main() {
     run_acceptance();
+    if std::env::args().any(|arg| arg == "--write-receipts") {
+        write_receipts().expect("write catalog HTML receipts");
+    }
 }
 
 #[cfg(test)]
@@ -1669,5 +2051,17 @@ mod tests {
     #[test]
     fn catalog_is_the_component_acceptance_surface() {
         super::run_acceptance();
+    }
+
+    #[test]
+    fn committed_receipts_match_the_live_catalog() {
+        assert_eq!(
+            super::receipt_html(super::CatalogWidth::Narrow),
+            include_str!("../../../docs/receipts/component_catalog_narrow.html")
+        );
+        assert_eq!(
+            super::receipt_html(super::CatalogWidth::Regular),
+            include_str!("../../../docs/receipts/component_catalog_regular.html")
+        );
     }
 }

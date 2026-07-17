@@ -176,6 +176,17 @@ the summary body is reused by two applications.
 
 ## Catalog refinements
 
+**Landed 2026-07-17.** The catalog now renders from configurable narrow and
+regular specimen widths, with explicit disabled, empty, error, overflow, dense,
+and long-label states. The Knob is a pointer-captured control with a live value
+output. Graph-canvas node targets participate in runner focus through the new
+`on_focus` view, so retained paint emphasis follows pointer, keyboard, and
+programmatic focus; empty, single-node, and crowded subgraphs sit beside the
+ordinary card. Self-contained narrow and regular HTML receipts serialize the
+same live `ScriptedDom` and stylesheet, and a byte-for-byte test keeps them in
+sync while the existing headless interaction and Sprigging paint assertions
+remain the fast acceptance wall.
+
 - Replace the fixed-width presentation with narrow and regular specimens.
 - Show disabled, empty, error, overflow, dense, and long-label states where
   relevant.
