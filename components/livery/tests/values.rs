@@ -86,6 +86,7 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<TransitionProperty>("border-left-style");
     assert_round_trip::<TransitionProperty>("border-right-style");
     assert_round_trip::<TransitionProperty>("border-top-style, border-right-style");
+    assert_round_trip::<TransitionProperty>("background-repeat");
     assert_round_trip::<TransitionProperty>("opacity, background-color");
     assert_round_trip::<TransitionProperty>("color, opacity, background-color");
     assert_round_trip::<TransitionProperty>("opacity, border-left-color, border-right-color");
@@ -189,6 +190,18 @@ fn background_image_interpolation_preserves_gradient_stops() {
 fn border_style_interpolation_switches_at_the_midpoint() {
     let from = "solid".parse::<BorderStyle>().expect("from style");
     let to = "dashed".parse::<BorderStyle>().expect("to style");
+    assert_eq!(from.interpolate(to, 0.49), from);
+    assert_eq!(from.interpolate(to, 0.5), to);
+}
+
+#[test]
+fn background_repeat_interpolation_switches_at_the_midpoint() {
+    let from = "no-repeat"
+        .parse::<BackgroundRepeat>()
+        .expect("from repeat mode");
+    let to = "repeat"
+        .parse::<BackgroundRepeat>()
+        .expect("to repeat mode");
     assert_eq!(from.interpolate(to, 0.49), from);
     assert_eq!(from.interpolate(to, 0.5), to);
 }

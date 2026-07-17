@@ -18,7 +18,7 @@ navigation, focus state, rounded fills, and two-stop gradient layering. A
 host-driven opacity clock supplies intermediate frames, and bounded
 `transition-property`/`transition-duration` metadata starts opacity,
 background-color, text-color, and the four physical border-color and
-border-width and border-style transitions on that same clock, so `transition: all` and explicit
+border-width, border-style, and background-repeat transitions on that same clock, so `transition: all` and explicit
 multi-property lists can
 paint those changes in one retained tick. Nested scroll containers now route wheel deltas
 into retained offsets, chain at their boundary to the viewport, and replay
@@ -486,6 +486,14 @@ style appears at the midpoint. A retained interaction test exercises solid,
 dashed, dotted, double, and groove sides together under `transition: all`.
 The focused Livery value wall has 11 tests, the cascade wall 17, and the
 genet-livery interaction wall 21; all pass.
+
+### 2026-07-17 retained background-repeat transition receipt
+
+The retained clock now carries the bounded `background-repeat` modes already
+consumed by image tiling. Repeat modes remain discrete: a 2x3 host-resolved
+image stays at one `DrawImage` before 50ms, then switches to repeated tiles at
+the midpoint and after settlement. The focused Livery value wall has 12 tests,
+the cascade wall 18, and the genet-livery interaction wall 22; all pass.
 
 ## The destination, named
 

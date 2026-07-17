@@ -11,8 +11,8 @@ use livery::{
     selector::StatePseudoClass,
     stylesheet::Keyframes,
     values::{
-        AnimationName, BackgroundImage, BackgroundPosition, BorderStyle, BorderWidth, BoxShadow,
-        Color, Opacity, Overflow, Radius, TimingFunction, Transform,
+        AnimationName, BackgroundImage, BackgroundPosition, BackgroundRepeat, BorderStyle,
+        BorderWidth, BoxShadow, Color, Opacity, Overflow, Radius, TimingFunction, Transform,
     },
 };
 use paint_list_api::DeviceIntSize;
@@ -197,6 +197,16 @@ struct BorderRightStyleTransition<Id> {
     automatic: bool,
 }
 
+#[derive(Clone, Copy)]
+struct BackgroundRepeatTransition<Id> {
+    node: Id,
+    from: BackgroundRepeat,
+    to: BackgroundRepeat,
+    start_ms: f64,
+    duration_ms: f64,
+    automatic: bool,
+}
+
 type RadiusSet = [Radius; 4];
 
 #[derive(Clone, Copy)]
@@ -295,6 +305,7 @@ where
     border_bottom_style_transition: Option<BorderBottomStyleTransition<D::NodeId>>,
     border_left_style_transition: Option<BorderLeftStyleTransition<D::NodeId>>,
     border_right_style_transition: Option<BorderRightStyleTransition<D::NodeId>>,
+    background_repeat_transition: Option<BackgroundRepeatTransition<D::NodeId>>,
     border_radius_transition: Option<BorderRadiusTransition<D::NodeId>>,
     transform_transition: Option<TransformTransition<D::NodeId>>,
     background_position_transition: Option<BackgroundPositionTransition<D::NodeId>>,
@@ -343,6 +354,7 @@ where
             border_bottom_style_transition: None,
             border_left_style_transition: None,
             border_right_style_transition: None,
+            background_repeat_transition: None,
             border_radius_transition: None,
             transform_transition: None,
             background_position_transition: None,
@@ -409,6 +421,7 @@ where
         self.finish_completed_border_bottom_style_transition();
         self.finish_completed_border_left_style_transition();
         self.finish_completed_border_right_style_transition();
+        self.finish_completed_background_repeat_transition();
         self.finish_completed_border_radius_transition();
         self.finish_completed_transform_transition();
         self.finish_completed_background_position_transition();
@@ -431,6 +444,7 @@ where
         self.schedule_border_bottom_style_transition(&styles);
         self.schedule_border_left_style_transition(&styles);
         self.schedule_border_right_style_transition(&styles);
+        self.schedule_background_repeat_transition(&styles);
         self.schedule_border_radius_transition(&styles);
         self.schedule_transform_transition(&styles);
         self.schedule_background_position_transition(&styles);
@@ -452,6 +466,7 @@ where
         self.apply_border_bottom_style_transition(&mut styles);
         self.apply_border_left_style_transition(&mut styles);
         self.apply_border_right_style_transition(&mut styles);
+        self.apply_background_repeat_transition(&mut styles);
         self.apply_border_radius_transition(&mut styles);
         self.apply_transform_transition(&mut styles);
         self.apply_background_position_transition(&mut styles);
@@ -547,6 +562,7 @@ where
             && self.border_bottom_style_transition.is_none()
             && self.border_left_style_transition.is_none()
             && self.border_right_style_transition.is_none()
+            && self.background_repeat_transition.is_none()
             && self.border_radius_transition.is_none()
             && self.transform_transition.is_none()
             && self.background_position_transition.is_none()
@@ -616,6 +632,9 @@ where
         let border_right_style_settled = self
             .border_right_style_transition
             .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
+        let background_repeat_settled = self
+            .background_repeat_transition
+            .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
         let border_radius_settled = self
             .border_radius_transition
             .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
@@ -649,6 +668,7 @@ where
             && border_bottom_style_settled
             && border_left_style_settled
             && border_right_style_settled
+            && background_repeat_settled
             && border_radius_settled
             && transform_settled
             && background_position_settled
@@ -1144,6 +1164,20 @@ where
         }
     }
 
+    fn apply_background_repeat_transition(&self, styles: &mut StylePlane<D::NodeId>) {
+        let Some(transition) = self.background_repeat_transition else {
+            return;
+        };
+        let progress = if transition.duration_ms == 0.0 {
+            1.0
+        } else {
+            ((self.clock_ms - transition.start_ms) / transition.duration_ms).clamp(0.0, 1.0) as f32
+        };
+        if let Some(style) = styles.get_mut(transition.node) {
+            style.background_repeat = transition.from.interpolate(transition.to, progress);
+        }
+    }
+
     fn apply_border_radius_transition(&self, styles: &mut StylePlane<D::NodeId>) {
         let Some(transition) = self.border_radius_transition else {
             return;
@@ -1516,6 +1550,21 @@ where
             style.border_right_style = transition.to;
         }
         self.border_right_style_transition = None;
+    }
+
+    fn finish_completed_background_repeat_transition(&mut self) {
+        let Some(transition) = self.background_repeat_transition else {
+            return;
+        };
+        if !transition.automatic || self.clock_ms < transition.start_ms + transition.duration_ms {
+            return;
+        }
+        if let Some(layout) = self.layout.as_mut()
+            && let Some(style) = layout.styles.get_mut(transition.node)
+        {
+            style.background_repeat = transition.to;
+        }
+        self.background_repeat_transition = None;
     }
 
     fn finish_completed_border_radius_transition(&mut self) {
@@ -2268,6 +2317,53 @@ where
         self.dom
             .dom_children(id)
             .find_map(|child| self.find_border_right_style_transition(child, previous, styles))
+    }
+
+    fn schedule_background_repeat_transition(&mut self, styles: &StylePlane<D::NodeId>) {
+        if self.background_repeat_transition.is_some() {
+            return;
+        }
+        let Some(previous) = self.layout.as_ref().map(|layout| &layout.styles) else {
+            return;
+        };
+        let Some((node, from, to, duration_ms)) =
+            self.find_background_repeat_transition(self.dom.document(), previous, styles)
+        else {
+            return;
+        };
+        self.background_repeat_transition = Some(BackgroundRepeatTransition {
+            node,
+            from,
+            to,
+            start_ms: self.clock_ms,
+            duration_ms,
+            automatic: true,
+        });
+    }
+
+    fn find_background_repeat_transition(
+        &self,
+        id: D::NodeId,
+        previous: &StylePlane<D::NodeId>,
+        styles: &StylePlane<D::NodeId>,
+    ) -> Option<(D::NodeId, BackgroundRepeat, BackgroundRepeat, f64)> {
+        if let (Some(old), Some(new)) = (previous.get(id), styles.get(id)) {
+            let duration_ms = f64::from(new.transition_duration.milliseconds());
+            if new.transition_property.includes_background_repeat()
+                && duration_ms > 0.0
+                && old.background_repeat != new.background_repeat
+            {
+                return Some((
+                    id,
+                    old.background_repeat,
+                    new.background_repeat,
+                    duration_ms,
+                ));
+            }
+        }
+        self.dom
+            .dom_children(id)
+            .find_map(|child| self.find_background_repeat_transition(child, previous, styles))
     }
 
     fn schedule_border_radius_transition(&mut self, styles: &StylePlane<D::NodeId>) {

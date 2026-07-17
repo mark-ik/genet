@@ -131,11 +131,23 @@ impl fmt::Display for BackgroundPosition {
 keyword_value! {
     /// Bounded background tiling modes. `space` and `round` remain future
     /// additions because they require intrinsic-size adjustment rules.
-    pub enum BackgroundRepeat {
+pub enum BackgroundRepeat {
         Repeat => "repeat",
         NoRepeat => "no-repeat",
         RepeatX => "repeat-x",
         RepeatY => "repeat-y",
+    }
+}
+
+impl BackgroundRepeat {
+    /// Repeat modes are discrete in CSS. The retained transition switches to
+    /// the target mode at the midpoint of the clock.
+    pub fn interpolate(self, other: Self, progress: f32) -> Self {
+        if progress.clamp(0.0, 1.0) < 0.5 {
+            self
+        } else {
+            other
+        }
     }
 }
 
@@ -317,6 +329,7 @@ pub enum TransitionProperty {
     BorderBottomStyle,
     BorderLeftStyle,
     BorderRightStyle,
+    BackgroundRepeat,
     List(u32),
     OpacityAndBackgroundColor,
     OpacityAndColor,
@@ -360,6 +373,7 @@ impl FromStr for TransitionProperty {
                 "border-bottom-style" => 131072,
                 "border-left-style" => 262144,
                 "border-right-style" => 524288,
+                "background-repeat" => 1048576,
                 _ => return Err(ParseError::expected("a bounded transition-property list")),
             };
             if flags & bit != 0 {
@@ -400,6 +414,7 @@ impl fmt::Display for TransitionProperty {
             Self::BorderBottomStyle => "border-bottom-style",
             Self::BorderLeftStyle => "border-left-style",
             Self::BorderRightStyle => "border-right-style",
+            Self::BackgroundRepeat => "background-repeat",
             Self::OpacityAndBackgroundColor => "opacity, background-color",
             Self::OpacityAndColor => "opacity, color",
             Self::BackgroundColorAndColor => "background-color, color",
@@ -427,6 +442,7 @@ impl fmt::Display for TransitionProperty {
                     (131072, "border-bottom-style"),
                     (262144, "border-left-style"),
                     (524288, "border-right-style"),
+                    (1048576, "background-repeat"),
                 ] {
                     if flags & bit == 0 {
                         continue;
@@ -467,6 +483,7 @@ impl TransitionProperty {
             131072 => Self::BorderBottomStyle,
             262144 => Self::BorderLeftStyle,
             524288 => Self::BorderRightStyle,
+            1048576 => Self::BackgroundRepeat,
             3 => Self::OpacityAndBackgroundColor,
             5 => Self::OpacityAndColor,
             6 => Self::BackgroundColorAndColor,
@@ -560,6 +577,10 @@ impl TransitionProperty {
         self.includes_flag(524288)
     }
 
+    pub fn includes_background_repeat(self) -> bool {
+        self.includes_flag(1048576)
+    }
+
     fn flags(self) -> u32 {
         match self {
             Self::All | Self::None => 0,
@@ -583,6 +604,7 @@ impl TransitionProperty {
             Self::BorderBottomStyle => 131072,
             Self::BorderLeftStyle => 262144,
             Self::BorderRightStyle => 524288,
+            Self::BackgroundRepeat => 1048576,
             Self::List(flags) => flags,
             Self::OpacityAndBackgroundColor => 3,
             Self::OpacityAndColor => 5,

@@ -701,6 +701,64 @@ fn css_transition_background_position_uses_the_retained_clock() {
 }
 
 #[test]
+fn css_transition_background_repeat_switches_at_the_retained_midpoint() {
+    use base64::Engine as _;
+
+    let blue = image::RgbaImage::from_pixel(2, 3, image::Rgba([0, 0, 255, 255]));
+    let mut png = Vec::new();
+    blue.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("encode test PNG");
+    let data_uri = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png)
+    );
+    let document = StaticDocument::parse(r#"<html><body><div class="card"></div></body></html>"#);
+    let card = document
+        .first_with_class(document.document(), "card")
+        .unwrap();
+    let styles = StyleSet::cambium(&[&format!(
+        r#"
+        body {{ margin: 0; }}
+        .card {{ display: block; width: 80px; height: 40px;
+                  background-position: left top; background-repeat: no-repeat;
+                  background-image: url({data_uri});
+                  transition: background-repeat 100ms; }}
+        .card:hover {{ background-repeat: repeat; }}
+        "#
+    )]);
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(200.0, 100.0));
+    let image_count = |frame: &genet_livery::LiveryPaintList| {
+        frame
+            .commands()
+            .iter()
+            .filter(|command| matches!(command, PaintCmd::DrawImage(_)))
+            .count()
+    };
+
+    let initial = retained.frame(200, 100).unwrap();
+    assert_eq!(image_count(&initial), 1);
+
+    retained
+        .interactions_mut()
+        .set(card, livery::selector::StatePseudoClass::Hover, true);
+    retained.frame(200, 100).unwrap();
+    assert!(!retained.settled());
+
+    retained.pump(25.0);
+    let early = retained.frame(200, 100).unwrap();
+    assert_eq!(image_count(&early), 1);
+
+    retained.pump(50.0);
+    let middle = retained.frame(200, 100).unwrap();
+    assert!(image_count(&middle) > 1);
+
+    retained.pump(100.0);
+    assert!(retained.settled());
+    let final_frame = retained.frame(200, 100).unwrap();
+    assert!(image_count(&final_frame) > 1);
+}
+
+#[test]
 fn css_transition_background_image_interpolates_gradient_stops() {
     let document = StaticDocument::parse(r#"<html><body><div class="card"></div></body></html>"#);
     let card = document
