@@ -74,6 +74,7 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<TransitionProperty>("border-right-color");
     assert_round_trip::<TransitionProperty>("opacity, background-color");
     assert_round_trip::<TransitionProperty>("color, opacity, background-color");
+    assert_round_trip::<TransitionProperty>("opacity, border-left-color, border-right-color");
     assert_round_trip::<Alignment>("space-between");
     assert_round_trip::<FlexDirection>("column");
     assert_round_trip::<FlexFactor>("1.5");

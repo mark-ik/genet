@@ -17,16 +17,15 @@ viewport scroll, pointer-events hit testing, link rectangles, fragment
 navigation, focus state, rounded fills, and two-stop gradient layering. A
 host-driven opacity clock supplies intermediate frames, and bounded
 `transition-property`/`transition-duration` metadata starts opacity,
-background-color, text-color, and border-top-color/border-bottom-color transitions on that same
-clock, so
-`transition: all` and the bounded explicit two- and three-property lists can
+background-color, text-color, and the four physical border-color transitions on
+that same clock, so `transition: all` and explicit multi-property lists can
 paint those changes in one retained tick. Nested scroll containers now route wheel deltas
 into retained offsets, chain at their boundary to the viewport, and replay
 descendant paint through transforms. Bounded opacity-only `@keyframes` and
 named timing functions now run on the retained clock. Host-owned remote image
 fetching now feeds the same resource seam. Remaining E3 work is full WPT
-reftest parity, additional transition-property lists and interpolation beyond
-the bounded opacity/background-color/color/border-top-color/border-bottom-color paths. A fresh
+reftest parity and interpolation beyond the bounded
+opacity/background-color/color/four-side-border-color paths. A fresh
 workspace cold-build receipt is recorded below. The
 first audit invalidated the proposed 33-accessor full-crate seam.
 The second chose Cambium structural UI as the bounded first lane.
@@ -257,8 +256,9 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   default. Bounded opacity-only `@keyframes` declarations and linear, ease,
   ease-in, ease-out, and ease-in-out timing functions run on the retained
   clock. Bounded intrinsic tiling and position/repeat modes now have paint-list
-  receipts. Remaining: additional transition-property lists and interpolation
-  beyond the bounded opacity/background-color/color paths and full reftest parity.
+  receipts. Remaining: interpolation beyond the bounded
+  opacity/background-color/color/four-side-border-color paths and full reftest
+  parity.
   The cold-build delta against the 30m35s baseline is recorded below.
 - **E4 — first production lane.** One real lane (host chrome or
   smolweb) ships on Livery by default. Receipt: the lane's
@@ -308,6 +308,9 @@ The matching left and right border-color lanes now parse and round-trip as
 bounded transition properties, schedule from the retained clock, and sample
 through the existing neutral `DrawBorder` side colors. One `transition: all`
 receipt exercises both sides at an intermediate frame and after settlement.
+The transition-property value now preserves arbitrary combinations of the
+supported property bits, so a shorthand list containing opacity and both side
+colors survives cascade merge and round-trip serialization.
 The Livery session now resolves a CSS/DOM image URL against the document
 address, asks the host `ResourceFetcher` for bytes, and paints the returned
 remote image; URL policy and caching remain host-owned.
@@ -316,7 +319,7 @@ The focused Livery/genet-livery clippy wall passes with `-D warnings`.
 `genet-documents` strict clippy remains blocked by the existing `pelt-core`
 `clippy::derivable_impls` error, outside this slice.
 The border-side color ratchet keeps the focused receipts green: Livery has
-10 cascade and 4 value tests, genet-livery has 14 interaction and 41 paint
+11 cascade and 4 value tests, genet-livery has 14 interaction and 41 paint
 tests, and genet-documents has 19 feature-gated tests.
 
 The WPT producer helper tests pass. `css/CSS2/box/ltr-basic.xht`,
@@ -361,7 +364,7 @@ directory run into usable parity telemetry while leaving the 47 localized
 linebox mismatches open for the next layout/paint slices. Full WPT parity
 remains an explicit gate.
 
-Full WPT reftest parity, broader transition lists and interpolation beyond
+Full WPT reftest parity and interpolation beyond
 color and the four physical border-color lanes, and the E4 default
 production-lane switch remain open. The standalone
 Cambium WebGPU smoke now passes a native `cargo check` after local

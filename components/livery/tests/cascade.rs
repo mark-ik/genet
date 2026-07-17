@@ -139,6 +139,26 @@ fn transition_shorthand_merges_the_bounded_three_property_list() {
 }
 
 #[test]
+fn transition_shorthand_preserves_a_side_color_list() {
+    let block = parse_declaration_block(
+        "transition: opacity 100ms, border-left-color 100ms, border-right-color 100ms",
+    );
+    assert!(block.errors.is_empty(), "{:?}", block.errors);
+    let Some(livery::cascade::DeclaredValue::Value(PropertyValue::TransitionProperty(property))) =
+        block
+            .declarations
+            .first()
+            .map(|declaration| &declaration.value)
+    else {
+        panic!("expected transition-property declaration");
+    };
+    assert_eq!(
+        property.to_string(),
+        "opacity, border-left-color, border-right-color"
+    );
+}
+
+#[test]
 fn origin_importance_specificity_and_source_order_follow_the_cascade() {
     let declarations = vec![
         matched(

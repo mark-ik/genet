@@ -251,9 +251,9 @@ impl fmt::Display for AnimationName {
     }
 }
 
-/// The bounded transition-property set consumed by the retained paint clock.
-/// Explicit lists are normalized into the small set of paint properties that
-/// Livery can sample from one retained tick.
+/// The supported transition-property set consumed by the retained paint clock.
+/// Explicit lists retain their property bitset so new combinations do not
+/// silently widen to `all`.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum TransitionProperty {
     All,
@@ -265,6 +265,7 @@ pub enum TransitionProperty {
     BorderBottomColor,
     BorderLeftColor,
     BorderRightColor,
+    List(u8),
     OpacityAndBackgroundColor,
     OpacityAndColor,
     BackgroundColorAndColor,
@@ -305,15 +306,15 @@ impl FromStr for TransitionProperty {
             return Err(ParseError::expected("a bounded transition-property list"));
         }
         Self::from_flags(flags)
-            .ok_or_else(|| ParseError::expected("a bounded transition-property list"))
+            .ok_or_else(|| ParseError::expected("a supported transition-property list"))
     }
 }
 
 impl fmt::Display for TransitionProperty {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::All => "all",
-            Self::None => "none",
+        let names = match self {
+            Self::All => return formatter.write_str("all"),
+            Self::None => return formatter.write_str("none"),
             Self::Opacity => "opacity",
             Self::BackgroundColor => "background-color",
             Self::Color => "color",
@@ -325,7 +326,30 @@ impl fmt::Display for TransitionProperty {
             Self::OpacityAndColor => "opacity, color",
             Self::BackgroundColorAndColor => "background-color, color",
             Self::OpacityAndBackgroundColorAndColor => "opacity, background-color, color",
-        })
+            Self::List(flags) => {
+                let mut first = true;
+                for (bit, name) in [
+                    (1, "opacity"),
+                    (2, "background-color"),
+                    (4, "color"),
+                    (8, "border-top-color"),
+                    (16, "border-bottom-color"),
+                    (32, "border-left-color"),
+                    (64, "border-right-color"),
+                ] {
+                    if flags & bit == 0 {
+                        continue;
+                    }
+                    if !first {
+                        formatter.write_str(", ")?;
+                    }
+                    formatter.write_str(name)?;
+                    first = false;
+                }
+                return Ok(());
+            },
+        };
+        formatter.write_str(names)
     }
 }
 
@@ -343,57 +367,41 @@ impl TransitionProperty {
             5 => Self::OpacityAndColor,
             6 => Self::BackgroundColorAndColor,
             7 => Self::OpacityAndBackgroundColorAndColor,
+            _ if flags != 0 => Self::List(flags),
             _ => return None,
         })
     }
 
+    fn includes_flag(self, bit: u8) -> bool {
+        matches!(self, Self::All) || self.flags() & bit != 0
+    }
+
     pub fn includes_opacity(self) -> bool {
-        matches!(
-            self,
-            Self::All
-                | Self::Opacity
-                | Self::OpacityAndBackgroundColor
-                | Self::OpacityAndColor
-                | Self::OpacityAndBackgroundColorAndColor
-        )
+        self.includes_flag(1)
     }
 
     pub fn includes_background_color(self) -> bool {
-        matches!(
-            self,
-            Self::All
-                | Self::BackgroundColor
-                | Self::OpacityAndBackgroundColor
-                | Self::BackgroundColorAndColor
-                | Self::OpacityAndBackgroundColorAndColor
-        )
+        self.includes_flag(2)
     }
 
     pub fn includes_color(self) -> bool {
-        matches!(
-            self,
-            Self::All
-                | Self::Color
-                | Self::OpacityAndColor
-                | Self::BackgroundColorAndColor
-                | Self::OpacityAndBackgroundColorAndColor
-        )
+        self.includes_flag(4)
     }
 
     pub fn includes_border_top_color(self) -> bool {
-        matches!(self, Self::All | Self::BorderTopColor)
+        self.includes_flag(8)
     }
 
     pub fn includes_border_bottom_color(self) -> bool {
-        matches!(self, Self::All | Self::BorderBottomColor)
+        self.includes_flag(16)
     }
 
     pub fn includes_border_left_color(self) -> bool {
-        matches!(self, Self::All | Self::BorderLeftColor)
+        self.includes_flag(32)
     }
 
     pub fn includes_border_right_color(self) -> bool {
-        matches!(self, Self::All | Self::BorderRightColor)
+        self.includes_flag(64)
     }
 
     fn flags(self) -> u8 {
@@ -406,6 +414,7 @@ impl TransitionProperty {
             Self::BorderBottomColor => 16,
             Self::BorderLeftColor => 32,
             Self::BorderRightColor => 64,
+            Self::List(flags) => flags,
             Self::OpacityAndBackgroundColor => 3,
             Self::OpacityAndColor => 5,
             Self::BackgroundColorAndColor => 6,
