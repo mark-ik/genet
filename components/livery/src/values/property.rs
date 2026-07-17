@@ -23,6 +23,16 @@ impl BackgroundPosition {
         x: LengthPercentage::ZERO,
         y: LengthPercentage::ZERO,
     };
+
+    /// Interpolate the bounded two-component position used by the retained
+    /// background image lane. Each component keeps the shared
+    /// length/percentage unit boundary.
+    pub fn interpolate(self, other: Self, progress: f32) -> Self {
+        Self {
+            x: self.x.interpolate(other.x, progress),
+            y: self.y.interpolate(other.y, progress),
+        }
+    }
 }
 
 fn position_component(input: &str, horizontal: bool) -> Result<LengthPercentage, ParseError> {
@@ -267,6 +277,7 @@ pub enum TransitionProperty {
     BorderRightColor,
     BorderRadius,
     Transform,
+    BackgroundPosition,
     List(u16),
     OpacityAndBackgroundColor,
     OpacityAndColor,
@@ -299,6 +310,7 @@ impl FromStr for TransitionProperty {
                 "border-right-color" => 64,
                 "border-radius" => 128,
                 "transform" => 256,
+                "background-position" => 512,
                 _ => return Err(ParseError::expected("a bounded transition-property list")),
             };
             if flags & bit != 0 {
@@ -328,6 +340,7 @@ impl fmt::Display for TransitionProperty {
             Self::BorderRightColor => "border-right-color",
             Self::BorderRadius => "border-radius",
             Self::Transform => "transform",
+            Self::BackgroundPosition => "background-position",
             Self::OpacityAndBackgroundColor => "opacity, background-color",
             Self::OpacityAndColor => "opacity, color",
             Self::BackgroundColorAndColor => "background-color, color",
@@ -344,6 +357,7 @@ impl fmt::Display for TransitionProperty {
                     (64, "border-right-color"),
                     (128, "border-radius"),
                     (256, "transform"),
+                    (512, "background-position"),
                 ] {
                     if flags & bit == 0 {
                         continue;
@@ -373,6 +387,7 @@ impl TransitionProperty {
             64 => Self::BorderRightColor,
             128 => Self::BorderRadius,
             256 => Self::Transform,
+            512 => Self::BackgroundPosition,
             3 => Self::OpacityAndBackgroundColor,
             5 => Self::OpacityAndColor,
             6 => Self::BackgroundColorAndColor,
@@ -422,6 +437,10 @@ impl TransitionProperty {
         self.includes_flag(256)
     }
 
+    pub fn includes_background_position(self) -> bool {
+        self.includes_flag(512)
+    }
+
     fn flags(self) -> u16 {
         match self {
             Self::All | Self::None => 0,
@@ -434,6 +453,7 @@ impl TransitionProperty {
             Self::BorderRightColor => 64,
             Self::BorderRadius => 128,
             Self::Transform => 256,
+            Self::BackgroundPosition => 512,
             Self::List(flags) => flags,
             Self::OpacityAndBackgroundColor => 3,
             Self::OpacityAndColor => 5,
@@ -1113,52 +1133,7 @@ impl Radius {
     /// Zero and a concrete length/percentage share the same scalar family;
     /// mixed non-zero units stay discrete until the broader value ratchet.
     pub fn interpolate(self, other: Self, progress: f32) -> Self {
-        let progress = progress.clamp(0.0, 1.0);
-        let value = match (self.0, other.0) {
-            (LengthPercentage::Zero, LengthPercentage::Zero) => LengthPercentage::ZERO,
-            (LengthPercentage::Length(from), LengthPercentage::Length(to))
-                if from.unit == to.unit =>
-            {
-                LengthPercentage::Length(Length {
-                    value: from.value + (to.value - from.value) * progress,
-                    unit: from.unit,
-                })
-            },
-            (LengthPercentage::Percentage(from), LengthPercentage::Percentage(to)) => {
-                LengthPercentage::Percentage(from + (to - from) * progress)
-            },
-            (LengthPercentage::Zero, LengthPercentage::Length(to))
-            | (LengthPercentage::Length(to), LengthPercentage::Zero) => {
-                let unit = to.unit;
-                let target = to.value;
-                let (from, to) = if matches!(self.0, LengthPercentage::Zero) {
-                    (0.0, target)
-                } else {
-                    (target, 0.0)
-                };
-                LengthPercentage::Length(Length {
-                    value: from + (to - from) * progress,
-                    unit,
-                })
-            },
-            (LengthPercentage::Zero, LengthPercentage::Percentage(to))
-            | (LengthPercentage::Percentage(to), LengthPercentage::Zero) => {
-                let (from, to) = if matches!(self.0, LengthPercentage::Zero) {
-                    (0.0, to)
-                } else {
-                    (to, 0.0)
-                };
-                LengthPercentage::Percentage(from + (to - from) * progress)
-            },
-            _ => {
-                if progress < 0.5 {
-                    self.0
-                } else {
-                    other.0
-                }
-            },
-        };
-        Self(value)
+        Self(self.0.interpolate(other.0, progress))
     }
 }
 

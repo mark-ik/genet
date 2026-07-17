@@ -210,6 +210,53 @@ pub enum LengthPercentage {
 
 impl LengthPercentage {
     pub const ZERO: Self = Self::Zero;
+
+    /// Interpolate the bounded scalar forms shared by paint and geometry
+    /// properties. Zero adopts the other endpoint's unit; mixed non-zero
+    /// units and calc expressions remain discrete until their value ratchet.
+    pub fn interpolate(self, other: Self, progress: f32) -> Self {
+        let progress = progress.clamp(0.0, 1.0);
+        match (self, other) {
+            (Self::Zero, Self::Zero) => Self::ZERO,
+            (Self::Length(from), Self::Length(to)) if from.unit == to.unit => {
+                Self::Length(Length {
+                    value: from.value + (to.value - from.value) * progress,
+                    unit: from.unit,
+                })
+            },
+            (Self::Percentage(from), Self::Percentage(to)) => {
+                Self::Percentage(from + (to - from) * progress)
+            },
+            (Self::Zero, Self::Length(to)) | (Self::Length(to), Self::Zero) => {
+                let unit = to.unit;
+                let target = to.value;
+                let (from, to) = if matches!(self, Self::Zero) {
+                    (0.0, target)
+                } else {
+                    (target, 0.0)
+                };
+                Self::Length(Length {
+                    value: from + (to - from) * progress,
+                    unit,
+                })
+            },
+            (Self::Zero, Self::Percentage(to)) | (Self::Percentage(to), Self::Zero) => {
+                let (from, to) = if matches!(self, Self::Zero) {
+                    (0.0, to)
+                } else {
+                    (to, 0.0)
+                };
+                Self::Percentage(from + (to - from) * progress)
+            },
+            _ => {
+                if progress < 0.5 {
+                    self
+                } else {
+                    other
+                }
+            },
+        }
+    }
 }
 
 fn parse_atomic(input: &str) -> Result<LengthPercentage, ParseError> {

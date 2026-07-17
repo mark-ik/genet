@@ -10,7 +10,10 @@ use livery::{
     PropertyValue,
     selector::StatePseudoClass,
     stylesheet::Keyframes,
-    values::{AnimationName, Color, Opacity, Overflow, Radius, TimingFunction, Transform},
+    values::{
+        AnimationName, BackgroundPosition, Color, Opacity, Overflow, Radius, TimingFunction,
+        Transform,
+    },
 };
 use paint_list_api::DeviceIntSize;
 
@@ -136,6 +139,16 @@ struct TransformTransition<Id> {
     automatic: bool,
 }
 
+#[derive(Clone, Copy)]
+struct BackgroundPositionTransition<Id> {
+    node: Id,
+    from: BackgroundPosition,
+    to: BackgroundPosition,
+    start_ms: f64,
+    duration_ms: f64,
+    automatic: bool,
+}
+
 #[derive(Clone)]
 struct KeyframeAnimation<Id> {
     node: Id,
@@ -176,6 +189,7 @@ where
     border_right_color_transition: Option<BorderRightColorTransition<D::NodeId>>,
     border_radius_transition: Option<BorderRadiusTransition<D::NodeId>>,
     transform_transition: Option<TransformTransition<D::NodeId>>,
+    background_position_transition: Option<BackgroundPositionTransition<D::NodeId>>,
     keyframe_animation: Option<KeyframeAnimation<D::NodeId>>,
     nested_scroll: HashMap<D::NodeId, (f32, f32)>,
     image_sources: HashMap<String, Vec<u8>>,
@@ -213,6 +227,7 @@ where
             border_right_color_transition: None,
             border_radius_transition: None,
             transform_transition: None,
+            background_position_transition: None,
             keyframe_animation: None,
             nested_scroll: HashMap::new(),
             image_sources: HashMap::new(),
@@ -268,6 +283,7 @@ where
         self.finish_completed_border_right_color_transition();
         self.finish_completed_border_radius_transition();
         self.finish_completed_transform_transition();
+        self.finish_completed_background_position_transition();
         let mut styles =
             resolve_styles(&self.dom, &self.style_set, &self.device, &self.interactions);
         self.schedule_opacity_transition(&styles);
@@ -279,6 +295,7 @@ where
         self.schedule_border_right_color_transition(&styles);
         self.schedule_border_radius_transition(&styles);
         self.schedule_transform_transition(&styles);
+        self.schedule_background_position_transition(&styles);
         self.schedule_keyframe_animation(&styles);
         self.apply_opacity_transition(&mut styles);
         self.apply_background_color_transition(&mut styles);
@@ -289,6 +306,7 @@ where
         self.apply_border_right_color_transition(&mut styles);
         self.apply_border_radius_transition(&mut styles);
         self.apply_transform_transition(&mut styles);
+        self.apply_background_position_transition(&mut styles);
         self.apply_keyframe_animation(&mut styles);
         let fragments = layout_with_text_system(
             &self.dom,
@@ -373,6 +391,7 @@ where
             && self.border_right_color_transition.is_none()
             && self.border_radius_transition.is_none()
             && self.transform_transition.is_none()
+            && self.background_position_transition.is_none()
             && self.keyframe_animation.is_none())
             || !now_ms.is_finite()
         {
@@ -420,6 +439,9 @@ where
             .transform_transition
             .as_ref()
             .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
+        let background_position_settled = self
+            .background_position_transition
+            .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
         opacity_settled
             && background_color_settled
             && color_settled
@@ -429,6 +451,7 @@ where
             && border_right_color_settled
             && border_radius_settled
             && transform_settled
+            && background_position_settled
             && keyframe_settled
     }
 
@@ -842,6 +865,21 @@ where
         }
     }
 
+    fn apply_background_position_transition(&self, styles: &mut StylePlane<D::NodeId>) {
+        let Some(transition) = self.background_position_transition else {
+            return;
+        };
+        let progress = if transition.duration_ms == 0.0 {
+            1.0
+        } else {
+            ((self.clock_ms - transition.start_ms) / transition.duration_ms).clamp(0.0, 1.0) as f32
+        };
+        let value = transition.from.interpolate(transition.to, progress);
+        if let Some(style) = styles.get_mut(transition.node) {
+            style.background_position = value;
+        }
+    }
+
     fn apply_keyframe_animation(&self, styles: &mut StylePlane<D::NodeId>) {
         let Some(animation) = self.keyframe_animation.as_ref() else {
             return;
@@ -1049,6 +1087,21 @@ where
         self.transform_transition = None;
     }
 
+    fn finish_completed_background_position_transition(&mut self) {
+        let Some(transition) = self.background_position_transition else {
+            return;
+        };
+        if !transition.automatic || self.clock_ms < transition.start_ms + transition.duration_ms {
+            return;
+        }
+        if let Some(layout) = self.layout.as_mut()
+            && let Some(style) = layout.styles.get_mut(transition.node)
+        {
+            style.background_position = transition.to;
+        }
+        self.background_position_transition = None;
+    }
+
     fn schedule_opacity_transition(&mut self, styles: &StylePlane<D::NodeId>) {
         if self.opacity_transition.is_some() {
             return;
@@ -1208,12 +1261,7 @@ where
                 && duration_ms > 0.0
                 && old.border_top_color != new.border_top_color
             {
-                return Some((
-                    id,
-                    old.border_top_color,
-                    new.border_top_color,
-                    duration_ms,
-                ));
+                return Some((id, old.border_top_color, new.border_top_color, duration_ms));
             }
         }
         self.dom
@@ -1437,12 +1485,64 @@ where
                 && duration_ms > 0.0
                 && old.transform != new.transform
             {
-                return Some((id, old.transform.clone(), new.transform.clone(), duration_ms));
+                return Some((
+                    id,
+                    old.transform.clone(),
+                    new.transform.clone(),
+                    duration_ms,
+                ));
             }
         }
         self.dom
             .dom_children(id)
             .find_map(|child| self.find_transform_transition(child, previous, styles))
+    }
+
+    fn schedule_background_position_transition(&mut self, styles: &StylePlane<D::NodeId>) {
+        if self.background_position_transition.is_some() {
+            return;
+        }
+        let Some(previous) = self.layout.as_ref().map(|layout| &layout.styles) else {
+            return;
+        };
+        let Some((node, from, to, duration_ms)) =
+            self.find_background_position_transition(self.dom.document(), previous, styles)
+        else {
+            return;
+        };
+        self.background_position_transition = Some(BackgroundPositionTransition {
+            node,
+            from,
+            to,
+            start_ms: self.clock_ms,
+            duration_ms,
+            automatic: true,
+        });
+    }
+
+    fn find_background_position_transition(
+        &self,
+        id: D::NodeId,
+        previous: &StylePlane<D::NodeId>,
+        styles: &StylePlane<D::NodeId>,
+    ) -> Option<(D::NodeId, BackgroundPosition, BackgroundPosition, f64)> {
+        if let (Some(old), Some(new)) = (previous.get(id), styles.get(id)) {
+            let duration_ms = f64::from(new.transition_duration.milliseconds());
+            if new.transition_property.includes_background_position()
+                && duration_ms > 0.0
+                && old.background_position != new.background_position
+            {
+                return Some((
+                    id,
+                    old.background_position,
+                    new.background_position,
+                    duration_ms,
+                ));
+            }
+        }
+        self.dom
+            .dom_children(id)
+            .find_map(|child| self.find_background_position_transition(child, previous, styles))
     }
 
     fn scrollable_axes(&self, layout: &LayoutState<D::NodeId>) -> (bool, bool) {

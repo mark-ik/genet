@@ -427,7 +427,10 @@ fn css_transition_border_top_color_uses_the_retained_clock() {
             _ => None,
         })
     };
-    assert_eq!(border_color(&initial), Some(ColorF::new(1.0, 0.0, 0.0, 1.0)));
+    assert_eq!(
+        border_color(&initial),
+        Some(ColorF::new(1.0, 0.0, 0.0, 1.0))
+    );
 
     retained
         .interactions_mut()
@@ -444,7 +447,10 @@ fn css_transition_border_top_color_uses_the_retained_clock() {
     retained.pump(100.0);
     assert!(retained.settled());
     let final_frame = retained.frame(200, 100).unwrap();
-    assert_eq!(border_color(&final_frame), Some(ColorF::new(0.0, 0.0, 1.0, 1.0)));
+    assert_eq!(
+        border_color(&final_frame),
+        Some(ColorF::new(0.0, 0.0, 1.0, 1.0))
+    );
 }
 
 #[test]
@@ -471,7 +477,10 @@ fn css_transition_border_bottom_color_uses_the_retained_clock() {
             _ => None,
         })
     };
-    assert_eq!(border_color(&initial), Some(ColorF::new(1.0, 0.0, 0.0, 1.0)));
+    assert_eq!(
+        border_color(&initial),
+        Some(ColorF::new(1.0, 0.0, 0.0, 1.0))
+    );
 
     retained
         .interactions_mut()
@@ -488,7 +497,10 @@ fn css_transition_border_bottom_color_uses_the_retained_clock() {
     retained.pump(100.0);
     assert!(retained.settled());
     let final_frame = retained.frame(200, 100).unwrap();
-    assert_eq!(border_color(&final_frame), Some(ColorF::new(0.0, 0.0, 1.0, 1.0)));
+    assert_eq!(
+        border_color(&final_frame),
+        Some(ColorF::new(0.0, 0.0, 1.0, 1.0))
+    );
 }
 
 #[test]
@@ -625,6 +637,67 @@ fn css_transition_transform_uses_the_retained_clock() {
     assert!(retained.settled());
     let final_frame = retained.frame(200, 100).unwrap();
     assert_eq!(translation(&final_frame), Some((20.0, 4.0)));
+}
+
+#[test]
+fn css_transition_background_position_uses_the_retained_clock() {
+    use base64::Engine as _;
+
+    let blue = image::RgbaImage::from_pixel(2, 3, image::Rgba([0, 0, 255, 255]));
+    let mut png = Vec::new();
+    blue.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("encode test PNG");
+    let data_uri = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png)
+    );
+    let document = StaticDocument::parse(r#"<html><body><div class="card"></div></body></html>"#);
+    let card = document
+        .first_with_class(document.document(), "card")
+        .unwrap();
+    let styles = StyleSet::cambium(&[&format!(
+        r#"
+        body {{ margin: 0; }}
+        .card {{ display: block; width: 80px; height: 40px;
+                  background-repeat: no-repeat; background-position: left top;
+                  background-image: url({data_uri});
+                  transition: background-position 100ms; }}
+        .card:hover {{ background-position: right bottom; }}
+        "#
+    )]);
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(200.0, 100.0));
+    let image_position = |frame: &genet_livery::LiveryPaintList| {
+        frame.commands().iter().find_map(|command| match command {
+            PaintCmd::DrawImage(image) => Some(image.placement.bounds.min),
+            _ => None,
+        })
+    };
+
+    let initial = retained.frame(200, 100).unwrap();
+    assert_eq!(
+        image_position(&initial),
+        Some(paint_list_api::LayoutPoint::new(0.0, 0.0))
+    );
+
+    retained
+        .interactions_mut()
+        .set(card, livery::selector::StatePseudoClass::Hover, true);
+    retained.frame(200, 100).unwrap();
+    assert!(!retained.settled());
+
+    retained.pump(50.0);
+    let middle = retained.frame(200, 100).unwrap();
+    let middle_position = image_position(&middle).expect("position transition keeps an image");
+    assert!((middle_position.x - 39.0).abs() < 0.01);
+    assert!((middle_position.y - 18.5).abs() < 0.01);
+
+    retained.pump(100.0);
+    assert!(retained.settled());
+    let final_frame = retained.frame(200, 100).unwrap();
+    assert_eq!(
+        image_position(&final_frame),
+        Some(paint_list_api::LayoutPoint::new(78.0, 37.0))
+    );
 }
 
 #[test]

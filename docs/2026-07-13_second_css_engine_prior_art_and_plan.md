@@ -3,7 +3,7 @@
 **Date:** 2026-07-13
 **Status:** E0a full-path audit, E0b Cambium lane choice/40-property catalog,
 E1 values/codegen, E2 style resolution, and the first E3 integration slice are
-landed. The catalog has since ratcheted to 87 properties. `genet-livery` now adapts `LayoutDom` into Livery's selector and cascade
+landed. The catalog has since ratcheted to 88 properties. `genet-livery` now adapts `LayoutDom` into Livery's selector and cascade
 path, retains a concrete Livery style plane, lowers the bounded box model into
 a standalone Taffy tree, and emits backgrounds and borders through the neutral
 `PaintList` API. Consecutive text and inline-element children now shape in one
@@ -25,7 +25,8 @@ descendant paint through transforms. Bounded opacity-only `@keyframes` and
 named timing functions now run on the retained clock. Host-owned remote image
 fetching now feeds the same resource seam. Remaining E3 work is full WPT
 reftest parity and interpolation beyond the bounded
-opacity/background-color/color/four-side-border-color paths. A fresh
+opacity/background-color/color/four-side-border-color/border-radius/transform/
+background-position paths. A fresh
 workspace cold-build receipt is recorded below. The
 first audit invalidated the proposed 33-accessor full-crate seam.
 The second chose Cambium structural UI as the bounded first lane.
@@ -258,8 +259,8 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   ease-in, ease-out, and ease-in-out timing functions run on the retained
   clock. Bounded intrinsic tiling and position/repeat modes now have paint-list
   receipts. Remaining: interpolation beyond the bounded
-  opacity/background-color/color/four-side-border-color/border-radius/transform paths and full reftest
-  parity.
+  opacity/background-color/color/four-side-border-color/border-radius/transform/
+  background-position paths and full reftest parity.
   The cold-build delta against the 30m35s baseline is recorded below.
 - **E4 — first production lane.** One real lane (host chrome or
   smolweb) ships on Livery by default. Receipt: the lane's
@@ -287,8 +288,8 @@ covered by the paint-list receipt. The gradient receipt and opacity clock are
   covered by the paint-list, cascade, and interaction suites. The keyframe
   parser and retained opacity animation receipt cover named timing functions.
   Additional transition-property lists and interpolation beyond the bounded
-  color and four physical border-color lanes, plus full reftest parity, remain
-  explicit next gates.
+  color, four physical border-color, radius, transform, and background-position
+  lanes, plus full reftest parity, remain explicit next gates.
   The image receipt covers raster `data:` URLs, host-resolved local and
   remote-looking bytes, intrinsic `<img>` sizing, and aspect-ratio preservation;
   the session now exercises the host fetcher for a remote image while keeping
@@ -365,9 +366,9 @@ directory run into usable parity telemetry while leaving the 47 localized
 linebox mismatches open for the next layout/paint slices. Full WPT parity
 remains an explicit gate.
 
-Full WPT reftest parity and interpolation beyond
-color and the four physical border-color lanes, and the E4 default
-production-lane switch remain open. The standalone
+Full WPT reftest parity and interpolation beyond the bounded color, four
+physical border-color, radius, transform, and background-position lanes, plus
+the E4 default production-lane switch, remain open. The standalone
 Cambium WebGPU smoke now passes a native `cargo check` after local
 `genet-scripted-dom` and `layout-dom-api` patching; the checkout does not have
 the `wasm32-unknown-unknown` target installed, so that target remains
@@ -424,6 +425,17 @@ test observes a 10px/2px translation at 50ms between 0px/0px and 20px/4px,
 then observes the settled transform through the neutral coordinate-space
 primitive. The focused Livery value wall has 6 tests and the genet-livery
 interaction wall 16; both pass with the paint wall.
+
+### 2026-07-17 retained background-position interpolation receipt
+
+The retained transition clock now accepts the bounded two-component
+`background-position` lane. Length/percentage components and zero-to-unit
+interpolation share the typed `LengthPercentage` helper; mixed non-zero units
+and `calc()` expressions remain discrete. A retained interaction test moves a
+2x3 host-resolved image from `left top` to `right bottom`, observing the
+39px/18.5px midpoint and the settled 78px/37px placement. The focused Livery
+value wall has 7 tests, the cascade wall 14, and the genet-livery interaction
+wall 17; all pass with the paint wall.
 
 ## The destination, named
 

@@ -74,6 +74,7 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<TransitionProperty>("border-right-color");
     assert_round_trip::<TransitionProperty>("border-radius");
     assert_round_trip::<TransitionProperty>("transform");
+    assert_round_trip::<TransitionProperty>("background-position");
     assert_round_trip::<TransitionProperty>("opacity, background-color");
     assert_round_trip::<TransitionProperty>("color, opacity, background-color");
     assert_round_trip::<TransitionProperty>("opacity, border-left-color, border-right-color");
@@ -126,7 +127,21 @@ fn radius_interpolation_preserves_the_bounded_length_family() {
 fn transform_interpolation_preserves_matching_function_shape() {
     let from = "translate(0px, 0px)".parse::<Transform>().expect("from");
     let to = "translate(20px, 4px)".parse::<Transform>().expect("to");
-    assert_eq!(from.interpolate(&to, 0.5).to_string(), "translate(10px, 2px)");
+    assert_eq!(
+        from.interpolate(&to, 0.5).to_string(),
+        "translate(10px, 2px)"
+    );
+}
+
+#[test]
+fn background_position_interpolation_preserves_each_component() {
+    let from = "left top"
+        .parse::<BackgroundPosition>()
+        .expect("from position");
+    let to = "right bottom"
+        .parse::<BackgroundPosition>()
+        .expect("to position");
+    assert_eq!(from.interpolate(to, 0.5).to_string(), "50% 50%");
 }
 
 #[test]
