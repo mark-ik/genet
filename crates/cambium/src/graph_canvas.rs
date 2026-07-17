@@ -12,8 +12,8 @@
 use sprigging::{ColorF, GraphCanvas, GraphGlyphNode, GraphViewport, Size};
 
 use crate::{
-    GenetCtx, GenetElement, HoverEvent, HoverPhase, PointerClick, View, custom_leaf, el, on_click,
-    on_hover,
+    FocusEvent, FocusPhase, GenetCtx, GenetElement, HoverEvent, HoverPhase, PointerClick, View,
+    custom_leaf, el, focusable, on_click, on_focus, on_hover,
 };
 
 /// Structural classes emitted by [`graph_canvas_swatch`]. Hosts own the palette.
@@ -211,6 +211,36 @@ where
     Hover: Fn(&mut State, Option<Id>) + Clone + 'static,
     Expand: Fn(&mut State) + Clone + 'static,
 {
+    graph_canvas_swatch_with_focus(
+        swatch,
+        on_node_click,
+        on_node_hover,
+        |_state: &mut State, _id: Option<Id>| {},
+        on_expand,
+    )
+}
+
+/// Render a graph-canvas swatch whose retained paint focus follows the native
+/// node button that pointer, keyboard, or programmatic focus selected.
+///
+/// `on_node_focus` normally writes its value into
+/// [`GraphCanvasSwatch::focus`] before rebuilding the matching paint leaf.
+pub fn graph_canvas_swatch_with_focus<State, AppAction, Id, Kind, Click, Hover, Focus, Expand>(
+    swatch: &GraphCanvasSwatch<Id, Kind>,
+    on_node_click: Click,
+    on_node_hover: Hover,
+    on_node_focus: Focus,
+    on_expand: Expand,
+) -> impl View<State, AppAction, GenetCtx, Element = GenetElement>
+where
+    State: 'static,
+    AppAction: 'static,
+    Id: Clone + PartialEq + 'static,
+    Click: Fn(&mut State, Id) + Clone + 'static,
+    Hover: Fn(&mut State, Option<Id>) + Clone + 'static,
+    Focus: Fn(&mut State, Option<Id>) + Clone + 'static,
+    Expand: Fn(&mut State) + Clone + 'static,
+{
     let positions = swatch.projected_positions();
     let hit_size = swatch.hit_size.max(1.0);
     let targets: Vec<_> = swatch
@@ -254,16 +284,24 @@ where
             let click_id = node.id.clone();
             let hover = on_node_hover.clone();
             let enter_id = node.id.clone();
-            on_hover(
-                on_click(target, move |state: &mut State, _: PointerClick| {
-                    click(state, click_id.clone());
-                }),
-                move |state: &mut State, event: HoverEvent| match event.phase {
-                    HoverPhase::Enter => hover(state, Some(enter_id.clone())),
-                    HoverPhase::Leave => hover(state, None),
-                    HoverPhase::Move => {}
+            let focus = on_node_focus.clone();
+            let focus_id = node.id.clone();
+            focusable(on_focus(
+                on_hover(
+                    on_click(target, move |state: &mut State, _: PointerClick| {
+                        click(state, click_id.clone());
+                    }),
+                    move |state: &mut State, event: HoverEvent| match event.phase {
+                        HoverPhase::Enter => hover(state, Some(enter_id.clone())),
+                        HoverPhase::Leave => hover(state, None),
+                        HoverPhase::Move => {}
+                    },
+                ),
+                move |state: &mut State, event: FocusEvent| match event.phase {
+                    FocusPhase::Gained => focus(state, Some(focus_id.clone())),
+                    FocusPhase::Lost => focus(state, None),
                 },
-            )
+            ))
         })
         .collect();
 
@@ -319,12 +357,13 @@ mod tests {
     struct State {
         clicked: Vec<u8>,
         hovered: Option<u8>,
+        focused: Option<u8>,
         expanded: bool,
     }
 
     type TestView = Box<dyn AnyView<State, (), GenetCtx, GenetElement>>;
 
-    fn model(hovered: Option<u8>) -> GraphCanvasSwatch<u8, &'static str> {
+    fn model(hovered: Option<u8>, focused: Option<u8>) -> GraphCanvasSwatch<u8, &'static str> {
         let mut swatch = GraphCanvasSwatch::new(
             77,
             GraphCanvasSubgraph {
@@ -347,17 +386,18 @@ mod tests {
         )
         .with_size(240, 112);
         swatch.selected = Some(1);
-        swatch.focus = Some(2);
+        swatch.focus = focused;
         swatch.hovered = hovered;
         swatch
     }
 
     fn view(state: &State) -> TestView {
-        let swatch = model(state.hovered);
-        Box::new(graph_canvas_swatch(
+        let swatch = model(state.hovered, state.focused);
+        Box::new(graph_canvas_swatch_with_focus(
             &swatch,
             |state: &mut State, id| state.clicked.push(id),
             |state: &mut State, id| state.hovered = id,
+            |state: &mut State, id| state.focused = id,
             |state: &mut State| state.expanded = true,
         ))
     }
@@ -388,6 +428,8 @@ mod tests {
         assert_eq!(runner.state().hovered, Some(1));
         runner.dispatch_click(first, PointerClick::at((2.0, 2.0)));
         assert_eq!(runner.state().clicked, [1]);
+        assert_eq!(runner.focus(), Some(first));
+        assert_eq!(runner.state().focused, Some(1));
 
         let expand =
             find_attr(&dom.borrow(), root, "aria-label", "Expand graph").expect("expand target");
@@ -397,7 +439,7 @@ mod tests {
 
     #[test]
     fn paint_leaf_and_hit_targets_share_projection() {
-        let swatch = model(Some(1));
+        let swatch = model(Some(1), Some(2));
         let leaf = swatch.paint_leaf(|kind| match *kind {
             "document" => ColorF {
                 r: 0.2,

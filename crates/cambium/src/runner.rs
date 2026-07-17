@@ -34,8 +34,8 @@ use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace};
 use meristem::{DynMessage, MessageCtx, MessageResult, View, ViewId};
 
 use crate::{
-    DomHandle, GenetCtx, GenetElement, GenetElementMut, HoverEvent, Key, KeyEvent, NamedKey,
-    PointerClick, PointerEvent, WheelEvent,
+    DomHandle, FocusEvent, FocusPhase, GenetCtx, GenetElement, GenetElementMut, HoverEvent, Key,
+    KeyEvent, NamedKey, PointerClick, PointerEvent, WheelEvent,
 };
 
 /// The per-tree half of a runner: one `ScriptedDom` target, its [`GenetCtx`]
@@ -250,6 +250,61 @@ where
         paths
     }
 
+    /// Route a focus change through the retained view before the caller's
+    /// publication rebuild. Lost is delivered first, then Gained.
+    fn route_focus_transition(
+        &mut self,
+        state: &mut State,
+        old: Option<NodeId>,
+        new: Option<NodeId>,
+    ) -> (Vec<Action>, bool) {
+        if old == new {
+            return (Vec::new(), false);
+        }
+        let deliveries: Vec<_> = [
+            (old, FocusEvent::new(FocusPhase::Lost)),
+            (new, FocusEvent::new(FocusPhase::Gained)),
+        ]
+        .into_iter()
+        .filter_map(|(node, event)| {
+            let node = node?;
+            let path = self.ctx.focus_handler(node)?.to_vec();
+            Some((path, event))
+        })
+        .collect();
+        if deliveries.is_empty() {
+            return (Vec::new(), false);
+        }
+
+        let mut env = self.ctx.take_environment();
+        let mut actions = Vec::new();
+        {
+            let Self {
+                view,
+                view_state,
+                root,
+                dom,
+                ..
+            } = self;
+            for (path, event) in deliveries {
+                let mut msg = MessageCtx::new(env, path, DynMessage::new(event));
+                let mut_ref = GenetElementMut {
+                    node: &mut root.node,
+                    dom: dom.clone(),
+                    parent: Some(dom.borrow().document()),
+                };
+                if let MessageResult::Action(action) =
+                    view.message(view_state, &mut msg, mut_ref, state)
+                {
+                    actions.push(action);
+                }
+                env = msg.finish().0;
+            }
+        }
+        self.ctx.set_environment(env);
+        (actions, true)
+    }
+
     /// Dispatch a native pointer click that hit `target`. See
     /// [`GenetAppRunner::dispatch_click`] for the full contract; this is the
     /// per-tree implementation with state and logic threaded in.
@@ -290,7 +345,9 @@ where
         // Click-to-focus: focus the nearest focusable ancestor, or clear it when
         // the click landed outside any focusable element. Independent of whether
         // a click handler fired below.
+        let old_focus = self.focus;
         self.focus = new_focus;
+        let (mut actions, focus_routed) = self.route_focus_transition(state, old_focus, new_focus);
 
         // 2. Build the routing paths in propagation order: capture pass first
         //    (chain reversed → root → target, capture==true handlers only), then
@@ -299,10 +356,13 @@ where
         let paths = self.phase_ordered_paths(&chain, |ctx, node| ctx.click_handlers_at(node));
 
         if paths.is_empty() {
-            // No click handler anywhere on the chain: nothing routed, no rebuild.
-            // Focus was still updated above; nothing could prevent the default.
+            // Focus observers may still have mutated state even when the hit had
+            // no click handler, so publish that transition before returning.
+            if focus_routed {
+                self.rebuild(logic, state);
+            }
             self.last_default_prevented = event.prop.default_prevented();
-            return Vec::new();
+            return actions;
         }
 
         // 3. Route the event down each collected path through the faithful
@@ -313,7 +373,6 @@ where
         // build share one: take it out, hand it to each path's `MessageCtx`, and
         // reclaim it via `finish` for the next path (and to restore below). (G2.2.)
         let mut env = self.ctx.take_environment();
-        let mut actions = Vec::new();
         {
             // `ctx` is not needed for routing: the recorded path is the full
             // routing target, so `View::message` walks it without the context.
@@ -375,8 +434,20 @@ where
         self.focus
     }
 
-    pub(crate) fn set_focus(&mut self, node: Option<NodeId>) {
-        self.focus = node.filter(|&node| self.node_is_live(node));
+    pub(crate) fn set_focus(
+        &mut self,
+        logic: &mut impl FnMut(&State) -> V,
+        state: &mut State,
+        node: Option<NodeId>,
+    ) -> Vec<Action> {
+        let next = node.filter(|&node| self.node_is_live(node));
+        let old = self.focus;
+        self.focus = next;
+        let (actions, _) = self.route_focus_transition(state, old, next);
+        if old != next {
+            self.rebuild(logic, state);
+        }
+        actions
     }
 
     /// Move focus to the next (`forward`) or previous focusable element in
@@ -421,8 +492,7 @@ where
                 }
             }
         };
-        self.set_focus(Some(focusables[next]));
-        self.rebuild(logic, state);
+        self.set_focus(logic, state, Some(focusables[next]));
     }
 
     /// Dispatch a native key event to the focused node, then apply the
@@ -545,7 +615,7 @@ where
                         target,
                         PointerClick::at((0.0, 0.0)),
                     ));
-                    self.focus = Some(target);
+                    actions.extend(self.set_focus(logic, state, Some(target)));
                     self.last_default_prevented = true;
                     return actions;
                 }
@@ -994,7 +1064,7 @@ where
     /// finds no key handler to route to if it is not focusable. A retired node
     /// clears focus under the DOM dangle contract.
     pub fn set_focus(&mut self, node: Option<NodeId>) {
-        self.tree.set_focus(node);
+        self.tree.set_focus(&mut self.logic, &mut self.state, node);
     }
 
     /// Move focus to the next (`forward`) or previous focusable element in

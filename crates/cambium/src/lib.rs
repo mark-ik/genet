@@ -36,6 +36,7 @@ mod disclosure;
 mod editor;
 mod element;
 mod event;
+mod focus;
 mod focus_request;
 mod focusable;
 mod graph_canvas;
@@ -88,7 +89,7 @@ pub use disclosure::{
 pub use editor::{EditHistory, pair_close, wrap_selection};
 pub use graph_canvas::{
     GRAPH_CANVAS_SWATCH_CSS, GraphCanvasEdge, GraphCanvasNode, GraphCanvasSubgraph,
-    GraphCanvasSwatch, graph_canvas_swatch,
+    GraphCanvasSwatch, graph_canvas_swatch, graph_canvas_swatch_with_focus,
 };
 pub use grid::{GridView, data_grid};
 pub use menu::{MENU_CLASS, MENU_ROW_ACTIVE_CLASS, MENU_ROW_CLASS, menu};
@@ -101,6 +102,7 @@ pub use controls::{
 };
 pub use element::{El, Element, ElementView, el};
 pub use event::{OnClick, OnClickState, PointerClick, clickable, on_click};
+pub use focus::{FocusEvent, FocusPhase, OnFocus, OnFocusState, on_focus};
 pub use focus_request::{FocusRequest, FocusRequestState, request_focus};
 pub use focusable::{Focusable, FocusableState, focusable, focusable_if};
 #[cfg(feature = "highlight")]

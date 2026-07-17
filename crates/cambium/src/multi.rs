@@ -307,9 +307,15 @@ where
 
     /// Set (or clear) projection `id`'s focused node.
     pub fn set_focus(&mut self, id: ProjectionId, node: Option<NodeId>) {
-        if let Some(Some(projection)) = self.projections.get_mut(id.0) {
-            projection.tree.set_focus(node);
+        let Self {
+            state, projections, ..
+        } = self;
+        if let Some(Some(projection)) = projections.get_mut(id.0) {
+            projection
+                .tree
+                .set_focus(&mut projection.logic, state, node);
         }
+        self.rebuild_others(id);
     }
 
     /// Whether projection `id`'s most recent dispatch was default-prevented.

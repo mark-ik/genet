@@ -85,6 +85,8 @@ pub struct GenetCtx {
     /// refcount, so stacked markers and node-swap rebuilds stay balanced. Read
     /// (with [`key_handlers`](Self::key_handlers)) by [`is_focusable`](Self::is_focusable).
     focusable: HashMap<NodeId, usize>,
+    /// Nodes observing runner focus transitions through [`on_focus`](crate::on_focus).
+    focus_handlers: HashMap<NodeId, Vec<ViewId>>,
     /// `NodeId → routing path` for pointer-drag handlers
     /// ([`OnPointer`](crate::OnPointer)). Unlike click/key there is no
     /// capture/bubble phase: a drag routes straight to the captured target, so
@@ -192,6 +194,7 @@ impl GenetCtx {
             click_handlers: HashMap::new(),
             key_handlers: HashMap::new(),
             focusable: HashMap::new(),
+            focus_handlers: HashMap::new(),
             pointer_handlers: HashMap::new(),
             hover_handlers: HashMap::new(),
             wheel_handlers: HashMap::new(),
@@ -426,6 +429,21 @@ impl GenetCtx {
             .get(&node)
             .is_some_and(|handlers| handlers.iter().any(|handler| handler.focusable))
             || self.focusable.contains_key(&node)
+    }
+
+    /// Register the retained message path that observes focus for `node`.
+    pub fn register_focus(&mut self, node: NodeId, path: Vec<ViewId>) {
+        self.focus_handlers.insert(node, path);
+    }
+
+    /// Remove `node`'s focus observer during teardown or node replacement.
+    pub fn unregister_focus(&mut self, node: NodeId) {
+        self.focus_handlers.remove(&node);
+    }
+
+    /// The retained message path observing focus for `node`.
+    pub fn focus_handler(&self, node: NodeId) -> Option<&[ViewId]> {
+        self.focus_handlers.get(&node).map(Vec::as_slice)
     }
 
     /// Register `path` as the pointer-drag handler for `node`
