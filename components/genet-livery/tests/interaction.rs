@@ -492,6 +492,55 @@ fn css_transition_border_bottom_color_uses_the_retained_clock() {
 }
 
 #[test]
+fn css_transition_border_left_and_right_colors_use_the_retained_clock() {
+    let document =
+        StaticDocument::parse(r#"<html><body><div class="card">card</div></body></html>"#);
+    let card = document
+        .first_with_class(document.document(), "card")
+        .unwrap();
+    let styles = StyleSet::cambium(&[r#"
+        .card { display: block; width: 100px; height: 20px;
+                border-left-width: 4px; border-left-style: solid; border-left-color: red;
+                border-right-width: 4px; border-right-style: solid; border-right-color: red;
+                transition: all 100ms; }
+        .card:hover { border-left-color: blue; border-right-color: blue; }
+    "#]);
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(200.0, 100.0));
+    let initial = retained.frame(200, 100).unwrap();
+    let border_colors = |frame: &genet_livery::LiveryPaintList| {
+        frame.commands().iter().find_map(|command| match command {
+            PaintCmd::DrawBorder(border) => match &border.details {
+                BorderDetails::Normal(border) => Some((border.left.color, border.right.color)),
+                _ => None,
+            },
+            _ => None,
+        })
+    };
+    let red = ColorF::new(1.0, 0.0, 0.0, 1.0);
+    let blue = ColorF::new(0.0, 0.0, 1.0, 1.0);
+    assert_eq!(border_colors(&initial), Some((red, red)));
+
+    retained
+        .interactions_mut()
+        .set(card, livery::selector::StatePseudoClass::Hover, true);
+    retained.frame(200, 100).unwrap();
+    assert!(!retained.settled());
+
+    retained.pump(50.0);
+    let middle = retained.frame(200, 100).unwrap();
+    let (left, right) = border_colors(&middle).expect("side border transition keeps a border");
+    for color in [left, right] {
+        assert!((color.r - 0.5).abs() < 0.01);
+        assert!((color.b - 0.5).abs() < 0.01);
+    }
+
+    retained.pump(100.0);
+    assert!(retained.settled());
+    let final_frame = retained.frame(200, 100).unwrap();
+    assert_eq!(border_colors(&final_frame), Some((blue, blue)));
+}
+
+#[test]
 fn css_keyframes_opacity_use_the_retained_clock() {
     let document =
         StaticDocument::parse(r#"<html><body><div class="fade">fade</div></body></html>"#);

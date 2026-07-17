@@ -285,8 +285,9 @@ and focus routing through genet-documents. Rounded background clipping is
 covered by the paint-list receipt. The gradient receipt and opacity clock are
   covered by the paint-list, cascade, and interaction suites. The keyframe
   parser and retained opacity animation receipt cover named timing functions.
-  Additional transition-property lists and interpolation beyond the new color
-  and border-top-color/border-bottom-color lanes and full reftest parity remain explicit next gates.
+  Additional transition-property lists and interpolation beyond the bounded
+  color and four physical border-color lanes, plus full reftest parity, remain
+  explicit next gates.
   The image receipt covers raster `data:` URLs, host-resolved local and
   remote-looking bytes, intrinsic `<img>` sizing, and aspect-ratio preservation;
   the session now exercises the host fetcher for a remote image while keeping
@@ -303,6 +304,10 @@ border through that clock; the fixture uses the supported physical border
 longhands rather than the unimplemented `border-top` shorthand. The matching
 `border-bottom-color` transition paints the neutral bottom border through the
 same clock, with the same physical-longhand fixture boundary.
+The matching left and right border-color lanes now parse and round-trip as
+bounded transition properties, schedule from the retained clock, and sample
+through the existing neutral `DrawBorder` side colors. One `transition: all`
+receipt exercises both sides at an intermediate frame and after settlement.
 The Livery session now resolves a CSS/DOM image URL against the document
 address, asks the host `ResourceFetcher` for bytes, and paints the returned
 remote image; URL policy and caching remain host-owned.
@@ -310,8 +315,8 @@ remote image; URL policy and caching remain host-owned.
 The focused Livery/genet-livery clippy wall passes with `-D warnings`.
 `genet-documents` strict clippy remains blocked by the existing `pelt-core`
 `clippy::derivable_impls` error, outside this slice.
-The border-bottom-color ratchet keeps the focused receipts green: Livery has
-10 cascade and 4 value tests, genet-livery has 13 interaction and 41 paint
+The border-side color ratchet keeps the focused receipts green: Livery has
+10 cascade and 4 value tests, genet-livery has 14 interaction and 41 paint
 tests, and genet-documents has 19 feature-gated tests.
 
 The WPT producer helper tests pass. `css/CSS2/box/ltr-basic.xht`,
@@ -357,8 +362,8 @@ linebox mismatches open for the next layout/paint slices. Full WPT parity
 remains an explicit gate.
 
 Full WPT reftest parity, broader transition lists and interpolation beyond
-color and border-top-color/border-bottom-color, and the E4 default production-lane switch remain
-open. The standalone
+color and the four physical border-color lanes, and the E4 default
+production-lane switch remain open. The standalone
 Cambium WebGPU smoke now passes a native `cargo check` after local
 `genet-scripted-dom` and `layout-dom-api` patching; the checkout does not have
 the `wasm32-unknown-unknown` target installed, so that target remains

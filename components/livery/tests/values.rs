@@ -70,6 +70,8 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<TransitionProperty>("color");
     assert_round_trip::<TransitionProperty>("border-top-color");
     assert_round_trip::<TransitionProperty>("border-bottom-color");
+    assert_round_trip::<TransitionProperty>("border-left-color");
+    assert_round_trip::<TransitionProperty>("border-right-color");
     assert_round_trip::<TransitionProperty>("opacity, background-color");
     assert_round_trip::<TransitionProperty>("color, opacity, background-color");
     assert_round_trip::<Alignment>("space-between");

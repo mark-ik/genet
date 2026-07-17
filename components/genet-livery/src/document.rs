@@ -94,6 +94,26 @@ struct BorderBottomColorTransition<Id> {
     automatic: bool,
 }
 
+#[derive(Clone, Copy)]
+struct BorderLeftColorTransition<Id> {
+    node: Id,
+    from: Color,
+    to: Color,
+    start_ms: f64,
+    duration_ms: f64,
+    automatic: bool,
+}
+
+#[derive(Clone, Copy)]
+struct BorderRightColorTransition<Id> {
+    node: Id,
+    from: Color,
+    to: Color,
+    start_ms: f64,
+    duration_ms: f64,
+    automatic: bool,
+}
+
 #[derive(Clone)]
 struct KeyframeAnimation<Id> {
     node: Id,
@@ -130,6 +150,8 @@ where
     color_transition: Option<ColorTransition<D::NodeId>>,
     border_top_color_transition: Option<BorderTopColorTransition<D::NodeId>>,
     border_bottom_color_transition: Option<BorderBottomColorTransition<D::NodeId>>,
+    border_left_color_transition: Option<BorderLeftColorTransition<D::NodeId>>,
+    border_right_color_transition: Option<BorderRightColorTransition<D::NodeId>>,
     keyframe_animation: Option<KeyframeAnimation<D::NodeId>>,
     nested_scroll: HashMap<D::NodeId, (f32, f32)>,
     image_sources: HashMap<String, Vec<u8>>,
@@ -163,6 +185,8 @@ where
             color_transition: None,
             border_top_color_transition: None,
             border_bottom_color_transition: None,
+            border_left_color_transition: None,
+            border_right_color_transition: None,
             keyframe_animation: None,
             nested_scroll: HashMap::new(),
             image_sources: HashMap::new(),
@@ -214,6 +238,8 @@ where
         self.finish_completed_color_transition();
         self.finish_completed_border_top_color_transition();
         self.finish_completed_border_bottom_color_transition();
+        self.finish_completed_border_left_color_transition();
+        self.finish_completed_border_right_color_transition();
         let mut styles =
             resolve_styles(&self.dom, &self.style_set, &self.device, &self.interactions);
         self.schedule_opacity_transition(&styles);
@@ -221,12 +247,16 @@ where
         self.schedule_color_transition(&styles);
         self.schedule_border_top_color_transition(&styles);
         self.schedule_border_bottom_color_transition(&styles);
+        self.schedule_border_left_color_transition(&styles);
+        self.schedule_border_right_color_transition(&styles);
         self.schedule_keyframe_animation(&styles);
         self.apply_opacity_transition(&mut styles);
         self.apply_background_color_transition(&mut styles);
         self.apply_color_transition(&mut styles);
         self.apply_border_top_color_transition(&mut styles);
         self.apply_border_bottom_color_transition(&mut styles);
+        self.apply_border_left_color_transition(&mut styles);
+        self.apply_border_right_color_transition(&mut styles);
         self.apply_keyframe_animation(&mut styles);
         let fragments = layout_with_text_system(
             &self.dom,
@@ -307,6 +337,8 @@ where
             && self.color_transition.is_none()
             && self.border_top_color_transition.is_none()
             && self.border_bottom_color_transition.is_none()
+            && self.border_left_color_transition.is_none()
+            && self.border_right_color_transition.is_none()
             && self.keyframe_animation.is_none())
             || !now_ms.is_finite()
         {
@@ -341,11 +373,19 @@ where
         let border_bottom_color_settled = self
             .border_bottom_color_transition
             .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
+        let border_left_color_settled = self
+            .border_left_color_transition
+            .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
+        let border_right_color_settled = self
+            .border_right_color_transition
+            .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
         opacity_settled
             && background_color_settled
             && color_settled
             && border_top_color_settled
             && border_bottom_color_settled
+            && border_left_color_settled
+            && border_right_color_settled
             && keyframe_settled
     }
 
@@ -694,6 +734,36 @@ where
         }
     }
 
+    fn apply_border_left_color_transition(&self, styles: &mut StylePlane<D::NodeId>) {
+        let Some(transition) = self.border_left_color_transition else {
+            return;
+        };
+        let progress = if transition.duration_ms == 0.0 {
+            1.0
+        } else {
+            ((self.clock_ms - transition.start_ms) / transition.duration_ms).clamp(0.0, 1.0) as f32
+        };
+        let value = transition.from.interpolate(transition.to, progress);
+        if let Some(style) = styles.get_mut(transition.node) {
+            style.border_left_color = value;
+        }
+    }
+
+    fn apply_border_right_color_transition(&self, styles: &mut StylePlane<D::NodeId>) {
+        let Some(transition) = self.border_right_color_transition else {
+            return;
+        };
+        let progress = if transition.duration_ms == 0.0 {
+            1.0
+        } else {
+            ((self.clock_ms - transition.start_ms) / transition.duration_ms).clamp(0.0, 1.0) as f32
+        };
+        let value = transition.from.interpolate(transition.to, progress);
+        if let Some(style) = styles.get_mut(transition.node) {
+            style.border_right_color = value;
+        }
+    }
+
     fn apply_keyframe_animation(&self, styles: &mut StylePlane<D::NodeId>) {
         let Some(animation) = self.keyframe_animation.as_ref() else {
             return;
@@ -836,6 +906,36 @@ where
             style.border_bottom_color = transition.to;
         }
         self.border_bottom_color_transition = None;
+    }
+
+    fn finish_completed_border_left_color_transition(&mut self) {
+        let Some(transition) = self.border_left_color_transition else {
+            return;
+        };
+        if !transition.automatic || self.clock_ms < transition.start_ms + transition.duration_ms {
+            return;
+        }
+        if let Some(layout) = self.layout.as_mut()
+            && let Some(style) = layout.styles.get_mut(transition.node)
+        {
+            style.border_left_color = transition.to;
+        }
+        self.border_left_color_transition = None;
+    }
+
+    fn finish_completed_border_right_color_transition(&mut self) {
+        let Some(transition) = self.border_right_color_transition else {
+            return;
+        };
+        if !transition.automatic || self.clock_ms < transition.start_ms + transition.duration_ms {
+            return;
+        }
+        if let Some(layout) = self.layout.as_mut()
+            && let Some(style) = layout.styles.get_mut(transition.node)
+        {
+            style.border_right_color = transition.to;
+        }
+        self.border_right_color_transition = None;
     }
 
     fn schedule_opacity_transition(&mut self, styles: &StylePlane<D::NodeId>) {
@@ -1055,6 +1155,100 @@ where
         self.dom
             .dom_children(id)
             .find_map(|child| self.find_border_bottom_color_transition(child, previous, styles))
+    }
+
+    fn schedule_border_left_color_transition(&mut self, styles: &StylePlane<D::NodeId>) {
+        if self.border_left_color_transition.is_some() {
+            return;
+        }
+        let Some(previous) = self.layout.as_ref().map(|layout| &layout.styles) else {
+            return;
+        };
+        let Some((node, from, to, duration_ms)) =
+            self.find_border_left_color_transition(self.dom.document(), previous, styles)
+        else {
+            return;
+        };
+        self.border_left_color_transition = Some(BorderLeftColorTransition {
+            node,
+            from,
+            to,
+            start_ms: self.clock_ms,
+            duration_ms,
+            automatic: true,
+        });
+    }
+
+    fn find_border_left_color_transition(
+        &self,
+        id: D::NodeId,
+        previous: &StylePlane<D::NodeId>,
+        styles: &StylePlane<D::NodeId>,
+    ) -> Option<(D::NodeId, Color, Color, f64)> {
+        if let (Some(old), Some(new)) = (previous.get(id), styles.get(id)) {
+            let duration_ms = f64::from(new.transition_duration.milliseconds());
+            if new.transition_property.includes_border_left_color()
+                && duration_ms > 0.0
+                && old.border_left_color != new.border_left_color
+            {
+                return Some((
+                    id,
+                    old.border_left_color,
+                    new.border_left_color,
+                    duration_ms,
+                ));
+            }
+        }
+        self.dom
+            .dom_children(id)
+            .find_map(|child| self.find_border_left_color_transition(child, previous, styles))
+    }
+
+    fn schedule_border_right_color_transition(&mut self, styles: &StylePlane<D::NodeId>) {
+        if self.border_right_color_transition.is_some() {
+            return;
+        }
+        let Some(previous) = self.layout.as_ref().map(|layout| &layout.styles) else {
+            return;
+        };
+        let Some((node, from, to, duration_ms)) =
+            self.find_border_right_color_transition(self.dom.document(), previous, styles)
+        else {
+            return;
+        };
+        self.border_right_color_transition = Some(BorderRightColorTransition {
+            node,
+            from,
+            to,
+            start_ms: self.clock_ms,
+            duration_ms,
+            automatic: true,
+        });
+    }
+
+    fn find_border_right_color_transition(
+        &self,
+        id: D::NodeId,
+        previous: &StylePlane<D::NodeId>,
+        styles: &StylePlane<D::NodeId>,
+    ) -> Option<(D::NodeId, Color, Color, f64)> {
+        if let (Some(old), Some(new)) = (previous.get(id), styles.get(id)) {
+            let duration_ms = f64::from(new.transition_duration.milliseconds());
+            if new.transition_property.includes_border_right_color()
+                && duration_ms > 0.0
+                && old.border_right_color != new.border_right_color
+            {
+                return Some((
+                    id,
+                    old.border_right_color,
+                    new.border_right_color,
+                    duration_ms,
+                ));
+            }
+        }
+        self.dom
+            .dom_children(id)
+            .find_map(|child| self.find_border_right_color_transition(child, previous, styles))
     }
 
     fn scrollable_axes(&self, layout: &LayoutState<D::NodeId>) -> (bool, bool) {

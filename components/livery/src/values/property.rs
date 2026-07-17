@@ -263,6 +263,8 @@ pub enum TransitionProperty {
     Color,
     BorderTopColor,
     BorderBottomColor,
+    BorderLeftColor,
+    BorderRightColor,
     OpacityAndBackgroundColor,
     OpacityAndColor,
     BackgroundColorAndColor,
@@ -290,6 +292,8 @@ impl FromStr for TransitionProperty {
                 "color" => 4,
                 "border-top-color" => 8,
                 "border-bottom-color" => 16,
+                "border-left-color" => 32,
+                "border-right-color" => 64,
                 _ => return Err(ParseError::expected("a bounded transition-property list")),
             };
             if flags & bit != 0 {
@@ -315,6 +319,8 @@ impl fmt::Display for TransitionProperty {
             Self::Color => "color",
             Self::BorderTopColor => "border-top-color",
             Self::BorderBottomColor => "border-bottom-color",
+            Self::BorderLeftColor => "border-left-color",
+            Self::BorderRightColor => "border-right-color",
             Self::OpacityAndBackgroundColor => "opacity, background-color",
             Self::OpacityAndColor => "opacity, color",
             Self::BackgroundColorAndColor => "background-color, color",
@@ -331,6 +337,8 @@ impl TransitionProperty {
             4 => Self::Color,
             8 => Self::BorderTopColor,
             16 => Self::BorderBottomColor,
+            32 => Self::BorderLeftColor,
+            64 => Self::BorderRightColor,
             3 => Self::OpacityAndBackgroundColor,
             5 => Self::OpacityAndColor,
             6 => Self::BackgroundColorAndColor,
@@ -380,6 +388,14 @@ impl TransitionProperty {
         matches!(self, Self::All | Self::BorderBottomColor)
     }
 
+    pub fn includes_border_left_color(self) -> bool {
+        matches!(self, Self::All | Self::BorderLeftColor)
+    }
+
+    pub fn includes_border_right_color(self) -> bool {
+        matches!(self, Self::All | Self::BorderRightColor)
+    }
+
     fn flags(self) -> u8 {
         match self {
             Self::All | Self::None => 0,
@@ -388,6 +404,8 @@ impl TransitionProperty {
             Self::Color => 4,
             Self::BorderTopColor => 8,
             Self::BorderBottomColor => 16,
+            Self::BorderLeftColor => 32,
+            Self::BorderRightColor => 64,
             Self::OpacityAndBackgroundColor => 3,
             Self::OpacityAndColor => 5,
             Self::BackgroundColorAndColor => 6,
