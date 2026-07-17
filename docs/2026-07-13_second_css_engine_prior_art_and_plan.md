@@ -368,11 +368,12 @@ remains an explicit gate.
 
 Full WPT reftest parity and interpolation beyond the bounded color, four
 physical border-color, radius, transform, and background-position lanes, plus
-the E4 default production-lane switch, remain open. The standalone
-Cambium WebGPU smoke now passes a native `cargo check` after local
-`genet-scripted-dom` and `layout-dom-api` patching; the checkout does not have
-the `wasm32-unknown-unknown` target installed, so that target remains
-unverified.
+the E4 default production-lane switch, remain open. The standalone Cambium
+WebGPU smoke now passes native `cargo check` plus wasm32 `cargo check` and
+`cargo build` after local `genet-scripted-dom` and `layout-dom-api` patching;
+wasm-bindgen also emits the web package. The browser runtime leg remains
+unverified in this environment because no controllable browser service is
+available.
 
 ### 2026-07-17 inline decoration and shorthand receipt
 
