@@ -13,12 +13,12 @@ use cambium::{
     DomHandle, GenetAppRunner, GenetCtx, GenetElement, GraphCanvasEdge, GraphCanvasNode,
     GraphCanvasSubgraph, GraphCanvasSwatch, GridColumn, GridSpec, GridView, HoverEvent, HoverPhase,
     Key, KeyEvent, NamedKey, OverlayDismiss, OverlayRole, OverlaySurface, Placement, PointerClick,
-    PointerEvent, PointerPhase, RadioGroup, SelectState, SelectionItem, SelectionState, Slider,
-    StyleRange, TabActivation, TextInput, button, button_with, checkbox, command_menu,
-    command_palette, command_picker, custom_leaf, data_grid, detail_popover, el, filter_chips,
-    graph_canvas_swatch, lens, map_action, on_hover, on_pointer, overlay_surface, radio_group,
-    segmented_control, select, slider, styled_textarea, tab_bar, text_field_typed, textarea_typed,
-    toggle,
+    PointerEvent, PointerPhase, RadioGroup, ReorderItem, ReorderMove, ReorderState, SelectState,
+    SelectionItem, SelectionState, Slider, StyleRange, TabActivation, TextInput, button,
+    button_with, checkbox, command_menu, command_palette, command_picker, custom_leaf, data_grid,
+    detail_popover, el, filter_chips, graph_canvas_swatch, lens, map_action, on_hover, on_pointer,
+    overlay_surface, radio_group, reorderable_list, segmented_control, select, slider,
+    styled_textarea, tab_bar, text_field_typed, textarea_typed, toggle,
 };
 use genet_scripted_dom::{NodeId, ScriptedDom};
 use layout_dom_api::{LayoutDom, LocalName, Namespace};
@@ -45,6 +45,9 @@ struct CatalogState {
     tabs: SelectionState,
     segments: SelectionState,
     chips: SelectionState,
+    reorder: ReorderState<&'static str>,
+    reorder_order: Vec<&'static str>,
+    last_reorder: Option<ReorderMove<&'static str>>,
     select: SelectState,
     slider: Slider,
     text: TextInput,
@@ -88,6 +91,11 @@ impl Default for CatalogState {
             chips: SelectionState::multiple([0])
                 .with_label("Visible node kinds")
                 .with_id("catalog-chips"),
+            reorder: ReorderState::new()
+                .with_label("Related panel order")
+                .with_id("catalog-reorder"),
+            reorder_order: vec!["notes", "people", "places"],
+            last_reorder: None,
             select: SelectState::new(1).with_label("Rendering mode"),
             slider: Slider::new(0.35).with_steps(0.05, 0.2).with_label("Zoom"),
             text: TextInput::new("merecat"),
@@ -219,6 +227,32 @@ fn chip_items() -> Vec<SelectionItem> {
         SelectionItem::new("People").disabled_because("People index is unavailable"),
         SelectionItem::new("Tags"),
     ]
+}
+
+fn reorder_items(order: &[&'static str]) -> Vec<ReorderItem<&'static str>> {
+    order
+        .iter()
+        .map(|id| {
+            let label = match *id {
+                "notes" => "Notes",
+                "people" => "People",
+                _ => "Places",
+            };
+            ReorderItem::new(*id, label)
+        })
+        .collect()
+}
+
+fn apply_reorder(state: &mut CatalogState, movement: ReorderMove<&'static str>) {
+    let from = state
+        .reorder_order
+        .iter()
+        .position(|id| *id == movement.id)
+        .expect("reorder identity remains in the application collection");
+    let item = state.reorder_order.remove(from);
+    let destination = movement.to.min(state.reorder_order.len());
+    state.reorder_order.insert(destination, item);
+    state.last_reorder = Some(movement);
 }
 
 fn command_result(event: CommandEvent) -> String {
@@ -417,6 +451,31 @@ fn catalog(state: &CatalogState) -> CatalogView {
         ),
     )
     .attr("id", "selection-section")
+    .attr("class", "catalog-section");
+
+    let current_reorder_items = reorder_items(&state.reorder_order);
+    let reorder = map_action(
+        lens(
+            move |reorder: &mut ReorderState<&'static str>| {
+                reorderable_list(reorder, &current_reorder_items)
+            },
+            |state: &mut CatalogState| &mut state.reorder,
+        ),
+        apply_reorder,
+    );
+    let reorder_section = el::<_, CatalogState, ()>(
+        "section",
+        (
+            el::<_, CatalogState, ()>("h2", "Reorderable list").attr("class", "catalog-label"),
+            el::<_, CatalogState, ()>(
+                "p",
+                "Drag a row, or pick it up with Space and move it with the arrow keys.",
+            )
+            .attr("class", "catalog-note"),
+            reorder,
+        ),
+    )
+    .attr("id", "reorder-section")
     .attr("class", "catalog-section");
 
     let editors = el::<_, CatalogState, ()>(
@@ -645,6 +704,7 @@ fn catalog(state: &CatalogState) -> CatalogView {
                 .attr("class", "catalog-intro"),
                 controls,
                 selection,
+                reorder_section,
                 editors,
                 navigation,
                 data,
@@ -787,6 +847,7 @@ fn assert_initial_surface(dom: &ScriptedDom, root: NodeId) {
     for section in [
         "controls-section",
         "selection-section",
+        "reorder-section",
         "editors-section",
         "navigation-section",
         "data-section",
@@ -841,6 +902,18 @@ fn assert_initial_surface(dom: &ScriptedDom, root: NodeId) {
     assert_attr(dom, segments, "role", "radiogroup");
     let chips = find_id(dom, root, "catalog-chips");
     assert_attr(dom, chips, "role", "toolbar");
+
+    let reorder = find_id(dom, root, "catalog-reorder");
+    assert_attr(dom, reorder, "role", "group");
+    assert_attr(dom, reorder, "aria-label", "Related panel order");
+    let first_reorder = find_id(dom, reorder, "catalog-reorder-item-notes");
+    assert_attr(dom, first_reorder, "role", "listitem");
+    assert_attr(dom, first_reorder, "tabindex", "0");
+    let reorder_status = find_where(dom, reorder, &|dom, node| {
+        attr(dom, node, "role") == Some("status")
+    })
+    .expect("reorder status announcement");
+    assert_attr(dom, reorder_status, "aria-live", "polite");
 
     let select_root = find_id(dom, root, "catalog-select");
     let select = find_where(dom, select_root, &|dom, node| {
@@ -988,8 +1061,11 @@ fn run_interactions(runner: &mut CatalogRunner) {
     );
     runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::Home)));
     assert_eq!(runner.state().segments.selected, [0]);
-    let balanced_segment =
-        find_id(&runner.dom().borrow(), root, "catalog-segments-item-Balanced");
+    let balanced_segment = find_id(
+        &runner.dom().borrow(),
+        root,
+        "catalog-segments-item-Balanced",
+    );
     runner.dispatch_click(balanced_segment, PointerClick::at((4.0, 4.0)));
     assert_eq!(
         runner.state().segments.selected,
@@ -1006,6 +1082,62 @@ fn run_interactions(runner: &mut CatalogRunner) {
     assert_eq!(runner.state().chips.selected, [0, 2]);
     runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::Home)));
     assert_eq!(runner.state().chips.active, 0);
+
+    let notes = find_id(&runner.dom().borrow(), root, "catalog-reorder-item-notes");
+    runner.set_focus(Some(notes));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::Space)));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::End)));
+    assert_eq!(runner.state().reorder.destination(), Some(2));
+    assert!(
+        find_where(&runner.dom().borrow(), root, &|dom, node| {
+            has_class(dom, node, "reorder-drop-indicator")
+        })
+        .is_some()
+    );
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::Escape)));
+    assert_eq!(runner.state().reorder_order, ["notes", "people", "places"]);
+    assert_eq!(runner.state().reorder.destination(), None);
+
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::Space)));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::ArrowDown)));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::Space)));
+    assert_eq!(runner.state().reorder_order, ["people", "notes", "places"]);
+    assert_eq!(
+        runner.state().last_reorder,
+        Some(ReorderMove {
+            id: "notes",
+            from: 0,
+            to: 1,
+        })
+    );
+    assert_eq!(runner.focus(), Some(notes), "focus follows the keyed row");
+
+    let people = find_id(&runner.dom().borrow(), root, "catalog-reorder-item-people");
+    runner.dispatch_pointer_down(
+        people,
+        PointerEvent::new(PointerPhase::Down, (8.0, 10.0), (180.0, 20.0)),
+    );
+    assert_eq!(runner.pointer_capture(), Some(people));
+    runner.dispatch_pointer_move(PointerEvent::new(
+        PointerPhase::Move,
+        (8.0, 50.0),
+        (180.0, 20.0),
+    ));
+    runner.dispatch_pointer_up(PointerEvent::new(
+        PointerPhase::Up,
+        (8.0, 50.0),
+        (180.0, 20.0),
+    ));
+    assert_eq!(runner.pointer_capture(), None);
+    assert_eq!(runner.state().reorder_order, ["notes", "places", "people"]);
+    assert_eq!(
+        runner.state().last_reorder,
+        Some(ReorderMove {
+            id: "people",
+            from: 0,
+            to: 2,
+        })
+    );
 
     let select_root = find_id(&runner.dom().borrow(), root, "catalog-select");
     let select = find_where(&runner.dom().borrow(), select_root, &|dom, node| {

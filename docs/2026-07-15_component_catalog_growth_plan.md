@@ -125,6 +125,20 @@ proved for every configuration.
 
 ### C4. Reorderable list
 
+**Landed 2026-07-16.** `ReorderState`, `ReorderItem`, and `ReorderMove` now
+provide one keyed list interaction for pointer capture and keyboard movement.
+Cambium owns the transient drag, roving focus, drop indicator, cancellation,
+and polite status announcement; the application receives identity plus final
+index and remains responsible for applying and persisting the move. Space or
+Enter enters the keyboard move mode, Arrow keys and Home/End place the target,
+Escape cancels, and `Alt+Arrow` provides the direct shortcut used by the W3C
+WAI-ARIA [rearrangeable listbox example](https://www.w3.org/WAI/ARIA/apg/patterns/listbox/examples/listbox-rearrangeable/).
+`reorderable_list_with` lets consumers supply the row body without taking over
+the interaction shell.
+The catalog proves equivalent pointer and keyboard outputs, cancellation,
+focus retention across the keyed DOM move, and capture cleanup when a dragged
+row disappears during rebuild.
+
 Add a keyed list interaction that reports an identity and destination to the
 application. It owns pointer capture, a drop indicator, cancellation, and a
 keyboard move path. The application remains responsible for applying and

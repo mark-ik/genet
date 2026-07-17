@@ -54,6 +54,7 @@ mod pointer;
 mod portable;
 mod propagation;
 mod radio;
+mod reorderable_list;
 mod runner;
 mod select;
 mod selection_bar;
@@ -112,6 +113,9 @@ pub use pointer::{OnPointer, PointerEvent, PointerPhase, on_pointer};
 pub use portable::{PortableKeyed, PortableKeyedState};
 pub use propagation::Propagation;
 pub use radio::{RadioGroup, radio_group};
+pub use reorderable_list::{
+    ReorderItem, ReorderMove, ReorderState, reorderable_list, reorderable_list_with,
+};
 pub use runner::GenetAppRunner;
 pub use select::{SelectState, select};
 pub use selection_bar::{

@@ -20,6 +20,7 @@ The ordered expansion and promotion rules live in
 | Command surfaces | One model rendered as palette, picker, and positioned context menu; pattern-specific roles, disabled reasons, shared navigation, and depth-one submenus |
 | Action list compatibility | Existing API delegates to the command palette engine |
 | Selection bars | Shared roving focus rendered as linked tabs, a single-select segmented control, and multi-select filter chips |
+| Reorderable list | Keyed rows with pointer capture, keyboard move mode, direct Alt+Arrow movement, cancellation, drop indication, and application-owned persistence |
 | Overlay surface | Edge-aware placement, dialog semantics, outside-click dismissal, passive Escape routing |
 | Detail popover | Hover preview, click-pinned interactive detail, Escape dismissal, and trigger focus return |
 | Data grid | Grid/row/header/cell semantics, keyboard-sortable headers, and bounded DOM rows for a 10,000-row model |
