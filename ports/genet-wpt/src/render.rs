@@ -13,6 +13,8 @@
 //! image bytes are supplied by the host, while remote fetch remains outside
 //! the route.
 
+use std::cell::Cell;
+use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
@@ -31,7 +33,8 @@ use netrender::{NetrenderOptions, boot, create_netrender_instance};
 use paint::Paint;
 use paint_api::display_list::{AxesScrollSensitivity, PaintDisplayListInfo, ScrollType};
 use paint_api::wgpu_readback::read_texture_to_image;
-use paint_list_api::{DeviceIntSize, PaintEnvelope};
+use paint_api::{PaintMessage, PipelineExitSource};
+use paint_list_api::{DeviceIntSize, IdNamespace, ImageKey, PaintCmd, PaintEnvelope};
 use paint_types::PipelineId;
 use paint_types::units::{DeviceIntRect, LayoutSize};
 use servo_base::id::{PainterId, PipelineNamespace, PipelineNamespaceId, WebViewId};
@@ -45,6 +48,7 @@ pub struct Renderer {
     paint: Rc<std::cell::RefCell<Paint>>,
     painter_id: PainterId,
     webview_id: WebViewId,
+    next_pipeline_index: Cell<u32>,
 }
 
 impl Renderer {
@@ -77,7 +81,14 @@ impl Renderer {
             paint,
             painter_id,
             webview_id,
+            next_pipeline_index: Cell::new(1),
         })
+    }
+
+    fn next_pipeline_id(&self) -> PipelineId {
+        let index = self.next_pipeline_index.get();
+        self.next_pipeline_index.set(index.saturating_add(1));
+        PipelineId(1, index)
     }
 
     /// Render `html` to an image at `width` x `height`, resolving the
@@ -92,18 +103,22 @@ impl Renderer {
         height: u32,
         is_xml: bool,
     ) -> Image {
-        let envelope = html_to_envelope(html, base_dir, tests_root, width, height, is_xml);
+        let pipeline_id = self.next_pipeline_id();
+        let envelope = isolate_image_keys(
+            html_to_envelope(html, base_dir, tests_root, width, height, is_xml),
+            pipeline_id,
+        );
         let paint = self.paint.borrow();
-        paint.handle_messages(vec![paint_api::PaintMessage::SendPaintList {
+        paint.handle_messages(vec![PaintMessage::SendPaintList {
             webview_id: self.webview_id,
             envelope,
-            paint_info: paint_info_for(PipelineId::default(), width, height),
+            paint_info: paint_info_for(pipeline_id, width, height),
         }]);
         paint.render(self.webview_id);
         let master = paint
             .composite_texture(self.painter_id)
             .expect("composite_texture after render");
-        read_texture_to_image(
+        let image = read_texture_to_image(
             &self.device,
             &self.queue,
             &master,
@@ -114,7 +129,13 @@ impl Renderer {
                 paint_types::units::DeviceIntPoint::new(width as i32, height as i32),
             ),
         )
-        .expect("master readback")
+        .expect("master readback");
+        paint.handle_messages(vec![PaintMessage::PipelineExited(
+            self.webview_id,
+            pipeline_id.into(),
+            PipelineExitSource::default(),
+        )]);
+        image
     }
 
     /// Render through the clean-room Livery lane. This first WPT bridge is
@@ -130,6 +151,7 @@ impl Renderer {
         height: u32,
         is_xml: bool,
     ) -> Image {
+        let pipeline_id = self.next_pipeline_id();
         let document = if is_xml {
             StaticDocument::parse_xml(html)
         } else {
@@ -157,18 +179,18 @@ impl Renderer {
         let list = session
             .frame(width, height)
             .expect("Livery WPT reftest layout");
-        let envelope = PaintEnvelope::from_list(&list);
+        let envelope = isolate_image_keys(PaintEnvelope::from_list(&list), pipeline_id);
         let paint = self.paint.borrow();
-        paint.handle_messages(vec![paint_api::PaintMessage::SendPaintList {
+        paint.handle_messages(vec![PaintMessage::SendPaintList {
             webview_id: self.webview_id,
             envelope,
-            paint_info: paint_info_for(PipelineId::default(), width, height),
+            paint_info: paint_info_for(pipeline_id, width, height),
         }]);
         paint.render(self.webview_id);
         let master = paint
             .composite_texture(self.painter_id)
             .expect("composite_texture after Livery render");
-        read_texture_to_image(
+        let image = read_texture_to_image(
             &self.device,
             &self.queue,
             &master,
@@ -179,7 +201,54 @@ impl Renderer {
                 paint_types::units::DeviceIntPoint::new(width as i32, height as i32),
             ),
         )
-        .expect("Livery master readback")
+        .expect("Livery master readback");
+        paint.handle_messages(vec![PaintMessage::PipelineExited(
+            self.webview_id,
+            pipeline_id.into(),
+            PipelineExitSource::default(),
+        )]);
+        image
+    }
+}
+
+/// Give every frame's image resources a distinct namespace before handing the
+/// list to the long-lived NetRender instance. Producers intentionally restart
+/// their per-list key counters at one; NetRender retains atlas entries after a
+/// pipeline exits and rejects a reused key whose dimensions differ.
+fn isolate_image_keys(mut envelope: PaintEnvelope, pipeline_id: PipelineId) -> PaintEnvelope {
+    if envelope.images.is_empty() {
+        return envelope;
+    }
+
+    let namespace = IdNamespace(0x4000_0000 | pipeline_id.1);
+    let mut remap = HashMap::with_capacity(envelope.images.len());
+    for image in &mut envelope.images {
+        let old = image.key;
+        let new = ImageKey::new(namespace, old.1);
+        image.key = new;
+        remap.insert(old, new);
+    }
+
+    for command in &mut envelope.commands {
+        match command {
+            PaintCmd::DrawImage(item) => remap_key(&mut item.image_key, &remap),
+            PaintCmd::DrawRepeatingImage(item) => remap_key(&mut item.image_key, &remap),
+            PaintCmd::PushLayer(layer) => {
+                if let Some(mask) = &mut layer.mask {
+                    if let Some(key) = &mut mask.image_mask {
+                        remap_key(key, &remap);
+                    }
+                }
+            },
+            _ => {},
+        }
+    }
+    envelope
+}
+
+fn remap_key(key: &mut ImageKey, remap: &HashMap<ImageKey, ImageKey>) {
+    if let Some(&new) = remap.get(key) {
+        *key = new;
     }
 }
 
@@ -238,8 +307,13 @@ fn livery_dom_image_urls(document: &StaticDocument) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{livery_dom_image_urls, livery_image_urls};
+    use super::{isolate_image_keys, livery_dom_image_urls, livery_image_urls};
     use genet_static_dom::StaticDocument;
+    use paint_list_api::{
+        AlphaType, ColorF, CommonPlacement, DeviceIntSize, EngineId, IdNamespace, ImageItem,
+        ImageKey, ImageRendering, ImageResource, LayoutPoint, LayoutRect, PaintCmd, PaintEnvelope,
+    };
+    use paint_types::PipelineId;
 
     #[test]
     fn livery_image_urls_deduplicates_css_sources() {
@@ -262,6 +336,41 @@ mod tests {
             livery_dom_image_urls(&document),
             vec!["a.png".to_owned(), "b.png".to_owned()]
         );
+    }
+
+    #[test]
+    fn image_keys_are_namespaced_per_pipeline() {
+        let old_key = ImageKey::new(IdNamespace(1), 1);
+        let envelope = PaintEnvelope {
+            engine: EngineId::GENET,
+            viewport: DeviceIntSize::new(1, 1),
+            generation: 0,
+            commands: vec![PaintCmd::DrawImage(ImageItem {
+                placement: CommonPlacement::new(LayoutRect::new(
+                    LayoutPoint::new(0.0, 0.0),
+                    LayoutPoint::new(1.0, 1.0),
+                )),
+                image_key: old_key,
+                image_rendering: ImageRendering::Auto,
+                alpha_type: AlphaType::Alpha,
+                color: ColorF::WHITE,
+            })],
+            fonts: Vec::new(),
+            images: vec![ImageResource {
+                key: old_key,
+                width: 1,
+                height: 1,
+                data: vec![255, 255, 255, 255],
+            }],
+        };
+
+        let rekeyed = isolate_image_keys(envelope, PipelineId(1, 7));
+        let new_key = ImageKey::new(IdNamespace(0x4000_0007), 1);
+        assert_eq!(rekeyed.images[0].key, new_key);
+        let PaintCmd::DrawImage(item) = &rekeyed.commands[0] else {
+            panic!("expected image command");
+        };
+        assert_eq!(item.image_key, new_key);
     }
 }
 

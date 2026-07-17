@@ -338,6 +338,24 @@ the recorded baseline under the current checkout and source-cache state; it is
 useful comparison telemetry rather than a controlled benchmark. Cargo emitted
 the existing path-override and unused-code warnings, with no errors.
 
+### 2026-07-17 WPT pipeline-isolation receipt
+
+The WPT renderer now allocates a fresh paint pipeline for each render, retires
+it after readback, and remaps each frame's image resources and image commands
+into a fresh namespace. The latter closes a real NetRender lifetime seam:
+producers restart image keys at one while the long-lived atlas retains entries
+after pipeline exit. Before the remap, `line-box-height-002.xht` crashed when a
+96x96 image reused a key previously registered as 15x15; it now reaches the
+expected localized pixel comparison.
+
+The focused renderer-selection unit test passes. With the rebuilt runner,
+`css/CSS2/linebox` reports 143 passed, 47 failed, 59 skipped, and 0 errored
+through Livery. The same isolated harness reports 118 passed, 72 failed, 59
+skipped, and 0 errored through Stylo. This turns the previous Livery crash-heavy
+directory run into usable parity telemetry while leaving the 47 localized
+linebox mismatches open for the next layout/paint slices. Full WPT parity
+remains an explicit gate.
+
 Full WPT reftest parity, broader transition lists and interpolation beyond
 color and border-top-color/border-bottom-color, and the E4 default production-lane switch remain
 open. The standalone
