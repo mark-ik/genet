@@ -153,6 +153,20 @@ neither capture nor a stale target.
 
 ### C5. Disclosure and summary surfaces
 
+**Landed 2026-07-17.** One internal disclosure control now owns trigger/panel
+linkage, expanded state, pointer activation, keyboard activation, focusability,
+and disabled behavior. `disclosure`, `accordion`, and `tree_view` compose that
+same node into their distinct WAI-ARIA patterns: accordion adds configurable
+heading levels, optional panel regions, and single/multiple expansion; the tree
+adds nested groups, roving focus, configurable explicit or focus-following
+selection, type-ahead, and the standard Arrow/Home/End hierarchy.
+`summary_body` is a context-neutral labelled record body with eyebrow,
+description, and definition-list facts; the catalog
+reuses it in card, compact-row, and accordion-panel contexts. The contracts
+follow the W3C WAI-ARIA [disclosure](https://www.w3.org/WAI/ARIA/apg/patterns/disclosure/),
+[accordion](https://www.w3.org/WAI/ARIA/apg/patterns/accordion/), and
+[tree view](https://www.w3.org/WAI/ARIA/apg/patterns/treeview/) patterns.
+
 Add `disclosure` as the shared node beneath accordion, tree, outline, and editor
 fold controls. Add a generic titled record/summary body that can live in a row,
 card, detail panel, or C1 popover.

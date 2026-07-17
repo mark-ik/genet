@@ -9,16 +9,18 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use cambium::{
-    AnyView, CommandEvent, CommandItem, CommandState, DetailPopoverMode, DetailPopoverState,
-    DomHandle, GenetAppRunner, GenetCtx, GenetElement, GraphCanvasEdge, GraphCanvasNode,
-    GraphCanvasSubgraph, GraphCanvasSwatch, GridColumn, GridSpec, GridView, HoverEvent, HoverPhase,
-    Key, KeyEvent, NamedKey, OverlayDismiss, OverlayRole, OverlaySurface, Placement, PointerClick,
-    PointerEvent, PointerPhase, RadioGroup, ReorderItem, ReorderMove, ReorderState, SelectState,
-    SelectionItem, SelectionState, Slider, StyleRange, TabActivation, TextInput, button,
-    button_with, checkbox, command_menu, command_palette, command_picker, custom_leaf, data_grid,
-    detail_popover, el, filter_chips, graph_canvas_swatch, lens, map_action, on_hover, on_pointer,
-    overlay_surface, radio_group, reorderable_list, segmented_control, select, slider,
-    styled_textarea, tab_bar, text_field_typed, textarea_typed, toggle,
+    AccordionConfig, AccordionItem, AccordionState, AnyView, CommandEvent, CommandItem,
+    CommandState, DetailPopoverMode, DetailPopoverState, DisclosureState, DomHandle,
+    GenetAppRunner, GenetCtx, GenetElement, GraphCanvasEdge, GraphCanvasNode, GraphCanvasSubgraph,
+    GraphCanvasSwatch, GridColumn, GridSpec, GridView, HoverEvent, HoverPhase, Key, KeyEvent,
+    NamedKey, OverlayDismiss, OverlayRole, OverlaySurface, Placement, PointerClick, PointerEvent,
+    PointerPhase, RadioGroup, ReorderItem, ReorderMove, ReorderState, SelectState, SelectionItem,
+    SelectionState, Slider, StyleRange, SummaryBody, TabActivation, TextInput, TreeItem, TreeState,
+    accordion_with, button, button_with, checkbox, command_menu, command_palette, command_picker,
+    custom_leaf, data_grid, detail_popover, disclosure, el, filter_chips, graph_canvas_swatch,
+    lens, map_action, on_hover, on_pointer, overlay_surface, radio_group, reorderable_list,
+    segmented_control, select, slider, styled_textarea, summary_body, tab_bar, text_field_typed,
+    textarea_typed, toggle, tree_view,
 };
 use genet_scripted_dom::{NodeId, ScriptedDom};
 use layout_dom_api::{LayoutDom, LocalName, Namespace};
@@ -48,6 +50,9 @@ struct CatalogState {
     reorder: ReorderState<&'static str>,
     reorder_order: Vec<&'static str>,
     last_reorder: Option<ReorderMove<&'static str>>,
+    disclosure: DisclosureState,
+    accordion: AccordionState<&'static str>,
+    tree: TreeState<&'static str>,
     select: SelectState,
     slider: Slider,
     text: TextInput,
@@ -96,6 +101,17 @@ impl Default for CatalogState {
                 .with_id("catalog-reorder"),
             reorder_order: vec!["notes", "people", "places"],
             last_reorder: None,
+            disclosure: DisclosureState::new("catalog-disclosure", "Node details"),
+            accordion: AccordionState::new()
+                .with_id("catalog-accordion")
+                .with_label("Node record sections")
+                .single(true)
+                .with_expanded(["identity"]),
+            tree: TreeState::new()
+                .with_id("catalog-tree")
+                .with_label("Workspace outline")
+                .with_expanded(["workspace"])
+                .with_selected("workspace"),
             select: SelectState::new(1).with_label("Rendering mode"),
             slider: Slider::new(0.35).with_steps(0.05, 0.2).with_label("Zoom"),
             text: TextInput::new("merecat"),
@@ -253,6 +269,34 @@ fn apply_reorder(state: &mut CatalogState, movement: ReorderMove<&'static str>) 
     let destination = movement.to.min(state.reorder_order.len());
     state.reorder_order.insert(destination, item);
     state.last_reorder = Some(movement);
+}
+
+fn disclosure_accordion_items() -> Vec<AccordionItem<&'static str>> {
+    vec![
+        AccordionItem::new("identity", "Identity", "Identity details"),
+        AccordionItem::new("activity", "Activity", "Recent activity"),
+    ]
+}
+
+fn catalog_tree_items() -> Vec<TreeItem<&'static str>> {
+    vec![
+        TreeItem::new("workspace", "Workspace").with_children([
+            TreeItem::new("notes", "Notes"),
+            TreeItem::new("people", "People").with_children([
+                TreeItem::new("collaborators", "Collaborators"),
+                TreeItem::new("authors", "Authors"),
+            ]),
+        ]),
+        TreeItem::new("archive", "Archive"),
+    ]
+}
+
+fn catalog_summary(id: impl Into<String>, title: impl Into<String>) -> SummaryBody {
+    SummaryBody::new(id, title)
+        .with_eyebrow("Document")
+        .with_description("A quiet reusable body for the selected graph record.")
+        .with_fact("Links", "12")
+        .with_fact("Updated", "Today")
 }
 
 fn command_result(event: CommandEvent) -> String {
@@ -476,6 +520,58 @@ fn catalog(state: &CatalogState) -> CatalogView {
         ),
     )
     .attr("id", "reorder-section")
+    .attr("class", "catalog-section");
+
+    let accordion_items = disclosure_accordion_items();
+    let accordion = lens(
+        move |accordion: &mut AccordionState<&'static str>| {
+            accordion_with(
+                accordion,
+                &accordion_items,
+                AccordionConfig::default().with_heading_level(3),
+                |item| {
+                    let summary = catalog_summary(
+                        format!("catalog-accordion-summary-{}", item.dom_id),
+                        item.label.clone(),
+                    );
+                    summary_body::<AccordionState<&'static str>, ()>(&summary)
+                },
+            )
+        },
+        |state: &mut CatalogState| &mut state.accordion,
+    );
+    let tree = lens(
+        |tree: &mut TreeState<&'static str>| tree_view(tree, &catalog_tree_items()),
+        |state: &mut CatalogState| &mut state.tree,
+    );
+    let card_summary = catalog_summary("catalog-summary-card-body", "Field notes");
+    let row_summary = catalog_summary("catalog-summary-row-body", "Field notes");
+    let disclosure_section = el::<_, CatalogState, ()>(
+        "section",
+        (
+            el::<_, CatalogState, ()>("h2", "Disclosure and summaries")
+                .attr("class", "catalog-label"),
+            el(
+                "div",
+                lens(
+                    |disclosure_state: &mut DisclosureState| {
+                        disclosure(disclosure_state, "Controlled detail content")
+                    },
+                    |state: &mut CatalogState| &mut state.disclosure,
+                ),
+            )
+            .attr("class", "catalog-row"),
+            accordion,
+            tree,
+            el("article", summary_body::<CatalogState, ()>(&card_summary))
+                .attr("id", "catalog-summary-card")
+                .attr("class", "catalog-summary-card"),
+            el("div", summary_body::<CatalogState, ()>(&row_summary))
+                .attr("id", "catalog-summary-row")
+                .attr("class", "catalog-summary-row"),
+        ),
+    )
+    .attr("id", "disclosure-section")
     .attr("class", "catalog-section");
 
     let editors = el::<_, CatalogState, ()>(
@@ -705,6 +801,7 @@ fn catalog(state: &CatalogState) -> CatalogView {
                 controls,
                 selection,
                 reorder_section,
+                disclosure_section,
                 editors,
                 navigation,
                 data,
@@ -848,6 +945,7 @@ fn assert_initial_surface(dom: &ScriptedDom, root: NodeId) {
         "controls-section",
         "selection-section",
         "reorder-section",
+        "disclosure-section",
         "editors-section",
         "navigation-section",
         "data-section",
@@ -914,6 +1012,63 @@ fn assert_initial_surface(dom: &ScriptedDom, root: NodeId) {
     })
     .expect("reorder status announcement");
     assert_attr(dom, reorder_status, "aria-live", "polite");
+
+    let disclosure_trigger = find_id(dom, root, "catalog-disclosure-trigger");
+    assert_attr(dom, disclosure_trigger, "aria-expanded", "false");
+    assert_attr(dom, disclosure_trigger, "data-disclosure-control", "true");
+    assert_attr(
+        dom,
+        disclosure_trigger,
+        "aria-controls",
+        "catalog-disclosure-panel",
+    );
+    assert_attr(
+        dom,
+        find_id(dom, root, "catalog-disclosure-panel"),
+        "hidden",
+        "true",
+    );
+
+    let accordion = find_id(dom, root, "catalog-accordion");
+    assert_attr(dom, accordion, "role", "group");
+    let identity_trigger = find_id(dom, accordion, "catalog-accordion-item-identity-trigger");
+    assert_attr(dom, identity_trigger, "aria-expanded", "true");
+    assert_attr(dom, identity_trigger, "data-disclosure-control", "true");
+    let accordion_heading = dom.parent(identity_trigger).expect("accordion heading");
+    assert_attr(dom, accordion_heading, "role", "heading");
+    assert_attr(dom, accordion_heading, "aria-level", "3");
+    assert_attr(
+        dom,
+        find_id(dom, accordion, "catalog-accordion-item-identity-panel"),
+        "role",
+        "region",
+    );
+
+    let tree = find_id(dom, root, "catalog-tree");
+    assert_attr(dom, tree, "role", "tree");
+    let workspace = find_id(dom, tree, "catalog-tree-item-workspace");
+    assert_attr(dom, workspace, "role", "treeitem");
+    assert_attr(dom, workspace, "aria-expanded", "true");
+    assert_attr(dom, workspace, "aria-selected", "true");
+    assert_attr(dom, workspace, "data-disclosure-control", "true");
+    let notes = find_id(dom, tree, "catalog-tree-item-notes");
+    assert_eq!(attr(dom, notes, "aria-expanded"), None);
+    let people = find_id(dom, tree, "catalog-tree-item-people");
+    assert_attr(dom, people, "aria-expanded", "false");
+
+    for surface in ["catalog-summary-card", "catalog-summary-row"] {
+        let surface = find_id(dom, root, surface);
+        find_where(dom, surface, &|dom, node| {
+            has_class(dom, node, "summary-body")
+        })
+        .expect("shared summary body in each surface");
+    }
+    let mut summaries = Vec::new();
+    collect_class(dom, root, "summary-body", &mut summaries);
+    assert!(
+        summaries.len() >= 4,
+        "summary bodies include accordion panels"
+    );
 
     let select_root = find_id(dom, root, "catalog-select");
     let select = find_where(dom, select_root, &|dom, node| {
@@ -1138,6 +1293,46 @@ fn run_interactions(runner: &mut CatalogRunner) {
             to: 2,
         })
     );
+
+    let disclosure_trigger = find_id(&runner.dom().borrow(), root, "catalog-disclosure-trigger");
+    runner.dispatch_click(disclosure_trigger, PointerClick::at((4.0, 4.0)));
+    assert!(runner.state().disclosure.expanded);
+    runner.set_focus(Some(disclosure_trigger));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::Space)));
+    assert!(!runner.state().disclosure.expanded);
+
+    let activity_trigger = find_id(
+        &runner.dom().borrow(),
+        root,
+        "catalog-accordion-item-activity-trigger",
+    );
+    runner.dispatch_click(activity_trigger, PointerClick::at((4.0, 4.0)));
+    assert_eq!(runner.state().accordion.expanded, ["activity"]);
+    assert_attr(
+        &runner.dom().borrow(),
+        find_id(
+            &runner.dom().borrow(),
+            root,
+            "catalog-accordion-item-identity-panel",
+        ),
+        "hidden",
+        "true",
+    );
+
+    let workspace = find_id(&runner.dom().borrow(), root, "catalog-tree-item-workspace");
+    runner.set_focus(Some(workspace));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::ArrowRight)));
+    assert_eq!(runner.state().tree.active(), Some(&"notes"));
+    let notes = find_id(&runner.dom().borrow(), root, "catalog-tree-item-notes");
+    assert_eq!(runner.focus(), Some(notes));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::ArrowDown)));
+    assert_eq!(runner.state().tree.active(), Some(&"people"));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::ArrowRight)));
+    assert!(runner.state().tree.is_expanded(&"people"));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::ArrowRight)));
+    assert_eq!(runner.state().tree.active(), Some(&"collaborators"));
+    runner.dispatch_key(KeyEvent::new(Key::Named(NamedKey::ArrowLeft)));
+    assert_eq!(runner.state().tree.active(), Some(&"people"));
 
     let select_root = find_id(&runner.dom().borrow(), root, "catalog-select");
     let select = find_where(&runner.dom().borrow(), select_root, &|dom, node| {

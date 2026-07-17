@@ -32,6 +32,7 @@ mod command_surface;
 mod context;
 mod controls;
 mod detail_popover;
+mod disclosure;
 mod editor;
 mod element;
 mod event;
@@ -61,6 +62,7 @@ mod selection_bar;
 mod slider;
 mod splice;
 mod styled_field;
+mod summary_body;
 mod tags;
 mod text;
 mod wheel;
@@ -77,6 +79,11 @@ pub use command_surface::{
 pub use context::GenetCtx;
 pub use detail_popover::{
     DetailPopoverEvent, DetailPopoverMode, DetailPopoverState, detail_popover,
+};
+pub use disclosure::{
+    AccordionConfig, AccordionItem, AccordionMode, AccordionState, DisclosureState, TreeItem,
+    TreeSelectionMode, TreeState, accordion, accordion_with, disclosure, disclosure_with,
+    tree_view,
 };
 pub use editor::{EditHistory, pair_close, wrap_selection};
 pub use graph_canvas::{
@@ -126,6 +133,7 @@ pub use slider::{Slider, slider};
 pub use splice::GenetChildrenSplice;
 pub use sprigging::{GraphCanvas, GraphViewport, GridColumn, GridSpec};
 pub use styled_field::{FieldChild, StyleRange, styled_text_field, styled_textarea};
+pub use summary_body::{SummaryBody, summary_body};
 // Per-tag element-view helpers: `div`, `span`, `p`, `input`, `label`, `a`,
 // `h1`/`h2`/`h3`, `ul`/`ol`/`li`. (No `button` here — `controls::button` is the
 // button view, with a handler.)

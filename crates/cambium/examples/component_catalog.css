@@ -226,6 +226,138 @@ textarea {
     bottom: -2px;
 }
 
+.disclosure-trigger,
+.accordion-trigger {
+    background-color: transparent;
+    border: 0;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 700;
+    padding: 0.4rem 0;
+    text-align: left;
+    width: 100%;
+}
+
+.disclosure-trigger::before,
+.accordion-trigger::before,
+.tree-item[aria-expanded] > .tree-label::before {
+    content: "▸";
+    display: inline-block;
+    margin-right: 0.4rem;
+}
+
+.disclosure-trigger[aria-expanded="true"]::before,
+.accordion-trigger[aria-expanded="true"]::before,
+.tree-item[aria-expanded="true"] > .tree-label::before {
+    content: "▾";
+}
+
+.disclosure-panel,
+.accordion-panel {
+    border-left: 2px solid var(--catalog-border);
+    padding: 0.4rem 0.75rem 0.75rem;
+}
+
+.disclosure-panel[hidden="true"],
+.accordion-panel[hidden="true"],
+.tree-group[hidden="true"] {
+    display: none;
+}
+
+.accordion {
+    border-top: 1px solid var(--catalog-border);
+    margin: 1rem 0;
+    max-width: 30rem;
+}
+
+.accordion-item {
+    border-bottom: 1px solid var(--catalog-border);
+}
+
+.tree-view,
+.tree-group {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.tree-view {
+    border: 1px solid var(--catalog-border);
+    margin: 1rem 0;
+    max-width: 22rem;
+    padding: 0.35rem;
+}
+
+.tree-group {
+    padding-left: 1.1rem;
+}
+
+.tree-item {
+    border-radius: 0.2rem;
+    cursor: pointer;
+    padding: 0.25rem 0.4rem;
+}
+
+.tree-item.active {
+    background-color: var(--catalog-hover);
+}
+
+.summary-body {
+    display: grid;
+    gap: 0.2rem;
+}
+
+.summary-eyebrow {
+    color: var(--catalog-muted);
+    font-size: 0.75rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.summary-title {
+    font-weight: 700;
+}
+
+.summary-description {
+    color: var(--catalog-muted);
+    margin: 0;
+}
+
+.summary-facts {
+    display: flex;
+    gap: 1rem;
+    margin: 0.25rem 0 0;
+}
+
+.summary-fact {
+    display: grid;
+    font-size: 0.8rem;
+}
+
+.summary-fact dt {
+    color: var(--catalog-muted);
+}
+
+.summary-fact dd {
+    margin: 0;
+}
+
+.catalog-summary-card,
+.catalog-summary-row {
+    border: 1px solid var(--catalog-border);
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+}
+
+.catalog-summary-card {
+    max-width: 22rem;
+}
+
+.catalog-summary-row {
+    max-width: 30rem;
+}
+
 .select {
     width: 16rem;
 }
