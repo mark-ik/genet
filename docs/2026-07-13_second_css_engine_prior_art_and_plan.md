@@ -18,7 +18,7 @@ navigation, focus state, rounded fills, and two-stop gradient layering. A
 host-driven opacity clock supplies intermediate frames, and bounded
 `transition-property`/`transition-duration` metadata starts opacity,
 background-color, text-color, and the four physical border-color and
-border-width transitions on that same clock, so `transition: all` and explicit
+border-width and border-style transitions on that same clock, so `transition: all` and explicit
 multi-property lists can
 paint those changes in one retained tick. Nested scroll containers now route wheel deltas
 into retained offsets, chain at their boundary to the viewport, and replay
@@ -475,6 +475,17 @@ interaction test observes all four neutral border widths at 6px between 2px and
 10px, then observes the settled 10px widths. The focused Livery value wall has
 9 tests, and the genet-livery interaction wall 19; both pass with the paint
 wall. The unsupported `border-width` shorthand remains outside this lane.
+
+### 2026-07-17 retained border-style transition receipt
+
+The transition-property mask now uses a `u32` bitset, leaving room for the
+remaining physical longhands after the first 16 paint properties. The four
+physical `border-*-style` values now travel through the retained clock as
+discrete transitions: the source style remains through 49ms and the target
+style appears at the midpoint. A retained interaction test exercises solid,
+dashed, dotted, double, and groove sides together under `transition: all`.
+The focused Livery value wall has 11 tests, the cascade wall 17, and the
+genet-livery interaction wall 21; all pass.
 
 ## The destination, named
 

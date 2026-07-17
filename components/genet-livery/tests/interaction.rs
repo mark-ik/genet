@@ -4,7 +4,7 @@ use genet_livery::{
 use genet_static_dom::StaticDocument;
 use layout_dom_api::LayoutDom;
 use livery::media::Device;
-use paint_list_api::{BorderDetails, ColorF, PaintCmd, PaintList};
+use paint_list_api::{BorderDetails, BorderStyle as PaintBorderStyle, ColorF, PaintCmd, PaintList};
 
 #[test]
 fn hit_test_skips_pointer_events_none_overlays() {
@@ -868,6 +868,70 @@ fn css_transition_border_widths_use_the_retained_clock() {
     assert_eq!(final_widths.right, 10.0);
     assert_eq!(final_widths.bottom, 10.0);
     assert_eq!(final_widths.left, 10.0);
+}
+
+#[test]
+fn css_transition_border_styles_switches_at_the_retained_midpoint() {
+    let document =
+        StaticDocument::parse(r#"<html><body><div class="card">card</div></body></html>"#);
+    let card = document
+        .first_with_class(document.document(), "card")
+        .unwrap();
+    let styles = StyleSet::cambium(&[r#"
+        .card { display: block; width: 100px; height: 20px; border: 4px solid red;
+                transition: all 100ms; }
+        .card:hover { border-top-style: dashed; border-right-style: dotted;
+                      border-bottom-style: double; border-left-style: groove; }
+    "#]);
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(200.0, 100.0));
+    let border_styles = |frame: &genet_livery::LiveryPaintList| {
+        frame.commands().iter().find_map(|command| match command {
+            PaintCmd::DrawBorder(border) => match &border.details {
+                BorderDetails::Normal(border) => Some((
+                    border.top.style,
+                    border.right.style,
+                    border.bottom.style,
+                    border.left.style,
+                )),
+                _ => None,
+            },
+            _ => None,
+        })
+    };
+    let solid = (
+        PaintBorderStyle::Solid,
+        PaintBorderStyle::Solid,
+        PaintBorderStyle::Solid,
+        PaintBorderStyle::Solid,
+    );
+    let target = (
+        PaintBorderStyle::Dashed,
+        PaintBorderStyle::Dotted,
+        PaintBorderStyle::Double,
+        PaintBorderStyle::Groove,
+    );
+
+    let initial = retained.frame(200, 100).unwrap();
+    assert_eq!(border_styles(&initial), Some(solid));
+
+    retained
+        .interactions_mut()
+        .set(card, livery::selector::StatePseudoClass::Hover, true);
+    retained.frame(200, 100).unwrap();
+    assert!(!retained.settled());
+
+    retained.pump(25.0);
+    let early = retained.frame(200, 100).unwrap();
+    assert_eq!(border_styles(&early), Some(solid));
+
+    retained.pump(50.0);
+    let middle = retained.frame(200, 100).unwrap();
+    assert_eq!(border_styles(&middle), Some(target));
+
+    retained.pump(100.0);
+    assert!(retained.settled());
+    let final_frame = retained.frame(200, 100).unwrap();
+    assert_eq!(border_styles(&final_frame), Some(target));
 }
 
 #[test]

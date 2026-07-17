@@ -138,7 +138,7 @@ source = "css_box_alignment_3"
 
 [shorthands.transition]
 longhands = ["transition-property", "transition-duration"]
-grammar = "[ none | all | opacity | background-color | color | border-top-color | border-bottom-color | border-radius | transform | background-position | box-shadow | background-image ] || <time>"
+grammar = "[ none | all | opacity | background-color | color | border-top-color | border-bottom-color | border-top-style | border-bottom-style | border-left-style | border-right-style | border-radius | transform | background-position | box-shadow | background-image ] || <time>"
 seed_values = [
     "opacity 100ms",
     "background-color 100ms",
@@ -150,6 +150,10 @@ seed_values = [
     "background-position 100ms",
     "box-shadow 100ms",
     "background-image 100ms",
+    "border-top-style 100ms",
+    "border-bottom-style 100ms",
+    "border-left-style 100ms",
+    "border-right-style 100ms",
 ]
 source = "css_transitions_1"
 
@@ -1004,7 +1008,7 @@ name = "transition-property"
 value_type = "transition-property"
 inherited = false
 initial = "all"
-grammar = "none | all | opacity | background-color | color | border-top-color | border-bottom-color | background-image | opacity, background-color | opacity, color | background-color, color | opacity, background-color, color"
+grammar = "none | all | opacity | background-color | color | border-top-color | border-bottom-color | background-image | border-top-style | border-bottom-style | border-left-style | border-right-style | opacity, background-color | opacity, color | background-color, color | opacity, background-color, color"
 seed_values = [
     "all",
     "opacity",
@@ -1013,6 +1017,10 @@ seed_values = [
     "border-top-color",
     "border-bottom-color",
     "background-image",
+    "border-top-style",
+    "border-bottom-style",
+    "border-left-style",
+    "border-right-style",
     "opacity, background-color",
     "opacity, color",
     "background-color, color",

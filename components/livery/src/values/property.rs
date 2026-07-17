@@ -313,7 +313,11 @@ pub enum TransitionProperty {
     BackgroundPosition,
     BoxShadow,
     BackgroundImage,
-    List(u16),
+    BorderTopStyle,
+    BorderBottomStyle,
+    BorderLeftStyle,
+    BorderRightStyle,
+    List(u32),
     OpacityAndBackgroundColor,
     OpacityAndColor,
     BackgroundColorAndColor,
@@ -331,7 +335,7 @@ impl FromStr for TransitionProperty {
         if input.eq_ignore_ascii_case("none") {
             return Ok(Self::None);
         }
-        let mut flags = 0_u16;
+        let mut flags = 0_u32;
         let mut saw_item = false;
         for item in input.split(',') {
             saw_item = true;
@@ -352,6 +356,10 @@ impl FromStr for TransitionProperty {
                 "background-position" => 512,
                 "box-shadow" => 1024,
                 "background-image" => 32768,
+                "border-top-style" => 65536,
+                "border-bottom-style" => 131072,
+                "border-left-style" => 262144,
+                "border-right-style" => 524288,
                 _ => return Err(ParseError::expected("a bounded transition-property list")),
             };
             if flags & bit != 0 {
@@ -388,6 +396,10 @@ impl fmt::Display for TransitionProperty {
             Self::BackgroundPosition => "background-position",
             Self::BoxShadow => "box-shadow",
             Self::BackgroundImage => "background-image",
+            Self::BorderTopStyle => "border-top-style",
+            Self::BorderBottomStyle => "border-bottom-style",
+            Self::BorderLeftStyle => "border-left-style",
+            Self::BorderRightStyle => "border-right-style",
             Self::OpacityAndBackgroundColor => "opacity, background-color",
             Self::OpacityAndColor => "opacity, color",
             Self::BackgroundColorAndColor => "background-color, color",
@@ -411,6 +423,10 @@ impl fmt::Display for TransitionProperty {
                     (512, "background-position"),
                     (1024, "box-shadow"),
                     (32768, "background-image"),
+                    (65536, "border-top-style"),
+                    (131072, "border-bottom-style"),
+                    (262144, "border-left-style"),
+                    (524288, "border-right-style"),
                 ] {
                     if flags & bit == 0 {
                         continue;
@@ -429,7 +445,7 @@ impl fmt::Display for TransitionProperty {
 }
 
 impl TransitionProperty {
-    fn from_flags(flags: u16) -> Option<Self> {
+    fn from_flags(flags: u32) -> Option<Self> {
         Some(match flags {
             1 => Self::Opacity,
             2 => Self::BackgroundColor,
@@ -447,6 +463,10 @@ impl TransitionProperty {
             512 => Self::BackgroundPosition,
             1024 => Self::BoxShadow,
             32768 => Self::BackgroundImage,
+            65536 => Self::BorderTopStyle,
+            131072 => Self::BorderBottomStyle,
+            262144 => Self::BorderLeftStyle,
+            524288 => Self::BorderRightStyle,
             3 => Self::OpacityAndBackgroundColor,
             5 => Self::OpacityAndColor,
             6 => Self::BackgroundColorAndColor,
@@ -456,7 +476,7 @@ impl TransitionProperty {
         })
     }
 
-    fn includes_flag(self, bit: u16) -> bool {
+    fn includes_flag(self, bit: u32) -> bool {
         matches!(self, Self::All) || self.flags() & bit != 0
     }
 
@@ -524,7 +544,23 @@ impl TransitionProperty {
         self.includes_flag(32768)
     }
 
-    fn flags(self) -> u16 {
+    pub fn includes_border_top_style(self) -> bool {
+        self.includes_flag(65536)
+    }
+
+    pub fn includes_border_bottom_style(self) -> bool {
+        self.includes_flag(131072)
+    }
+
+    pub fn includes_border_left_style(self) -> bool {
+        self.includes_flag(262144)
+    }
+
+    pub fn includes_border_right_style(self) -> bool {
+        self.includes_flag(524288)
+    }
+
+    fn flags(self) -> u32 {
         match self {
             Self::All | Self::None => 0,
             Self::Opacity => 1,
@@ -543,6 +579,10 @@ impl TransitionProperty {
             Self::BackgroundPosition => 512,
             Self::BoxShadow => 1024,
             Self::BackgroundImage => 32768,
+            Self::BorderTopStyle => 65536,
+            Self::BorderBottomStyle => 131072,
+            Self::BorderLeftStyle => 262144,
+            Self::BorderRightStyle => 524288,
             Self::List(flags) => flags,
             Self::OpacityAndBackgroundColor => 3,
             Self::OpacityAndColor => 5,
@@ -623,6 +663,18 @@ keyword_value! {
         Ridge => "ridge",
         Inset => "inset",
         Outset => "outset",
+    }
+}
+
+impl BorderStyle {
+    /// Border styles are discrete in CSS. The bounded retained transition
+    /// switches to the target at the midpoint of the clock.
+    pub fn interpolate(self, other: Self, progress: f32) -> Self {
+        if progress.clamp(0.0, 1.0) < 0.5 {
+            self
+        } else {
+            other
+        }
     }
 }
 
