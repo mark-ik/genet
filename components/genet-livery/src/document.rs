@@ -11,8 +11,8 @@ use livery::{
     selector::StatePseudoClass,
     stylesheet::Keyframes,
     values::{
-        AnimationName, BackgroundPosition, BoxShadow, Color, Opacity, Overflow, Radius,
-        TimingFunction, Transform,
+        AnimationName, BackgroundPosition, BorderWidth, BoxShadow, Color, Opacity, Overflow,
+        Radius, TimingFunction, Transform,
     },
 };
 use paint_list_api::DeviceIntSize;
@@ -117,6 +117,46 @@ struct BorderRightColorTransition<Id> {
     automatic: bool,
 }
 
+#[derive(Clone, Copy)]
+struct BorderTopWidthTransition<Id> {
+    node: Id,
+    from: BorderWidth,
+    to: BorderWidth,
+    start_ms: f64,
+    duration_ms: f64,
+    automatic: bool,
+}
+
+#[derive(Clone, Copy)]
+struct BorderBottomWidthTransition<Id> {
+    node: Id,
+    from: BorderWidth,
+    to: BorderWidth,
+    start_ms: f64,
+    duration_ms: f64,
+    automatic: bool,
+}
+
+#[derive(Clone, Copy)]
+struct BorderLeftWidthTransition<Id> {
+    node: Id,
+    from: BorderWidth,
+    to: BorderWidth,
+    start_ms: f64,
+    duration_ms: f64,
+    automatic: bool,
+}
+
+#[derive(Clone, Copy)]
+struct BorderRightWidthTransition<Id> {
+    node: Id,
+    from: BorderWidth,
+    to: BorderWidth,
+    start_ms: f64,
+    duration_ms: f64,
+    automatic: bool,
+}
+
 type RadiusSet = [Radius; 4];
 
 #[derive(Clone, Copy)]
@@ -197,6 +237,10 @@ where
     border_bottom_color_transition: Option<BorderBottomColorTransition<D::NodeId>>,
     border_left_color_transition: Option<BorderLeftColorTransition<D::NodeId>>,
     border_right_color_transition: Option<BorderRightColorTransition<D::NodeId>>,
+    border_top_width_transition: Option<BorderTopWidthTransition<D::NodeId>>,
+    border_bottom_width_transition: Option<BorderBottomWidthTransition<D::NodeId>>,
+    border_left_width_transition: Option<BorderLeftWidthTransition<D::NodeId>>,
+    border_right_width_transition: Option<BorderRightWidthTransition<D::NodeId>>,
     border_radius_transition: Option<BorderRadiusTransition<D::NodeId>>,
     transform_transition: Option<TransformTransition<D::NodeId>>,
     background_position_transition: Option<BackgroundPositionTransition<D::NodeId>>,
@@ -236,6 +280,10 @@ where
             border_bottom_color_transition: None,
             border_left_color_transition: None,
             border_right_color_transition: None,
+            border_top_width_transition: None,
+            border_bottom_width_transition: None,
+            border_left_width_transition: None,
+            border_right_width_transition: None,
             border_radius_transition: None,
             transform_transition: None,
             background_position_transition: None,
@@ -293,6 +341,10 @@ where
         self.finish_completed_border_bottom_color_transition();
         self.finish_completed_border_left_color_transition();
         self.finish_completed_border_right_color_transition();
+        self.finish_completed_border_top_width_transition();
+        self.finish_completed_border_bottom_width_transition();
+        self.finish_completed_border_left_width_transition();
+        self.finish_completed_border_right_width_transition();
         self.finish_completed_border_radius_transition();
         self.finish_completed_transform_transition();
         self.finish_completed_background_position_transition();
@@ -306,6 +358,10 @@ where
         self.schedule_border_bottom_color_transition(&styles);
         self.schedule_border_left_color_transition(&styles);
         self.schedule_border_right_color_transition(&styles);
+        self.schedule_border_top_width_transition(&styles);
+        self.schedule_border_bottom_width_transition(&styles);
+        self.schedule_border_left_width_transition(&styles);
+        self.schedule_border_right_width_transition(&styles);
         self.schedule_border_radius_transition(&styles);
         self.schedule_transform_transition(&styles);
         self.schedule_background_position_transition(&styles);
@@ -318,6 +374,10 @@ where
         self.apply_border_bottom_color_transition(&mut styles);
         self.apply_border_left_color_transition(&mut styles);
         self.apply_border_right_color_transition(&mut styles);
+        self.apply_border_top_width_transition(&mut styles);
+        self.apply_border_bottom_width_transition(&mut styles);
+        self.apply_border_left_width_transition(&mut styles);
+        self.apply_border_right_width_transition(&mut styles);
         self.apply_border_radius_transition(&mut styles);
         self.apply_transform_transition(&mut styles);
         self.apply_background_position_transition(&mut styles);
@@ -404,6 +464,10 @@ where
             && self.border_bottom_color_transition.is_none()
             && self.border_left_color_transition.is_none()
             && self.border_right_color_transition.is_none()
+            && self.border_top_width_transition.is_none()
+            && self.border_bottom_width_transition.is_none()
+            && self.border_left_width_transition.is_none()
+            && self.border_right_width_transition.is_none()
             && self.border_radius_transition.is_none()
             && self.transform_transition.is_none()
             && self.background_position_transition.is_none()
@@ -448,6 +512,18 @@ where
         let border_right_color_settled = self
             .border_right_color_transition
             .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
+        let border_top_width_settled = self
+            .border_top_width_transition
+            .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
+        let border_bottom_width_settled = self
+            .border_bottom_width_transition
+            .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
+        let border_left_width_settled = self
+            .border_left_width_transition
+            .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
+        let border_right_width_settled = self
+            .border_right_width_transition
+            .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
         let border_radius_settled = self
             .border_radius_transition
             .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
@@ -469,6 +545,10 @@ where
             && border_bottom_color_settled
             && border_left_color_settled
             && border_right_color_settled
+            && border_top_width_settled
+            && border_bottom_width_settled
+            && border_left_width_settled
+            && border_right_width_settled
             && border_radius_settled
             && transform_settled
             && background_position_settled
@@ -851,6 +931,62 @@ where
         }
     }
 
+    fn apply_border_top_width_transition(&self, styles: &mut StylePlane<D::NodeId>) {
+        let Some(transition) = self.border_top_width_transition else {
+            return;
+        };
+        let progress = if transition.duration_ms == 0.0 {
+            1.0
+        } else {
+            ((self.clock_ms - transition.start_ms) / transition.duration_ms).clamp(0.0, 1.0) as f32
+        };
+        if let Some(style) = styles.get_mut(transition.node) {
+            style.border_top_width = transition.from.interpolate(transition.to, progress);
+        }
+    }
+
+    fn apply_border_bottom_width_transition(&self, styles: &mut StylePlane<D::NodeId>) {
+        let Some(transition) = self.border_bottom_width_transition else {
+            return;
+        };
+        let progress = if transition.duration_ms == 0.0 {
+            1.0
+        } else {
+            ((self.clock_ms - transition.start_ms) / transition.duration_ms).clamp(0.0, 1.0) as f32
+        };
+        if let Some(style) = styles.get_mut(transition.node) {
+            style.border_bottom_width = transition.from.interpolate(transition.to, progress);
+        }
+    }
+
+    fn apply_border_left_width_transition(&self, styles: &mut StylePlane<D::NodeId>) {
+        let Some(transition) = self.border_left_width_transition else {
+            return;
+        };
+        let progress = if transition.duration_ms == 0.0 {
+            1.0
+        } else {
+            ((self.clock_ms - transition.start_ms) / transition.duration_ms).clamp(0.0, 1.0) as f32
+        };
+        if let Some(style) = styles.get_mut(transition.node) {
+            style.border_left_width = transition.from.interpolate(transition.to, progress);
+        }
+    }
+
+    fn apply_border_right_width_transition(&self, styles: &mut StylePlane<D::NodeId>) {
+        let Some(transition) = self.border_right_width_transition else {
+            return;
+        };
+        let progress = if transition.duration_ms == 0.0 {
+            1.0
+        } else {
+            ((self.clock_ms - transition.start_ms) / transition.duration_ms).clamp(0.0, 1.0) as f32
+        };
+        if let Some(style) = styles.get_mut(transition.node) {
+            style.border_right_width = transition.from.interpolate(transition.to, progress);
+        }
+    }
+
     fn apply_border_radius_transition(&self, styles: &mut StylePlane<D::NodeId>) {
         let Some(transition) = self.border_radius_transition else {
             return;
@@ -1088,6 +1224,66 @@ where
             style.border_right_color = transition.to;
         }
         self.border_right_color_transition = None;
+    }
+
+    fn finish_completed_border_top_width_transition(&mut self) {
+        let Some(transition) = self.border_top_width_transition else {
+            return;
+        };
+        if !transition.automatic || self.clock_ms < transition.start_ms + transition.duration_ms {
+            return;
+        }
+        if let Some(layout) = self.layout.as_mut()
+            && let Some(style) = layout.styles.get_mut(transition.node)
+        {
+            style.border_top_width = transition.to;
+        }
+        self.border_top_width_transition = None;
+    }
+
+    fn finish_completed_border_bottom_width_transition(&mut self) {
+        let Some(transition) = self.border_bottom_width_transition else {
+            return;
+        };
+        if !transition.automatic || self.clock_ms < transition.start_ms + transition.duration_ms {
+            return;
+        }
+        if let Some(layout) = self.layout.as_mut()
+            && let Some(style) = layout.styles.get_mut(transition.node)
+        {
+            style.border_bottom_width = transition.to;
+        }
+        self.border_bottom_width_transition = None;
+    }
+
+    fn finish_completed_border_left_width_transition(&mut self) {
+        let Some(transition) = self.border_left_width_transition else {
+            return;
+        };
+        if !transition.automatic || self.clock_ms < transition.start_ms + transition.duration_ms {
+            return;
+        }
+        if let Some(layout) = self.layout.as_mut()
+            && let Some(style) = layout.styles.get_mut(transition.node)
+        {
+            style.border_left_width = transition.to;
+        }
+        self.border_left_width_transition = None;
+    }
+
+    fn finish_completed_border_right_width_transition(&mut self) {
+        let Some(transition) = self.border_right_width_transition else {
+            return;
+        };
+        if !transition.automatic || self.clock_ms < transition.start_ms + transition.duration_ms {
+            return;
+        }
+        if let Some(layout) = self.layout.as_mut()
+            && let Some(style) = layout.styles.get_mut(transition.node)
+        {
+            style.border_right_width = transition.to;
+        }
+        self.border_right_width_transition = None;
     }
 
     fn finish_completed_border_radius_transition(&mut self) {
@@ -1459,6 +1655,189 @@ where
         self.dom
             .dom_children(id)
             .find_map(|child| self.find_border_right_color_transition(child, previous, styles))
+    }
+
+    fn schedule_border_top_width_transition(&mut self, styles: &StylePlane<D::NodeId>) {
+        if self.border_top_width_transition.is_some() {
+            return;
+        }
+        let Some(previous) = self.layout.as_ref().map(|layout| &layout.styles) else {
+            return;
+        };
+        let Some((node, from, to, duration_ms)) =
+            self.find_border_top_width_transition(self.dom.document(), previous, styles)
+        else {
+            return;
+        };
+        self.border_top_width_transition = Some(BorderTopWidthTransition {
+            node,
+            from,
+            to,
+            start_ms: self.clock_ms,
+            duration_ms,
+            automatic: true,
+        });
+    }
+
+    fn find_border_top_width_transition(
+        &self,
+        id: D::NodeId,
+        previous: &StylePlane<D::NodeId>,
+        styles: &StylePlane<D::NodeId>,
+    ) -> Option<(D::NodeId, BorderWidth, BorderWidth, f64)> {
+        if let (Some(old), Some(new)) = (previous.get(id), styles.get(id)) {
+            let duration_ms = f64::from(new.transition_duration.milliseconds());
+            if new.transition_property.includes_border_top_width()
+                && duration_ms > 0.0
+                && old.border_top_width != new.border_top_width
+            {
+                return Some((id, old.border_top_width, new.border_top_width, duration_ms));
+            }
+        }
+        self.dom
+            .dom_children(id)
+            .find_map(|child| self.find_border_top_width_transition(child, previous, styles))
+    }
+
+    fn schedule_border_bottom_width_transition(&mut self, styles: &StylePlane<D::NodeId>) {
+        if self.border_bottom_width_transition.is_some() {
+            return;
+        }
+        let Some(previous) = self.layout.as_ref().map(|layout| &layout.styles) else {
+            return;
+        };
+        let Some((node, from, to, duration_ms)) =
+            self.find_border_bottom_width_transition(self.dom.document(), previous, styles)
+        else {
+            return;
+        };
+        self.border_bottom_width_transition = Some(BorderBottomWidthTransition {
+            node,
+            from,
+            to,
+            start_ms: self.clock_ms,
+            duration_ms,
+            automatic: true,
+        });
+    }
+
+    fn find_border_bottom_width_transition(
+        &self,
+        id: D::NodeId,
+        previous: &StylePlane<D::NodeId>,
+        styles: &StylePlane<D::NodeId>,
+    ) -> Option<(D::NodeId, BorderWidth, BorderWidth, f64)> {
+        if let (Some(old), Some(new)) = (previous.get(id), styles.get(id)) {
+            let duration_ms = f64::from(new.transition_duration.milliseconds());
+            if new.transition_property.includes_border_bottom_width()
+                && duration_ms > 0.0
+                && old.border_bottom_width != new.border_bottom_width
+            {
+                return Some((
+                    id,
+                    old.border_bottom_width,
+                    new.border_bottom_width,
+                    duration_ms,
+                ));
+            }
+        }
+        self.dom
+            .dom_children(id)
+            .find_map(|child| self.find_border_bottom_width_transition(child, previous, styles))
+    }
+
+    fn schedule_border_left_width_transition(&mut self, styles: &StylePlane<D::NodeId>) {
+        if self.border_left_width_transition.is_some() {
+            return;
+        }
+        let Some(previous) = self.layout.as_ref().map(|layout| &layout.styles) else {
+            return;
+        };
+        let Some((node, from, to, duration_ms)) =
+            self.find_border_left_width_transition(self.dom.document(), previous, styles)
+        else {
+            return;
+        };
+        self.border_left_width_transition = Some(BorderLeftWidthTransition {
+            node,
+            from,
+            to,
+            start_ms: self.clock_ms,
+            duration_ms,
+            automatic: true,
+        });
+    }
+
+    fn find_border_left_width_transition(
+        &self,
+        id: D::NodeId,
+        previous: &StylePlane<D::NodeId>,
+        styles: &StylePlane<D::NodeId>,
+    ) -> Option<(D::NodeId, BorderWidth, BorderWidth, f64)> {
+        if let (Some(old), Some(new)) = (previous.get(id), styles.get(id)) {
+            let duration_ms = f64::from(new.transition_duration.milliseconds());
+            if new.transition_property.includes_border_left_width()
+                && duration_ms > 0.0
+                && old.border_left_width != new.border_left_width
+            {
+                return Some((
+                    id,
+                    old.border_left_width,
+                    new.border_left_width,
+                    duration_ms,
+                ));
+            }
+        }
+        self.dom
+            .dom_children(id)
+            .find_map(|child| self.find_border_left_width_transition(child, previous, styles))
+    }
+
+    fn schedule_border_right_width_transition(&mut self, styles: &StylePlane<D::NodeId>) {
+        if self.border_right_width_transition.is_some() {
+            return;
+        }
+        let Some(previous) = self.layout.as_ref().map(|layout| &layout.styles) else {
+            return;
+        };
+        let Some((node, from, to, duration_ms)) =
+            self.find_border_right_width_transition(self.dom.document(), previous, styles)
+        else {
+            return;
+        };
+        self.border_right_width_transition = Some(BorderRightWidthTransition {
+            node,
+            from,
+            to,
+            start_ms: self.clock_ms,
+            duration_ms,
+            automatic: true,
+        });
+    }
+
+    fn find_border_right_width_transition(
+        &self,
+        id: D::NodeId,
+        previous: &StylePlane<D::NodeId>,
+        styles: &StylePlane<D::NodeId>,
+    ) -> Option<(D::NodeId, BorderWidth, BorderWidth, f64)> {
+        if let (Some(old), Some(new)) = (previous.get(id), styles.get(id)) {
+            let duration_ms = f64::from(new.transition_duration.milliseconds());
+            if new.transition_property.includes_border_right_width()
+                && duration_ms > 0.0
+                && old.border_right_width != new.border_right_width
+            {
+                return Some((
+                    id,
+                    old.border_right_width,
+                    new.border_right_width,
+                    duration_ms,
+                ));
+            }
+        }
+        self.dom
+            .dom_children(id)
+            .find_map(|child| self.find_border_right_width_transition(child, previous, styles))
     }
 
     fn schedule_border_radius_transition(&mut self, styles: &StylePlane<D::NodeId>) {

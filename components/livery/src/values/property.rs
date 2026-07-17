@@ -275,6 +275,10 @@ pub enum TransitionProperty {
     BorderBottomColor,
     BorderLeftColor,
     BorderRightColor,
+    BorderTopWidth,
+    BorderBottomWidth,
+    BorderLeftWidth,
+    BorderRightWidth,
     BorderRadius,
     Transform,
     BackgroundPosition,
@@ -309,6 +313,10 @@ impl FromStr for TransitionProperty {
                 "border-bottom-color" => 16,
                 "border-left-color" => 32,
                 "border-right-color" => 64,
+                "border-top-width" => 2048,
+                "border-bottom-width" => 4096,
+                "border-left-width" => 8192,
+                "border-right-width" => 16384,
                 "border-radius" => 128,
                 "transform" => 256,
                 "background-position" => 512,
@@ -340,6 +348,10 @@ impl fmt::Display for TransitionProperty {
             Self::BorderBottomColor => "border-bottom-color",
             Self::BorderLeftColor => "border-left-color",
             Self::BorderRightColor => "border-right-color",
+            Self::BorderTopWidth => "border-top-width",
+            Self::BorderBottomWidth => "border-bottom-width",
+            Self::BorderLeftWidth => "border-left-width",
+            Self::BorderRightWidth => "border-right-width",
             Self::BorderRadius => "border-radius",
             Self::Transform => "transform",
             Self::BackgroundPosition => "background-position",
@@ -358,6 +370,10 @@ impl fmt::Display for TransitionProperty {
                     (16, "border-bottom-color"),
                     (32, "border-left-color"),
                     (64, "border-right-color"),
+                    (2048, "border-top-width"),
+                    (4096, "border-bottom-width"),
+                    (8192, "border-left-width"),
+                    (16384, "border-right-width"),
                     (128, "border-radius"),
                     (256, "transform"),
                     (512, "background-position"),
@@ -389,6 +405,10 @@ impl TransitionProperty {
             16 => Self::BorderBottomColor,
             32 => Self::BorderLeftColor,
             64 => Self::BorderRightColor,
+            2048 => Self::BorderTopWidth,
+            4096 => Self::BorderBottomWidth,
+            8192 => Self::BorderLeftWidth,
+            16384 => Self::BorderRightWidth,
             128 => Self::BorderRadius,
             256 => Self::Transform,
             512 => Self::BackgroundPosition,
@@ -434,6 +454,22 @@ impl TransitionProperty {
         self.includes_flag(64)
     }
 
+    pub fn includes_border_top_width(self) -> bool {
+        self.includes_flag(2048)
+    }
+
+    pub fn includes_border_bottom_width(self) -> bool {
+        self.includes_flag(4096)
+    }
+
+    pub fn includes_border_left_width(self) -> bool {
+        self.includes_flag(8192)
+    }
+
+    pub fn includes_border_right_width(self) -> bool {
+        self.includes_flag(16384)
+    }
+
     pub fn includes_border_radius(self) -> bool {
         self.includes_flag(128)
     }
@@ -460,6 +496,10 @@ impl TransitionProperty {
             Self::BorderBottomColor => 16,
             Self::BorderLeftColor => 32,
             Self::BorderRightColor => 64,
+            Self::BorderTopWidth => 2048,
+            Self::BorderBottomWidth => 4096,
+            Self::BorderLeftWidth => 8192,
+            Self::BorderRightWidth => 16384,
             Self::BorderRadius => 128,
             Self::Transform => 256,
             Self::BackgroundPosition => 512,
@@ -736,6 +776,38 @@ pub enum BorderWidth {
     Medium,
     Thick,
     Length(Length),
+}
+
+impl BorderWidth {
+    /// Interpolate the bounded line-width family used by the border paint
+    /// lane. Fixed keyword widths participate in the px family; length
+    /// endpoints interpolate only when their units match.
+    pub fn interpolate(self, other: Self, progress: f32) -> Self {
+        let progress = progress.clamp(0.0, 1.0);
+        match (self, other) {
+            (Self::Length(from), Self::Length(to)) if from.unit == to.unit => {
+                Self::Length(Length {
+                    value: from.value + (to.value - from.value) * progress,
+                    unit: from.unit,
+                })
+            },
+            (from, to) => match (from.computed_px(), to.computed_px()) {
+                (Some(from), Some(to)) => Self::Length(Length::px(from + (to - from) * progress)),
+                _ if progress < 0.5 => from,
+                _ => to,
+            },
+        }
+    }
+
+    fn computed_px(self) -> Option<f32> {
+        match self {
+            Self::Thin => Some(1.0),
+            Self::Medium => Some(3.0),
+            Self::Thick => Some(5.0),
+            Self::Length(length) if length.unit == super::LengthUnit::Px => Some(length.value),
+            _ => None,
+        }
+    }
 }
 
 impl FromStr for BorderWidth {

@@ -72,6 +72,10 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<TransitionProperty>("border-bottom-color");
     assert_round_trip::<TransitionProperty>("border-left-color");
     assert_round_trip::<TransitionProperty>("border-right-color");
+    assert_round_trip::<TransitionProperty>("border-top-width");
+    assert_round_trip::<TransitionProperty>("border-bottom-width");
+    assert_round_trip::<TransitionProperty>("border-left-width");
+    assert_round_trip::<TransitionProperty>("border-right-width");
     assert_round_trip::<TransitionProperty>("border-radius");
     assert_round_trip::<TransitionProperty>("transform");
     assert_round_trip::<TransitionProperty>("background-position");
@@ -122,6 +126,22 @@ fn radius_interpolation_preserves_the_bounded_length_family() {
     let from = "0".parse::<Radius>().expect("zero radius");
     let to = "20px".parse::<Radius>().expect("px radius");
     assert_eq!(from.interpolate(to, 0.5).to_string(), "10px");
+}
+
+#[test]
+fn border_width_interpolation_preserves_computed_px_values() {
+    let from = "thin".parse::<BorderWidth>().expect("thin width");
+    let to = "5px".parse::<BorderWidth>().expect("px width");
+    assert_eq!(from.interpolate(to, 0.5).to_string(), "3px");
+
+    let from = "2px".parse::<BorderWidth>().expect("from width");
+    let to = "10px".parse::<BorderWidth>().expect("to width");
+    assert_eq!(from.interpolate(to, 0.5).to_string(), "6px");
+
+    let from = "1em".parse::<BorderWidth>().expect("from em width");
+    let to = "10px".parse::<BorderWidth>().expect("to px width");
+    assert_eq!(from.interpolate(to, 0.25), from);
+    assert_eq!(from.interpolate(to, 0.75), to);
 }
 
 #[test]

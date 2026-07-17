@@ -756,6 +756,57 @@ fn css_transition_box_shadow_uses_the_retained_clock() {
 }
 
 #[test]
+fn css_transition_border_widths_use_the_retained_clock() {
+    let document =
+        StaticDocument::parse(r#"<html><body><div class="card">card</div></body></html>"#);
+    let card = document
+        .first_with_class(document.document(), "card")
+        .unwrap();
+    let styles = StyleSet::cambium(&[r#"
+        .card { display: block; width: 100px; height: 20px; border: 2px solid red;
+                transition: all 100ms; }
+        .card:hover { border-top-width: 10px; border-right-width: 10px;
+                      border-bottom-width: 10px; border-left-width: 10px; }
+    "#]);
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(200.0, 100.0));
+    let widths = |frame: &genet_livery::LiveryPaintList| {
+        frame.commands().iter().find_map(|command| match command {
+            PaintCmd::DrawBorder(border) => Some(border.widths),
+            _ => None,
+        })
+    };
+
+    let initial = retained.frame(200, 100).unwrap();
+    assert_eq!(widths(&initial).map(|widths| widths.top), Some(2.0));
+    assert_eq!(widths(&initial).map(|widths| widths.right), Some(2.0));
+    assert_eq!(widths(&initial).map(|widths| widths.bottom), Some(2.0));
+    assert_eq!(widths(&initial).map(|widths| widths.left), Some(2.0));
+
+    retained
+        .interactions_mut()
+        .set(card, livery::selector::StatePseudoClass::Hover, true);
+    retained.frame(200, 100).unwrap();
+    assert!(!retained.settled());
+
+    retained.pump(50.0);
+    let middle = retained.frame(200, 100).unwrap();
+    let middle = widths(&middle).expect("width transition keeps a border primitive");
+    assert_eq!(middle.top, 6.0);
+    assert_eq!(middle.right, 6.0);
+    assert_eq!(middle.bottom, 6.0);
+    assert_eq!(middle.left, 6.0);
+
+    retained.pump(100.0);
+    assert!(retained.settled());
+    let final_frame = retained.frame(200, 100).unwrap();
+    let final_widths = widths(&final_frame).expect("settled width transition paints");
+    assert_eq!(final_widths.top, 10.0);
+    assert_eq!(final_widths.right, 10.0);
+    assert_eq!(final_widths.bottom, 10.0);
+    assert_eq!(final_widths.left, 10.0);
+}
+
+#[test]
 fn css_keyframes_opacity_use_the_retained_clock() {
     let document =
         StaticDocument::parse(r#"<html><body><div class="fade">fade</div></body></html>"#);
