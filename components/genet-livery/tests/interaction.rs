@@ -701,6 +701,70 @@ fn css_transition_background_position_uses_the_retained_clock() {
 }
 
 #[test]
+fn css_transition_background_image_interpolates_gradient_stops() {
+    let document = StaticDocument::parse(r#"<html><body><div class="card"></div></body></html>"#);
+    let card = document
+        .first_with_class(document.document(), "card")
+        .unwrap();
+    let styles = StyleSet::cambium(&[r#"
+        body { margin: 0; }
+        .card { display: block; width: 80px; height: 40px;
+                background-image: linear-gradient(red, blue);
+                transition: background-image 100ms; }
+        .card:hover { background-image: linear-gradient(white, black); }
+    "#]);
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(200.0, 100.0));
+    let gradient_stops = |frame: &genet_livery::LiveryPaintList| {
+        frame.commands().iter().find_map(|command| match command {
+            PaintCmd::DrawLinearGradient(item) => Some(
+                item.gradient
+                    .stops
+                    .iter()
+                    .map(|stop| stop.color)
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+    };
+
+    let initial = retained.frame(200, 100).unwrap();
+    assert_eq!(
+        gradient_stops(&initial),
+        Some(vec![
+            ColorF::new(1.0, 0.0, 0.0, 1.0),
+            ColorF::new(0.0, 0.0, 1.0, 1.0),
+        ])
+    );
+
+    retained
+        .interactions_mut()
+        .set(card, livery::selector::StatePseudoClass::Hover, true);
+    retained.frame(200, 100).unwrap();
+    assert!(!retained.settled());
+
+    retained.pump(50.0);
+    let middle = retained.frame(200, 100).unwrap();
+    let middle = gradient_stops(&middle).expect("image transition keeps a gradient");
+    assert!((middle[0].r - 1.0).abs() < 0.01);
+    assert!((middle[0].g - 0.5).abs() < 0.01);
+    assert!((middle[0].b - 0.5).abs() < 0.01);
+    assert!((middle[1].r - 0.0).abs() < 0.01);
+    assert!((middle[1].g - 0.0).abs() < 0.01);
+    assert!((middle[1].b - 0.5).abs() < 0.01);
+
+    retained.pump(100.0);
+    assert!(retained.settled());
+    let final_frame = retained.frame(200, 100).unwrap();
+    assert_eq!(
+        gradient_stops(&final_frame),
+        Some(vec![
+            ColorF::new(1.0, 1.0, 1.0, 1.0),
+            ColorF::new(0.0, 0.0, 0.0, 1.0),
+        ])
+    );
+}
+
+#[test]
 fn css_transition_box_shadow_uses_the_retained_clock() {
     let document =
         StaticDocument::parse(r#"<html><body><div class="card">card</div></body></html>"#);

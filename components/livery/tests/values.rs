@@ -80,6 +80,7 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<TransitionProperty>("transform");
     assert_round_trip::<TransitionProperty>("background-position");
     assert_round_trip::<TransitionProperty>("box-shadow");
+    assert_round_trip::<TransitionProperty>("background-image");
     assert_round_trip::<TransitionProperty>("opacity, background-color");
     assert_round_trip::<TransitionProperty>("color, opacity, background-color");
     assert_round_trip::<TransitionProperty>("opacity, border-left-color, border-right-color");
@@ -163,6 +164,20 @@ fn background_position_interpolation_preserves_each_component() {
         .parse::<BackgroundPosition>()
         .expect("to position");
     assert_eq!(from.interpolate(to, 0.5).to_string(), "50% 50%");
+}
+
+#[test]
+fn background_image_interpolation_preserves_gradient_stops() {
+    let from = "linear-gradient(red, blue)"
+        .parse::<BackgroundImage>()
+        .expect("from image");
+    let to = "linear-gradient(white, black)"
+        .parse::<BackgroundImage>()
+        .expect("to image");
+    assert_eq!(
+        from.interpolate(&to, 0.5).to_string(),
+        "linear-gradient(#ff8080, #000080)"
+    );
 }
 
 #[test]

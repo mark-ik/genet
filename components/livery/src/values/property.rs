@@ -9,6 +9,35 @@ pub enum BackgroundImage {
     Url(Box<str>),
 }
 
+impl BackgroundImage {
+    /// Interpolate the bounded single-image forms consumed by the retained
+    /// paint lane. Two-stop linear gradients interpolate each stop; URLs and
+    /// mixed image shapes remain discrete until the image-list ratchet.
+    pub fn interpolate(&self, other: &Self, progress: f32) -> Self {
+        let progress = progress.clamp(0.0, 1.0);
+        let value = match (self, other) {
+            (
+                Self::LinearGradient { from, to },
+                Self::LinearGradient {
+                    from: other_from,
+                    to: other_to,
+                },
+            ) => Some(Self::LinearGradient {
+                from: from.interpolate(*other_from, progress),
+                to: to.interpolate(*other_to, progress),
+            }),
+            _ => None,
+        };
+        value.unwrap_or_else(|| {
+            if progress < 0.5 {
+                self.clone()
+            } else {
+                other.clone()
+            }
+        })
+    }
+}
+
 /// The bounded background-position pair consumed by the paint lane. Lengths,
 /// percentages, and the five physical position keywords are accepted; the
 /// full four-value grammar remains outside this ratchet.
@@ -283,6 +312,7 @@ pub enum TransitionProperty {
     Transform,
     BackgroundPosition,
     BoxShadow,
+    BackgroundImage,
     List(u16),
     OpacityAndBackgroundColor,
     OpacityAndColor,
@@ -321,6 +351,7 @@ impl FromStr for TransitionProperty {
                 "transform" => 256,
                 "background-position" => 512,
                 "box-shadow" => 1024,
+                "background-image" => 32768,
                 _ => return Err(ParseError::expected("a bounded transition-property list")),
             };
             if flags & bit != 0 {
@@ -356,6 +387,7 @@ impl fmt::Display for TransitionProperty {
             Self::Transform => "transform",
             Self::BackgroundPosition => "background-position",
             Self::BoxShadow => "box-shadow",
+            Self::BackgroundImage => "background-image",
             Self::OpacityAndBackgroundColor => "opacity, background-color",
             Self::OpacityAndColor => "opacity, color",
             Self::BackgroundColorAndColor => "background-color, color",
@@ -378,6 +410,7 @@ impl fmt::Display for TransitionProperty {
                     (256, "transform"),
                     (512, "background-position"),
                     (1024, "box-shadow"),
+                    (32768, "background-image"),
                 ] {
                     if flags & bit == 0 {
                         continue;
@@ -413,6 +446,7 @@ impl TransitionProperty {
             256 => Self::Transform,
             512 => Self::BackgroundPosition,
             1024 => Self::BoxShadow,
+            32768 => Self::BackgroundImage,
             3 => Self::OpacityAndBackgroundColor,
             5 => Self::OpacityAndColor,
             6 => Self::BackgroundColorAndColor,
@@ -486,6 +520,10 @@ impl TransitionProperty {
         self.includes_flag(1024)
     }
 
+    pub fn includes_background_image(self) -> bool {
+        self.includes_flag(32768)
+    }
+
     fn flags(self) -> u16 {
         match self {
             Self::All | Self::None => 0,
@@ -504,6 +542,7 @@ impl TransitionProperty {
             Self::Transform => 256,
             Self::BackgroundPosition => 512,
             Self::BoxShadow => 1024,
+            Self::BackgroundImage => 32768,
             Self::List(flags) => flags,
             Self::OpacityAndBackgroundColor => 3,
             Self::OpacityAndColor => 5,

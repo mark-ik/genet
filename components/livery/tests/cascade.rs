@@ -189,6 +189,21 @@ fn transition_shorthand_accepts_the_bounded_box_shadow_lane() {
 }
 
 #[test]
+fn transition_shorthand_accepts_the_bounded_background_image_lane() {
+    let block = parse_declaration_block("transition: background-image 100ms");
+    assert!(block.errors.is_empty(), "{:?}", block.errors);
+    assert!(matches!(
+        block
+            .declarations
+            .first()
+            .map(|declaration| &declaration.value),
+        Some(livery::cascade::DeclaredValue::Value(
+            PropertyValue::TransitionProperty(TransitionProperty::BackgroundImage)
+        ))
+    ));
+}
+
+#[test]
 fn transition_shorthand_merges_the_bounded_two_property_list() {
     let block = parse_declaration_block("transition: opacity 100ms, background-color 100ms");
     assert!(block.errors.is_empty(), "{:?}", block.errors);
