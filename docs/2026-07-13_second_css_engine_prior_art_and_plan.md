@@ -310,6 +310,9 @@ remote image; URL policy and caching remain host-owned.
 The focused Livery/genet-livery clippy wall passes with `-D warnings`.
 `genet-documents` strict clippy remains blocked by the existing `pelt-core`
 `clippy::derivable_impls` error, outside this slice.
+The border-bottom-color ratchet keeps the focused receipts green: Livery has
+10 cascade and 4 value tests, genet-livery has 13 interaction and 41 paint
+tests, and genet-documents has 19 feature-gated tests.
 
 The WPT producer helper tests pass. `css/CSS2/box/ltr-basic.xht`,
 `css/css-backgrounds/background-image-001.html`, and
