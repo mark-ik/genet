@@ -46,6 +46,59 @@ fn declaration_parser_expands_the_lane_shorthands_and_recovers() {
 }
 
 #[test]
+fn directional_border_shorthands_expand_to_their_three_longhands() {
+    for (shorthand, expected) in [
+        (
+            "border-left: 100px solid black",
+            [
+                "border-left-color",
+                "border-left-style",
+                "border-left-width",
+            ],
+        ),
+        (
+            "border-right: 100px solid black",
+            [
+                "border-right-color",
+                "border-right-style",
+                "border-right-width",
+            ],
+        ),
+    ] {
+        let block = parse_declaration_block(shorthand);
+        assert!(block.errors.is_empty(), "{shorthand}: {:?}", block.errors);
+        assert_eq!(
+            block
+                .declarations
+                .iter()
+                .map(|declaration| declaration.property.metadata().name)
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn background_color_shorthand_accepts_the_bounded_color_form() {
+    let block = parse_declaration_block("background: black");
+    assert!(block.errors.is_empty(), "{:?}", block.errors);
+    assert_eq!(block.declarations.len(), 1);
+    assert_eq!(
+        block.declarations[0].property.metadata().name,
+        "background-color"
+    );
+    assert!(matches!(
+        &block.declarations[0].value,
+        livery::cascade::DeclaredValue::Value(PropertyValue::Color(Color::Rgba {
+            red: 0,
+            green: 0,
+            blue: 0,
+            alpha: 255,
+        }))
+    ));
+}
+
+#[test]
 fn transition_shorthand_expands_to_the_opacity_clock_controls() {
     let block = parse_declaration_block("transition: opacity 100ms");
     assert!(block.errors.is_empty(), "{:?}", block.errors);

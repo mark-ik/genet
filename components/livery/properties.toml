@@ -73,12 +73,42 @@ grammar = "<length-percentage [0,∞]>, one to four values"
 seed_values = ["px", "rem", "zero"]
 source = "css_box_4"
 
+[shorthands.background]
+longhands = ["background-color"]
+grammar = "<color>"
+seed_values = ["hex", "named"]
+source = "css_backgrounds_3"
+
 [shorthands.border]
 longhands = [
     "border-top-color", "border-right-color", "border-bottom-color", "border-left-color",
     "border-top-style", "border-right-style", "border-bottom-style", "border-left-style",
     "border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
 ]
+grammar = "<line-width> || <line-style> || <color>"
+seed_values = ["px", "solid", "hex"]
+source = "css_backgrounds_3"
+
+[shorthands.border_top]
+longhands = ["border-top-color", "border-top-style", "border-top-width"]
+grammar = "<line-width> || <line-style> || <color>"
+seed_values = ["px", "solid", "hex"]
+source = "css_backgrounds_3"
+
+[shorthands.border_right]
+longhands = ["border-right-color", "border-right-style", "border-right-width"]
+grammar = "<line-width> || <line-style> || <color>"
+seed_values = ["px", "solid", "hex"]
+source = "css_backgrounds_3"
+
+[shorthands.border_bottom]
+longhands = ["border-bottom-color", "border-bottom-style", "border-bottom-width"]
+grammar = "<line-width> || <line-style> || <color>"
+seed_values = ["px", "solid", "hex"]
+source = "css_backgrounds_3"
+
+[shorthands.border_left]
+longhands = ["border-left-color", "border-left-style", "border-left-width"]
 grammar = "<line-width> || <line-style> || <color>"
 seed_values = ["px", "solid", "hex"]
 source = "css_backgrounds_3"

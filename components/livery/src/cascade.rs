@@ -398,7 +398,12 @@ fn expand_animation(block: &mut DeclarationBlock, value: &str, important: bool) 
     );
 }
 
-fn expand_border(block: &mut DeclarationBlock, value: &str, important: bool) {
+fn expand_border(
+    block: &mut DeclarationBlock,
+    shorthand: ShorthandId,
+    value: &str,
+    important: bool,
+) {
     let mut width = None;
     let mut style = None;
     let mut color = None;
@@ -422,7 +427,7 @@ fn expand_border(block: &mut DeclarationBlock, value: &str, important: bool) {
             }
         }
         block.errors.push(DeclarationError {
-            name: "border".to_owned(),
+            name: shorthand.metadata().name.to_owned(),
             value: value.to_owned(),
             kind: DeclarationErrorKind::InvalidValue,
         });
@@ -431,7 +436,7 @@ fn expand_border(block: &mut DeclarationBlock, value: &str, important: bool) {
     let width = width.unwrap_or(BorderWidth::Medium);
     let style = style.unwrap_or(BorderStyle::None);
     let color = color.unwrap_or(Color::CurrentColor);
-    for &property in ShorthandId::Border.metadata().longhands {
+    for &property in shorthand.metadata().longhands {
         let value = match property.metadata().value_type {
             crate::ValueType::BorderWidth => PropertyValue::BorderWidth(width),
             crate::ValueType::BorderStyle => PropertyValue::BorderStyle(style),
@@ -444,6 +449,22 @@ fn expand_border(block: &mut DeclarationBlock, value: &str, important: bool) {
             important,
         });
     }
+}
+
+fn expand_background(block: &mut DeclarationBlock, value: &str, important: bool) {
+    let Ok(color) = value.trim().parse::<Color>() else {
+        block.errors.push(DeclarationError {
+            name: "background".to_owned(),
+            value: value.to_owned(),
+            kind: DeclarationErrorKind::InvalidValue,
+        });
+        return;
+    };
+    block.declarations.push(Declaration {
+        property: PropertyId::BackgroundColor,
+        value: DeclaredValue::Value(PropertyValue::Color(color)),
+        important,
+    });
 }
 
 fn expand_white_space(block: &mut DeclarationBlock, value: &str, important: bool) {
@@ -523,12 +544,21 @@ pub fn parse_declaration_block(input: &str) -> DeclarationBlock {
         ) {
             expand_css_wide_shorthand(&mut block, shorthand, value, important);
         } else if expand_box_shorthand(&mut block, shorthand, value, important) {
+        } else if shorthand == ShorthandId::Background {
+            expand_background(&mut block, value, important);
         } else if shorthand == ShorthandId::Transition {
             expand_transition(&mut block, value, important);
         } else if shorthand == ShorthandId::Animation {
             expand_animation(&mut block, value, important);
-        } else if shorthand == ShorthandId::Border {
-            expand_border(&mut block, value, important);
+        } else if matches!(
+            shorthand,
+            ShorthandId::Border
+                | ShorthandId::BorderTop
+                | ShorthandId::BorderRight
+                | ShorthandId::BorderBottom
+                | ShorthandId::BorderLeft
+        ) {
+            expand_border(&mut block, shorthand, value, important);
         } else if shorthand == ShorthandId::WhiteSpace {
             expand_white_space(&mut block, value, important);
         }

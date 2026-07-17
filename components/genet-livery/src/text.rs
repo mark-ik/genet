@@ -13,7 +13,8 @@ use livery::{
     ComputedValues,
     values::{
         Display, FontFamily as CssFontFamily, FontStyle as CssFontStyle,
-        FontWeight as CssFontWeight, LineHeight as CssLineHeight, Spacing, TextAlign, TextWrapMode,
+        FontWeight as CssFontWeight, LineHeight as CssLineHeight, Margin, Spacing, TextAlign,
+        TextWrapMode,
     },
 };
 use paint_list_api::{
@@ -337,35 +338,38 @@ impl TextSystem {
                     owners,
                     mut fragment,
                     edge,
+                    paint,
                     mut line_y,
                 } => {
                     translate_fragment(&mut fragment, origin);
                     line_y += origin.1;
-                    frame.record_inline_fragment(
-                        source,
-                        if edge {
-                            decorated_inline_fragment(
-                                styles,
-                                source,
-                                fragment,
-                                parent_fragment.width,
-                            )
-                        } else {
-                            fragment
-                        },
-                        line_y,
-                    );
-                    for owner in owners {
+                    if paint {
                         frame.record_inline_fragment(
-                            owner,
-                            decorated_inline_fragment(
-                                styles,
-                                owner,
-                                fragment,
-                                parent_fragment.width,
-                            ),
+                            source,
+                            if edge {
+                                decorated_inline_fragment(
+                                    styles,
+                                    source,
+                                    fragment,
+                                    parent_fragment.width,
+                                )
+                            } else {
+                                fragment
+                            },
                             line_y,
                         );
+                        for owner in owners {
+                            frame.record_inline_fragment(
+                                owner,
+                                decorated_inline_fragment(
+                                    styles,
+                                    owner,
+                                    fragment,
+                                    parent_fragment.width,
+                                ),
+                                line_y,
+                            );
+                        }
                     }
                 },
             }
@@ -476,6 +480,7 @@ impl TextSystem {
                                 },
                             },
                             edge: inline_box.edge,
+                            paint: inline_box.paint,
                             line_y: metrics.block_min_coord,
                         });
                     },
@@ -615,6 +620,7 @@ struct InlineAtom<Id> {
     index: usize,
     fragment: Fragment,
     edge: bool,
+    paint: bool,
 }
 
 enum ShapedItem<Id> {
@@ -624,6 +630,7 @@ enum ShapedItem<Id> {
         owners: Vec<Id>,
         fragment: Fragment,
         edge: bool,
+        paint: bool,
         line_y: f32,
     },
 }
@@ -715,6 +722,7 @@ where
                             index: self.text.len(),
                             fragment,
                             edge: false,
+                            paint: true,
                         });
                     }
                     return;
@@ -748,20 +756,35 @@ where
         start: bool,
     ) {
         let edges = inline_decoration_edges(style, self.percentage_basis);
-        let width = if start { edges.left } else { edges.right };
-        if width <= 0.0 {
-            return;
+        let em = super::paint::used_font_size(style);
+        let margin = if start {
+            inline_margin_px(style.margin_left, em, self.percentage_basis)
+        } else {
+            inline_margin_px(style.margin_right, em, self.percentage_basis)
+        };
+        let decoration = if start { edges.left } else { edges.right };
+        let mut push = |width: f32, paint: bool| {
+            if width > 0.0 {
+                self.inline_boxes.push(InlineAtom {
+                    source,
+                    owners: owners.to_vec(),
+                    index: self.text.len(),
+                    fragment: Fragment {
+                        width,
+                        ..Fragment::default()
+                    },
+                    edge: true,
+                    paint,
+                });
+            }
+        };
+        if start {
+            push(margin, false);
         }
-        self.inline_boxes.push(InlineAtom {
-            source,
-            owners: owners.to_vec(),
-            index: self.text.len(),
-            fragment: Fragment {
-                width,
-                ..Fragment::default()
-            },
-            edge: true,
-        });
+        push(decoration, true);
+        if !start {
+            push(margin, false);
+        }
     }
 }
 
@@ -792,6 +815,13 @@ fn inline_decoration_edges(style: &ComputedValues, percentage_basis: f32) -> Inl
                 style.border_bottom_width,
                 em,
             ),
+    }
+}
+
+fn inline_margin_px(value: Margin, em: f32, percentage_basis: f32) -> f32 {
+    match value {
+        Margin::Auto => 0.0,
+        Margin::Value(value) => super::layout::length_percentage_px(value, em, percentage_basis),
     }
 }
 

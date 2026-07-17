@@ -211,7 +211,8 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   numeric types. Receipt: generated code compiles standalone; ten catalog,
   initial/inheritance, rejection, and CSS round-trip tests are green.
 - **E2 — cascade + media: landed.** Livery parses declarations and the lane's
-  margin, padding, border, and white-space shorthands; matches structural,
+  color-only background, directional border, margin, padding, border, and
+  white-space shorthands; matches structural,
   attribute, state, and combinator selectors through `selectors`; and resolves
   origin, layer, importance, specificity, source order, CSS-wide keywords, and
   inheritance into its generated `ComputedValues`. Media-query lists evaluate
@@ -371,6 +372,20 @@ Cambium WebGPU smoke now passes a native `cargo check` after local
 `genet-scripted-dom` and `layout-dom-api` patching; the checkout does not have
 the `wasm32-unknown-unknown` target installed, so that target remains
 unverified.
+
+### 2026-07-17 inline decoration and shorthand receipt
+
+The Livery database now admits the bounded color-only `background` shorthand
+and the four directional border shorthands. Their cascade expansion is covered
+by 13 green Livery cascade tests. Parley inline atoms now separate margin-only
+advance from paintable padding and border edges, so an inline margin shifts the
+following glyph without extending the inline background into the margin; the
+41-test genet-livery paint wall remains green.
+
+The six CSS2 inline-formatting probes used for this slice remain localized
+Livery mismatches. Their reference fixtures depend on float and viewport
+background behavior that is outside this bounded lane, so the parser and atom
+receipts are landed without treating those probes as parity passes.
 
 ## The destination, named
 

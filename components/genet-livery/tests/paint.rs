@@ -1302,7 +1302,7 @@ fn bidi_runs_paint_in_parley_visual_order() {
 fn inline_background_uses_the_shaped_line_fragment() {
     let list = render(
         r#"<html><body><div class="label">before <span>inside</span> after</div></body></html>"#,
-        ".label { width: 240px; font-size: 18px; } span { color: blue; background-color: lime; }",
+        ".label { width: 240px; font-size: 18px; } span { color: blue; background-color: lime; margin-left: 10px; }",
         1,
     );
     let background = list
@@ -1348,6 +1348,11 @@ fn inline_background_uses_the_shaped_line_fragment() {
 
     assert!(background.min.x <= glyph.point.x && glyph.point.x <= background.max.x);
     assert!(background.min.y <= glyph.point.y && glyph.point.y <= background.max.y);
+    assert!(
+        glyph.point.x - background.min.x <= 1.0,
+        "inline margins consume advance without painting into the background: background={background:?} glyph={:?}",
+        glyph.point.x
+    );
     assert!(background_index < text_index);
 }
 
@@ -1376,10 +1381,15 @@ fn inline_horizontal_edges_occupy_text_advance() {
     let plain = trailing_origin("");
     let decorated =
         trailing_origin("padding-left: 10px; padding-right: 10px; border: 2px solid lime;");
+    let margined = trailing_origin("margin-left: 10px; margin-right: 10px;");
 
     assert!(
         decorated - plain >= 23.5,
         "inline padding and borders must consume advance: plain={plain}, decorated={decorated}"
+    );
+    assert!(
+        margined - plain >= 19.5,
+        "inline margins must consume advance: plain={plain}, margined={margined}"
     );
 }
 
