@@ -319,6 +319,10 @@ skipped by the runner. A first `css/css-backgrounds` probe reports 7 passes,
 582 failures, 360 skips, and no runner errors. That is a capability map rather
 than a parity receipt: the failures cluster around background features outside
 the bounded lane and crash-path coverage.
+The focused `css/CSS2/box` subset is 9/9 through Livery; the default Stylo
+route is 8/9 because `rtl-linebreak.xht` has a localized reference diff. This
+is useful route telemetry, not a claim that the incumbent failure transfers to
+the clean-room engine.
 The full `genet-wpt` unit wall is 18 passed, 1 failed, and 3 ignored; its sole
 failure is the existing WebGL `gl_clear` harness panic (`JsError: not a callable
 function`), outside the Livery route. After removing 17.9 GiB of targeted
