@@ -17,7 +17,7 @@ viewport scroll, pointer-events hit testing, link rectangles, fragment
 navigation, focus state, rounded fills, and two-stop gradient layering. A
 host-driven opacity clock supplies intermediate frames, and bounded
 `transition-property`/`transition-duration` metadata starts opacity,
-background-color, text-color, and border-top-color transitions on that same
+background-color, text-color, and border-top-color/border-bottom-color transitions on that same
 clock, so
 `transition: all` and the bounded explicit two- and three-property lists can
 paint those changes in one retained tick. Nested scroll containers now route wheel deltas
@@ -26,7 +26,7 @@ descendant paint through transforms. Bounded opacity-only `@keyframes` and
 named timing functions now run on the retained clock. Host-owned remote image
 fetching now feeds the same resource seam. Remaining E3 work is full WPT
 reftest parity, additional transition-property lists and interpolation beyond
-the bounded opacity/background-color/color/border-top-color paths. A fresh
+the bounded opacity/background-color/color/border-top-color/border-bottom-color paths. A fresh
 workspace cold-build receipt is recorded below. The
 first audit invalidated the proposed 33-accessor full-crate seam.
 The second chose Cambium structural UI as the bounded first lane.
@@ -245,7 +245,7 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   Rounded backgrounds are clipped through the neutral paint stack. Two-stop
   linear-gradient backgrounds paint as an ordered neutral layer over the color
   fill under that clip. The retained session also has a host-driven opacity
-  clock and bounded CSS opacity/background-color/color/border-top-color transitions, with
+  clock and bounded CSS opacity/background-color/color/border-top-color/border-bottom-color transitions, with
   intermediate-frame receipts proving `transition: all` and the explicit
   two- and three-property lists update their paint properties from the same
   clock.
@@ -286,7 +286,7 @@ covered by the paint-list receipt. The gradient receipt and opacity clock are
   covered by the paint-list, cascade, and interaction suites. The keyframe
   parser and retained opacity animation receipt cover named timing functions.
   Additional transition-property lists and interpolation beyond the new color
-  and border-top-color lanes and full reftest parity remain explicit next gates.
+  and border-top-color/border-bottom-color lanes and full reftest parity remain explicit next gates.
   The image receipt covers raster `data:` URLs, host-resolved local and
   remote-looking bytes, intrinsic `<img>` sizing, and aspect-ratio preservation;
   the session now exercises the host fetcher for a remote image while keeping
@@ -300,7 +300,9 @@ round-trip, and retained mid-frame receipts. A standalone `color` transition
 also paints an interpolated Parley text run through the same retained clock.
 The standalone `border-top-color` transition likewise paints the neutral top
 border through that clock; the fixture uses the supported physical border
-longhands rather than the unimplemented `border-top` shorthand.
+longhands rather than the unimplemented `border-top` shorthand. The matching
+`border-bottom-color` transition paints the neutral bottom border through the
+same clock, with the same physical-longhand fixture boundary.
 The Livery session now resolves a CSS/DOM image URL against the document
 address, asks the host `ResourceFetcher` for bytes, and paints the returned
 remote image; URL policy and caching remain host-owned.
@@ -330,7 +332,7 @@ useful comparison telemetry rather than a controlled benchmark. Cargo emitted
 the existing path-override and unused-code warnings, with no errors.
 
 Full WPT reftest parity, broader transition lists and interpolation beyond
-color and border-top-color, and the E4 default production-lane switch remain
+color and border-top-color/border-bottom-color, and the E4 default production-lane switch remain
 open. The standalone
 Cambium WebGPU smoke now passes a native `cargo check` after local
 `genet-scripted-dom` and `layout-dom-api` patching; the checkout does not have

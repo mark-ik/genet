@@ -150,13 +150,13 @@ bounded transform list supports 2D translate, scale, and rotate functions
 around the default center origin. The retained Livery session now routes
 viewport scroll, pointer-events hit testing, links, fragment navigation, and
 focus state. A host-driven opacity clock, bounded CSS transition metadata for
-opacity, background-color, color, and border-top-color, and a native reftest-style paint pair are
+opacity, background-color, color, and border-top-color/border-bottom-color, and a native reftest-style paint pair are
 covered by package receipts. Nested scroll containers route wheel deltas into retained offsets and
 chain to the viewport at their boundary. Raster `data:` background URLs reach
 the neutral image side-table, and host-resolved local image bytes now use the
 same side-table seam. Bounded intrinsic tiling and position/repeat modes now
 paint through that seam. The bounded `all` and explicit two- and three-property
-transition paths now sample opacity, background-color, color, and border-top-color together. Replaced
+transition paths now sample opacity, background-color, color, and border-top-color/border-bottom-color together. Replaced
 `<img>` elements now use intrinsic data/local dimensions and preserve their
 aspect ratio under a bounded CSS width or height. Host-supplied remote-looking
 URLs use the same image seam. The Livery session now asks the host fetcher for

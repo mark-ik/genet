@@ -22,7 +22,7 @@ session, take paint frames, scroll, click, settle).
   named timing functions. Nested scroll chaining is routed through the retained
   session and chains at its boundary. The session asks the host `ResourceFetcher`
   for CSS/DOM image URLs and feeds returned bytes into the neutral image side
-  table. The bounded lane includes text color and border-top-color interpolation;
+  table. The bounded lane includes text color and border-top-color/border-bottom-color interpolation;
   broader transition-property lists/interpolation remain open. Livery's image gate
   covers two-stop gradients, raster `data:` URLs, host-resolved local and
   remote-looking bytes, replaced-element intrinsic sizing, and bounded

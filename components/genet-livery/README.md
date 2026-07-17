@@ -53,7 +53,8 @@ now supplies bounded viewport scrolling, pointer-events-aware hit testing,
 retained link rectangles, fragment scrolling, and focus-state routing. A
 host-driven opacity clock can invalidate and repaint intermediate frames through
 the same retained session. Bounded `transition-property`/`transition-duration`
-metadata also starts opacity, background-color, text-color, and border-top-color
+metadata also starts opacity, background-color, text-color, and border-top-color/
+border-bottom-color
 transitions from that clock; `transition: all` and explicit two- and
 three-property lists interpolate those paint values together on the same clock.
 Two-stop
