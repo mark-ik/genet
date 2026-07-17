@@ -262,6 +262,7 @@ pub enum TransitionProperty {
     BackgroundColor,
     Color,
     BorderTopColor,
+    BorderBottomColor,
     OpacityAndBackgroundColor,
     OpacityAndColor,
     BackgroundColorAndColor,
@@ -288,6 +289,7 @@ impl FromStr for TransitionProperty {
                 "background-color" => 2,
                 "color" => 4,
                 "border-top-color" => 8,
+                "border-bottom-color" => 16,
                 _ => return Err(ParseError::expected("a bounded transition-property list")),
             };
             if flags & bit != 0 {
@@ -312,6 +314,7 @@ impl fmt::Display for TransitionProperty {
             Self::BackgroundColor => "background-color",
             Self::Color => "color",
             Self::BorderTopColor => "border-top-color",
+            Self::BorderBottomColor => "border-bottom-color",
             Self::OpacityAndBackgroundColor => "opacity, background-color",
             Self::OpacityAndColor => "opacity, color",
             Self::BackgroundColorAndColor => "background-color, color",
@@ -327,6 +330,7 @@ impl TransitionProperty {
             2 => Self::BackgroundColor,
             4 => Self::Color,
             8 => Self::BorderTopColor,
+            16 => Self::BorderBottomColor,
             3 => Self::OpacityAndBackgroundColor,
             5 => Self::OpacityAndColor,
             6 => Self::BackgroundColorAndColor,
@@ -372,6 +376,10 @@ impl TransitionProperty {
         matches!(self, Self::All | Self::BorderTopColor)
     }
 
+    pub fn includes_border_bottom_color(self) -> bool {
+        matches!(self, Self::All | Self::BorderBottomColor)
+    }
+
     fn flags(self) -> u8 {
         match self {
             Self::All | Self::None => 0,
@@ -379,6 +387,7 @@ impl TransitionProperty {
             Self::BackgroundColor => 2,
             Self::Color => 4,
             Self::BorderTopColor => 8,
+            Self::BorderBottomColor => 16,
             Self::OpacityAndBackgroundColor => 3,
             Self::OpacityAndColor => 5,
             Self::BackgroundColorAndColor => 6,

@@ -448,6 +448,50 @@ fn css_transition_border_top_color_uses_the_retained_clock() {
 }
 
 #[test]
+fn css_transition_border_bottom_color_uses_the_retained_clock() {
+    let document =
+        StaticDocument::parse(r#"<html><body><div class="card">card</div></body></html>"#);
+    let card = document
+        .first_with_class(document.document(), "card")
+        .unwrap();
+    let styles = StyleSet::cambium(&[r#"
+        .card { display: block; width: 100px; height: 20px; border-bottom-width: 4px;
+                border-bottom-style: solid; border-bottom-color: red;
+                transition: border-bottom-color 100ms; }
+        .card:hover { border-bottom-color: blue; }
+    "#]);
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(200.0, 100.0));
+    let initial = retained.frame(200, 100).unwrap();
+    let border_color = |frame: &genet_livery::LiveryPaintList| {
+        frame.commands().iter().find_map(|command| match command {
+            PaintCmd::DrawBorder(border) => match &border.details {
+                BorderDetails::Normal(border) => Some(border.bottom.color),
+                _ => None,
+            },
+            _ => None,
+        })
+    };
+    assert_eq!(border_color(&initial), Some(ColorF::new(1.0, 0.0, 0.0, 1.0)));
+
+    retained
+        .interactions_mut()
+        .set(card, livery::selector::StatePseudoClass::Hover, true);
+    retained.frame(200, 100).unwrap();
+    assert!(!retained.settled());
+
+    retained.pump(50.0);
+    let middle = retained.frame(200, 100).unwrap();
+    let middle_color = border_color(&middle).expect("border transition keeps a border primitive");
+    assert!((middle_color.r - 0.5).abs() < 0.01);
+    assert!((middle_color.b - 0.5).abs() < 0.01);
+
+    retained.pump(100.0);
+    assert!(retained.settled());
+    let final_frame = retained.frame(200, 100).unwrap();
+    assert_eq!(border_color(&final_frame), Some(ColorF::new(0.0, 0.0, 1.0, 1.0)));
+}
+
+#[test]
 fn css_keyframes_opacity_use_the_retained_clock() {
     let document =
         StaticDocument::parse(r#"<html><body><div class="fade">fade</div></body></html>"#);
