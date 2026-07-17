@@ -360,11 +360,12 @@ after pipeline exit. Before the remap, `line-box-height-002.xht` crashed when a
 96x96 image reused a key previously registered as 15x15; it now reaches the
 expected localized pixel comparison.
 
-The focused renderer-selection unit test passes. With the rebuilt runner,
-`css/CSS2/linebox` reports 143 passed, 47 failed, 59 skipped, and 0 errored
+The focused renderer-selection unit test passes. With the rebuilt runner and
+the live manifest root `tests/wpt/tests`,
+`css/CSS2/linebox` reports 142 passed, 48 failed, 59 skipped, and 0 errored
 through Livery. The same isolated harness reports 118 passed, 72 failed, 59
 skipped, and 0 errored through Stylo. This turns the previous Livery crash-heavy
-directory run into usable parity telemetry while leaving the 47 localized
+directory run into usable parity telemetry while leaving the 48 localized
 linebox mismatches open for the next layout/paint slices. Full WPT parity
 remains an explicit gate.
 
