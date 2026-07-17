@@ -541,6 +541,49 @@ fn css_transition_border_left_and_right_colors_use_the_retained_clock() {
 }
 
 #[test]
+fn css_transition_border_radius_uses_the_retained_clock() {
+    let document =
+        StaticDocument::parse(r#"<html><body><div class="card">card</div></body></html>"#);
+    let card = document
+        .first_with_class(document.document(), "card")
+        .unwrap();
+    let styles = StyleSet::cambium(&[r#"
+        .card { display: block; width: 100px; height: 20px;
+                border: 4px solid red; border-radius: 0;
+                transition: border-radius 100ms; }
+        .card:hover { border-radius: 20px; }
+    "#]);
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(200.0, 100.0));
+    let radius = |frame: &genet_livery::LiveryPaintList| {
+        frame.commands().iter().find_map(|command| match command {
+            PaintCmd::DrawBorder(border) => match &border.details {
+                BorderDetails::Normal(border) => Some(border.radius.top_left.width),
+                _ => None,
+            },
+            _ => None,
+        })
+    };
+    let initial = retained.frame(200, 100).unwrap();
+    assert_eq!(radius(&initial), Some(0.0));
+
+    retained
+        .interactions_mut()
+        .set(card, livery::selector::StatePseudoClass::Hover, true);
+    retained.frame(200, 100).unwrap();
+    assert!(!retained.settled());
+
+    retained.pump(50.0);
+    let middle = retained.frame(200, 100).unwrap();
+    let middle_radius = radius(&middle).expect("radius transition keeps a border primitive");
+    assert!((middle_radius - 10.0).abs() < 0.01);
+
+    retained.pump(100.0);
+    assert!(retained.settled());
+    let final_frame = retained.frame(200, 100).unwrap();
+    assert_eq!(radius(&final_frame), Some(20.0));
+}
+
+#[test]
 fn css_keyframes_opacity_use_the_retained_clock() {
     let document =
         StaticDocument::parse(r#"<html><body><div class="fade">fade</div></body></html>"#);

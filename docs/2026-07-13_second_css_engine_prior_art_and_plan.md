@@ -245,7 +245,7 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   Rounded backgrounds are clipped through the neutral paint stack. Two-stop
   linear-gradient backgrounds paint as an ordered neutral layer over the color
   fill under that clip. The retained session also has a host-driven opacity
-  clock and bounded CSS opacity/background-color/color/border-top-color/border-bottom-color transitions, with
+  clock and bounded CSS opacity/background-color/color/border-top-color/border-bottom-color/border-radius transitions, with
   intermediate-frame receipts proving `transition: all` and the explicit
   two- and three-property lists update their paint properties from the same
   clock.
@@ -258,7 +258,7 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   ease-in, ease-out, and ease-in-out timing functions run on the retained
   clock. Bounded intrinsic tiling and position/repeat modes now have paint-list
   receipts. Remaining: interpolation beyond the bounded
-  opacity/background-color/color/four-side-border-color paths and full reftest
+  opacity/background-color/color/four-side-border-color/border-radius paths and full reftest
   parity.
   The cold-build delta against the 30m35s baseline is recorded below.
 - **E4 — first production lane.** One real lane (host chrome or
@@ -402,6 +402,17 @@ The walk-discovery `css/CSS2/linebox` run now reports 142 passed, 48 failed,
 120 skipped, and 0 errored. The remaining failures are the existing line-height,
 vertical-align, empty-inline, and inline-box groups plus the two margin probes;
 the float reference dependency is no longer an unimplemented-property failure.
+
+### 2026-07-17 retained radius interpolation receipt
+
+The retained transition clock now accepts the bounded `border-radius` shorthand
+and interpolates its four physical corner radii. Zero-to-px and same-unit
+length/percentage radii interpolate through a typed `Radius` helper; mixed
+non-zero units remain discrete until the value ratchet expands them. A retained
+mid-frame interaction test observes the neutral `DrawBorder` radius at 10px
+between 0px and 20px, then observes the settled 20px value. The focused Livery
+value wall has 5 tests, the cascade wall 13, and the genet-livery interaction
+wall 15; all pass.
 
 ## The destination, named
 
