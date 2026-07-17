@@ -266,7 +266,8 @@ pub enum TransitionProperty {
     BorderLeftColor,
     BorderRightColor,
     BorderRadius,
-    List(u8),
+    Transform,
+    List(u16),
     OpacityAndBackgroundColor,
     OpacityAndColor,
     BackgroundColorAndColor,
@@ -284,7 +285,7 @@ impl FromStr for TransitionProperty {
         if input.eq_ignore_ascii_case("none") {
             return Ok(Self::None);
         }
-        let mut flags = 0_u8;
+        let mut flags = 0_u16;
         let mut saw_item = false;
         for item in input.split(',') {
             saw_item = true;
@@ -297,6 +298,7 @@ impl FromStr for TransitionProperty {
                 "border-left-color" => 32,
                 "border-right-color" => 64,
                 "border-radius" => 128,
+                "transform" => 256,
                 _ => return Err(ParseError::expected("a bounded transition-property list")),
             };
             if flags & bit != 0 {
@@ -325,6 +327,7 @@ impl fmt::Display for TransitionProperty {
             Self::BorderLeftColor => "border-left-color",
             Self::BorderRightColor => "border-right-color",
             Self::BorderRadius => "border-radius",
+            Self::Transform => "transform",
             Self::OpacityAndBackgroundColor => "opacity, background-color",
             Self::OpacityAndColor => "opacity, color",
             Self::BackgroundColorAndColor => "background-color, color",
@@ -340,6 +343,7 @@ impl fmt::Display for TransitionProperty {
                     (32, "border-left-color"),
                     (64, "border-right-color"),
                     (128, "border-radius"),
+                    (256, "transform"),
                 ] {
                     if flags & bit == 0 {
                         continue;
@@ -358,7 +362,7 @@ impl fmt::Display for TransitionProperty {
 }
 
 impl TransitionProperty {
-    fn from_flags(flags: u8) -> Option<Self> {
+    fn from_flags(flags: u16) -> Option<Self> {
         Some(match flags {
             1 => Self::Opacity,
             2 => Self::BackgroundColor,
@@ -368,6 +372,7 @@ impl TransitionProperty {
             32 => Self::BorderLeftColor,
             64 => Self::BorderRightColor,
             128 => Self::BorderRadius,
+            256 => Self::Transform,
             3 => Self::OpacityAndBackgroundColor,
             5 => Self::OpacityAndColor,
             6 => Self::BackgroundColorAndColor,
@@ -377,7 +382,7 @@ impl TransitionProperty {
         })
     }
 
-    fn includes_flag(self, bit: u8) -> bool {
+    fn includes_flag(self, bit: u16) -> bool {
         matches!(self, Self::All) || self.flags() & bit != 0
     }
 
@@ -413,7 +418,11 @@ impl TransitionProperty {
         self.includes_flag(128)
     }
 
-    fn flags(self) -> u8 {
+    pub fn includes_transform(self) -> bool {
+        self.includes_flag(256)
+    }
+
+    fn flags(self) -> u16 {
         match self {
             Self::All | Self::None => 0,
             Self::Opacity => 1,
@@ -424,6 +433,7 @@ impl TransitionProperty {
             Self::BorderLeftColor => 32,
             Self::BorderRightColor => 64,
             Self::BorderRadius => 128,
+            Self::Transform => 256,
             Self::List(flags) => flags,
             Self::OpacityAndBackgroundColor => 3,
             Self::OpacityAndColor => 5,
@@ -1500,6 +1510,32 @@ impl Transform {
     pub const fn is_none(&self) -> bool {
         matches!(self, Self::None)
     }
+
+    /// Interpolate transform lists when their function shape and units match.
+    /// The broader matrix and `none` normalization rules remain outside this
+    /// bounded transition lane.
+    pub fn interpolate(&self, other: &Self, progress: f32) -> Self {
+        let progress = progress.clamp(0.0, 1.0);
+        let value = match (self, other) {
+            (Self::None, Self::None) => return Self::None,
+            (Self::Functions(from), Self::Functions(to)) if from.len() == to.len() => from
+                .iter()
+                .zip(to)
+                .map(|(from, to)| interpolate_transform_function(*from, *to, progress))
+                .collect::<Option<Vec<_>>>(),
+            _ => None,
+        };
+        value.map_or_else(
+            || {
+                if progress < 0.5 {
+                    self.clone()
+                } else {
+                    other.clone()
+                }
+            },
+            Self::Functions,
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1507,6 +1543,37 @@ pub enum TransformFunction {
     Translate(Length, Length),
     Scale(f32, f32),
     Rotate(f32),
+}
+
+fn interpolate_transform_function(
+    from: TransformFunction,
+    to: TransformFunction,
+    progress: f32,
+) -> Option<TransformFunction> {
+    let scalar = |from: f32, to: f32| from + (to - from) * progress;
+    Some(match (from, to) {
+        (
+            TransformFunction::Translate(from_x, from_y),
+            TransformFunction::Translate(to_x, to_y),
+        ) => TransformFunction::Translate(
+            interpolate_length(from_x, to_x, progress)?,
+            interpolate_length(from_y, to_y, progress)?,
+        ),
+        (TransformFunction::Scale(from_x, from_y), TransformFunction::Scale(to_x, to_y)) => {
+            TransformFunction::Scale(scalar(from_x, to_x), scalar(from_y, to_y))
+        },
+        (TransformFunction::Rotate(from), TransformFunction::Rotate(to)) => {
+            TransformFunction::Rotate(scalar(from, to))
+        },
+        _ => return None,
+    })
+}
+
+fn interpolate_length(from: Length, to: Length, progress: f32) -> Option<Length> {
+    (from.unit == to.unit).then_some(Length {
+        value: from.value + (to.value - from.value) * progress,
+        unit: from.unit,
+    })
 }
 
 impl FromStr for Transform {

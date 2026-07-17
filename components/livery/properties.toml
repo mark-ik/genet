@@ -138,7 +138,7 @@ source = "css_box_alignment_3"
 
 [shorthands.transition]
 longhands = ["transition-property", "transition-duration"]
-grammar = "[ none | all | opacity | background-color | color | border-top-color | border-bottom-color | border-radius ] || <time>"
+grammar = "[ none | all | opacity | background-color | color | border-top-color | border-bottom-color | border-radius | transform ] || <time>"
 seed_values = [
     "opacity 100ms",
     "background-color 100ms",
@@ -146,6 +146,7 @@ seed_values = [
     "border-top-color 100ms",
     "border-bottom-color 100ms",
     "border-radius 100ms",
+    "transform 100ms",
 ]
 source = "css_transitions_1"
 

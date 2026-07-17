@@ -10,7 +10,7 @@ use livery::{
     PropertyValue,
     selector::StatePseudoClass,
     stylesheet::Keyframes,
-    values::{AnimationName, Color, Opacity, Overflow, Radius, TimingFunction},
+    values::{AnimationName, Color, Opacity, Overflow, Radius, TimingFunction, Transform},
 };
 use paint_list_api::DeviceIntSize;
 
@@ -127,6 +127,16 @@ struct BorderRadiusTransition<Id> {
 }
 
 #[derive(Clone)]
+struct TransformTransition<Id> {
+    node: Id,
+    from: Transform,
+    to: Transform,
+    start_ms: f64,
+    duration_ms: f64,
+    automatic: bool,
+}
+
+#[derive(Clone)]
 struct KeyframeAnimation<Id> {
     node: Id,
     name: Box<str>,
@@ -165,6 +175,7 @@ where
     border_left_color_transition: Option<BorderLeftColorTransition<D::NodeId>>,
     border_right_color_transition: Option<BorderRightColorTransition<D::NodeId>>,
     border_radius_transition: Option<BorderRadiusTransition<D::NodeId>>,
+    transform_transition: Option<TransformTransition<D::NodeId>>,
     keyframe_animation: Option<KeyframeAnimation<D::NodeId>>,
     nested_scroll: HashMap<D::NodeId, (f32, f32)>,
     image_sources: HashMap<String, Vec<u8>>,
@@ -201,6 +212,7 @@ where
             border_left_color_transition: None,
             border_right_color_transition: None,
             border_radius_transition: None,
+            transform_transition: None,
             keyframe_animation: None,
             nested_scroll: HashMap::new(),
             image_sources: HashMap::new(),
@@ -255,6 +267,7 @@ where
         self.finish_completed_border_left_color_transition();
         self.finish_completed_border_right_color_transition();
         self.finish_completed_border_radius_transition();
+        self.finish_completed_transform_transition();
         let mut styles =
             resolve_styles(&self.dom, &self.style_set, &self.device, &self.interactions);
         self.schedule_opacity_transition(&styles);
@@ -265,6 +278,7 @@ where
         self.schedule_border_left_color_transition(&styles);
         self.schedule_border_right_color_transition(&styles);
         self.schedule_border_radius_transition(&styles);
+        self.schedule_transform_transition(&styles);
         self.schedule_keyframe_animation(&styles);
         self.apply_opacity_transition(&mut styles);
         self.apply_background_color_transition(&mut styles);
@@ -274,6 +288,7 @@ where
         self.apply_border_left_color_transition(&mut styles);
         self.apply_border_right_color_transition(&mut styles);
         self.apply_border_radius_transition(&mut styles);
+        self.apply_transform_transition(&mut styles);
         self.apply_keyframe_animation(&mut styles);
         let fragments = layout_with_text_system(
             &self.dom,
@@ -357,6 +372,7 @@ where
             && self.border_left_color_transition.is_none()
             && self.border_right_color_transition.is_none()
             && self.border_radius_transition.is_none()
+            && self.transform_transition.is_none()
             && self.keyframe_animation.is_none())
             || !now_ms.is_finite()
         {
@@ -400,6 +416,10 @@ where
         let border_radius_settled = self
             .border_radius_transition
             .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
+        let transform_settled = self
+            .transform_transition
+            .as_ref()
+            .is_none_or(|transition| self.clock_ms >= transition.start_ms + transition.duration_ms);
         opacity_settled
             && background_color_settled
             && color_settled
@@ -408,6 +428,7 @@ where
             && border_left_color_settled
             && border_right_color_settled
             && border_radius_settled
+            && transform_settled
             && keyframe_settled
     }
 
@@ -806,6 +827,21 @@ where
         }
     }
 
+    fn apply_transform_transition(&self, styles: &mut StylePlane<D::NodeId>) {
+        let Some(transition) = self.transform_transition.as_ref() else {
+            return;
+        };
+        let progress = if transition.duration_ms == 0.0 {
+            1.0
+        } else {
+            ((self.clock_ms - transition.start_ms) / transition.duration_ms).clamp(0.0, 1.0) as f32
+        };
+        let value = transition.from.interpolate(&transition.to, progress);
+        if let Some(style) = styles.get_mut(transition.node) {
+            style.transform = value;
+        }
+    }
+
     fn apply_keyframe_animation(&self, styles: &mut StylePlane<D::NodeId>) {
         let Some(animation) = self.keyframe_animation.as_ref() else {
             return;
@@ -996,6 +1032,21 @@ where
             style.border_bottom_left_radius = transition.to[3];
         }
         self.border_radius_transition = None;
+    }
+
+    fn finish_completed_transform_transition(&mut self) {
+        let Some(transition) = self.transform_transition.clone() else {
+            return;
+        };
+        if !transition.automatic || self.clock_ms < transition.start_ms + transition.duration_ms {
+            return;
+        }
+        if let Some(layout) = self.layout.as_mut()
+            && let Some(style) = layout.styles.get_mut(transition.node)
+        {
+            style.transform = transition.to;
+        }
+        self.transform_transition = None;
     }
 
     fn schedule_opacity_transition(&mut self, styles: &StylePlane<D::NodeId>) {
@@ -1350,6 +1401,48 @@ where
         self.dom
             .dom_children(id)
             .find_map(|child| self.find_border_radius_transition(child, previous, styles))
+    }
+
+    fn schedule_transform_transition(&mut self, styles: &StylePlane<D::NodeId>) {
+        if self.transform_transition.is_some() {
+            return;
+        }
+        let Some(previous) = self.layout.as_ref().map(|layout| &layout.styles) else {
+            return;
+        };
+        let Some((node, from, to, duration_ms)) =
+            self.find_transform_transition(self.dom.document(), previous, styles)
+        else {
+            return;
+        };
+        self.transform_transition = Some(TransformTransition {
+            node,
+            from,
+            to,
+            start_ms: self.clock_ms,
+            duration_ms,
+            automatic: true,
+        });
+    }
+
+    fn find_transform_transition(
+        &self,
+        id: D::NodeId,
+        previous: &StylePlane<D::NodeId>,
+        styles: &StylePlane<D::NodeId>,
+    ) -> Option<(D::NodeId, Transform, Transform, f64)> {
+        if let (Some(old), Some(new)) = (previous.get(id), styles.get(id)) {
+            let duration_ms = f64::from(new.transition_duration.milliseconds());
+            if new.transition_property.includes_transform()
+                && duration_ms > 0.0
+                && old.transform != new.transform
+            {
+                return Some((id, old.transform.clone(), new.transform.clone(), duration_ms));
+            }
+        }
+        self.dom
+            .dom_children(id)
+            .find_map(|child| self.find_transform_transition(child, previous, styles))
     }
 
     fn scrollable_axes(&self, layout: &LayoutState<D::NodeId>) -> (bool, bool) {

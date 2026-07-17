@@ -245,7 +245,7 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   Rounded backgrounds are clipped through the neutral paint stack. Two-stop
   linear-gradient backgrounds paint as an ordered neutral layer over the color
   fill under that clip. The retained session also has a host-driven opacity
-  clock and bounded CSS opacity/background-color/color/border-top-color/border-bottom-color/border-radius transitions, with
+  clock and bounded CSS opacity/background-color/color/border-top-color/border-bottom-color/border-radius/transform transitions, with
   intermediate-frame receipts proving `transition: all` and the explicit
   two- and three-property lists update their paint properties from the same
   clock.
@@ -258,7 +258,7 @@ Serval. Livery's `livery` and `genet-livery` names were claimed the same day;
   ease-in, ease-out, and ease-in-out timing functions run on the retained
   clock. Bounded intrinsic tiling and position/repeat modes now have paint-list
   receipts. Remaining: interpolation beyond the bounded
-  opacity/background-color/color/four-side-border-color/border-radius paths and full reftest
+  opacity/background-color/color/four-side-border-color/border-radius/transform paths and full reftest
   parity.
   The cold-build delta against the 30m35s baseline is recorded below.
 - **E4 — first production lane.** One real lane (host chrome or
@@ -413,6 +413,17 @@ mid-frame interaction test observes the neutral `DrawBorder` radius at 10px
 between 0px and 20px, then observes the settled 20px value. The focused Livery
 value wall has 5 tests, the cascade wall 13, and the genet-livery interaction
 wall 15; all pass.
+
+### 2026-07-17 retained transform interpolation receipt
+
+The transition-property ratchet now preserves a `transform` bit alongside the
+existing paint properties. Matching transform-function lists interpolate
+translations, scales, and rotations; mixed function shapes, units, and `none`
+normalization remain discrete until the matrix ratchet. A retained interaction
+test observes a 10px/2px translation at 50ms between 0px/0px and 20px/4px,
+then observes the settled transform through the neutral coordinate-space
+primitive. The focused Livery value wall has 6 tests and the genet-livery
+interaction wall 16; both pass with the paint wall.
 
 ## The destination, named
 
