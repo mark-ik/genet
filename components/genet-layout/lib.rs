@@ -26,10 +26,9 @@
 //! `render` and `paint_list_from_layout_dom` are the convenience entry points.
 
 mod a11y;
-/// Semantic element queries over the one projection assistive tech reads.
-mod query;
 mod adapter;
 mod adapter_stylo;
+mod animation_events;
 mod box_tree;
 mod caret;
 mod cascade;
@@ -38,8 +37,8 @@ mod computed_query;
 mod construct;
 mod font_metrics;
 mod fragment;
+mod genet_lane;
 mod highlights;
-mod overlays;
 mod host_loader;
 mod image_decode;
 mod incremental;
@@ -47,12 +46,14 @@ mod inline_hit;
 mod invalidate;
 mod layout;
 mod link_harvest;
+mod overlays;
 mod paint_emit;
 mod paint_stacking;
-mod genet_lane;
+/// Semantic element queries over the one projection assistive tech reads.
+mod query;
 mod snapshot;
-mod animation_events;
 mod style;
+mod forest;
 mod subtree;
 mod text_measure;
 mod transition_events;
@@ -63,9 +64,9 @@ pub use a11y::{
     LeafA11ySource, NoLeafA11y, ProjectedNode, Projection, ROUTABLE_ACTIONS, accesskit_tree,
     build_subtree, build_subtree_with_leaves, project,
 };
-pub use query::{ElementQuery, Handle, NameMatch, Resolution};
 pub use adapter::NodeRef;
 pub use adapter_stylo::StyleNodeRef;
+pub use animation_events::{AnimationEventKind, AnimationEventRecord};
 pub use box_tree::{BoxTree, build_box_tree, layout_via_box_tree};
 pub use caret::{
     CaretRect, TextRange, TextSelection, caret_byte_at_point, caret_byte_vertical, caret_color,
@@ -76,9 +77,13 @@ pub use cascade::{
     restyle_for_interaction, restyle_structural, restyle_with_snapshots, run_cascade,
 };
 pub use cell::ArcRefCell;
+pub use engine_observables_api::{InteractionState, SourceNodeId};
 pub use fragment::FragmentPlane;
+pub use genet_lane::{
+    GenetLaneView, absolute_origin, accumulate_origins, accumulate_painted_origins,
+    accumulated_translate,
+};
 pub use highlights::{HighlightRange, HighlightStyle};
-pub use overlays::OverlaySlot;
 pub use host_loader::{
     LocalFileImageLoader, ResourceResolver, inline_stylesheets, inline_stylesheets_from_source,
     linked_icon_href, linked_stylesheets, linked_stylesheets_with_loader,
@@ -86,29 +91,26 @@ pub use host_loader::{
 pub use image_decode::{
     BackgroundImagePlane, DecodedImage, ImageLoader, ImagePlane, NoImageLoader, decode_image_bytes,
 };
-pub use engine_observables_api::{InteractionState, SourceNodeId};
 pub use incremental::{AnimationMode, Applied, IncrementalLayout};
 pub use invalidate::{Invalidation, classify, coalesce};
 pub use layout::layout;
+pub use overlays::OverlaySlot;
 pub use paint_emit::{
-    LeafPaintSource, SCROLLBAR_COLOR, SCROLLBAR_WIDTH, ScrollOffsets, GenetPaintList,
+    GenetPaintList, LeafPaintSource, SCROLLBAR_COLOR, SCROLLBAR_WIDTH, ScrollOffsets,
     emit_paint_list, emit_paint_list_scrolled, emit_paint_list_scrolled_excluding_subtrees,
     emit_paint_list_scrolled_with_leaves, emit_paint_list_with_layouts,
     emit_paint_list_with_leaves, emit_subtree_paint_list_scrolled, push_scrollbars,
 };
-pub use genet_lane::{
-    GenetLaneView, absolute_origin, accumulate_origins, accumulate_painted_origins,
-    accumulated_translate,
-};
+pub use query::{ElementQuery, Handle, NameMatch, Resolution};
 pub use snapshot::build_snapshot_map;
 pub use style::{StyleEntry, StylePlane};
-pub use subtree::{SubtreeView, render_subtree};
-pub use animation_events::{AnimationEventKind, AnimationEventRecord};
-pub use transition_events::{TransitionEventKind, TransitionEventRecord};
+pub use forest::{ForestDom, WINDOW_ROOT_CLASS, WindowRootId};
+pub use subtree::{SubtreeView, layout_subtree, render_subtree};
 pub use text_measure::{
     FontFamilySpec, GenericFamilyKind, InlineContent, InlineRun, TextMeasureCtx,
     measure_inline_content, register_host_font,
 };
+pub use transition_events::{TransitionEventKind, TransitionEventRecord};
 pub use viewport::{ScrollKey, Viewport, document_scroll_range};
 
 use engine_observables_api::{FragmentQuery, Point};
@@ -415,10 +417,8 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> ContentLayout<Id> {
     /// was laid out by its own isolated cascade, so the page's sheets never
     /// reach it. Painted top-layer (after content + highlights).
     pub fn set_overlay(&mut self, name: &str, anchor: Id, content: GenetPaintList) {
-        self.overlays.insert(
-            name.to_string(),
-            overlays::OverlaySlot { anchor, content },
-        );
+        self.overlays
+            .insert(name.to_string(), overlays::OverlaySlot { anchor, content });
     }
 
     /// Remove the named overlay slot (no-op when absent).
@@ -435,14 +435,9 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> ContentLayout<Id> {
     /// The laid-out `(x, y, w, h)` of a page node, if it has a box — the anchor
     /// geometry an overlay slot positions against.
     pub fn node_rect(&self, node: Id) -> Option<(f32, f32, f32, f32)> {
-        self.fragments.rect_of(node).map(|l| {
-            (
-                l.location.x,
-                l.location.y,
-                l.size.width,
-                l.size.height,
-            )
-        })
+        self.fragments
+            .rect_of(node)
+            .map(|l| (l.location.x, l.location.y, l.size.width, l.size.height))
     }
 
     /// Register (or replace) the named custom highlight: `ranges` paint with
@@ -500,11 +495,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> ContentLayout<Id> {
     /// The highlight rects for one found range (full-document px, unscrolled) —
     /// the per-match metadata a `find_ranges` caller ships for match counting,
     /// active-match stepping, and auto-scroll.
-    pub fn range_rects<D>(
-        &self,
-        dom: &D,
-        range: &highlights::HighlightRange<Id>,
-    ) -> Vec<[f32; 4]>
+    pub fn range_rects<D>(&self, dom: &D, range: &highlights::HighlightRange<Id>) -> Vec<[f32; 4]>
     where
         D: LayoutDom<NodeId = Id>,
     {
@@ -728,7 +719,12 @@ mod tests {
 
         // Register both "needle" occurrences (the shape the actor's `Find` arm
         // builds from `find_ranges`), then emit: two more fills appear, no search.
-        let color = ColorF { r: 1.0, g: 0.82, b: 0.2, a: 0.38 };
+        let color = ColorF {
+            r: 1.0,
+            g: 0.82,
+            b: 0.2,
+            a: 0.38,
+        };
         let ranges = layout.find_ranges(&doc, "needle");
         assert_eq!(ranges.len(), 2, "two occurrences of the needle");
         layout.set_highlight("find", ranges, HighlightStyle { color });
@@ -833,9 +829,12 @@ mod tests {
         let (plain, _, _) = layout.emit_band(&doc, 0, 400, &scroll);
         let plain_cmds = plain.commands().len();
 
-        let (content, sat_color) =
-            satellite(".card { display: block; width: 80px; height: 40px; \
-                       background-color: rgb(20, 120, 200) }", 80, 40);
+        let (content, sat_color) = satellite(
+            ".card { display: block; width: 80px; height: 40px; \
+                       background-color: rgb(20, 120, 200) }",
+            80,
+            40,
+        );
         layout.set_overlay("preview", p, content);
 
         // (a) The page's own layout is untouched: fragment count + the anchor's
@@ -968,7 +967,12 @@ mod tests {
         l2.set_overlay("a", anchor_p(&page_hostile), c2);
         assert_ne!(
             color1,
-            paint_list_api::ColorF { r: 1.0, g: 0.0, b: 0.0, a: 1.0 },
+            paint_list_api::ColorF {
+                r: 1.0,
+                g: 0.0,
+                b: 0.0,
+                a: 1.0
+            },
             "the page's `.card{{color:red}}` did not reach the isolated satellite"
         );
     }
@@ -1000,7 +1004,9 @@ mod tests {
         let sat_doc = StaticDocument::parse("<div class='chip'>count: 7</div>");
         let sat = lay_out_content(
             &sat_doc,
-            &[".chip { display: block; width: 120px; height: 24px;                background-color: rgb(40, 40, 48); color: rgb(240, 240, 250) }"],
+            &[
+                ".chip { display: block; width: 120px; height: 24px;                background-color: rgb(40, 40, 48); color: rgb(240, 240, 250) }",
+            ],
             &NoImageLoader,
             120,
             24,
