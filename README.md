@@ -187,12 +187,14 @@ engine-rendered form controls) and the scripted-tier consumer wiring.
 - **netrender** (`github.com/mark-ik/netrender`) — the vello-based renderer
   genet emits into. Pulled as a git dependency (`branch = "main"`), and it owns
   the engine-agnostic `paint_list_api` / `paint_list_render` crates.
-- **Forks** consumed as git deps: `nova_vm` (mark-ik/nova, `genet-embedder`
-  branch) and `boa_engine` / `boa_gc` (mark-ik/boa, `genet` branch), each
-  carrying additive reflector-liveness patches. The Stylo crates track the
-  servo/stylo v0.18.0 release tag by git rev.
-- genet is consumed as the engine/host layer by Mark's `mere` workspace
-  (meerkat chrome shell, orrery host). The dependency direction is one-way:
+- **Forks** consumed as git deps: Vano's `nova_vm` package (local checkout at
+  `crates/vano`, git fallback `mark-ik/nova`, `genet-embedder` branch) and
+  `boa_engine` / `boa_gc` (mark-ik/boa, `genet` branch), each carrying additive
+  reflector-liveness patches. The Stylo crates track the servo/stylo v0.18.0
+  release tag by git rev.
+- genet is consumed as the engine/host layer by Mark's `mere` workspace and its
+  Merecat browser host (currently represented by the transitional `meerkat`
+  checkout). The dependency direction is one-way:
   those consume genet, genet does not depend on them.
 
 ## License

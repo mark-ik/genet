@@ -1,11 +1,10 @@
-# Nova backend for script-engine-api — the primary backend on 64-bit targets.
+# Vano/Nova backend for script-engine-api — the primary backend on 64-bit targets.
 # Nova is pointer-width-bound (its `Value` is usize-sized), so `nova_vm` is gated
 # by pointer width rather than by native-vs-wasm. This admits wasm64 while keeping
 # every 32-bit target (including wasm32) on the Boa backend.
 #
-# `nova_vm` is redirected to the local fork checkout (genet-embedder branch, which
-# carries the EmbedderObject native-data patch) via [patch.crates-io] in the
-# workspace root Cargo.toml.
+# `nova_vm` is redirected to the local Vano fork checkout (which carries the
+# EmbedderObject native-data patch) via the gitignored paths override.
 [package]
 name = "script-engine-nova"
 version = "0.0.0"

@@ -29,7 +29,7 @@ in CI; there is no CI in the repo yet. The blocker is dependency resolution:
 `cargo tree` resolves the **whole** workspace, and the workspace pins the JS
 engines as **external path deps** outside the repo:
 
-- `nova_vm = { path = "../../crates/nova/nova_vm" }` (git form, per the root
+- `nova_vm = { path = "../../crates/vano/nova_vm" }` (git form, per the root
   `Cargo.toml` patch comment: `git = "https://github.com/mark-ik/nova", branch = "genet-embedder"`)
 - `boa_engine = { path = "../../crates/boa/core/engine" }` (no git form recorded)
 
@@ -41,7 +41,7 @@ GitHub Actions job is one step:
 ```yaml
 # .github/workflows/tier-gate.yml (after the engine-dep bootstrap)
 #   - uses: actions/checkout@v4
-#   - <materialize ../../crates/nova and ../../crates/boa>
+#   - <materialize ../../crates/vano and ../../crates/boa>
 #   - run: bash support/profile-gates/check-tiers.sh
 ```
 
