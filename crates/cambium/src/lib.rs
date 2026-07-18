@@ -31,6 +31,7 @@ mod arrangement;
 mod command_surface;
 mod context;
 mod controls;
+mod detail_panel;
 mod detail_popover;
 mod disclosure;
 mod editor;
@@ -81,6 +82,7 @@ pub use command_surface::{
     command_picker, command_surface,
 };
 pub use context::GenetCtx;
+pub use detail_panel::{DetailRow, DetailSection, detail_panel};
 pub use detail_popover::{
     DetailPopoverEvent, DetailPopoverMode, DetailPopoverState, detail_popover,
 };
