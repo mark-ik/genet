@@ -138,7 +138,7 @@ impl<'a> DocumentLayouter<'a> {
             Block::Table { .. } => None,
             Block::Heading { level, spans } => {
                 Some(self.render_heading(source_index, indent_level, *level, spans))
-            }
+            },
             Block::Paragraph { spans } => {
                 let resolved = self.style.resolve(BlockRole::Body);
                 Some(self.render_paragraph(
@@ -148,22 +148,22 @@ impl<'a> DocumentLayouter<'a> {
                     text_base_from(&resolved),
                     resolved.spacing_below,
                 ))
-            }
+            },
             Block::CodeBlock { text, .. } => {
                 Some(self.render_code_block(source_index, indent_level, text))
-            }
+            },
             Block::Preformatted { text } => {
                 Some(self.render_code_block(source_index, indent_level, text))
-            }
+            },
             Block::Quote { blocks } => {
                 Some(self.render_group(source_index, indent_level + 1, blocks))
-            }
+            },
             Block::List { items, .. } => {
                 Some(self.render_list(source_index, indent_level + 1, items))
-            }
+            },
             Block::Image { url, alt } => {
                 Some(self.render_image(source_index, indent_level, url.clone(), alt.clone()))
-            }
+            },
             Block::Rule => Some(self.render_rule(source_index, indent_level)),
             Block::FeedHeader {
                 title,
@@ -195,7 +195,7 @@ impl<'a> DocumentLayouter<'a> {
             )),
             Block::MetadataRow { label, value } => {
                 Some(self.render_metadata_row(source_index, indent_level, label, value))
-            }
+            },
             Block::Badge { text } => Some(self.render_badge(source_index, indent_level, text)),
         }
     }

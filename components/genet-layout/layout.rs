@@ -56,9 +56,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    use genet_static_dom::{StaticDocument, StaticNodeId};
     use html5ever::local_name;
     use layout_dom_api::LayoutDom;
-    use genet_static_dom::{StaticDocument, StaticNodeId};
     use taffy::prelude::*;
 
     use super::*;

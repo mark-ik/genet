@@ -45,7 +45,7 @@ fn map_error(error: spartan_protocol::ClientError) -> Error {
         Spartan::Protocol(message) => Error::Protocol(message),
         Spartan::BodyTooLarge { max } => {
             Error::Protocol(format!("spartan response exceeds {max} bytes"))
-        }
+        },
     }
 }
 

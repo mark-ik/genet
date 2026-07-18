@@ -18,9 +18,9 @@
 //! how the [`crate::scry`] receiver is host-fed. The [`crate::flip`] orchestrator builds a donor at
 //! flip time, calls [`capture`](FlipDonor::capture) once, and drops it.
 
-use layout_dom_api::LayoutDom;
-use genet_scripted_dom::ScriptedDom;
 use crate::api::{Cookie, FlipDonor, FormValues, FrameHandle, LayerSet, PortableViewState};
+use genet_scripted_dom::ScriptedDom;
+use layout_dom_api::LayoutDom;
 
 /// A one-shot flip donor over a genet scripted document.
 ///

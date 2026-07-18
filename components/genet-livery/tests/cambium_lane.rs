@@ -138,12 +138,19 @@ fn geometry_properties_reach_taffy() {
         &InteractionStates::default(),
     );
     let fragments = layout(&document, &plane, 320.0, 240.0).unwrap();
-    let stage = document.first_with_class(document.document(), "stage").unwrap();
-    let box_node = document.first_with_class(document.document(), "box").unwrap();
+    let stage = document
+        .first_with_class(document.document(), "stage")
+        .unwrap();
+    let box_node = document
+        .first_with_class(document.document(), "box")
+        .unwrap();
     let stage_fragment = fragments.get(stage).unwrap();
     let box_fragment = fragments.get(box_node).unwrap();
 
-    assert_eq!((stage_fragment.width, stage_fragment.height), (200.0, 120.0));
+    assert_eq!(
+        (stage_fragment.width, stage_fragment.height),
+        (200.0, 120.0)
+    );
     assert_eq!((box_fragment.width, box_fragment.height), (40.0, 40.0));
     assert!((box_fragment.x - 156.0).abs() <= 0.5);
     assert!((box_fragment.y - 80.0).abs() <= 0.5);
@@ -166,8 +173,12 @@ fn flex_properties_reach_taffy() {
         &InteractionStates::default(),
     );
     let fragments = layout(&document, &plane, 320.0, 240.0).unwrap();
-    let first = document.first_with_class(document.document(), "first").unwrap();
-    let second = document.first_with_class(document.document(), "second").unwrap();
+    let first = document
+        .first_with_class(document.document(), "first")
+        .unwrap();
+    let second = document
+        .first_with_class(document.document(), "second")
+        .unwrap();
     let first_fragment = fragments.get(first).unwrap();
     let second_fragment = fragments.get(second).unwrap();
 
@@ -184,17 +195,19 @@ fn flex_order_reorders_layout_items() {
     );
     let plane = resolve_styles(
         &document,
-        &StyleSet::cambium(&[
-            ".row { display: flex; width: 100px; height: 20px; } \
+        &StyleSet::cambium(&[".row { display: flex; width: 100px; height: 20px; } \
              .first { width: 20px; height: 20px; order: 2; } \
-             .second { width: 20px; height: 20px; order: 1; }",
-        ]),
+             .second { width: 20px; height: 20px; order: 1; }"]),
         &Device::screen(320.0, 240.0),
         &InteractionStates::default(),
     );
     let fragments = layout(&document, &plane, 320.0, 240.0).unwrap();
-    let first = document.first_with_class(document.document(), "first").unwrap();
-    let second = document.first_with_class(document.document(), "second").unwrap();
+    let first = document
+        .first_with_class(document.document(), "first")
+        .unwrap();
+    let second = document
+        .first_with_class(document.document(), "second")
+        .unwrap();
     assert!(fragments.get(second).unwrap().x < fragments.get(first).unwrap().x);
 }
 
@@ -205,26 +218,31 @@ fn grid_tracks_and_placements_reach_taffy() {
     );
     let plane = resolve_styles(
         &document,
-        &StyleSet::cambium(&[
-            ".grid { display: grid; width: 200px; height: 100px; \
+        &StyleSet::cambium(&[".grid { display: grid; width: 200px; height: 100px; \
                      grid-template-columns: 40px 1fr; grid-template-rows: 30px 1fr; \
                      column-gap: 10px; row-gap: 5px; } \
              .first { grid-column-start: 1; grid-column-end: 2; \
                      grid-row-start: 1; grid-row-end: 2; } \
              .second { grid-column-start: 2; grid-column-end: 3; \
-                       grid-row-start: 2; grid-row-end: 3; }",
-        ]),
+                       grid-row-start: 2; grid-row-end: 3; }"]),
         &Device::screen(320.0, 240.0),
         &InteractionStates::default(),
     );
     let fragments = layout(&document, &plane, 320.0, 240.0).unwrap();
-    let first = document.first_with_class(document.document(), "first").unwrap();
-    let second = document.first_with_class(document.document(), "second").unwrap();
+    let first = document
+        .first_with_class(document.document(), "first")
+        .unwrap();
+    let second = document
+        .first_with_class(document.document(), "second")
+        .unwrap();
     let first_fragment = fragments.get(first).unwrap();
     let second_fragment = fragments.get(second).unwrap();
 
     assert_eq!((first_fragment.width, first_fragment.height), (40.0, 30.0));
-    assert_eq!((second_fragment.width, second_fragment.height), (150.0, 65.0));
+    assert_eq!(
+        (second_fragment.width, second_fragment.height),
+        (150.0, 65.0)
+    );
     assert!((second_fragment.x - (first_fragment.x + 50.0)).abs() <= 0.5);
     assert!((second_fragment.y - (first_fragment.y + 35.0)).abs() <= 0.5);
 }

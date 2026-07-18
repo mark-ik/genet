@@ -82,8 +82,16 @@ fn parse_line(line: &str) -> Option<GopherItem> {
     let port = parts.next().unwrap_or("70");
 
     match type_char {
-        'i' => Some(GopherItem { kind: GopherKind::Info, display, url: None }),
-        '3' => Some(GopherItem { kind: GopherKind::Error, display, url: None }),
+        'i' => Some(GopherItem {
+            kind: GopherKind::Info,
+            display,
+            url: None,
+        }),
+        '3' => Some(GopherItem {
+            kind: GopherKind::Error,
+            display,
+            url: None,
+        }),
         'h' => {
             // URL items: selector is typically "URL:https://…". Strip the prefix;
             // skip the line when it carries no usable target.
@@ -91,15 +99,23 @@ fn parse_line(line: &str) -> Option<GopherItem> {
             if url.is_empty() {
                 return None;
             }
-            Some(GopherItem { kind: GopherKind::Url, display, url: Some(url.to_string()) })
-        }
+            Some(GopherItem {
+                kind: GopherKind::Url,
+                display,
+                url: Some(url.to_string()),
+            })
+        },
         _ => {
             if host.is_empty() {
                 return None;
             }
             let url = synthesise_gopher_url(type_char, host, port, selector);
-            Some(GopherItem { kind: kind_of(type_char), display, url: Some(url) })
-        }
+            Some(GopherItem {
+                kind: kind_of(type_char),
+                display,
+                url: Some(url),
+            })
+        },
     }
 }
 
@@ -138,7 +154,13 @@ mod tests {
 
     #[test]
     fn standard_item_synthesises_url_with_type_and_selector() {
-        let items = parse(&line('0', "Welcome text", "/welcome.txt", "example.test", "70"));
+        let items = parse(&line(
+            '0',
+            "Welcome text",
+            "/welcome.txt",
+            "example.test",
+            "70",
+        ));
         assert_eq!(
             items,
             vec![GopherItem {
@@ -152,13 +174,22 @@ mod tests {
     #[test]
     fn non_default_port_appears_in_url() {
         let items = parse(&line('1', "Sub", "/sub", "example.test", "7070"));
-        assert_eq!(items[0].url.as_deref(), Some("gopher://example.test:7070/1/sub"));
+        assert_eq!(
+            items[0].url.as_deref(),
+            Some("gopher://example.test:7070/1/sub")
+        );
         assert_eq!(items[0].kind, GopherKind::Submenu);
     }
 
     #[test]
     fn url_item_extracts_target() {
-        let items = parse(&line('h', "External", "URL:https://example.test/", ".", "70"));
+        let items = parse(&line(
+            'h',
+            "External",
+            "URL:https://example.test/",
+            ".",
+            "70",
+        ));
         assert_eq!(items[0].kind, GopherKind::Url);
         assert_eq!(items[0].url.as_deref(), Some("https://example.test/"));
     }
@@ -170,8 +201,22 @@ mod tests {
             line('i', "hello", "", "example.test", "70"),
             line('3', "boom", "", "example.test", "70"),
         ));
-        assert_eq!(items[0], GopherItem { kind: GopherKind::Info, display: "hello".into(), url: None });
-        assert_eq!(items[1], GopherItem { kind: GopherKind::Error, display: "boom".into(), url: None });
+        assert_eq!(
+            items[0],
+            GopherItem {
+                kind: GopherKind::Info,
+                display: "hello".into(),
+                url: None
+            }
+        );
+        assert_eq!(
+            items[1],
+            GopherItem {
+                kind: GopherKind::Error,
+                display: "boom".into(),
+                url: None
+            }
+        );
     }
 
     #[test]

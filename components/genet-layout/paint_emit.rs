@@ -1504,7 +1504,7 @@ pub(crate) fn walk<Id>(
                 LayoutPoint::new(child_origin.0 + r.max.x, child_origin.1 + r.max.y),
             ));
             v
-        }
+        },
         _ => abs_clips.to_vec(),
     };
 
@@ -2079,7 +2079,13 @@ fn emit_object_image(
             kind: ClipKind::Rect(content_rect),
         }));
     }
-    emit_image_rect(object_rect, decoded, image_rendering_of(cv), images, commands);
+    emit_image_rect(
+        object_rect,
+        decoded,
+        image_rendering_of(cv),
+        images,
+        commands,
+    );
     if clips {
         commands.push(PaintCmd::PopClip);
     }
@@ -3725,10 +3731,10 @@ fn stylo_border_style(s: style::values::specified::border::BorderStyle) -> Borde
 
 #[cfg(test)]
 mod tests {
+    use genet_static_dom::{StaticDocument, StaticNodeId};
     use html5ever::local_name;
     use layout_dom_api::LayoutDom;
     use paint_list_api::PaintList;
-    use genet_static_dom::{StaticDocument, StaticNodeId};
     use taffy::prelude::*;
 
     use super::*;

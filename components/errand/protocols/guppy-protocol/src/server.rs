@@ -591,7 +591,10 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert!(buffer[..count].starts_with(b"4 "), "traversal answered with an error");
+        assert!(
+            buffer[..count].starts_with(b"4 "),
+            "traversal answered with an error"
+        );
     }
 
     #[test]

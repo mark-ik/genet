@@ -105,7 +105,7 @@ fn flatten_into(
                 if start < end {
                     out.styles.push((start..end, inherited));
                 }
-            }
+            },
             InlineSpan::Code(t) => {
                 let start = out.text.len();
                 out.text.push_str(t);
@@ -113,13 +113,13 @@ fn flatten_into(
                 if start < end {
                     out.styles.push((start..end, inherited.with_monospace()));
                 }
-            }
+            },
             InlineSpan::Emphasis(inner) => {
                 flatten_into(inner, inherited.with_italic(), adornment, base_scheme, out);
-            }
+            },
             InlineSpan::Strong(inner) => {
                 flatten_into(inner, inherited.with_bold(), adornment, base_scheme, out);
-            }
+            },
             InlineSpan::Link {
                 url, spans: inner, ..
             } => {
@@ -136,13 +136,13 @@ fn flatten_into(
                 if link_start < link_end {
                     out.links.push((link_start..link_end, url.clone()));
                 }
-            }
+            },
             InlineSpan::SoftBreak => {
                 out.text.push(' ');
-            }
+            },
             InlineSpan::LineBreak => {
                 out.text.push('\n');
-            }
+            },
         }
     }
 }

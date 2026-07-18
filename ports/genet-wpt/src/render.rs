@@ -393,7 +393,10 @@ mod tests {
             "@font-face { font-family: Ahem; src: url('/fonts/Ahem.ttf'); }".to_owned(),
             ".x { background: url(other.png); }".to_owned(),
         ];
-        assert_eq!(livery_font_urls(&sheets), vec!["/fonts/Ahem.ttf".to_owned()]);
+        assert_eq!(
+            livery_font_urls(&sheets),
+            vec!["/fonts/Ahem.ttf".to_owned()]
+        );
     }
 
     #[test]

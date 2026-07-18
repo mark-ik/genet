@@ -133,7 +133,7 @@ mod imp {
                 RawWindowHandle::Win32(handle) => HWND(handle.hwnd.get() as *mut _),
                 RawWindowHandle::WinRt(_) => {
                     return Err("WinRT window handles are not supported".to_string());
-                }
+                },
                 _ => return Err("window is not backed by a Win32 HWND".to_string()),
             };
             let adapter = SubclassingAdapter::new(

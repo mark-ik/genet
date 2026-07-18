@@ -41,7 +41,7 @@ pub(super) fn expand_fenced_blocks(blocks: &mut Vec<Block>) {
             Block::Quote { mut blocks } => {
                 expand_fenced_blocks(&mut blocks);
                 out.push(Block::Quote { blocks });
-            }
+            },
             Block::List { ordered, items } => {
                 let expanded_items = items
                     .into_iter()
@@ -54,7 +54,7 @@ pub(super) fn expand_fenced_blocks(blocks: &mut Vec<Block>) {
                     ordered,
                     items: expanded_items,
                 });
-            }
+            },
             other => out.push(other),
         }
     }
@@ -226,7 +226,7 @@ pub(super) fn rewrite_inline_extensions(blocks: &mut Vec<Block>) {
                 for tag in hashtags {
                     out.push(Block::Badge { text: tag });
                 }
-            }
+            },
             Block::Heading { level, spans } => {
                 // Hashtags inside headings aren't usually intended as tags;
                 // leave wikilinks rewritten but don't extract hashtags.
@@ -235,11 +235,11 @@ pub(super) fn rewrite_inline_extensions(blocks: &mut Vec<Block>) {
                     level,
                     spans: rewritten,
                 });
-            }
+            },
             Block::Quote { mut blocks } => {
                 rewrite_inline_extensions(&mut blocks);
                 out.push(Block::Quote { blocks });
-            }
+            },
             Block::List { ordered, items } => {
                 let rewritten_items = items
                     .into_iter()
@@ -252,7 +252,7 @@ pub(super) fn rewrite_inline_extensions(blocks: &mut Vec<Block>) {
                     ordered,
                     items: rewritten_items,
                 });
-            }
+            },
             other => out.push(other),
         }
     }
@@ -295,7 +295,7 @@ fn merge_adjacent_text(spans: Vec<InlineSpan>) -> Vec<InlineSpan> {
                     out.push(InlineSpan::Text(mem::take(&mut buffer)));
                 }
                 out.push(other);
-            }
+            },
         }
     }
     if !buffer.is_empty() {
@@ -311,12 +311,12 @@ fn rewrite_one_span(span: InlineSpan, out: &mut Vec<InlineSpan>, hashtags: &mut 
             let (rewritten, mut found) = rewrite_spans(inner);
             hashtags.append(&mut found);
             out.push(InlineSpan::Emphasis(rewritten));
-        }
+        },
         InlineSpan::Strong(inner) => {
             let (rewritten, mut found) = rewrite_spans(inner);
             hashtags.append(&mut found);
             out.push(InlineSpan::Strong(rewritten));
-        }
+        },
         InlineSpan::Link {
             url,
             title,
@@ -331,7 +331,7 @@ fn rewrite_one_span(span: InlineSpan, out: &mut Vec<InlineSpan>, hashtags: &mut 
                 spans: inner,
                 predicate: None,
             });
-        }
+        },
         other => out.push(other),
     }
 }
@@ -346,11 +346,11 @@ fn rewrite_one_span_keep_tags(
         InlineSpan::Emphasis(inner) => {
             let (rewritten, _) = rewrite_spans_no_hashtags(inner);
             out.push(InlineSpan::Emphasis(rewritten));
-        }
+        },
         InlineSpan::Strong(inner) => {
             let (rewritten, _) = rewrite_spans_no_hashtags(inner);
             out.push(InlineSpan::Strong(rewritten));
-        }
+        },
         InlineSpan::Link { .. } => out.push(span),
         other => out.push(other),
     }

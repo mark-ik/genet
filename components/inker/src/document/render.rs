@@ -194,12 +194,12 @@ impl Block {
                 out.push(' ');
                 write_inline_markdown(spans, out);
                 out.push_str("\n\n");
-            }
+            },
             Self::Paragraph { spans } => {
                 out.push_str(&pad);
                 write_inline_markdown(spans, out);
                 out.push_str("\n\n");
-            }
+            },
             Self::CodeBlock { language, text } => {
                 out.push_str(&pad);
                 out.push_str("```");
@@ -213,7 +213,7 @@ impl Block {
                 }
                 out.push_str(&pad);
                 out.push_str("```\n\n");
-            }
+            },
             Self::Quote { blocks } => {
                 let mut inner = String::new();
                 for block in blocks {
@@ -226,7 +226,7 @@ impl Block {
                     out.push('\n');
                 }
                 out.push('\n');
-            }
+            },
             Self::List { ordered, items } => {
                 for (i, item) in items.iter().enumerate() {
                     out.push_str(&pad);
@@ -251,11 +251,11 @@ impl Block {
                     }
                 }
                 out.push('\n');
-            }
+            },
             Self::Image { url, alt } => {
                 out.push_str(&pad);
                 out.push_str(&format!("![{alt}]({url})\n\n"));
-            }
+            },
             Self::Preformatted { text } => {
                 out.push_str(&pad);
                 out.push_str("```\n");
@@ -265,7 +265,7 @@ impl Block {
                 }
                 out.push_str(&pad);
                 out.push_str("```\n\n");
-            }
+            },
             Self::Rule => out.push_str("---\n\n"),
             Self::FeedHeader {
                 title,
@@ -284,7 +284,7 @@ impl Block {
                 if let Some(url) = source_url {
                     out.push_str(&format!("[Open source]({url})\n\n"));
                 }
-            }
+            },
             Self::FeedEntry {
                 title,
                 date,
@@ -306,20 +306,20 @@ impl Block {
                 if let Some(url) = source_url {
                     out.push_str(&format!("[Open source]({url})\n\n"));
                 }
-            }
+            },
             Self::MetadataRow { label, value } => {
                 out.push_str(&format!("**{label}:** {value}\n\n"));
-            }
+            },
             Self::Badge { text } => {
                 out.push_str(&format!("> *{text}*\n\n"));
-            }
+            },
             Self::Table {
                 alignments,
                 header,
                 rows,
             } => {
                 write_markdown_table(alignments, header, rows, out, &pad);
-            }
+            },
         }
     }
 
@@ -332,7 +332,7 @@ impl Block {
                     out.push('\n');
                 }
                 out.push_str("```\n");
-            }
+            },
             Self::Heading { level, spans } => {
                 let prefix = match level {
                     1 => "# ",
@@ -342,7 +342,7 @@ impl Block {
                 out.push_str(prefix);
                 out.push_str(&inline_text(spans));
                 out.push('\n');
-            }
+            },
             Self::Paragraph { spans } => {
                 // A link-only paragraph (e.g. a parsed `=>` line, or a bare
                 // link on its own line) IS the link line — emitting its text
@@ -367,7 +367,7 @@ impl Block {
                     }
                     out.push('\n');
                 }
-            }
+            },
             Self::CodeBlock { language, text } => {
                 out.push_str("```");
                 if let Some(lang) = language {
@@ -379,7 +379,7 @@ impl Block {
                     out.push('\n');
                 }
                 out.push_str("```\n");
-            }
+            },
             Self::Quote { blocks } => {
                 let mut inner = String::new();
                 for block in blocks {
@@ -390,7 +390,7 @@ impl Block {
                     out.push_str(line);
                     out.push('\n');
                 }
-            }
+            },
             Self::List { items, .. } => {
                 for item in items {
                     let mut inner = String::new();
@@ -402,7 +402,7 @@ impl Block {
                     out.push_str(trimmed);
                     out.push('\n');
                 }
-            }
+            },
             Self::Image { url, alt } => {
                 out.push_str("=> ");
                 out.push_str(url);
@@ -411,7 +411,7 @@ impl Block {
                     out.push_str(alt);
                 }
                 out.push('\n');
-            }
+            },
             Self::Preformatted { text } => {
                 out.push_str("```\n");
                 out.push_str(text);
@@ -419,7 +419,7 @@ impl Block {
                     out.push('\n');
                 }
                 out.push_str("```\n");
-            }
+            },
             Self::Rule => out.push('\n'),
             Self::FeedHeader {
                 title,
@@ -438,7 +438,7 @@ impl Block {
                 if let Some(url) = source_url {
                     out.push_str(&format!("=> {url} Open source\n"));
                 }
-            }
+            },
             Self::FeedEntry {
                 title,
                 date,
@@ -460,13 +460,13 @@ impl Block {
                 if let Some(url) = source_url {
                     out.push_str(&format!("=> {url} Open source\n"));
                 }
-            }
+            },
             Self::MetadataRow { label, value } => {
                 out.push_str(&format!("{label}: {value}\n"));
-            }
+            },
             Self::Badge { text } => {
                 out.push_str(&format!("> {text}\n"));
-            }
+            },
         }
     }
 }
@@ -496,7 +496,7 @@ impl Block {
                     out.push_str(&format!("source: {url}\n"));
                 }
                 out.push_str("```\n\n");
-            }
+            },
             Self::FeedEntry {
                 title,
                 date,
@@ -519,12 +519,12 @@ impl Block {
                     out.push_str(&format!("source: {url}\n"));
                 }
                 out.push_str("```\n\n");
-            }
+            },
             Self::MetadataRow { label, value } => {
                 out.push_str("```metadata-row\n");
                 out.push_str(&format!("{label}: {value}\n"));
                 out.push_str("```\n\n");
-            }
+            },
             Self::Badge { text } => {
                 out.push_str("```badge\n");
                 out.push_str(text);
@@ -532,7 +532,7 @@ impl Block {
                     out.push('\n');
                 }
                 out.push_str("```\n\n");
-            }
+            },
             // Recurse into containers so semantic blocks nested inside
             // quotes / list items also serialise as fences.
             Self::Quote { blocks } => {
@@ -546,7 +546,7 @@ impl Block {
                     out.push('\n');
                 }
                 out.push('\n');
-            }
+            },
             Self::List { ordered, items } => {
                 for (i, item) in items.iter().enumerate() {
                     if *ordered {
@@ -562,7 +562,7 @@ impl Block {
                     out.push('\n');
                 }
                 out.push('\n');
-            }
+            },
             // For everything else, knot output and markdown output match.
             other => other.write_markdown(out, 0),
         }
@@ -577,24 +577,24 @@ fn write_inline_markdown(spans: &[InlineSpan], out: &mut String) {
                 out.push('`');
                 out.push_str(t);
                 out.push('`');
-            }
+            },
             InlineSpan::Emphasis(s) => {
                 out.push('*');
                 write_inline_markdown(s, out);
                 out.push('*');
-            }
+            },
             InlineSpan::Strong(s) => {
                 out.push_str("**");
                 write_inline_markdown(s, out);
                 out.push_str("**");
-            }
+            },
             InlineSpan::Link { url, spans, .. } => {
                 out.push('[');
                 write_inline_markdown(spans, out);
                 out.push_str("](");
                 out.push_str(url);
                 out.push(')');
-            }
+            },
             InlineSpan::SoftBreak => out.push('\n'),
             InlineSpan::LineBreak => out.push_str("  \n"),
         }
@@ -609,8 +609,8 @@ fn is_link_only(spans: &[InlineSpan]) -> bool {
     for span in spans {
         match span {
             InlineSpan::Link { .. } => saw_link = true,
-            InlineSpan::Text(text) if text.trim().is_empty() => {}
-            InlineSpan::SoftBreak | InlineSpan::LineBreak => {}
+            InlineSpan::Text(text) if text.trim().is_empty() => {},
+            InlineSpan::SoftBreak | InlineSpan::LineBreak => {},
             _ => return false,
         }
     }
@@ -624,13 +624,13 @@ fn collect_link_targets(span: &InlineSpan, out: &mut Vec<(String, String)>) {
             for inner in spans {
                 collect_link_targets(inner, out);
             }
-        }
+        },
         InlineSpan::Emphasis(spans) | InlineSpan::Strong(spans) => {
             for inner in spans {
                 collect_link_targets(inner, out);
             }
-        }
-        _ => {}
+        },
+        _ => {},
     }
 }
 

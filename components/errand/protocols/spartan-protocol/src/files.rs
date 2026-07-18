@@ -88,7 +88,7 @@ impl Handler for FileHandler {
                 SpartanResponse::ClientError {
                     message: format!("File {} not found.", request.path),
                 }
-            }
+            },
             Err(_) => SpartanResponse::ServerError {
                 message: "Could not read file.".to_string(),
             },
@@ -116,7 +116,10 @@ mod tests {
             PathBuf::from("/srv/spartan").join("sub").join("index.gmi")
         );
         assert!(handler.resolve("/../etc/passwd").is_none());
-        assert!(handler.resolve("/%2e%2e/etc/passwd").is_none(), "encoded dots");
+        assert!(
+            handler.resolve("/%2e%2e/etc/passwd").is_none(),
+            "encoded dots"
+        );
         assert!(handler.resolve("/a%5Cb").is_none(), "backslash segments");
     }
 

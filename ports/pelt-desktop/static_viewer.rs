@@ -102,10 +102,10 @@ pub(crate) mod windowed {
     use std::sync::Arc;
     use std::time::Instant;
 
-    use netrender::external_texture::ExternalTexturePlacement;
-    use netrender::{ColorLoad, NetrenderOptions, Scene};
     use genet_layout::ScrollKey;
     use genet_winit_host::{SurfaceHost, wheel_delta_from_winit};
+    use netrender::external_texture::ExternalTexturePlacement;
+    use netrender::{ColorLoad, NetrenderOptions, Scene};
     use winit::application::ApplicationHandler;
     use winit::dpi::PhysicalSize;
     use winit::event::{ElementState, MouseButton, WindowEvent};

@@ -145,7 +145,7 @@ impl Converter {
             | Event::FootnoteReference(_)
             | Event::TaskListMarker(_)
             | Event::InlineMath(_)
-            | Event::DisplayMath(_) => {}
+            | Event::DisplayMath(_) => {},
         }
     }
 
@@ -154,36 +154,36 @@ impl Converter {
             Tag::Paragraph => {
                 self.block_stack.push(BlockFrame::Paragraph);
                 self.inline_stack.push(Vec::new());
-            }
+            },
             Tag::Heading { level, .. } => {
                 let level = heading_level(level);
                 self.block_stack.push(BlockFrame::Heading { level });
                 self.inline_stack.push(Vec::new());
-            }
+            },
             Tag::BlockQuote(_) => {
                 self.block_stack.push(BlockFrame::Quote {
                     children: Vec::new(),
                 });
-            }
+            },
             Tag::CodeBlock(kind) => {
                 let language = match kind {
                     CodeBlockKind::Indented => None,
                     CodeBlockKind::Fenced(info) => {
                         let info = info.into_string();
                         if info.is_empty() { None } else { Some(info) }
-                    }
+                    },
                 };
                 self.block_stack.push(BlockFrame::CodeBlock {
                     language,
                     text: String::new(),
                 });
-            }
+            },
             Tag::List(start) => {
                 self.block_stack.push(BlockFrame::List {
                     ordered: start.is_some(),
                     items: Vec::new(),
                 });
-            }
+            },
             Tag::Item => {
                 self.block_stack.push(BlockFrame::Item {
                     children: Vec::new(),
@@ -193,17 +193,17 @@ impl Converter {
                 // spans are captured. Loose-list items push their own frame
                 // at Tag::Paragraph and ignore this one.
                 self.inline_stack.push(Vec::new());
-            }
+            },
             Tag::Emphasis | Tag::Strong => {
                 self.inline_stack.push(Vec::new());
-            }
+            },
             Tag::Strikethrough | Tag::Superscript | Tag::Subscript => {
                 // Strikethrough / superscript / subscript lower to a no-op
                 // wrapper for v1: the inline model has no variant for them,
                 // but losing the inner text would be worse than losing the
                 // styling.
                 self.inline_stack.push(Vec::new());
-            }
+            },
             Tag::Link {
                 dest_url, title, ..
             } => {
@@ -212,7 +212,7 @@ impl Converter {
                     title: optional(title.into_string()),
                 });
                 self.inline_stack.push(Vec::new());
-            }
+            },
             Tag::Image { .. } => {
                 // Render images by extracting alt text only (lossy v1). We
                 // push an inline frame to collect the alt text, then on
@@ -221,7 +221,7 @@ impl Converter {
                 // to an inline image span variant yet.
                 self.image_depth = self.image_depth.saturating_add(1);
                 self.inline_stack.push(Vec::new());
-            }
+            },
             // Tables, definition lists, footnotes, HTML blocks, and metadata
             // blocks are dropped in v1. We still push a no-op frame so the
             // matching End event balances.
@@ -237,7 +237,7 @@ impl Converter {
             | Tag::MetadataBlock(_) => {
                 self.block_stack.push(BlockFrame::Paragraph);
                 self.inline_stack.push(Vec::new());
-            }
+            },
         }
     }
 
@@ -247,7 +247,7 @@ impl Converter {
                 let spans = self.inline_stack.pop().unwrap_or_default();
                 self.block_stack.pop();
                 self.attach_block(Block::Paragraph { spans });
-            }
+            },
             TagEnd::Heading(_) => {
                 let spans = self.inline_stack.pop().unwrap_or_default();
                 let level = match self.block_stack.pop() {
@@ -255,22 +255,22 @@ impl Converter {
                     _ => 1,
                 };
                 self.attach_block(Block::Heading { level, spans });
-            }
+            },
             TagEnd::BlockQuote(_) => {
                 if let Some(BlockFrame::Quote { children }) = self.block_stack.pop() {
                     self.attach_block(Block::Quote { blocks: children });
                 }
-            }
+            },
             TagEnd::CodeBlock => {
                 if let Some(BlockFrame::CodeBlock { language, text }) = self.block_stack.pop() {
                     self.attach_block(Block::CodeBlock { language, text });
                 }
-            }
+            },
             TagEnd::List(_) => {
                 if let Some(BlockFrame::List { ordered, items }) = self.block_stack.pop() {
                     self.attach_block(Block::List { ordered, items });
                 }
-            }
+            },
             TagEnd::Item => {
                 let item_spans = self.inline_stack.pop().unwrap_or_default();
                 if let Some(BlockFrame::Item { mut children }) = self.block_stack.pop() {
@@ -284,22 +284,22 @@ impl Converter {
                         items.push(children);
                     }
                 }
-            }
+            },
             TagEnd::Emphasis => {
                 let spans = self.inline_stack.pop().unwrap_or_default();
                 self.push_inline(InlineSpan::Emphasis(spans));
-            }
+            },
             TagEnd::Strong => {
                 let spans = self.inline_stack.pop().unwrap_or_default();
                 self.push_inline(InlineSpan::Strong(spans));
-            }
+            },
             TagEnd::Strikethrough | TagEnd::Superscript | TagEnd::Subscript => {
                 // Lower to inner spans (see Start handler).
                 let spans = self.inline_stack.pop().unwrap_or_default();
                 for span in spans {
                     self.push_inline(span);
                 }
-            }
+            },
             TagEnd::Link => {
                 let spans = self.inline_stack.pop().unwrap_or_default();
                 if let Some(builder) = self.link_stack.pop() {
@@ -310,7 +310,7 @@ impl Converter {
                         predicate: None,
                     });
                 }
-            }
+            },
             TagEnd::Image => {
                 let spans = self.inline_stack.pop().unwrap_or_default();
                 self.image_depth = self.image_depth.saturating_sub(1);
@@ -318,7 +318,7 @@ impl Converter {
                 if !alt.is_empty() {
                     self.push_inline(InlineSpan::Text(alt));
                 }
-            }
+            },
             TagEnd::Table
             | TagEnd::TableHead
             | TagEnd::TableRow
@@ -331,7 +331,7 @@ impl Converter {
             | TagEnd::MetadataBlock(_) => {
                 self.inline_stack.pop();
                 self.block_stack.pop();
-            }
+            },
         }
     }
 
@@ -368,7 +368,7 @@ impl Converter {
                 BlockFrame::Quote { children } | BlockFrame::Item { children } => {
                     children.push(block);
                     return;
-                }
+                },
                 BlockFrame::Heading { .. }
                 | BlockFrame::Paragraph
                 | BlockFrame::List { .. }
@@ -376,7 +376,7 @@ impl Converter {
                     // These are not container blocks for *other* blocks; keep
                     // walking outward.
                     continue;
-                }
+                },
             }
         }
         self.root_blocks.push(block);
@@ -407,7 +407,7 @@ fn first_h1_text(blocks: &[Block]) -> Option<String> {
         Block::Heading { level: 1, spans } => {
             let text = inline_text(spans);
             if text.is_empty() { None } else { Some(text) }
-        }
+        },
         _ => None,
     })
 }

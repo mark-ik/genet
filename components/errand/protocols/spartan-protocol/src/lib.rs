@@ -96,7 +96,7 @@ pub fn parse_prompt_line(line: &str) -> Option<(&str, Option<&str>)> {
         Some((target, label)) => {
             let label = label.trim();
             Some((target, (!label.is_empty()).then_some(label)))
-        }
+        },
         None => Some((rest, None)),
     }
 }

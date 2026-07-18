@@ -672,8 +672,8 @@ mod tests {
     use crate::image_decode::ImagePlane;
     use crate::layout::layout;
     use crate::style::StylePlane;
-    use layout_dom_api::LocalName;
     use genet_static_dom::{StaticDocument, StaticNodeId};
+    use layout_dom_api::LocalName;
 
     fn find_p(doc: &StaticDocument) -> StaticNodeId {
         let mut q = vec![doc.document()];

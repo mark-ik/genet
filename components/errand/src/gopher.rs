@@ -80,7 +80,10 @@ mod tests {
 
     #[test]
     fn type_and_selector_split_at_the_first_char() {
-        assert_eq!(split("gopher://example.org/0/about.txt"), ('0', "/about.txt".into()));
+        assert_eq!(
+            split("gopher://example.org/0/about.txt"),
+            ('0', "/about.txt".into())
+        );
         assert_eq!(split("gopher://example.org/1/dir"), ('1', "/dir".into()));
     }
 

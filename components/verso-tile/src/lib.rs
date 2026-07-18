@@ -32,6 +32,6 @@
 
 pub mod api;
 pub mod flip;
-pub mod scry;
 #[cfg(feature = "genet-donor")]
 pub mod genet;
+pub mod scry;

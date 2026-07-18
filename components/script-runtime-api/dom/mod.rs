@@ -52,10 +52,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use genet_scripted_dom::{NodeId, ScriptedDom};
 use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, NodeKind, QualName};
 use markup5ever::Prefix;
 use script_engine_api::{CallCx, NativeFn, ScriptEngine};
-use genet_scripted_dom::{NodeId, ScriptedDom};
 
 use crate::HostState;
 

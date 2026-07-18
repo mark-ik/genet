@@ -735,7 +735,9 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
         // `IncrementalLayout::advance_css_animations`), because Stylo never
         // promotes an animation out of `Pending` on its own.
         ctx.animations.get_animation_declarations(
-            &style::animation::AnimationSetKey::new_for_non_pseudo(style::dom::TNode::opaque(&style::dom::TElement::as_node(self))),
+            &style::animation::AnimationSetKey::new_for_non_pseudo(style::dom::TNode::opaque(
+                &style::dom::TElement::as_node(self),
+            )),
             ctx.current_time_for_animations,
             Self::plane_from_ctx().shared_lock(),
         )
@@ -748,7 +750,9 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
         // Interpolated CSS-transition declarations at the context's clock; the
         // `RESTYLE_CSS_TRANSITIONS` replacement path re-splices these per tick.
         ctx.animations.get_transition_declarations(
-            &style::animation::AnimationSetKey::new_for_non_pseudo(style::dom::TNode::opaque(&style::dom::TElement::as_node(self))),
+            &style::animation::AnimationSetKey::new_for_non_pseudo(style::dom::TNode::opaque(
+                &style::dom::TElement::as_node(self),
+            )),
             ctx.current_time_for_animations,
             Self::plane_from_ctx().shared_lock(),
         )
@@ -895,26 +899,20 @@ impl<'a, D: LayoutDom> TElement for StyleNodeRef<'a, D> {
         self.has_css_animations(ctx, None) || self.has_css_transitions(ctx, None)
     }
 
-    fn has_css_animations(
-        &self,
-        ctx: &SharedStyleContext,
-        pseudo: Option<PseudoElement>,
-    ) -> bool {
-        ctx.animations.has_active_animations(&style::animation::AnimationSetKey::new(
-            style::dom::TNode::opaque(&style::dom::TElement::as_node(self)),
-            pseudo,
-        ))
+    fn has_css_animations(&self, ctx: &SharedStyleContext, pseudo: Option<PseudoElement>) -> bool {
+        ctx.animations
+            .has_active_animations(&style::animation::AnimationSetKey::new(
+                style::dom::TNode::opaque(&style::dom::TElement::as_node(self)),
+                pseudo,
+            ))
     }
 
-    fn has_css_transitions(
-        &self,
-        ctx: &SharedStyleContext,
-        pseudo: Option<PseudoElement>,
-    ) -> bool {
-        ctx.animations.has_active_transitions(&style::animation::AnimationSetKey::new(
-            style::dom::TNode::opaque(&style::dom::TElement::as_node(self)),
-            pseudo,
-        ))
+    fn has_css_transitions(&self, ctx: &SharedStyleContext, pseudo: Option<PseudoElement>) -> bool {
+        ctx.animations
+            .has_active_transitions(&style::animation::AnimationSetKey::new(
+                style::dom::TNode::opaque(&style::dom::TElement::as_node(self)),
+                pseudo,
+            ))
     }
 
     fn shadow_root(&self) -> Option<<Self::ConcreteNode as TNode>::ConcreteShadowRoot> {

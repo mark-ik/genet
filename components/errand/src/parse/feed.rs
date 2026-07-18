@@ -12,9 +12,9 @@
 //! transport crate should not carry); a consumer parses it and builds a [`Feed`]
 //! itself — the public fields make that straightforward.
 
+use quick_xml::Reader;
 use quick_xml::escape::unescape;
 use quick_xml::events::Event;
-use quick_xml::Reader;
 
 /// A parsed feed: channel-level metadata plus entries, flavour-neutral.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -68,7 +68,7 @@ pub fn parse(body: &str) -> Result<Feed, FeedError> {
                         state.set_link(href);
                     }
                 }
-            }
+            },
             Ok(Event::Empty(e)) => {
                 // Atom self-closing <link href="..." rel="alternate"/>.
                 let local = local_name(e.name().as_ref());
@@ -77,27 +77,27 @@ pub fn parse(body: &str) -> Result<Feed, FeedError> {
                         state.set_link(href);
                     }
                 }
-            }
+            },
             Ok(Event::Text(t)) => {
                 let raw = std::str::from_utf8(t.as_ref()).map_err(err)?;
                 let unescaped = unescape(raw).map_err(err)?.into_owned();
                 state.append_text(&unescaped);
-            }
+            },
             Ok(Event::GeneralRef(r)) => {
                 // quick-xml 0.39 emits entity references as their own event,
                 // split out of surrounding Text. Resolve and append.
                 let name = std::str::from_utf8(r.as_ref()).map_err(err)?;
                 let unescaped = unescape(&format!("&{name};")).map_err(err)?.into_owned();
                 state.append_text(&unescaped);
-            }
+            },
             Ok(Event::CData(c)) => {
                 let raw = std::str::from_utf8(c.as_ref()).map_err(err)?;
                 state.append_text(raw);
-            }
+            },
             Ok(Event::End(e)) => {
                 let local = local_name(e.name().as_ref());
                 state.end_element(&local);
-            }
+            },
             Ok(Event::Eof) => {
                 if !state.path.is_empty() {
                     return Err(FeedError(format!(
@@ -106,9 +106,9 @@ pub fn parse(body: &str) -> Result<Feed, FeedError> {
                     )));
                 }
                 break;
-            }
+            },
             Err(e) => return Err(err(e)),
-            _ => {}
+            _ => {},
         }
         buf.clear();
     }
@@ -127,7 +127,7 @@ pub fn strip_html_tags(input: &str) -> String {
             '<' => in_tag = true,
             '>' => in_tag = false,
             _ if !in_tag => out.push(ch),
-            _ => {}
+            _ => {},
         }
     }
     let mut collapsed = String::with_capacity(out.len());
@@ -192,19 +192,19 @@ impl State {
                         if entry.title.is_none() {
                             entry.title = Some(trimmed.to_string());
                         }
-                    }
+                    },
                     "link" => {
                         // Atom emits an empty <link/> with href; only RSS-style
                         // text content reaches here.
                         if entry.link.is_none() {
                             entry.link = Some(trimmed.to_string());
                         }
-                    }
+                    },
                     "pubDate" | "published" | "updated" => {
                         if entry.date.is_none() {
                             entry.date = Some(trimmed.to_string());
                         }
-                    }
+                    },
                     "description" | "summary" | "content" => {
                         if entry.summary.is_none() {
                             let had_tags = trimmed.contains('<');
@@ -213,8 +213,8 @@ impl State {
                                 self.feed.html_stripped += 1;
                             }
                         }
-                    }
-                    _ => {}
+                    },
+                    _ => {},
                 }
             } else {
                 match name {
@@ -224,25 +224,25 @@ impl State {
                         {
                             self.feed.title = Some(trimmed.to_string());
                         }
-                    }
+                    },
                     "subtitle" | "description" => {
                         if matches!(parent, Some("channel") | Some("feed"))
                             && self.feed.subtitle.is_none()
                         {
                             self.feed.subtitle = Some(strip_html_tags(trimmed));
                         }
-                    }
+                    },
                     "link" => {
                         if matches!(parent, Some("channel")) && self.feed.link.is_none() {
                             self.feed.link = Some(trimmed.to_string());
                         }
-                    }
+                    },
                     "language" => {
                         if matches!(parent, Some("channel")) && self.feed.lang.is_none() {
                             self.feed.lang = Some(trimmed.to_string());
                         }
-                    }
-                    _ => {}
+                    },
+                    _ => {},
                 }
             }
         }
@@ -328,9 +328,15 @@ mod tests {
         assert_eq!(feed.lang.as_deref(), Some("en"));
         assert_eq!(feed.entries.len(), 2);
         assert_eq!(feed.entries[0].title.as_deref(), Some("First post"));
-        assert_eq!(feed.entries[0].link.as_deref(), Some("https://example.test/1"));
+        assert_eq!(
+            feed.entries[0].link.as_deref(),
+            Some("https://example.test/1")
+        );
         assert_eq!(feed.entries[0].summary.as_deref(), Some("A bold summary."));
-        assert_eq!(feed.html_stripped, 1, "the first item's HTML summary was stripped");
+        assert_eq!(
+            feed.html_stripped, 1,
+            "the first item's HTML summary was stripped"
+        );
     }
 
     #[test]
@@ -341,7 +347,10 @@ mod tests {
         assert_eq!(feed.subtitle.as_deref(), Some("An atom feed"));
         assert_eq!(feed.entries.len(), 1);
         assert_eq!(feed.entries[0].link.as_deref(), Some("https://atom.test/a"));
-        assert_eq!(feed.entries[0].date.as_deref(), Some("2026-01-01T00:00:00Z"));
+        assert_eq!(
+            feed.entries[0].date.as_deref(),
+            Some("2026-01-01T00:00:00Z")
+        );
     }
 
     #[test]

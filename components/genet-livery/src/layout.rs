@@ -9,9 +9,8 @@ use livery::{
         FlexWrap as CssFlexWrap, Float as CssFloat, FontSize, Gap as CssGap,
         GridAutoFlow as CssGridAutoFlow, GridPlacement as CssGridPlacement,
         GridTemplate as CssGridTemplate, GridTrack as CssGridTrack, Inset, Length,
-        LengthPercentage as CssLengthPercentage, LineHeight, Margin,
-        Overflow as CssOverflow, Position as CssPosition, Size as CssSize, VerticalAlign,
-        WhiteSpaceCollapse,
+        LengthPercentage as CssLengthPercentage, LineHeight, Margin, Overflow as CssOverflow,
+        Position as CssPosition, Size as CssSize, VerticalAlign, WhiteSpaceCollapse,
     },
 };
 use taffy::{
@@ -301,7 +300,9 @@ where
                 let (measured_width, measured_height) =
                     measured.unwrap_or((context.width, context.height));
                 Size {
-                    width: known.width.unwrap_or(measured_width.min(available_width.max(0.0))),
+                    width: known
+                        .width
+                        .unwrap_or(measured_width.min(available_width.max(0.0))),
                     height: known.height.unwrap_or(measured_height),
                 }
             },
@@ -330,9 +331,7 @@ where
         let Some(style) = styles.get(*id) else {
             continue;
         };
-        if style.display != CssDisplay::Inline
-            && has_inline_block_ancestor(dom, styles, *id)
-        {
+        if style.display != CssDisplay::Inline && has_inline_block_ancestor(dom, styles, *id) {
             // The inline formatting pass treats an inline-block as atomic,
             // so retain its nested block descendants from the preliminary
             // tree for the paint walk.
@@ -395,7 +394,10 @@ where
                 let computed = self.styles.get(id).cloned().unwrap_or_default();
                 let font_size = font_size_px(&computed.font_size, parent_font_size);
                 let mut inline_container_style = computed.clone();
-                if matches!(computed.position, CssPosition::Absolute | CssPosition::Fixed) {
+                if matches!(
+                    computed.position,
+                    CssPosition::Absolute | CssPosition::Fixed
+                ) {
                     // Once positioned, an inline element establishes a block
                     // container; its own vertical-align does not offset the
                     // text inside that container.
@@ -469,7 +471,11 @@ where
             }
         }
         if !inline_group.is_empty() {
-            children.push(self.build_inline_group(&inline_group, parent_style, parent_font_size)?);
+            children.push(self.build_inline_group(
+                &inline_group,
+                parent_style,
+                parent_font_size,
+            )?);
         }
         Ok(children)
     }
@@ -495,7 +501,10 @@ where
             && roots.iter().all(|candidate| {
                 *candidate == root
                     || (self.dom.kind(*candidate) == NodeKind::Text
-                        && self.dom.text(*candidate).is_some_and(|text| text.trim().is_empty()))
+                        && self
+                            .dom
+                            .text(*candidate)
+                            .is_some_and(|text| text.trim().is_empty()))
             })
         {
             return self
@@ -732,11 +741,7 @@ where
     }
 }
 
-fn has_inline_block_ancestor<D>(
-    dom: &D,
-    styles: &StylePlane<D::NodeId>,
-    id: D::NodeId,
-) -> bool
+fn has_inline_block_ancestor<D>(dom: &D, styles: &StylePlane<D::NodeId>, id: D::NodeId) -> bool
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -754,18 +759,23 @@ where
     false
 }
 
-fn first_flow_child<D>(dom: &D, styles: &StylePlane<D::NodeId>, parent: D::NodeId) -> Option<D::NodeId>
+fn first_flow_child<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    parent: D::NodeId,
+) -> Option<D::NodeId>
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    dom.dom_children(parent).find(|child| match dom.kind(*child) {
-        NodeKind::Text => dom.text(*child).is_some_and(|text| !text.trim().is_empty()),
-        NodeKind::Element => styles
-            .get(*child)
-            .is_some_and(|style| style.display != CssDisplay::None),
-        _ => false,
-    })
+    dom.dom_children(parent)
+        .find(|child| match dom.kind(*child) {
+            NodeKind::Text => dom.text(*child).is_some_and(|text| !text.trim().is_empty()),
+            NodeKind::Element => styles
+                .get(*child)
+                .is_some_and(|style| style.display != CssDisplay::None),
+            _ => false,
+        })
 }
 
 /// Return the topmost pointer-events-enabled element whose layout fragment
@@ -936,15 +946,14 @@ fn apply_replaced_image_size<D>(
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    let intrinsic = image_intrinsic_size(dom, id, image_sources).filter(|(width, height)| {
-        *width > 0.0 && *height > 0.0
-    });
+    let intrinsic = image_intrinsic_size(dom, id, image_sources)
+        .filter(|(width, height)| *width > 0.0 && *height > 0.0);
 
     // HTML width/height attributes are presentational hints for replaced
     // elements.  A definite CSS declaration wins, while an attribute fills
     // an otherwise-auto dimension before the intrinsic ratio is applied.
-    let width = definite_size(computed.width, font_size)
-        .or_else(|| image_attribute_size(dom, id, "width"));
+    let width =
+        definite_size(computed.width, font_size).or_else(|| image_attribute_size(dom, id, "width"));
     let height = definite_size(computed.height, font_size)
         .or_else(|| image_attribute_size(dom, id, "height"));
     let width = width.filter(|value| *value > 0.0);
@@ -990,9 +999,9 @@ where
     dom.attributes(id).find_map(|attribute| {
         (attribute.name.ns.as_ref().is_empty()
             && attribute.name.local.as_ref().eq_ignore_ascii_case(name))
-            .then(|| attribute.value.trim().parse::<f32>().ok())
-            .flatten()
-            .filter(|value| value.is_finite() && *value > 0.0)
+        .then(|| attribute.value.trim().parse::<f32>().ok())
+        .flatten()
+        .filter(|value| value.is_finite() && *value > 0.0)
     })
 }
 
@@ -1043,7 +1052,10 @@ fn collapsed_word_width(text: &str) -> usize {
     let mut maximum = 0;
     let mut current = 0;
     for character in text.chars() {
-        if matches!(character, '\u{0009}' | '\u{000A}' | '\u{000C}' | '\u{000D}' | ' ') {
+        if matches!(
+            character,
+            '\u{0009}' | '\u{000A}' | '\u{000C}' | '\u{000D}' | ' '
+        ) {
             maximum = maximum.max(current);
             current = 0;
         } else {

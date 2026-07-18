@@ -7,9 +7,9 @@
 //! `ViewerContent` / `BrowsableContent`, plus the standalone viewer entry.
 //! Pelt impls its own local traits for the foreign type.
 
-use netrender::Scene;
 use genet_documents::{LocalFetcher, SmolwebDocument, SmolwebTheme};
 use genet_layout::ScrollKey;
+use netrender::Scene;
 
 /// The smolweb document as windowed [`ViewerContent`](crate::static_viewer::windowed::ViewerContent),
 /// so it plugs into the shared winit shell like the static document. v1 is read-only:

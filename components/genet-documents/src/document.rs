@@ -9,11 +9,11 @@
 //! [`LoadedDocument`] that renders to a [`netrender::Scene`] through `genet-render`.
 //! GPU-free and testable; the windowed present loop (`static_viewer`) drives it.
 
-use netrender::Scene;
-use pelt_core::ResourceFetcher;
 use genet_layout::{IncrementalLayout, ScrollKey, ScrollOffsets, inline_stylesheets};
 use genet_render::{ContentReport, content_report, scene_from_session_dom};
 use genet_static_dom::{StaticDocument, StaticNodeId};
+use netrender::Scene;
+use pelt_core::ResourceFetcher;
 
 /// A local-scheme [`ResourceFetcher`]: `data:` decodes the inline payload,
 /// `file://` (and a bare filesystem path) read from disk. `http(s)` loads over the

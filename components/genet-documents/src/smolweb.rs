@@ -275,7 +275,7 @@ fn style_for_theme(theme: &SmolwebTheme, url: &str) -> (DocumentStyleSheet, [f32
         SmolwebTheme::Plain => fixed_palette("#ffffff", "#1a1a1a", "#0b57d0", "#555555", "#f4f4f4"),
         SmolwebTheme::Light | SmolwebTheme::System => {
             fixed_palette("#fbfaf7", "#23211c", "#1a6e57", "#5b574e", "#f0eee8")
-        }
+        },
         SmolwebTheme::Dark => fixed_palette("#16181c", "#e6e3dc", "#7db4ff", "#a8a49a", "#21242a"),
         SmolwebTheme::App(palette) => palette.clone(),
     };
@@ -375,7 +375,7 @@ fn parse_color(value: &str) -> Option<[f32; 4]> {
                     expand(chars.next()?)?,
                     expand(chars.next()?)?,
                 )
-            }
+            },
             6 => (
                 u8::from_str_radix(&hex[0..2], 16).ok()?,
                 u8::from_str_radix(&hex[2..4], 16).ok()?,

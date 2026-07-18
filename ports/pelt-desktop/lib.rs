@@ -34,10 +34,10 @@ pub use genet_documents::SmolwebDocument;
 // theme and, for the App theme, supply a palette.
 #[cfg(all(feature = "smolweb", feature = "viewer", feature = "chrome"))]
 pub use chrome_viewer::run_smolweb_browser;
-#[cfg(all(feature = "smolweb", feature = "viewer"))]
-pub use smolweb_glue::run_smolweb_viewer;
 #[cfg(feature = "smolweb")]
 pub use genet_documents::{SmolwebPalette, SmolwebTheme};
+#[cfg(all(feature = "smolweb", feature = "viewer"))]
+pub use smolweb_glue::run_smolweb_viewer;
 
 #[cfg(feature = "viewer")]
 mod headless;
@@ -127,10 +127,10 @@ pub use script_runtime_api::CookieProvider;
 pub use chrome::{Chrome, ChromeIntent, ChromeState, StripSide};
 #[cfg(all(feature = "viewer", feature = "chrome"))]
 pub use chrome_viewer::run_chrome_viewer;
-#[cfg(all(feature = "viewer", feature = "scripted"))]
-pub use scripted_viewer::run_scripted_viewer;
 #[cfg(feature = "scripted")]
 pub use genet_extract::{Heading, Link, Metadata, PageExtract};
+#[cfg(all(feature = "viewer", feature = "scripted"))]
+pub use scripted_viewer::run_scripted_viewer;
 #[cfg(feature = "tile-surface")]
 pub use tile_shell::TileShell;
 #[cfg(feature = "tile-surface")]

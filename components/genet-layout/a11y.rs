@@ -236,7 +236,7 @@ where
         let action = match access.role() {
             Role::Button | Role::Switch | Role::CheckBox | Role::RadioButton | Role::Tab => {
                 Some(Action::Click)
-            }
+            },
             Role::TextInput => Some(Action::Focus),
             _ => None,
         };
@@ -388,7 +388,11 @@ pub fn build_subtree<D, I, S>(
     root: D::NodeId,
     id_of: &I,
     skip: &S,
-) -> (Vec<(AccessNodeId, AccessNode)>, AccessNodeId, Vec<D::NodeId>)
+) -> (
+    Vec<(AccessNodeId, AccessNode)>,
+    AccessNodeId,
+    Vec<D::NodeId>,
+)
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -414,7 +418,11 @@ pub fn build_subtree_with_leaves<D, I, S>(
     id_of: &I,
     skip: &S,
     leaves: &mut dyn LeafA11ySource,
-) -> (Vec<(AccessNodeId, AccessNode)>, AccessNodeId, Vec<D::NodeId>)
+) -> (
+    Vec<(AccessNodeId, AccessNode)>,
+    AccessNodeId,
+    Vec<D::NodeId>,
+)
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -436,8 +444,8 @@ where
 mod tests {
     use super::*;
     use crate::{ImagePlane, StylePlane, layout, run_cascade};
-    use layout_dom_api::{LayoutDomMut, QualName};
     use genet_scripted_dom::{NodeId, ScriptedDom};
+    use layout_dom_api::{LayoutDomMut, QualName};
 
     const SHEET: &[&str] = &["div, p, button { display: block; }"];
 
@@ -614,7 +622,11 @@ mod tests {
             .find(|(id, _)| *id == access_id(&dom, leaf))
             .map(|(_, n)| n)
             .expect("leaf node present");
-        assert_eq!(bare.role(), Role::GenericContainer, "opaque without a source");
+        assert_eq!(
+            bare.role(),
+            Role::GenericContainer,
+            "opaque without a source"
+        );
         assert_eq!(bare.label(), None);
         assert!(actionable.is_empty(), "an opaque leaf advertises nothing");
 

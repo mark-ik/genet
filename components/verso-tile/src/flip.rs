@@ -19,7 +19,9 @@
 //!   secondary never implements `FlipDonor`, so there is no type path to forward a
 //!   document from one secondary to another. A flip is always primary ↔ secondary.
 
-use crate::api::{BackState, Carry, FlipBack, FlipDonor, FlipReceiver, LayerSet, PortableViewState};
+use crate::api::{
+    BackState, Carry, FlipBack, FlipDonor, FlipReceiver, LayerSet, PortableViewState,
+};
 
 /// Drop every forward layer outside `carried`. The intersection of what the donor
 /// donates and what the receiver receives is the only state that crosses; the rest
@@ -167,7 +169,7 @@ mod tests {
                 assert_eq!(s.cookies.len(), 1); // SESSION crossed
                 assert!(s.form.is_none()); // FORM dropped (degrade, not block)
                 assert!(s.dom_snapshot.is_none()); // DOM dropped
-            }
+            },
             Carry::Back(_) => panic!("expected a forward carry"),
         }
     }
@@ -211,7 +213,7 @@ mod tests {
                 assert_eq!(b.url, "https://example.com/after-login");
                 assert_eq!(b.cookies.len(), 1); // SESSION home (login made in scry comes back)
                 assert!(b.form.is_none()); // FORM dropped
-            }
+            },
             Carry::Forward(_) => panic!("expected a back carry"),
         }
     }

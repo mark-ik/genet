@@ -108,13 +108,13 @@ fn collect_links(span: &InlineSpan, out: &mut Vec<(String, String)>) {
             for inner in spans {
                 collect_links(inner, out);
             }
-        }
+        },
         InlineSpan::Emphasis(spans) | InlineSpan::Strong(spans) => {
             for inner in spans {
                 collect_links(inner, out);
             }
-        }
-        _ => {}
+        },
+        _ => {},
     }
 }
 
@@ -123,7 +123,7 @@ fn write_gophermap_block(block: &Block, ctx: &GophermapContext, out: &mut String
         Block::Heading { spans, .. } => {
             push_info(out, &format!("{prefix}{}", inline_text(spans)));
             push_info(out, "");
-        }
+        },
         Block::Paragraph { spans } => {
             // A link-only paragraph IS its link line (same rule as the
             // gemtext writer) — no doubled info line.
@@ -138,24 +138,24 @@ fn write_gophermap_block(block: &Block, ctx: &GophermapContext, out: &mut String
             for (url, label) in links {
                 push_link(out, ctx, &url, &label);
             }
-        }
+        },
         Block::CodeBlock { text, .. } | Block::Preformatted { text } => {
             for line in text.lines() {
                 push_info(out, &format!("{prefix}{line}"));
             }
-        }
+        },
         Block::Quote { blocks } => {
             for inner in blocks {
                 write_gophermap_block(inner, ctx, out, &format!("{prefix}> "));
             }
-        }
+        },
         Block::List { items, .. } => {
             for item in items {
                 for inner in item {
                     write_gophermap_block(inner, ctx, out, &format!("{prefix}* "));
                 }
             }
-        }
+        },
         Block::Image { url, alt } => push_link(out, ctx, url, alt),
         Block::Rule => push_info(out, &format!("{prefix}---")),
         Block::FeedHeader {
@@ -165,7 +165,7 @@ fn write_gophermap_block(block: &Block, ctx: &GophermapContext, out: &mut String
             if let Some(subtitle) = subtitle {
                 push_info(out, &format!("{prefix}{subtitle}"));
             }
-        }
+        },
         Block::FeedEntry {
             title,
             date,
@@ -180,16 +180,16 @@ fn write_gophermap_block(block: &Block, ctx: &GophermapContext, out: &mut String
                 Some(url) => push_link(out, ctx, url, &dated),
                 None => push_info(out, &dated),
             }
-        }
+        },
         Block::MetadataRow { label, value } => {
             push_info(out, &format!("{prefix}{label}: {value}"));
-        }
+        },
         Block::Badge { text } => push_info(out, &format!("{prefix}[{text}]")),
         Block::Table { header, rows, .. } => {
             for line in super::table_lines(header, rows) {
                 push_info(out, &format!("{prefix}{line}"));
             }
-        }
+        },
     }
 }
 
@@ -202,12 +202,12 @@ fn write_text_block(block: &Block, out: &mut String, prefix: &str) {
                 out.push('\n');
             }
             out.push('\n');
-        }
+        },
         Block::Heading { spans, .. } => {
             out.push_str(prefix);
             out.push_str(&inline_text(spans));
             out.push_str("\n\n");
-        }
+        },
         Block::Paragraph { spans } => {
             let text = text_with_links(spans);
             if !text.is_empty() {
@@ -215,7 +215,7 @@ fn write_text_block(block: &Block, out: &mut String, prefix: &str) {
                 out.push_str(&text);
                 out.push_str("\n\n");
             }
-        }
+        },
         Block::CodeBlock { text, .. } | Block::Preformatted { text } => {
             for line in text.lines() {
                 out.push_str(prefix);
@@ -224,12 +224,12 @@ fn write_text_block(block: &Block, out: &mut String, prefix: &str) {
                 out.push('\n');
             }
             out.push('\n');
-        }
+        },
         Block::Quote { blocks } => {
             for inner in blocks {
                 write_text_block(inner, out, &format!("{prefix}> "));
             }
-        }
+        },
         Block::List { ordered, items } => {
             for (index, item) in items.iter().enumerate() {
                 let marker = if *ordered {
@@ -247,7 +247,7 @@ fn write_text_block(block: &Block, out: &mut String, prefix: &str) {
                 out.push('\n');
             }
             out.push('\n');
-        }
+        },
         Block::Image { url, alt } => {
             out.push_str(prefix);
             if alt.is_empty() {
@@ -256,11 +256,11 @@ fn write_text_block(block: &Block, out: &mut String, prefix: &str) {
                 out.push_str(&format!("{alt} <{url}>"));
             }
             out.push_str("\n\n");
-        }
+        },
         Block::Rule => {
             out.push_str(prefix);
             out.push_str("---\n\n");
-        }
+        },
         Block::FeedHeader {
             title, subtitle, ..
         } => {
@@ -273,7 +273,7 @@ fn write_text_block(block: &Block, out: &mut String, prefix: &str) {
                 out.push('\n');
             }
             out.push('\n');
-        }
+        },
         Block::FeedEntry {
             title,
             date,
@@ -287,7 +287,7 @@ fn write_text_block(block: &Block, out: &mut String, prefix: &str) {
                 None => {
                     out.push_str(title);
                     out.push('\n');
-                }
+                },
             }
             if let Some(summary) = summary {
                 out.push_str(prefix);
@@ -301,15 +301,15 @@ fn write_text_block(block: &Block, out: &mut String, prefix: &str) {
                 out.push_str(">\n");
             }
             out.push('\n');
-        }
+        },
         Block::MetadataRow { label, value } => {
             out.push_str(prefix);
             out.push_str(&format!("{label}: {value}\n"));
-        }
+        },
         Block::Badge { text } => {
             out.push_str(prefix);
             out.push_str(&format!("[{text}]\n"));
-        }
+        },
     }
 }
 
@@ -327,10 +327,10 @@ fn text_with_links(spans: &[InlineSpan]) -> String {
                 } else {
                     out.push_str(&format!("{label} <{url}>"));
                 }
-            }
+            },
             InlineSpan::Emphasis(spans) | InlineSpan::Strong(spans) => {
                 out.push_str(&text_with_links(spans));
-            }
+            },
             InlineSpan::Text(text) | InlineSpan::Code(text) => out.push_str(text),
             InlineSpan::SoftBreak => out.push(' '),
             InlineSpan::LineBreak => out.push('\n'),

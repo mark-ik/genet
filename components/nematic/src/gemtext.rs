@@ -104,18 +104,18 @@ impl Lowering {
             GemLine::Heading { level, text } => {
                 self.flush_pending();
                 self.push_heading(*level, text);
-            }
+            },
             GemLine::Link { url, label } => {
                 self.flush_pending();
                 self.push_link(url, label);
-            }
+            },
             GemLine::Pre { alt, text } => {
                 self.flush_pending();
                 self.blocks.push(Block::CodeBlock {
                     language: alt.clone(),
                     text: text.clone(),
                 });
-            }
+            },
             GemLine::Item(text) => {
                 if !matches!(self.pending, Pending::List(_)) {
                     self.flush_pending();
@@ -126,7 +126,7 @@ impl Lowering {
                         spans: vec![InlineSpan::Text(text.clone())],
                     }]);
                 }
-            }
+            },
             GemLine::Quote(text) => {
                 if !matches!(self.pending, Pending::Quote(_)) {
                     self.flush_pending();
@@ -135,7 +135,7 @@ impl Lowering {
                 if let Pending::Quote(lines) = &mut self.pending {
                     lines.push(text.clone());
                 }
-            }
+            },
             GemLine::Text(text) => {
                 if !matches!(self.pending, Pending::Paragraph(_)) {
                     self.flush_pending();
@@ -144,14 +144,14 @@ impl Lowering {
                 if let Pending::Paragraph(lines) = &mut self.pending {
                     lines.push(text.clone());
                 }
-            }
+            },
             GemLine::Blank => {
                 // Blank lines flush paragraphs but keep list/quote runs alive across
                 // single blank separators (gemtext readers commonly accept this).
                 if matches!(self.pending, Pending::Paragraph(_)) {
                     self.flush_pending();
                 }
-            }
+            },
         }
     }
 
@@ -180,14 +180,14 @@ impl Lowering {
 
     fn flush_pending(&mut self) {
         match std::mem::take(&mut self.pending) {
-            Pending::None => {}
+            Pending::None => {},
             Pending::Paragraph(lines) => {
                 if !lines.is_empty() {
                     self.blocks.push(Block::Paragraph {
                         spans: join_soft(lines),
                     });
                 }
-            }
+            },
             Pending::List(items) => {
                 if !items.is_empty() {
                     self.blocks.push(Block::List {
@@ -195,7 +195,7 @@ impl Lowering {
                         items,
                     });
                 }
-            }
+            },
             Pending::Quote(lines) => {
                 if !lines.is_empty() {
                     self.blocks.push(Block::Quote {
@@ -204,7 +204,7 @@ impl Lowering {
                         }],
                     });
                 }
-            }
+            },
         }
     }
 }

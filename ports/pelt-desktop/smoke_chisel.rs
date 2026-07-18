@@ -76,17 +76,34 @@ pub fn run_chisel_smoke(out_png: Option<&std::path::Path>) -> Result<ChiselSmoke
     // with magenta nodes.
     let mut registry: LeafRegistry<u64> = LeafRegistry::new();
     let mut cache = RenderedLeaves::new();
-    let square = Size { width: 48.0, height: 48.0 };
+    let square = Size {
+        width: 48.0,
+        height: 48.0,
+    };
     let mut knob = Knob::new(square);
     knob.set_value(0.66);
     registry.insert(1, Box::new(knob));
     let mut meter = Meter::new(true, square);
     meter.set_level(0.7, Some(0.9));
     registry.insert(2, Box::new(meter));
-    let magenta = ColorF { r: 0.9, g: 0.15, b: 0.9, a: 1.0 };
-    let node = |x: f32, y: f32| GraphGlyphNode { x, y, color: magenta };
+    let magenta = ColorF {
+        r: 0.9,
+        g: 0.15,
+        b: 0.9,
+        a: 1.0,
+    };
+    let node = |x: f32, y: f32| GraphGlyphNode {
+        x,
+        y,
+        color: magenta,
+    };
     let mut glyph = GraphGlyph::new(
-        vec![node(0.1, 0.2), node(0.9, 0.1), node(0.5, 0.9), node(0.2, 0.8)],
+        vec![
+            node(0.1, 0.2),
+            node(0.9, 0.1),
+            node(0.5, 0.9),
+            node(0.2, 0.8),
+        ],
         vec![(0, 1), (1, 2), (2, 3), (3, 0)],
         square,
     );
@@ -100,11 +117,15 @@ pub fn run_chisel_smoke(out_png: Option<&std::path::Path>) -> Result<ChiselSmoke
     let boxes = session.custom_leaf_boxes();
     let sizes: std::collections::HashMap<u64, (f32, f32)> = boxes.iter().copied().collect();
     let leaves_painted = registry.render_into(
-        |key| sizes.get(&key).map(|&(w, h)| Size { width: w, height: h }),
+        |key| {
+            sizes.get(&key).map(|&(w, h)| Size {
+                width: w,
+                height: h,
+            })
+        },
         &mut cache,
     );
-    let scene =
-        scene_from_session_dom_with_leaves(&session, &dom, W, H, &mut registry, &mut cache);
+    let scene = scene_from_session_dom_with_leaves(&session, &dom, W, H, &mut registry, &mut cache);
 
     // Offscreen render + readback (the render_png harness shape).
     let handles = netrender::boot().map_err(|e| format!("netrender wgpu boot failed: {e}"))?;
@@ -120,7 +141,11 @@ pub fn run_chisel_smoke(out_png: Option<&std::path::Path>) -> Result<ChiselSmoke
     .map_err(|e| format!("netrender renderer init failed: {e:?}"))?;
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("chisel smoke target"),
-        size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: W,
+            height: H,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -135,7 +160,11 @@ pub fn run_chisel_smoke(out_png: Option<&std::path::Path>) -> Result<ChiselSmoke
         format: Some(wgpu::TextureFormat::Rgba8Unorm),
         ..Default::default()
     });
-    renderer.render_vello(&scene, &view, netrender::ColorLoad::Clear(wgpu::Color::WHITE));
+    renderer.render_vello(
+        &scene,
+        &view,
+        netrender::ColorLoad::Clear(wgpu::Color::WHITE),
+    );
     let bytes = renderer.wgpu_device.read_rgba8_texture(&target, W, H);
 
     // Color-dominance counts (robust to sRGB/linear encoding): the knob's value
@@ -161,7 +190,8 @@ pub fn run_chisel_smoke(out_png: Option<&std::path::Path>) -> Result<ChiselSmoke
         }
         let img = image::RgbaImage::from_raw(W, H, bytes)
             .ok_or_else(|| "readback byte length mismatch".to_string())?;
-        img.save(path).map_err(|e| format!("png write failed: {e}"))?;
+        img.save(path)
+            .map_err(|e| format!("png write failed: {e}"))?;
     }
 
     Ok(ChiselSmokeOutcome {
@@ -189,9 +219,15 @@ mod tests {
         );
         let out = run_chisel_smoke(Some(receipt)).expect("smoke renders");
         assert_eq!(out.leaf_boxes, 3, "layout seam found all leaves: {out:?}");
-        assert_eq!(out.leaves_painted, 3, "render gate painted all leaves: {out:?}");
+        assert_eq!(
+            out.leaves_painted, 3,
+            "render gate painted all leaves: {out:?}"
+        );
         assert!(out.blue_pixels > 20, "knob value arc visible: {out:?}");
         assert!(out.green_pixels > 40, "meter fill visible: {out:?}");
-        assert!(out.magenta_pixels > 10, "graph glyph nodes visible: {out:?}");
+        assert!(
+            out.magenta_pixels > 10,
+            "graph glyph nodes visible: {out:?}"
+        );
     }
 }

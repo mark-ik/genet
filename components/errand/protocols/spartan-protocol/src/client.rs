@@ -68,7 +68,7 @@ impl std::fmt::Display for ClientError {
             Self::Protocol(message) => write!(formatter, "spartan protocol error: {message}"),
             Self::BodyTooLarge { max } => {
                 write!(formatter, "spartan response body exceeds {max} bytes")
-            }
+            },
         }
     }
 }
@@ -80,7 +80,14 @@ impl std::error::Error for ClientError {}
 /// content-length 0 and a `?query` URL uploads the query.
 pub async fn fetch(url: &str, options: &FetchOptions) -> Result<Response, ClientError> {
     let (host, port, path, query_data) = split_url(url)?;
-    request(&host, port, &path, query_data.as_deref().unwrap_or(&[]), options).await
+    request(
+        &host,
+        port,
+        &path,
+        query_data.as_deref().unwrap_or(&[]),
+        options,
+    )
+    .await
 }
 
 /// Upload `data` as the request's data block (the `=:` prompt-line flow).
@@ -237,7 +244,10 @@ mod tests {
     fn urls_map_to_request_components_per_spec_table() {
         // The spec §5.1 reference table.
         let (host, port, path, data) = split_url("spartan://example.com").unwrap();
-        assert_eq!((host.as_str(), port, path.as_str()), ("example.com", 300, "/"));
+        assert_eq!(
+            (host.as_str(), port, path.as_str()),
+            ("example.com", 300, "/")
+        );
         assert!(data.is_none());
 
         let (_, port, ..) = split_url("spartan://example.com:3000/").unwrap();
@@ -256,7 +266,11 @@ mod tests {
         assert_eq!(data.unwrap(), b"a=1&b=2");
 
         let (_, _, _, data) = split_url("spartan://example.com?hello%20world").unwrap();
-        assert_eq!(data.unwrap(), b"hello world", "query %-decodes into the data block");
+        assert_eq!(
+            data.unwrap(),
+            b"hello world",
+            "query %-decodes into the data block"
+        );
     }
 
     #[test]

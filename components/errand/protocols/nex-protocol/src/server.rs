@@ -152,7 +152,12 @@ impl FileHandler {
         if let Ok(mut entries) = tokio::fs::read_dir(dir).await {
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let mut name = entry.file_name().to_string_lossy().into_owned();
-                if entry.file_type().await.map(|kind| kind.is_dir()).unwrap_or(false) {
+                if entry
+                    .file_type()
+                    .await
+                    .map(|kind| kind.is_dir())
+                    .unwrap_or(false)
+                {
                     name.push('/');
                 }
                 names.push(name);
@@ -180,7 +185,14 @@ impl Handler for FileHandler {
                 return body;
             }
             return self
-                .listing_for(&path, if request.path.is_empty() { "/" } else { &request.path })
+                .listing_for(
+                    &path,
+                    if request.path.is_empty() {
+                        "/"
+                    } else {
+                        &request.path
+                    },
+                )
                 .await;
         }
         match tokio::fs::read(&path).await {

@@ -50,7 +50,10 @@ impl TofuStore for InMemoryTofu {
         self.pins.lock().unwrap().get(host).copied()
     }
     fn pin(&self, host: &str, fingerprint: [u8; 32]) {
-        self.pins.lock().unwrap().insert(host.to_string(), fingerprint);
+        self.pins
+            .lock()
+            .unwrap()
+            .insert(host.to_string(), fingerprint);
     }
 }
 

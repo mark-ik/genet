@@ -79,7 +79,7 @@ impl InjectionLexer for MarkdownLexer {
                     if let Some(kind) = tag_kind(&tag) {
                         stack.push((kind, range.start));
                     }
-                }
+                },
                 Event::End(end) => {
                     if tag_end_tracked(&end) {
                         if let Some((kind, start)) = stack.pop() {
@@ -89,13 +89,13 @@ impl InjectionLexer for MarkdownLexer {
                             });
                         }
                     }
-                }
+                },
                 // Inline code spans are atomic (no Start/End pair).
                 Event::Code(_) => spans.push(Span {
                     range,
                     kind: SyntaxKind::Verbatim,
                 }),
-                _ => {}
+                _ => {},
             }
         }
         spans

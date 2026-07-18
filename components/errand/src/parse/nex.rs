@@ -47,7 +47,9 @@ pub fn looks_like_directory(body: &str) -> bool {
     if lines.is_empty() {
         return false;
     }
-    lines.iter().all(|line| is_directory_entry_line(line.trim()))
+    lines
+        .iter()
+        .all(|line| is_directory_entry_line(line.trim()))
 }
 
 fn is_directory_entry_line(line: &str) -> bool {
@@ -86,10 +88,22 @@ mod tests {
         assert_eq!(
             entries,
             vec![
-                NexEntry { name: "README.txt".into(), is_dir: false },
-                NexEntry { name: "about/".into(), is_dir: true },
-                NexEntry { name: "photos/".into(), is_dir: true },
-                NexEntry { name: "contact.txt".into(), is_dir: false },
+                NexEntry {
+                    name: "README.txt".into(),
+                    is_dir: false
+                },
+                NexEntry {
+                    name: "about/".into(),
+                    is_dir: true
+                },
+                NexEntry {
+                    name: "photos/".into(),
+                    is_dir: true
+                },
+                NexEntry {
+                    name: "contact.txt".into(),
+                    is_dir: false
+                },
             ]
         );
     }
@@ -106,12 +120,18 @@ mod tests {
 
     #[test]
     fn base_url_keeps_trailing_slash() {
-        assert_eq!(base_url("nex://example.test/path/"), "nex://example.test/path/");
+        assert_eq!(
+            base_url("nex://example.test/path/"),
+            "nex://example.test/path/"
+        );
     }
 
     #[test]
     fn base_url_drops_page_to_parent() {
-        assert_eq!(base_url("nex://example.test/path/page"), "nex://example.test/path/");
+        assert_eq!(
+            base_url("nex://example.test/path/page"),
+            "nex://example.test/path/"
+        );
     }
 
     #[test]

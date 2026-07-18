@@ -145,10 +145,10 @@ impl<'a> Builder<'a> {
                 for run in glyph_runs {
                     self.emit_glyph_run(run);
                 }
-            }
+            },
             RenderedBlockKind::Image { .. } => {
                 self.push_rect(block.bounds, self.colors.placeholder_image);
-            }
+            },
             RenderedBlockKind::Rule => {
                 // Hairline: a 1px-tall strip centered on the rect's
                 // vertical midpoint. Lowered as a (filled) line primitive.
@@ -166,12 +166,12 @@ impl<'a> Builder<'a> {
                     orientation: LineOrientation::Horizontal,
                     wavy_thickness: 0.0,
                 }));
-            }
+            },
             RenderedBlockKind::Group { children } => {
                 for child in children {
                     self.emit_block(child);
                 }
-            }
+            },
         }
     }
 
@@ -343,7 +343,9 @@ mod tests {
         assert!(!list.fonts().is_empty());
         for fr in list.fonts() {
             assert!(
-                sidecar.iter().any(|(d, i)| *d == *fr.data && *i == fr.index),
+                sidecar
+                    .iter()
+                    .any(|(d, i)| *d == *fr.data && *i == fr.index),
                 "shipped face must originate from parley's sidecar, not a label re-resolve"
             );
         }

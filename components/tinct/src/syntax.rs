@@ -11,7 +11,7 @@
 //! theme and the whole syntax palette rotates with the brand.
 
 use crate::oklch::Oklch;
-use crate::{contrast, derive_palette, Palette, Seeds, Srgb};
+use crate::{Palette, Seeds, Srgb, contrast, derive_palette};
 
 /// A canonical highlight role. A host maps its lexer's finer token kinds onto
 /// these, and [`derive_syntax_palette`] gives each a themed colour.
@@ -120,7 +120,11 @@ fn gate(mut col: Oklch, surface: Srgb, dark: bool) -> Srgb {
         if contrast(col.to_srgb(), surface) >= MIN_CONTRAST {
             break;
         }
-        col = if dark { col.lighten(0.02) } else { col.darken(0.02) };
+        col = if dark {
+            col.lighten(0.02)
+        } else {
+            col.darken(0.02)
+        };
         if !(0.04..=0.96).contains(&col.l) {
             break;
         }

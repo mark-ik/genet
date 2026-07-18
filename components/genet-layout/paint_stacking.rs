@@ -198,8 +198,8 @@ fn z_index_value(cv: &ComputedValues) -> Option<i32> {
 
 #[cfg(test)]
 mod tests {
-    use paint_list_api::{DeviceIntSize, PaintCmd, PaintList};
     use genet_static_dom::{StaticDocument, StaticNodeId};
+    use paint_list_api::{DeviceIntSize, PaintCmd, PaintList};
     use taffy::{AvailableSpace, Size};
 
     use crate::cascade::run_cascade;
@@ -279,7 +279,7 @@ mod tests {
             match c {
                 PaintCmd::PushClip(_) => depth += 1,
                 PaintCmd::PopClip => depth -= 1,
-                _ => {}
+                _ => {},
             }
         }
         depth

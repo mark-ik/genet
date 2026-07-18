@@ -186,7 +186,7 @@ pub fn resolve_transclusions(
                     outcome.failed.push((url, error));
                     keep(block, &mut blocks, &mut outcome);
                     continue;
-                }
+                },
             };
             let mut input = EngineInput::new(url.clone(), fetched.body);
             input.content_type = fetched.content_type;
@@ -196,7 +196,7 @@ pub fn resolve_transclusions(
                     outcome.failed.push((url, error));
                     keep(block, &mut blocks, &mut outcome);
                     continue;
-                }
+                },
             };
 
             let source = BlockProvenance::from_document(child.provenance.clone());

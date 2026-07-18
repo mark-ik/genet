@@ -85,7 +85,7 @@ pub fn container_tree(src: &str) -> Vec<TreeNode> {
                 if let Some(kind) = node_kind_of(&c) {
                     stack.push((kind, range.start, Vec::new()));
                 }
-            }
+            },
             Event::End(c) => {
                 if node_kind_of(&c).is_some() {
                     if let Some((kind, start, children)) = stack.pop() {
@@ -100,8 +100,8 @@ pub fn container_tree(src: &str) -> Vec<TreeNode> {
                         }
                     }
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
     roots
@@ -164,12 +164,12 @@ pub fn outline(src: &str) -> Vec<OutlineItem> {
         match event {
             Event::Start(Container::Heading { level, .. }, _) => {
                 current = Some((range.start, level as u8, String::new()));
-            }
+            },
             Event::Str(s) => {
                 if let Some((_, _, text)) = current.as_mut() {
                     text.push_str(s.as_ref());
                 }
-            }
+            },
             Event::End(Container::Heading { .. }) => {
                 if let Some((start, level, text)) = current.take() {
                     items.push(OutlineItem {
@@ -178,8 +178,8 @@ pub fn outline(src: &str) -> Vec<OutlineItem> {
                         text,
                     });
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
     items

@@ -50,11 +50,11 @@ use webdriver::actions::{
     PointerActionItem, PointerOrigin, PointerType, WheelAction, WheelActionItem,
 };
 
+use crate::WebViewPoint;
 use crate::input_events::{
     InputEvent, KeyboardEvent, MouseButtonAction, MouseButtonEvent, MouseMoveEvent, TouchEvent,
     TouchEventType, TouchId, WheelDelta, WheelEvent, WheelMode,
 };
-use crate::WebViewPoint;
 
 /// One tick of an actions transaction: the events every input source emitted at
 /// this index, in source order, plus the tick's spec duration.
@@ -230,10 +230,7 @@ pub fn interpret_actions(
                         duration_ms = duration_ms.max(scroll.duration.unwrap_or(0));
                         let at = resolve_origin(
                             &scroll.origin,
-                            (
-                                scroll.x.unwrap_or(0) as f64,
-                                scroll.y.unwrap_or(0) as f64,
-                            ),
+                            (scroll.x.unwrap_or(0) as f64, scroll.y.unwrap_or(0) as f64),
                             positions[source_index],
                             resolve_element,
                         )?;
@@ -497,10 +494,7 @@ mod tests {
             (KeyState::Down, Key::Named(NamedKey::Enter))
         );
         assert_eq!(key(&ticks[1]), (KeyState::Up, Key::Named(NamedKey::Enter)));
-        assert_eq!(
-            key(&ticks[2]),
-            (KeyState::Down, Key::Character("q".into()))
-        );
+        assert_eq!(key(&ticks[2]), (KeyState::Down, Key::Character("q".into())));
         assert_eq!(
             key(&ticks[3]),
             (KeyState::Down, Key::Named(NamedKey::Unidentified))

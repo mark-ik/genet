@@ -84,10 +84,7 @@ impl PendingWork {
     /// genuinely static surface; on anything animated this may simply never be
     /// true, which is the caller's risk to accept.
     pub fn fully_idle(&self) -> bool {
-        self.settled()
-            && self.next_timer_ms.is_none()
-            && !self.animation_frames
-            && !self.animations
+        self.settled() && self.next_timer_ms.is_none() && !self.animation_frames && !self.animations
     }
 }
 

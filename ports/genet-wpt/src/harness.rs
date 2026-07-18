@@ -28,15 +28,15 @@ use std::time::{Duration, Instant};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use genet_layout::{Applied, IncrementalLayout, inline_stylesheets};
+use genet_scripted_dom::NodeId as DomNodeId;
+use genet_static_dom::StaticDocument;
 use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace};
 use script_engine_api::ScriptEngine;
 use script_runtime_api::{
     ComputedStyleHandler, FetchHandler, FetchOutcome, MediaQueryHandler, Runtime, TestResult,
     WebGlFactory,
 };
-use genet_layout::{Applied, IncrementalLayout, inline_stylesheets};
-use genet_scripted_dom::NodeId as DomNodeId;
-use genet_static_dom::StaticDocument;
 
 thread_local! {
     /// One media-query evaluator per thread (the WPT 800x600 viewport, default
@@ -370,7 +370,9 @@ impl RenderSession {
             let mut discard = Vec::new();
             host.dom.drain_mutations(&mut discard);
             let refs: Vec<&str> = sheets.iter().map(String::as_str).collect();
-            *layout.borrow_mut() = Some(IncrementalLayout::new(&host.dom, &refs, VIEWPORT_W, VIEWPORT_H));
+            *layout.borrow_mut() = Some(IncrementalLayout::new(
+                &host.dom, &refs, VIEWPORT_W, VIEWPORT_H,
+            ));
         }
         rt.set_computed_style_handler(Box::new(WptComputedStyle {
             layout: layout.clone(),
@@ -491,14 +493,13 @@ fn process_testdriver_actions<E: ScriptEngine>(
         let (x, y, w, h) = layout.as_ref()?.absolute_rect(&host.dom, node)?;
         Some((f64::from(x + w / 2.0), f64::from(y + h / 2.0)))
     };
-    let ticks =
-        match embedder_traits::webdriver_actions::interpret_actions(&sequences, &resolver) {
-            Ok(t) => t,
-            Err(e) => {
-                settle(rt, Some(format!("{e:?}")));
-                return 1;
-            },
-        };
+    let ticks = match embedder_traits::webdriver_actions::interpret_actions(&sequences, &resolver) {
+        Ok(t) => t,
+        Err(e) => {
+            settle(rt, Some(format!("{e:?}")));
+            return 1;
+        },
+    };
     // Per Touch Events, every event for one touch point goes to the element the
     // touch *started* on, not to whatever is under the finger now. Remember that
     // target per touch id for the life of the transaction.
@@ -554,7 +555,9 @@ fn dispatch_input_event<E: ScriptEngine>(
             let id = t.touch_id.0;
             let (kind, target) = match t.event_type {
                 TouchEventType::Down => {
-                    let Some(target) = hit(rt, (x, y)) else { return };
+                    let Some(target) = hit(rt, (x, y)) else {
+                        return;
+                    };
                     // Every later event for this touch point goes here.
                     touch_targets.insert(id, target);
                     ("touchstart", target)
@@ -578,7 +581,9 @@ fn dispatch_input_event<E: ScriptEngine>(
         },
         InputEvent::Wheel(w) => {
             let (x, y) = xy(&w.point);
-            let Some(target) = hit(rt, (x, y)) else { return };
+            let Some(target) = hit(rt, (x, y)) else {
+                return;
+            };
             // The interpreter negates the spec's deltas (its positive WheelDelta
             // scrolls the view up); the DOM event carries the spec sign, so
             // negate back.
@@ -654,7 +659,12 @@ fn drive_virtual<E: ScriptEngine>(rt: &mut Runtime<E>, render: &RenderSession) -
         let has_raf = rt.has_animation_frame_callbacks();
         let animating = render.animating();
         let next_timer = rt.next_timer_delay();
-        if fired == 0 && rendered == 0 && acted == 0 && !has_raf && !animating && next_timer.is_none()
+        if fired == 0
+            && rendered == 0
+            && acted == 0
+            && !has_raf
+            && !animating
+            && next_timer.is_none()
         {
             break; // quiescent: no timer, no frame consumer, nothing happened
         }
@@ -965,7 +975,10 @@ window.addEventListener("load", function() {
             // Subtest passes/failures are the corpus baseline's business; this
             // guard only pins "the session does not take the process down".
             HarnessOutcome::Ran(results) => {
-                assert!(!results.is_empty(), "the animation events should reach testharness");
+                assert!(
+                    !results.is_empty(),
+                    "the animation events should reach testharness"
+                );
             },
             HarnessOutcome::Threw(m) => panic!("threw instead of reporting: {m}"),
         }
@@ -1089,12 +1102,12 @@ async_test(function(t) {{
                 None,
                 Engine::Boa,
             ));
-            assert_eq!(results.len(), 1, "passive={passive}: one subtest: {results:?}");
-            assert!(
-                results[0].passed(),
-                "passive={passive}: {:?}",
-                results[0]
+            assert_eq!(
+                results.len(),
+                1,
+                "passive={passive}: one subtest: {results:?}"
             );
+            assert!(results[0].passed(), "passive={passive}: {:?}", results[0]);
         }
     }
 

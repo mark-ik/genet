@@ -118,12 +118,12 @@ impl ScryForward {
                 surface.navigate(url)?;
                 self.phase = Phase::Navigating;
                 Ok(())
-            }
+            },
             // No URL: nothing to navigate. Terminal; the host handles the degrade path.
             None => {
                 self.phase = Phase::Done;
                 Ok(())
-            }
+            },
         }
     }
 
@@ -135,7 +135,7 @@ impl ScryForward {
             return;
         }
         match signal {
-            NavSignal::Started => {}
+            NavSignal::Started => {},
             NavSignal::Completed { success } => {
                 if success {
                     if let Some(js) = self.restore_script() {
@@ -145,7 +145,7 @@ impl ScryForward {
                     }
                 }
                 self.phase = Phase::Done;
-            }
+            },
         }
     }
 

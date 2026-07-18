@@ -48,7 +48,7 @@ impl std::fmt::Display for ClientError {
             Self::Timeout(step) => write!(formatter, "nex {step} timed out"),
             Self::BodyTooLarge { max } => {
                 write!(formatter, "nex response exceeds {max} bytes")
-            }
+            },
         }
     }
 }

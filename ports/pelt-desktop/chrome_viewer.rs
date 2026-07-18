@@ -58,6 +58,10 @@ pub fn run_smolweb_browser(
 pub(crate) mod windowed {
     use std::sync::Arc;
 
+    use super::{StaticViewerConfig, StaticViewerOutcome};
+    use crate::chrome::{Chrome, ChromeIntent, StripSide};
+    use crate::document::{ClickOutcome, LoadedDocument, LocalFetcher};
+    use crate::href::resolve_href;
     use cambium::{
         Key as CambiumKey, KeyEvent, Modifiers, NamedKey as CambiumNamedKey, PointerClick,
     };
@@ -71,10 +75,6 @@ pub(crate) mod windowed {
     use winit::event_loop::{ActiveEventLoop, EventLoop};
     use winit::keyboard::{Key, ModifiersState, NamedKey};
     use winit::window::{Window, WindowId};
-    use super::{StaticViewerConfig, StaticViewerOutcome};
-    use crate::chrome::{Chrome, ChromeIntent, StripSide};
-    use crate::document::{ClickOutcome, LoadedDocument, LocalFetcher};
-    use crate::href::resolve_href;
 
     // Migration adapter. C4 replaces Pelt's compatibility dependency with
     // `cambium-winit`; the Genet presentation crate is already GUI-independent.

@@ -75,7 +75,10 @@ pub type TransitionTracker = FxHashMap<(usize, String), AnimationState>;
 
 /// Which events a single transition's `(prior -> current)` state change emits,
 /// in order. `prior == None` means the transition is newly observed.
-fn events_for(prior: Option<&AnimationState>, current: &AnimationState) -> &'static [TransitionEventKind] {
+fn events_for(
+    prior: Option<&AnimationState>,
+    current: &AnimationState,
+) -> &'static [TransitionEventKind] {
     use AnimationState::*;
     use TransitionEventKind::*;
     match (prior, current) {
@@ -169,7 +172,11 @@ where
             continue;
         };
         for transition in &set.transitions {
-            let property_name = transition.property_animation.property_id().name().into_owned();
+            let property_name = transition
+                .property_animation
+                .property_id()
+                .name()
+                .into_owned();
             let tkey = (opaque, property_name.clone());
             seen.insert(tkey.clone());
             let phase = phase_at(transition, now);
@@ -181,9 +188,8 @@ where
                         (-transition.delay).max(0.0)
                     },
                     TransitionEventKind::End => transition.property_animation.duration,
-                    TransitionEventKind::Cancel => {
-                        (now - transition.start_time).clamp(0.0, transition.property_animation.duration)
-                    },
+                    TransitionEventKind::Cancel => (now - transition.start_time)
+                        .clamp(0.0, transition.property_animation.duration),
                 };
                 events.push(TransitionEventRecord {
                     node,
@@ -210,8 +216,12 @@ where
     // on supplying its final value. Each harvest prunes only its own kind, so the
     // two can be drained in either order.
     for set in sets.values_mut() {
-        set.transitions
-            .retain(|t| !matches!(phase_at(t, now), AnimationState::Finished | AnimationState::Canceled));
+        set.transitions.retain(|t| {
+            !matches!(
+                phase_at(t, now),
+                AnimationState::Finished | AnimationState::Canceled
+            )
+        });
     }
     sets.retain(|_, set| !set.is_empty());
 

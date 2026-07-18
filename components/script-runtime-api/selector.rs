@@ -388,8 +388,8 @@ fn read_ident(chars: &[char], start: usize) -> (String, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use layout_dom_api::{LayoutDom, LayoutDomMut, QualName};
     use genet_scripted_dom::ScriptedDom;
+    use layout_dom_api::{LayoutDom, LayoutDomMut, QualName};
 
     // Build `<body><div id=a class="x y"><p class=x></p><span></span></div></body>`.
     // The `<body>` is created explicitly because fragment-parsing `<body>` under the

@@ -164,7 +164,7 @@ impl InjectionLexer for ClikeLexer {
                 Ok(ClikeToken::Punct) => SyntaxKind::Punctuation,
                 Ok(ClikeToken::Ident) if self.keywords.contains(&lex.slice()) => {
                     SyntaxKind::Keyword
-                }
+                },
                 // A plain identifier or unrecognized input: leave it unstyled.
                 Ok(ClikeToken::Ident) | Err(_) => continue,
             };

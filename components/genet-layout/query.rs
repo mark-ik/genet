@@ -216,9 +216,9 @@ mod tests {
     use super::*;
     use crate::a11y::{LeafA11ySource, NoLeafA11y, project};
     use crate::{ImagePlane, StylePlane, layout, run_cascade};
-    use accesskit::{Action, NodeId as AccessNodeId, Node as AccessNode};
-    use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, QualName};
+    use accesskit::{Action, Node as AccessNode, NodeId as AccessNodeId};
     use genet_scripted_dom::{NodeId, ScriptedDom};
+    use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, QualName};
 
     const SHEET: &[&str] = &["div, button, custom-leaf { display: block; }"];
 
@@ -236,7 +236,13 @@ mod tests {
 
     fn fragments(dom: &ScriptedDom) -> crate::FragmentPlane<NodeId> {
         let mut styles = StylePlane::new();
-        run_cascade(dom, &mut styles, euclid::Size2D::new(800.0, 600.0), SHEET, None);
+        run_cascade(
+            dom,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            SHEET,
+            None,
+        );
         let viewport = taffy::Size {
             width: taffy::AvailableSpace::Definite(800.0),
             height: taffy::AvailableSpace::Definite(600.0),
@@ -298,7 +304,9 @@ mod tests {
 
         // Both buttons are routable; neither the document nor the text is.
         assert_eq!(
-            projection.find_all(&ElementQuery::default().actionable(true)).len(),
+            projection
+                .find_all(&ElementQuery::default().actionable(true))
+                .len(),
             2
         );
     }

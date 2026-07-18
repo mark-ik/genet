@@ -619,7 +619,7 @@ where
                 root.children = children;
                 tree.synthetic_root = true;
                 tree.push(root)
-            }
+            },
             (None, _) => {
                 tree.synthetic_root = true;
                 tree.push(BoxNode::new(initial_style(), BoxSource::Element(doc.id())))
@@ -922,7 +922,9 @@ fn apply_inline_cb_fixups<Id: Copy + Eq + Hash>(
                 }
             }
         }
-        let Some((px, py, pw, ph)) = placed else { continue };
+        let Some((px, py, pw, ph)) = placed else {
+            continue;
+        };
         let (Some(leaf_abs), Some(cur)) = (origins[leaf], origins[b]) else {
             continue;
         };
@@ -970,7 +972,8 @@ fn capture_sticky_bases<Id: Copy + Eq + Hash>(tree: &mut BoxTree<Id>, root: usiz
         for ci in 0..tree.nodes[i].children.len() {
             let c = tree.nodes[i].children[ci];
             if is_sticky(&tree.nodes[c].style) {
-                tree.sticky_bases.push((c, i, tree.nodes[c].final_layout.location));
+                tree.sticky_bases
+                    .push((c, i, tree.nodes[c].final_layout.location));
             }
             stack.push(c);
         }
@@ -1635,7 +1638,7 @@ struct CssStyle {
     size_override: Option<taffy::Size<taffy::Dimension>>,
     /// Report `is_block()` regardless of the inner display — the synthetic
     /// multi-root's initial style computes `display: inline`, which would
-    /// skip `compute_root_layout`'s block branch (where the root size 
+    /// skip `compute_root_layout`'s block branch (where the root size
     /// resolves against the viewport). genet dispatches the box as a block
     /// container either way; this makes the style agree.
     block_override: bool,

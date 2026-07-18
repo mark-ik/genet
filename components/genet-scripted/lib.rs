@@ -21,11 +21,11 @@
 #![cfg_attr(target_arch = "wasm32", allow(unused_crate_dependencies))]
 
 #[cfg(feature = "render")]
-use layout_dom_api::LayoutDomMut;
-use script_engine_api::ScriptEngine;
-#[cfg(feature = "render")]
 use genet_layout::{FragmentPlane, render};
 use genet_scripted_dom::{NodeId, ScriptedDom};
+#[cfg(feature = "render")]
+use layout_dom_api::LayoutDomMut;
+use script_engine_api::ScriptEngine;
 
 mod capture;
 mod document;
@@ -157,10 +157,10 @@ mod native {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use genet_scripted_dom::{NodeId, ScriptedDom};
     use layout_dom_api::LayoutDomMut;
     use script_engine_api::{CallCx, NativeFn, ScriptEngine, ScriptEngineLive};
     use script_engine_nova::NovaEngine;
-    use genet_scripted_dom::{NodeId, ScriptedDom};
 
     /// The host DOM stashed in engine host data, recovered inside the callback.
     type HostDom = RefCell<ScriptedDom>;

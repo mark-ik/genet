@@ -37,22 +37,22 @@
 
 use std::hash::Hash;
 
+use cssparser::{Parser, ParserInput};
 use engine_observables_api::{InteractionState, SourceNodeId};
 use layout_dom_api::LayoutDom;
 use rustc_hash::FxHashMap;
 use selectors::matching::QuirksMode;
-use cssparser::{Parser, ParserInput};
 use servo_arc::Arc as ServoArc;
 use style::Atom;
 use style::context::{
     RegisteredSpeculativePainter, RegisteredSpeculativePainters, SharedStyleContext, StyleContext,
 };
 use style::device::Device;
-use style::parser::ParserContext;
 use style::driver;
 use style::global_style_data::GLOBAL_STYLE_DATA;
 use style::media_queries::MediaList;
 use style::media_queries::MediaType;
+use style::parser::ParserContext;
 use style::properties::ComputedValues;
 use style::properties::declaration_block::parse_style_attribute;
 use style::properties::style_structs::Font;
@@ -66,10 +66,10 @@ use style::stylesheets::{
 };
 use style::stylist::Stylist;
 use style::thread_state::{self, ThreadState};
-use stylo_traits::{ParsingMode, ToCss};
 use style::traversal::{DomTraversal, PerLevelTraversalData, recalc_style_at};
 use style::traversal_flags::TraversalFlags;
 use stylo_dom::ElementState;
+use stylo_traits::{ParsingMode, ToCss};
 
 use crate::adapter_stylo::{CascadeGuard, StyleNodeRef, selectors_quirks_mode};
 use crate::font_metrics::SkrifaFontMetricsProvider;
@@ -355,7 +355,10 @@ impl MediaQueryEvaluator {
             &lock,
             QuirksMode::NoQuirks,
         );
-        Self { stylist, _lock: lock }
+        Self {
+            stylist,
+            _lock: lock,
+        }
     }
 
     /// Evaluate a media query string; returns the serialized query and whether
@@ -1587,9 +1590,9 @@ fn count_element_subtree<D: LayoutDom>(dom: &D, root: D::NodeId) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use genet_static_dom::StaticDocument;
     use html5ever::local_name;
     use layout_dom_api::LayoutDom;
-    use genet_static_dom::StaticDocument;
 
     use super::*;
     use crate::adapter::NodeRef;
@@ -1707,7 +1710,10 @@ mod tests {
             .resolve_to_absolute(&current_color)
             .into_srgb_legacy();
         let [r, g, b, _a] = *srgb.raw_components();
-        assert!(g > 0.99, ":root must match <html> and paint it green: g={g}");
+        assert!(
+            g > 0.99,
+            ":root must match <html> and paint it green: g={g}"
+        );
         assert!(
             r < 0.01 && b < 0.01,
             ":root background is pure green: r={r} b={b}"
@@ -1911,9 +1917,9 @@ mod tests {
     #[test]
     fn interaction_hover_drives_restyle() {
         use engine_observables_api::{InteractionState, SourceNodeId};
+        use genet_scripted_dom::ScriptedDom;
         use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
-        use genet_scripted_dom::ScriptedDom;
 
         const SHEET: &[&str] = &["p:hover { color: rgb(255, 0, 0); }"];
         let html = |l: &str| QualName::new(None, ns!(html), l.into());
@@ -1975,9 +1981,9 @@ mod tests {
     /// with the rule tree left intact.
     #[test]
     fn prefers_reduced_motion_media_query_evaluates_and_reevaluates() {
+        use genet_scripted_dom::ScriptedDom;
         use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
-        use genet_scripted_dom::ScriptedDom;
 
         const SHEET: &[&str] = &[
             "@media (prefers-reduced-motion: reduce) { p { color: rgb(255, 0, 0); } } \
@@ -2031,9 +2037,9 @@ mod tests {
     /// serializes to `"not all"` and never matches.
     #[test]
     fn evaluate_media_query_matches_and_serializes() {
+        use genet_scripted_dom::ScriptedDom;
         use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
-        use genet_scripted_dom::ScriptedDom;
 
         let html = |l: &str| QualName::new(None, ns!(html), l.into());
         let mut dom = ScriptedDom::new();
@@ -2049,7 +2055,10 @@ mod tests {
         // Valid, matching (800 >= 500).
         let (media, matches) = evaluate_media_query(&stylist, "(min-width: 500px)");
         assert!(matches, "800px viewport matches min-width: 500px");
-        assert_ne!(media, "not all", "valid query is not 'not all', got {media:?}");
+        assert_ne!(
+            media, "not all",
+            "valid query is not 'not all', got {media:?}"
+        );
 
         // Valid, not matching.
         let (_, m) = evaluate_media_query(&stylist, "(min-width: 900px)");
@@ -2057,7 +2066,10 @@ mod tests {
 
         // A fork-added feature evaluates too (default env is no-preference).
         let (_, m) = evaluate_media_query(&stylist, "(prefers-reduced-motion: no-preference)");
-        assert!(m, "default env matches prefers-reduced-motion: no-preference");
+        assert!(
+            m,
+            "default env matches prefers-reduced-motion: no-preference"
+        );
 
         // An unknown feature is valid <general-enclosed> syntax: preserved on
         // serialization but evaluates to false (never matches).
@@ -2071,16 +2083,14 @@ mod tests {
     /// different state.
     #[test]
     fn tier_e_state_media_features_evaluate() {
+        use genet_scripted_dom::ScriptedDom;
         use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
-        use genet_scripted_dom::ScriptedDom;
         use style::queries::values::{DisplayMode, Scripting};
 
-        const SHEET: &[&str] = &[
-            "p { color: rgb(0, 0, 0); } \
+        const SHEET: &[&str] = &["p { color: rgb(0, 0, 0); } \
              @media (display-mode: standalone) { p { color: rgb(255, 0, 0); } } \
-             @media (scripting: none) { p { color: rgb(0, 255, 0); } }",
-        ];
+             @media (scripting: none) { p { color: rgb(0, 255, 0); } }"];
         let html = |l: &str| QualName::new(None, ns!(html), l.into());
 
         let mut dom = ScriptedDom::new();
@@ -2099,7 +2109,10 @@ mod tests {
         let vp = euclid::Size2D::new(800.0, 600.0);
 
         // Default: display-mode browser, scripting enabled → neither rule → black.
-        assert!(color_of::<ScriptedDom>(&plane, p)[0] < 0.01, "default → black");
+        assert!(
+            color_of::<ScriptedDom>(&plane, p)[0] < 0.01,
+            "default → black"
+        );
 
         let check = |stylist: &mut Stylist, plane: &mut StylePlane<_>, env: MediaEnvironment| {
             set_stylist_media_env(stylist, &lock, vp, quirks, env);
@@ -2107,17 +2120,31 @@ mod tests {
             color_of::<ScriptedDom>(plane, p)
         };
 
-        let c = check(&mut stylist, &mut plane, MediaEnvironment {
-            display_mode: DisplayMode::Standalone,
-            ..MediaEnvironment::default()
-        });
-        assert!(c[0] > 0.99 && c[1] < 0.01, "display-mode: standalone → red, got {c:?}");
+        let c = check(
+            &mut stylist,
+            &mut plane,
+            MediaEnvironment {
+                display_mode: DisplayMode::Standalone,
+                ..MediaEnvironment::default()
+            },
+        );
+        assert!(
+            c[0] > 0.99 && c[1] < 0.01,
+            "display-mode: standalone → red, got {c:?}"
+        );
 
-        let c = check(&mut stylist, &mut plane, MediaEnvironment {
-            scripting: Scripting::None,
-            ..MediaEnvironment::default()
-        });
-        assert!(c[1] > 0.99 && c[0] < 0.01, "scripting: none → green, got {c:?}");
+        let c = check(
+            &mut stylist,
+            &mut plane,
+            MediaEnvironment {
+                scripting: Scripting::None,
+                ..MediaEnvironment::default()
+            },
+        );
+        assert!(
+            c[1] > 0.99 && c[0] < 0.01,
+            "scripting: none → green, got {c:?}"
+        );
     }
 
     /// Tier D device-capability media features (parity plan M4): pointer, hover,
@@ -2127,19 +2154,17 @@ mod tests {
     /// `(hover: hover) and (pointer: fine)` holds by construction at the default.
     #[test]
     fn tier_d_capability_media_features_evaluate() {
+        use genet_scripted_dom::ScriptedDom;
         use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
-        use genet_scripted_dom::ScriptedDom;
         use style::queries::values::{ColorGamut, Update};
         use style::servo::media_features::PointerCapabilities;
 
-        const SHEET: &[&str] = &[
-            "p { color: rgb(0, 0, 0); } \
+        const SHEET: &[&str] = &["p { color: rgb(0, 0, 0); } \
              @media (pointer: coarse) { p { color: rgb(255, 0, 0); } } \
              @media (hover: none) { p { color: rgb(0, 255, 0); } } \
              @media (color-gamut: p3) { p { color: rgb(0, 0, 255); } } \
-             @media (update: slow) { p { color: rgb(255, 255, 0); } }",
-        ];
+             @media (update: slow) { p { color: rgb(255, 255, 0); } }"];
         let html = |l: &str| QualName::new(None, ns!(html), l.into());
 
         let mut dom = ScriptedDom::new();
@@ -2159,7 +2184,10 @@ mod tests {
 
         // Default screen: none of the "unusual capability" rules match → black.
         // (Confirms fine pointer, hover, srgb gamut, fast update.)
-        assert!(color_of::<ScriptedDom>(&plane, p)[0] < 0.01, "default screen → black");
+        assert!(
+            color_of::<ScriptedDom>(&plane, p)[0] < 0.01,
+            "default screen → black"
+        );
 
         let check = |stylist: &mut Stylist, plane: &mut StylePlane<_>, env: MediaEnvironment| {
             set_stylist_media_env(stylist, &lock, vp, quirks, env);
@@ -2167,13 +2195,12 @@ mod tests {
             color_of::<ScriptedDom>(plane, p)
         };
 
-        let check_pointers = |stylist: &mut Stylist,
-                              plane: &mut StylePlane<_>,
-                              primary: PointerCapabilities| {
-            set_stylist_pointer_capabilities(stylist, &lock, vp, quirks, primary, primary);
-            restyle_structural(&dom, plane, stylist, &[h]);
-            color_of::<ScriptedDom>(plane, p)
-        };
+        let check_pointers =
+            |stylist: &mut Stylist, plane: &mut StylePlane<_>, primary: PointerCapabilities| {
+                set_stylist_pointer_capabilities(stylist, &lock, vp, quirks, primary, primary);
+                restyle_structural(&dom, plane, stylist, &[h]);
+                color_of::<ScriptedDom>(plane, p)
+            };
 
         // Primary pointer is coarse but can still hover (COARSE|HOVER) →
         // (pointer: coarse) matches; (hover: none) does not.
@@ -2182,24 +2209,41 @@ mod tests {
             &mut plane,
             PointerCapabilities::COARSE | PointerCapabilities::HOVER,
         );
-        assert!(c[0] > 0.99 && c[1] < 0.01, "pointer: coarse → red, got {c:?}");
+        assert!(
+            c[0] > 0.99 && c[1] < 0.01,
+            "pointer: coarse → red, got {c:?}"
+        );
 
         // Primary pointer is fine but can't hover → (hover: none) matches.
         let c = check_pointers(&mut stylist, &mut plane, PointerCapabilities::FINE);
         assert!(c[1] > 0.99 && c[0] < 0.01, "hover: none → green, got {c:?}");
 
         // color-gamut: p3 matches when the device gamut is at least p3.
-        let c = check(&mut stylist, &mut plane, MediaEnvironment {
-            color_gamut: ColorGamut::P3,
-            ..MediaEnvironment::default()
-        });
-        assert!(c[2] > 0.99 && c[0] < 0.01, "color-gamut ≥ p3 → blue, got {c:?}");
+        let c = check(
+            &mut stylist,
+            &mut plane,
+            MediaEnvironment {
+                color_gamut: ColorGamut::P3,
+                ..MediaEnvironment::default()
+            },
+        );
+        assert!(
+            c[2] > 0.99 && c[0] < 0.01,
+            "color-gamut ≥ p3 → blue, got {c:?}"
+        );
 
-        let c = check(&mut stylist, &mut plane, MediaEnvironment {
-            update: Update::Slow,
-            ..MediaEnvironment::default()
-        });
-        assert!(c[0] > 0.99 && c[1] > 0.99 && c[2] < 0.01, "update: slow → yellow, got {c:?}");
+        let c = check(
+            &mut stylist,
+            &mut plane,
+            MediaEnvironment {
+                update: Update::Slow,
+                ..MediaEnvironment::default()
+            },
+        );
+        assert!(
+            c[0] > 0.99 && c[1] > 0.99 && c[2] < 0.01,
+            "update: slow → yellow, got {c:?}"
+        );
     }
 
     /// Multi-capability `any-pointer`: a hybrid device (touchscreen + mouse)
@@ -2209,16 +2253,14 @@ mod tests {
     /// stays the fine mouse, so `(pointer: coarse)` does not match.
     #[test]
     fn multi_capability_any_pointer_matches_coarse_and_fine() {
+        use genet_scripted_dom::ScriptedDom;
         use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
-        use genet_scripted_dom::ScriptedDom;
         use style::servo::media_features::PointerCapabilities;
 
-        const SHEET: &[&str] = &[
-            "p { color: rgb(0, 0, 0); } \
+        const SHEET: &[&str] = &["p { color: rgb(0, 0, 0); } \
              @media (any-pointer: coarse) and (any-pointer: fine) { p { color: rgb(255, 0, 0); } } \
-             @media (pointer: coarse) { p { color: rgb(0, 255, 0); } }",
-        ];
+             @media (pointer: coarse) { p { color: rgb(0, 255, 0); } }"];
         let html = |l: &str| QualName::new(None, ns!(html), l.into());
 
         let mut dom = ScriptedDom::new();
@@ -2238,7 +2280,10 @@ mod tests {
 
         // Default (mouse only): any-pointer is fine, not coarse → combined rule
         // fails → black.
-        assert!(color_of::<ScriptedDom>(&plane, p)[0] < 0.01, "mouse-only → black");
+        assert!(
+            color_of::<ScriptedDom>(&plane, p)[0] < 0.01,
+            "mouse-only → black"
+        );
 
         // Hybrid: any-pointer is coarse + fine + hover; primary stays the fine
         // mouse. The combined any-pointer rule matches (red); (pointer: coarse)
@@ -2249,9 +2294,7 @@ mod tests {
             vp,
             quirks,
             PointerCapabilities::FINE | PointerCapabilities::HOVER,
-            PointerCapabilities::COARSE
-                | PointerCapabilities::FINE
-                | PointerCapabilities::HOVER,
+            PointerCapabilities::COARSE | PointerCapabilities::FINE | PointerCapabilities::HOVER,
         );
         restyle_structural(&dom, &mut plane, &stylist, &[h]);
         let c = color_of::<ScriptedDom>(&plane, p);
@@ -2268,17 +2311,15 @@ mod tests {
     /// since its color-reverting confounds a color observable.)
     #[test]
     fn tier_c_accessibility_media_features_evaluate() {
+        use genet_scripted_dom::ScriptedDom;
         use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
-        use genet_scripted_dom::ScriptedDom;
         use style::queries::values::{InvertedColors, PrefersContrast, PrefersReducedTransparency};
 
-        const SHEET: &[&str] = &[
-            "p { color: rgb(0, 0, 0); } \
+        const SHEET: &[&str] = &["p { color: rgb(0, 0, 0); } \
              @media (prefers-contrast: more) { p { color: rgb(255, 0, 0); } } \
              @media (prefers-reduced-transparency: reduce) { p { color: rgb(0, 255, 0); } } \
-             @media (inverted-colors: inverted) { p { color: rgb(0, 0, 255); } }",
-        ];
+             @media (inverted-colors: inverted) { p { color: rgb(0, 0, 255); } }"];
         let html = |l: &str| QualName::new(None, ns!(html), l.into());
 
         let mut dom = ScriptedDom::new();
@@ -2296,7 +2337,10 @@ mod tests {
         let quirks = selectors_quirks_mode(dom.quirks_mode());
         let vp = euclid::Size2D::new(800.0, 600.0);
 
-        assert!(color_of::<ScriptedDom>(&plane, p)[0] < 0.01, "default → black");
+        assert!(
+            color_of::<ScriptedDom>(&plane, p)[0] < 0.01,
+            "default → black"
+        );
 
         let check = |stylist: &mut Stylist, plane: &mut StylePlane<_>, env: MediaEnvironment| {
             set_stylist_media_env(stylist, &lock, vp, quirks, env);
@@ -2304,23 +2348,44 @@ mod tests {
             color_of::<ScriptedDom>(plane, p)
         };
 
-        let c = check(&mut stylist, &mut plane, MediaEnvironment {
-            prefers_contrast: PrefersContrast::More,
-            ..MediaEnvironment::default()
-        });
-        assert!(c[0] > 0.99 && c[1] < 0.01, "prefers-contrast: more → red, got {c:?}");
+        let c = check(
+            &mut stylist,
+            &mut plane,
+            MediaEnvironment {
+                prefers_contrast: PrefersContrast::More,
+                ..MediaEnvironment::default()
+            },
+        );
+        assert!(
+            c[0] > 0.99 && c[1] < 0.01,
+            "prefers-contrast: more → red, got {c:?}"
+        );
 
-        let c = check(&mut stylist, &mut plane, MediaEnvironment {
-            prefers_reduced_transparency: PrefersReducedTransparency::Reduce,
-            ..MediaEnvironment::default()
-        });
-        assert!(c[1] > 0.99 && c[0] < 0.01, "reduced-transparency → green, got {c:?}");
+        let c = check(
+            &mut stylist,
+            &mut plane,
+            MediaEnvironment {
+                prefers_reduced_transparency: PrefersReducedTransparency::Reduce,
+                ..MediaEnvironment::default()
+            },
+        );
+        assert!(
+            c[1] > 0.99 && c[0] < 0.01,
+            "reduced-transparency → green, got {c:?}"
+        );
 
-        let c = check(&mut stylist, &mut plane, MediaEnvironment {
-            inverted_colors: InvertedColors::Inverted,
-            ..MediaEnvironment::default()
-        });
-        assert!(c[2] > 0.99 && c[0] < 0.01, "inverted-colors → blue, got {c:?}");
+        let c = check(
+            &mut stylist,
+            &mut plane,
+            MediaEnvironment {
+                inverted_colors: InvertedColors::Inverted,
+                ..MediaEnvironment::default()
+            },
+        );
+        assert!(
+            c[2] > 0.99 && c[0] < 0.01,
+            "inverted-colors → blue, got {c:?}"
+        );
     }
 
     /// The `forced-colors` media feature evaluates. Observed via the `none`
@@ -2332,15 +2397,13 @@ mod tests {
     /// per the parity plan; only the query is wired here.)
     #[test]
     fn forced_colors_media_feature_evaluates() {
+        use genet_scripted_dom::ScriptedDom;
         use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
-        use genet_scripted_dom::ScriptedDom;
         use style::values::specified::color::ForcedColors;
 
-        const SHEET: &[&str] = &[
-            "p { color: rgb(0, 0, 0); } \
-             @media (forced-colors: none) { p { color: rgb(0, 255, 0); } }",
-        ];
+        const SHEET: &[&str] = &["p { color: rgb(0, 0, 0); } \
+             @media (forced-colors: none) { p { color: rgb(0, 255, 0); } }"];
         let html = |l: &str| QualName::new(None, ns!(html), l.into());
 
         let mut dom = ScriptedDom::new();
@@ -2360,16 +2423,28 @@ mod tests {
 
         // Default env: forced-colors is none → the rule matches → green.
         let c = color_of::<ScriptedDom>(&plane, p);
-        assert!(c[1] > 0.99, "forced-colors: none matches at default → green, got {c:?}");
+        assert!(
+            c[1] > 0.99,
+            "forced-colors: none matches at default → green, got {c:?}"
+        );
 
         // Host reports active → the (forced-colors: none) rule no longer matches.
-        set_stylist_media_env(&mut stylist, &lock, vp, quirks, MediaEnvironment {
-            forced_colors: ForcedColors::Active,
-            ..MediaEnvironment::default()
-        });
+        set_stylist_media_env(
+            &mut stylist,
+            &lock,
+            vp,
+            quirks,
+            MediaEnvironment {
+                forced_colors: ForcedColors::Active,
+                ..MediaEnvironment::default()
+            },
+        );
         restyle_structural(&dom, &mut plane, &stylist, &[h]);
         let c = color_of::<ScriptedDom>(&plane, p);
-        assert!(c[1] < 0.99, "active → (forced-colors: none) stops matching, got {c:?}");
+        assert!(
+            c[1] < 0.99,
+            "active → (forced-colors: none) stops matching, got {c:?}"
+        );
     }
 
     /// The `MediaEnvironment` consolidation (parity plan M2): setting one
@@ -2379,18 +2454,16 @@ mod tests {
     /// color-scheme flip.
     #[test]
     fn media_environment_preferences_do_not_clobber() {
+        use genet_scripted_dom::ScriptedDom;
         use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
-        use genet_scripted_dom::ScriptedDom;
 
         // Red iff reduce, green channel iff dark. A pixel that is red AND has a
         // green tint means both preferences are active at once.
-        const SHEET: &[&str] = &[
-            "p { color: rgb(0, 0, 0); } \
+        const SHEET: &[&str] = &["p { color: rgb(0, 0, 0); } \
              @media (prefers-reduced-motion: reduce) { p { color: rgb(255, 0, 0); } } \
              @media (prefers-color-scheme: dark) and (prefers-reduced-motion: reduce) \
-             { p { color: rgb(255, 128, 0); } }",
-        ];
+             { p { color: rgb(255, 128, 0); } }"];
         let html = |l: &str| QualName::new(None, ns!(html), l.into());
 
         let mut dom = ScriptedDom::new();
@@ -2409,7 +2482,10 @@ mod tests {
         let vp = euclid::Size2D::new(800.0, 600.0);
 
         // Default (light, no-preference): black.
-        assert!(color_of::<ScriptedDom>(&plane, p)[0] < 0.01, "default black");
+        assert!(
+            color_of::<ScriptedDom>(&plane, p)[0] < 0.01,
+            "default black"
+        );
 
         // Flip reduced-motion → red.
         set_stylist_reduced_motion(&mut stylist, &lock, vp, quirks, true);
@@ -2435,15 +2511,13 @@ mod tests {
     /// at once: it matches a landscape 800x600 viewport and fails a portrait one.
     #[test]
     fn tier_a_geometry_media_features_evaluate() {
+        use genet_scripted_dom::ScriptedDom;
         use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
-        use genet_scripted_dom::ScriptedDom;
 
-        const SHEET: &[&str] = &[
-            "p { color: rgb(0, 0, 0); } \
+        const SHEET: &[&str] = &["p { color: rgb(0, 0, 0); } \
              @media (min-height: 500px) and (orientation: landscape) and (min-aspect-ratio: 5/4) \
-             { p { color: rgb(255, 0, 0); } }",
-        ];
+             { p { color: rgb(255, 0, 0); } }"];
         let html = |l: &str| QualName::new(None, ns!(html), l.into());
         let build = || {
             let mut dom = ScriptedDom::new();
@@ -2460,16 +2534,31 @@ mod tests {
         // Landscape 800x600: height 600 ≥ 500, landscape, 4/3 ≥ 5/4 → red.
         let (dom, p) = build();
         let mut plane: StylePlane<_> = StylePlane::new();
-        run_cascade(&dom, &mut plane, euclid::Size2D::new(800.0, 600.0), SHEET, None);
+        run_cascade(
+            &dom,
+            &mut plane,
+            euclid::Size2D::new(800.0, 600.0),
+            SHEET,
+            None,
+        );
         let c = color_of::<ScriptedDom>(&plane, p);
         assert!(c[0] > 0.99, "landscape 800x600 → red, got {c:?}");
 
         // Portrait 600x800: orientation fails → default black.
         let (dom, p) = build();
         let mut plane: StylePlane<_> = StylePlane::new();
-        run_cascade(&dom, &mut plane, euclid::Size2D::new(600.0, 800.0), SHEET, None);
+        run_cascade(
+            &dom,
+            &mut plane,
+            euclid::Size2D::new(600.0, 800.0),
+            SHEET,
+            None,
+        );
         let c = color_of::<ScriptedDom>(&plane, p);
-        assert!(c[0] < 0.01, "portrait 600x800 → black (query fails), got {c:?}");
+        assert!(
+            c[0] < 0.01,
+            "portrait 600x800 → black (query fails), got {c:?}"
+        );
     }
 
     /// `:focus` matches only the focused element while `:focus-within` matches
@@ -2478,9 +2567,9 @@ mod tests {
     #[test]
     fn interaction_focus_within_walks_ancestors() {
         use engine_observables_api::{InteractionState, SourceNodeId};
+        use genet_scripted_dom::ScriptedDom;
         use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
-        use genet_scripted_dom::ScriptedDom;
 
         const SHEET: &[&str] =
             &["div:focus-within { color: rgb(0, 255, 0); } p:focus { color: rgb(255, 0, 0); }"];
@@ -2645,9 +2734,9 @@ mod tests {
     /// sibling keeps its color.
     #[test]
     fn incremental_restyle_matches_full_recascade_on_class_toggle() {
+        use genet_scripted_dom::ScriptedDom;
         use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
-        use genet_scripted_dom::ScriptedDom;
 
         const SHEET: &[&str] = &[
             ".a { color: rgb(255,0,0); } .b { color: rgb(0,0,255); } .keep { color: rgb(0,255,0); }",
@@ -2724,9 +2813,9 @@ mod tests {
     /// invalidator sets descendant hints through genet's adapter.
     #[test]
     fn incremental_restyle_propagates_to_descendants() {
+        use genet_scripted_dom::ScriptedDom;
         use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
-        use genet_scripted_dom::ScriptedDom;
 
         const SHEET: &[&str] = &["p { color: rgb(0,0,0); } .box p { color: rgb(0,0,255); }"];
         let html = |l: &str| QualName::new(None, ns!(html), l.into());
@@ -2786,9 +2875,9 @@ mod tests {
     /// re-cascade. (Exercises attr snapshots + `attr_matches` together.)
     #[test]
     fn incremental_restyle_handles_attribute_selectors() {
+        use genet_scripted_dom::ScriptedDom;
         use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
-        use genet_scripted_dom::ScriptedDom;
 
         const SHEET: &[&str] =
             &["p { color: rgb(0,0,0); } p[data-state=\"on\"] { color: rgb(0,255,0); }"];
@@ -2847,9 +2936,9 @@ mod tests {
     /// uses to skip layout for paint-only mutations.
     #[test]
     fn restyle_outcome_distinguishes_repaint_from_relayout() {
+        use genet_scripted_dom::ScriptedDom;
         use html5ever::ns;
         use layout_dom_api::{LayoutDomMut, QualName};
-        use genet_scripted_dom::ScriptedDom;
 
         const SHEET: &[&str] = &[
             ".red { color: rgb(255,0,0); } .blue { color: rgb(0,0,255); } \

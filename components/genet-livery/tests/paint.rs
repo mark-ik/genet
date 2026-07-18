@@ -320,9 +320,7 @@ fn host_image_resource_resolves_a_remote_url_without_engine_fetching() {
 fn formatting_whitespace_does_not_shift_following_block_flow() {
     let css = ".card { width: 80px; height: 40px; background-color: lime; }";
     let mut compact = LiveryDocument::new(
-        StaticDocument::parse(
-            "<html><body><p>hello</p><div class=\"card\"></div></body></html>",
-        ),
+        StaticDocument::parse("<html><body><p>hello</p><div class=\"card\"></div></body></html>"),
         StyleSet::cambium(&[css]),
         Device::screen(320.0, 240.0),
     );

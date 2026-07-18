@@ -132,9 +132,9 @@ impl<'a, D: LayoutDom> Eq for NodeRef<'a, D> {}
 
 #[cfg(test)]
 mod tests {
+    use genet_static_dom::StaticDocument;
     use html5ever::local_name;
     use layout_dom_api::LayoutDom;
-    use genet_static_dom::StaticDocument;
 
     use super::*;
 

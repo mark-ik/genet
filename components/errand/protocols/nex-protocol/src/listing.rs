@@ -26,13 +26,13 @@ pub fn parse_listing(text: &str) -> Vec<ListingLine> {
                                 url: url.to_string(),
                                 label: (!label.is_empty()).then(|| label.to_string()),
                             }
-                        }
+                        },
                         None => ListingLine::Link {
                             url: rest.to_string(),
                             label: None,
                         },
                     }
-                }
+                },
                 _ => ListingLine::Text(line.to_string()),
             }
         })
@@ -75,7 +75,10 @@ mod tests {
 
     #[test]
     fn a_bare_arrow_is_text_not_a_link() {
-        assert_eq!(parse_listing("=> ")[0], ListingLine::Text("=> ".to_string()));
+        assert_eq!(
+            parse_listing("=> ")[0],
+            ListingLine::Text("=> ".to_string())
+        );
         // No space after the arrow: the spec requires "=> ".
         assert_eq!(
             parse_listing("=>about.txt")[0],

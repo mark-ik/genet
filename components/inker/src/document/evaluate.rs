@@ -254,7 +254,7 @@ pub fn evaluate_blocks(
                 outcome.failed.push((lang, error));
                 blocks.push(block);
                 continue;
-            }
+            },
         };
 
         // Provenance marks the splice as generated, not fetched.
@@ -279,13 +279,13 @@ pub fn evaluate_blocks(
                     blocks.push(child);
                 }
                 outcome.evaluated += 1;
-            }
+            },
             Err(error) => {
                 outcome
                     .failed
                     .push((lang, format!("render output: {error}")));
                 blocks.push(block);
-            }
+            },
         }
     }
 

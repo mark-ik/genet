@@ -45,26 +45,26 @@ fn collect_block(block: &Block, out: &mut Vec<LinkStatement>) {
             for span in spans {
                 collect_span(span, out);
             }
-        }
+        },
         Block::Quote { blocks } => {
             for inner in blocks {
                 collect_block(inner, out);
             }
-        }
+        },
         Block::List { items, .. } => {
             for item in items {
                 for inner in item {
                     collect_block(inner, out);
                 }
             }
-        }
+        },
         Block::Table { header, rows, .. } => {
             for cell in header.iter().chain(rows.iter().flatten()) {
                 for span in cell {
                     collect_span(span, out);
                 }
             }
-        }
+        },
         // Feed blocks carry navigation URLs (article / source), not `rel`
         // statements; the remaining variants hold no inline links.
         Block::FeedHeader { .. }
@@ -74,7 +74,7 @@ fn collect_block(block: &Block, out: &mut Vec<LinkStatement>) {
         | Block::Preformatted { .. }
         | Block::Rule
         | Block::MetadataRow { .. }
-        | Block::Badge { .. } => {}
+        | Block::Badge { .. } => {},
     }
 }
 
@@ -95,16 +95,16 @@ fn collect_span(span: &InlineSpan, out: &mut Vec<LinkStatement>) {
             for inner in spans {
                 collect_span(inner, out);
             }
-        }
+        },
         InlineSpan::Emphasis(inner) | InlineSpan::Strong(inner) => {
             for s in inner {
                 collect_span(s, out);
             }
-        }
+        },
         InlineSpan::Text(_)
         | InlineSpan::Code(_)
         | InlineSpan::LineBreak
-        | InlineSpan::SoftBreak => {}
+        | InlineSpan::SoftBreak => {},
     }
 }
 

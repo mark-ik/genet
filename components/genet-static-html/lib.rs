@@ -6,8 +6,8 @@
 
 use std::sync::Arc;
 
-use layout_api::{LayoutHostServices, NoOpLayoutHostServices};
 use genet_static_dom::StaticDocument;
+use layout_api::{LayoutHostServices, NoOpLayoutHostServices};
 use servo_url::ServoUrl;
 
 /// The first low-profile Genet build target.

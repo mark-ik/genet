@@ -56,11 +56,20 @@ pub fn parse(body: &str) -> Vec<GemLine> {
         if let Some(rest) = line.strip_prefix("```") {
             pre = Some((trimmed_or_none(rest), String::new()));
         } else if let Some(t) = line.strip_prefix("### ") {
-            out.push(GemLine::Heading { level: 3, text: t.trim().to_string() });
+            out.push(GemLine::Heading {
+                level: 3,
+                text: t.trim().to_string(),
+            });
         } else if let Some(t) = line.strip_prefix("## ") {
-            out.push(GemLine::Heading { level: 2, text: t.trim().to_string() });
+            out.push(GemLine::Heading {
+                level: 2,
+                text: t.trim().to_string(),
+            });
         } else if let Some(t) = line.strip_prefix("# ") {
-            out.push(GemLine::Heading { level: 1, text: t.trim().to_string() });
+            out.push(GemLine::Heading {
+                level: 1,
+                text: t.trim().to_string(),
+            });
         } else if let Some(rest) = line.strip_prefix("=>") {
             if let Some(link) = parse_link(rest) {
                 out.push(link);
@@ -113,16 +122,26 @@ mod tests {
         assert_eq!(
             lines,
             vec![
-                GemLine::Heading { level: 1, text: "one".into() },
-                GemLine::Heading { level: 2, text: "two".into() },
-                GemLine::Heading { level: 3, text: "three".into() },
+                GemLine::Heading {
+                    level: 1,
+                    text: "one".into()
+                },
+                GemLine::Heading {
+                    level: 2,
+                    text: "two".into()
+                },
+                GemLine::Heading {
+                    level: 3,
+                    text: "three".into()
+                },
             ]
         );
     }
 
     #[test]
     fn link_with_and_without_label() {
-        let lines = parse("=> gemini://example.test/  Example capsule\n=> gemini://example.test/page\n");
+        let lines =
+            parse("=> gemini://example.test/  Example capsule\n=> gemini://example.test/page\n");
         assert_eq!(
             lines,
             vec![
@@ -186,7 +205,10 @@ mod tests {
         let lines = parse("```\nstill open\n");
         assert_eq!(
             lines,
-            vec![GemLine::Pre { alt: None, text: "still open\n".into() }]
+            vec![GemLine::Pre {
+                alt: None,
+                text: "still open\n".into()
+            }]
         );
     }
 

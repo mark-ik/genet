@@ -11,8 +11,8 @@ pub use length::{CalcLengthPercentage, Length, LengthPercentage, LengthUnit};
 pub use property::{
     Alignment, AnimationName, AspectRatio, BackgroundImage, BackgroundPosition, BackgroundRepeat,
     BorderStyle, BorderWidth, BoxShadow, BoxShadowValue, BoxSizing, Display, Duration,
-    FlexDirection, FlexFactor, FlexWrap, FontFamily, FontSize, FontStyle, FontWeight, Gap,
-    Float, GridAutoFlow, GridPlacement, GridTemplate, GridTrack, Inset, LineHeight, ListStyleType, Margin,
+    FlexDirection, FlexFactor, FlexWrap, Float, FontFamily, FontSize, FontStyle, FontWeight, Gap,
+    GridAutoFlow, GridPlacement, GridTemplate, GridTrack, Inset, LineHeight, ListStyleType, Margin,
     Opacity, Order, Overflow, Padding, PointerEvents, Position, Radius, Size, Spacing, TextAlign,
     TextDecorationColor, TextDecorationLine, TextWrapMode, TimingFunction, Transform,
     TransformFunction, TransitionProperty, VerticalAlign, Visibility, WhiteSpaceCollapse, ZIndex,

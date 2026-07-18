@@ -133,7 +133,7 @@ pub fn highlight_djot(src: &str) -> Vec<Span> {
                 if let Some(kind) = kind_of(&container) {
                     stack.push((kind, range.start));
                 }
-            }
+            },
             Event::End(container) => {
                 if kind_of(&container).is_some() {
                     if let Some((kind, start)) = stack.pop() {
@@ -143,8 +143,8 @@ pub fn highlight_djot(src: &str) -> Vec<Span> {
                         });
                     }
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
     spans
@@ -192,19 +192,19 @@ pub fn highlight(src: &str, registry: &InjectionRegistry) -> Vec<Span> {
                 match &container {
                     Container::CodeBlock { language } => {
                         code = Some(CodeCtx::new(language.as_ref()))
-                    }
+                    },
                     Container::RawBlock { format } => code = Some(CodeCtx::new(format.as_ref())),
-                    _ => {}
+                    _ => {},
                 }
                 if let Some(kind) = kind_of(&container) {
                     stack.push((kind, range.start));
                 }
-            }
+            },
             Event::Str(_) => {
                 if let Some(ctx) = code.as_mut() {
                     ctx.extend(range.clone());
                 }
-            }
+            },
             Event::End(container) => {
                 if matches!(
                     &container,
@@ -228,8 +228,8 @@ pub fn highlight(src: &str, registry: &InjectionRegistry) -> Vec<Span> {
                         });
                     }
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
     spans

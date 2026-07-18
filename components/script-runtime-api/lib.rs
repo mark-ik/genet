@@ -35,9 +35,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use genet_scripted_dom::{NodeId, ScriptedDom};
 use layout_dom_api::LayoutDom;
 use script_engine_api::{CallCx, NativeFn, ScriptEngine, ScriptEngineSnapshot};
-use genet_scripted_dom::{NodeId, ScriptedDom};
 
 mod dom;
 mod fetch;
@@ -396,9 +396,8 @@ impl<E: ScriptEngine> Runtime<E> {
     ) -> Result<bool, E::Error> {
         // Node id as a *string*: a tagged raw NodeId can exceed 2^53 (the
         // precision bug the transitions plan hit).
-        let expr = format!(
-            "__dispatchTouch(\"{raw_node_id}\", {event_type:?}, {x}, {y}, {identifier})"
-        );
+        let expr =
+            format!("__dispatchTouch(\"{raw_node_id}\", {event_type:?}, {x}, {y}, {identifier})");
         let v = self.engine.eval(&expr)?;
         self.flush_host_trace_events();
         let proceed = self
@@ -632,10 +631,9 @@ impl<E: ScriptEngine> Runtime<E> {
         loop {
             // Step 3: "For each handle in callbackHandles, if handle exists in
             // callbacks: ... Invoke callback with « now » and "report"."
-            let v = match self
-                .engine
-                .eval(&format!("String(globalThis.__runOneAnimationFrameCallback({now_ms}))"))
-            {
+            let v = match self.engine.eval(&format!(
+                "String(globalThis.__runOneAnimationFrameCallback({now_ms}))"
+            )) {
                 Ok(value) => value,
                 Err(error) => {
                     self.flush_host_trace_events();
@@ -752,9 +750,8 @@ impl<E: ScriptEngine> Runtime<E> {
     /// after mutating the device its [`MediaQueryHandler`] evaluates against. A
     /// microtask checkpoint runs after so listener-scheduled work settles.
     pub fn notify_media_features_changed(&mut self) -> Result<(), E::Error> {
-        self.engine.eval(
-            "globalThis.__reevaluateMediaQueries && globalThis.__reevaluateMediaQueries()",
-        )?;
+        self.engine
+            .eval("globalThis.__reevaluateMediaQueries && globalThis.__reevaluateMediaQueries()")?;
         self.flush_host_trace_events();
         self.perform_microtask_checkpoint();
         Ok(())
@@ -1998,7 +1995,14 @@ mod tests {
              console.log('init:' + mql.matches);",
         )
         .expect("setup");
-        let last = |rt: &Runtime<E>| rt.host().borrow().console.last().cloned().unwrap_or_default();
+        let last = |rt: &Runtime<E>| {
+            rt.host()
+                .borrow()
+                .console
+                .last()
+                .cloned()
+                .unwrap_or_default()
+        };
         assert_eq!(last(&rt), "init:false");
 
         // Device flips to matching + notify -> one change; `.matches` now true.
@@ -2010,7 +2014,8 @@ mod tests {
 
         // Re-notify with no state change -> no new event.
         rt.notify_media_features_changed().expect("notify2");
-        rt.eval("console.log('again:' + __seen.join(','));").expect("read2");
+        rt.eval("console.log('again:' + __seen.join(','));")
+            .expect("read2");
         assert_eq!(last(&rt), "again:c:true");
 
         // Flip back -> another change (both directions fire).
@@ -2409,10 +2414,8 @@ mod tests {
         .expect("setup");
 
         // The throwing listener must not make dispatchEvent throw.
-        rt.eval(
-            "document.body.firstChild.dispatchEvent(new Event('click', { bubbles: true }));",
-        )
-        .expect("dispatch must not propagate the listener's exception");
+        rt.eval("document.body.firstChild.dispatchEvent(new Event('click', { bubbles: true }));")
+            .expect("dispatch must not propagate the listener's exception");
 
         let console = rt.host().borrow().console.clone();
         assert!(
@@ -2472,10 +2475,10 @@ mod tests {
         assert_eq!(
             rt.host().borrow().console,
             vec![
-                "window capture".to_string(),           // capture, root -> target
-                "div".to_string(),                      // target
+                "window capture".to_string(),            // capture, root -> target
+                "div".to_string(),                       // target
                 "window saw click, phase=3".to_string(), // bubble (3 = BUBBLING_PHASE)
-                "once".to_string(),                     // fires exactly once
+                "once".to_string(),                      // fires exactly once
             ],
         );
     }
@@ -2484,7 +2487,6 @@ mod tests {
     fn window_listeners_receive_bubbled_events_on_boa() {
         window_listeners_receive_bubbled_events::<script_engine_boa::BoaEngine>();
     }
-
 
     /// The G3 GC tick, against any backend: a detached node script holds is
     /// pinned on mint and spared by `collect_garbage`; once its reflector is

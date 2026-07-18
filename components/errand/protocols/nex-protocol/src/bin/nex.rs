@@ -24,7 +24,7 @@ fn main() -> ExitCode {
         Err(message) => {
             eprintln!("{message}");
             ExitCode::FAILURE
-        }
+        },
     }
 }
 
@@ -56,7 +56,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             std::io::stdout()
                 .write_all(&body)
                 .map_err(|error| error.to_string())
-        }
+        },
         "serve" => {
             let root = root.ok_or("nex serve: --root DIR is required")?;
             let listen: SocketAddr = listen
@@ -68,7 +68,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 let listener = tokio::net::TcpListener::bind(listen)
                     .await
                     .map_err(|error| format!("bind {listen}: {error}"))?;
-                eprintln!("nex: serving {} on {listen} (ctrl-c to stop)", root.display());
+                eprintln!(
+                    "nex: serving {} on {listen} (ctrl-c to stop)",
+                    root.display()
+                );
                 serve(
                     listener,
                     FileHandler::new(root),
@@ -80,11 +83,11 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 .await
                 .map_err(|error| error.to_string())
             })
-        }
+        },
         "--help" | "-h" | "help" => {
             println!("{USAGE}");
             Ok(())
-        }
+        },
         other => Err(format!("Unknown command '{other}'.\n\n{USAGE}")),
     }
 }

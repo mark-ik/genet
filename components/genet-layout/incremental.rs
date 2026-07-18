@@ -30,25 +30,25 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use style::selector_parser::RestyleDamage;
 use style::stylist::Stylist;
 
+use crate::animation_events::{AnimationEventRecord, harvest_animation_events};
 use crate::box_tree::BoxTree;
 use crate::cascade::{
     build_stylist, restyle_for_animation_tick, restyle_for_interaction, restyle_structural,
     restyle_with_snapshots, run_cascade_with_stylist, set_stylist_color_scheme,
 };
-use crate::animation_events::{AnimationEventRecord, harvest_animation_events};
-use crate::transition_events::{TransitionEventRecord, harvest_transition_events};
 use crate::fragment::FragmentPlane;
+use crate::genet_lane::GenetLaneView;
 use crate::image_decode::{BackgroundImagePlane, DecodedImage, ImagePlane};
 use crate::invalidate::{classify, coalesce};
 use crate::paint_emit::{
-    LeafPaintSource, ScrollOffsets, GenetPaintList, emit_paint_list_scrolled,
+    GenetPaintList, LeafPaintSource, ScrollOffsets, emit_paint_list_scrolled,
     emit_paint_list_scrolled_excluding_subtrees, emit_paint_list_scrolled_with_leaves,
     emit_subtree_paint_list_scrolled,
 };
-use crate::genet_lane::GenetLaneView;
 use crate::style::StylePlane;
 use crate::subtree::SubtreeView;
 use crate::text_measure::TextMeasureCtx;
+use crate::transition_events::{TransitionEventRecord, harvest_transition_events};
 use crate::viewport::{ScrollKey, Viewport, document_scroll_range};
 
 /// What [`IncrementalLayout::apply`] did for a mutation batch.
@@ -1036,7 +1036,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
                             .attribute(*node, &name.ns, &name.local)
                             .as_deref()
                             .is_some_and(mentions_bg)
-                }
+                },
                 _ => false,
             },
             DomMutation::CharacterDataChanged { .. } => false,
@@ -1301,12 +1301,13 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         use style::animation::AnimationState::{Canceled, Pending, Running};
         let now = self.styles.animation_clock();
         self.styles.animations().sets.read().values().any(|set| {
-            set.transitions.iter().any(|t| {
-                t.state != Canceled && t.start_time + t.property_animation.duration > now
-            }) || set
-                .animations
+            set.transitions
                 .iter()
-                .any(|a| matches!(a.state, Pending | Running) && !a.has_ended(now))
+                .any(|t| t.state != Canceled && t.start_time + t.property_animation.duration > now)
+                || set
+                    .animations
+                    .iter()
+                    .any(|a| matches!(a.state, Pending | Running) && !a.has_ended(now))
         })
     }
 
@@ -1403,8 +1404,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             return Vec::new();
         }
         let now = self.styles.animation_clock();
-        let events =
-            harvest_animation_events(dom, &self.styles, &mut self.animation_tracker, now);
+        let events = harvest_animation_events(dom, &self.styles, &mut self.animation_tracker, now);
         match self.animation_mode {
             AnimationMode::Full => events,
             AnimationMode::Disabled => Vec::new(),
@@ -2252,9 +2252,9 @@ where
 #[cfg(test)]
 mod tests {
     use engine_observables_api::{LayoutApplyKind, LayoutDamageClass};
+    use genet_scripted_dom::ScriptedDom;
     use html5ever::ns;
     use layout_dom_api::{LayoutDomMut, QualName};
-    use genet_scripted_dom::ScriptedDom;
 
     use super::*;
     use crate::cascade::run_cascade;
@@ -2292,7 +2292,11 @@ mod tests {
         dom.append_child(root, a);
         let b = dom.create_element(html("div"));
         dom.set_attribute(b, attr("class"), "b");
-        dom.set_attribute(b, attr("style"), "transform: translate(232px, 96px); width: 560px;");
+        dom.set_attribute(
+            b,
+            attr("style"),
+            "transform: translate(232px, 96px); width: 560px;",
+        );
         let tb = dom.create_text("bravo");
         dom.append_child(b, tb);
         dom.append_child(root, b);
@@ -2321,8 +2325,14 @@ mod tests {
                     if (t.transform.m41 - x).abs() < 0.5 && (t.transform.m42 - y).abs() < 0.5)
             })
         };
-        assert!(translated_to(12.0, 566.0), "first sibling's transform applies");
-        assert!(translated_to(232.0, 96.0), "second sibling's transform applies");
+        assert!(
+            translated_to(12.0, 566.0),
+            "first sibling's transform applies"
+        );
+        assert!(
+            translated_to(232.0, 96.0),
+            "second sibling's transform applies"
+        );
     }
 
     /// The text color a node's persistent plane resolved to.
@@ -2353,9 +2363,8 @@ mod tests {
     /// skip the repaint.
     #[test]
     fn set_interaction_drives_hover_repaint_only() {
-        const SHEET: &[&str] = &[
-            "p{width:100px;height:20px;color:rgb(0,0,255)} p:hover{color:rgb(255,0,0)}",
-        ];
+        const SHEET: &[&str] =
+            &["p{width:100px;height:20px;color:rgb(0,0,255)} p:hover{color:rgb(255,0,0)}"];
         let mut dom = ScriptedDom::new();
         let root = dom.document();
         let h = dom.create_element(html("html"));
@@ -2437,7 +2446,10 @@ mod tests {
             "a hidden input must never render",
         );
         // The type-selector rule must not swallow the other input types.
-        assert_eq!(display_of("input", Some("text")).as_deref(), Some("inline-block"));
+        assert_eq!(
+            display_of("input", Some("text")).as_deref(),
+            Some("inline-block")
+        );
     }
 
     /// A `<custom-leaf>` nested inside a native `<button>` (the widget catalog's
@@ -2483,12 +2495,20 @@ mod tests {
         // content as an InlineBoxItem. This is `<button>`'s real UA display.
         let inline_block =
             IncrementalLayout::new(&dom, &[LEAF, "button { display: inline-block; }"], W, H);
-        assert_eq!(inline_block.custom_leaf_boxes(), want, "inline-block button");
+        assert_eq!(
+            inline_block.custom_leaf_boxes(),
+            want,
+            "inline-block button"
+        );
 
         // Unstyled button: genet gives `<button>` no UA display, so it is `inline`
         // and the leaf lands directly in the body's inline content.
         let unstyled = IncrementalLayout::new(&dom, &[LEAF], W, H);
-        assert_eq!(unstyled.custom_leaf_boxes(), want, "inline (unstyled) button");
+        assert_eq!(
+            unstyled.custom_leaf_boxes(),
+            want,
+            "inline (unstyled) button"
+        );
     }
 
     /// A color-only change: incremental restyle, layout skipped
@@ -2578,7 +2598,10 @@ mod tests {
     }
 
     fn assert_close(got: f32, want: f32, what: &str) {
-        assert!((got - want).abs() < 0.01, "{what}: expected ~{want}, got {got}");
+        assert!(
+            (got - want).abs() < 0.01,
+            "{what}: expected ~{want}, got {got}"
+        );
     }
 
     /// A `@keyframes` animation interpolates across animation-clock ticks and then
@@ -2592,7 +2615,11 @@ mod tests {
         let (v, active) = animate_opacity("animation:fade 2s linear", &[1.0, 3.0]);
         assert_close(v[0], 1.0, "t=0 sits at the `from` keyframe");
         assert_close(v[1], 0.5, "t=1s is halfway through a 2s linear fade");
-        assert_close(v[2], 1.0, "past the end, fill-mode:none reverts to the base style");
+        assert_close(
+            v[2],
+            1.0,
+            "past the end, fill-mode:none reverts to the base style",
+        );
         assert!(!active, "a finished animation must report idle");
     }
 
@@ -2630,8 +2657,10 @@ mod tests {
         assert_close(delayed[1], 1.0, "still inside the 1s delay");
         assert_close(delayed[2], 0.5, "1s past the delay is halfway through");
 
-        let (paused, active) =
-            animate_opacity("animation:fade 2s linear;animation-play-state:paused", &[1.0]);
+        let (paused, active) = animate_opacity(
+            "animation:fade 2s linear;animation-play-state:paused",
+            &[1.0],
+        );
         assert_close(paused[1], 1.0, "a paused animation holds its value");
         assert!(!active, "a paused animation redraws nothing, so it is idle");
     }
@@ -2678,8 +2707,15 @@ mod tests {
     fn animation_events_fire_start_then_end() {
         let e = animation_events("animation:fade 2s linear", &[1.0, 3.0]);
         assert_eq!(kinds(&e), ["animationstart", "animationend"]);
-        assert!((e[0].1 - 0.0).abs() < 0.01, "start elapsedTime is 0, got {}", e[0].1);
-        assert!((e[1].1 - 2.0).abs() < 0.01, "end elapsedTime is the active duration");
+        assert!(
+            (e[0].1 - 0.0).abs() < 0.01,
+            "start elapsedTime is 0, got {}",
+            e[0].1
+        );
+        assert!(
+            (e[1].1 - 2.0).abs() < 0.01,
+            "end elapsedTime is the active duration"
+        );
     }
 
     /// `animationstart` waits for `animation-delay`: a tick inside the delay emits
@@ -2690,7 +2726,11 @@ mod tests {
         assert!(e.is_empty(), "still inside the delay, got {:?}", kinds(&e));
 
         let e = animation_events("animation:fade 2s linear 1s", &[0.5, 1.5]);
-        assert_eq!(kinds(&e), ["animationstart"], "start once the delay elapses");
+        assert_eq!(
+            kinds(&e),
+            ["animationstart"],
+            "start once the delay elapses"
+        );
     }
 
     /// `animationiteration` fires at each iteration boundary *except* the last, so
@@ -2703,14 +2743,25 @@ mod tests {
             kinds(&e),
             ["animationstart", "animationiteration", "animationend"],
         );
-        assert!((e[1].1 - 2.0).abs() < 0.01, "the boundary is 2s of active time in");
-        assert!((e[2].1 - 4.0).abs() < 0.01, "end elapsedTime is 2 iterations x 2s");
+        assert!(
+            (e[1].1 - 2.0).abs() < 0.01,
+            "the boundary is 2s of active time in"
+        );
+        assert!(
+            (e[2].1 - 4.0).abs() < 0.01,
+            "end elapsedTime is 2 iterations x 2s"
+        );
 
         // Three iterations => two boundaries.
         let e = animation_events("animation:fade 1s linear 0s 3", &[0.5, 1.5, 2.5, 4.0]);
         assert_eq!(
             kinds(&e),
-            ["animationstart", "animationiteration", "animationiteration", "animationend"],
+            [
+                "animationstart",
+                "animationiteration",
+                "animationiteration",
+                "animationend"
+            ],
         );
     }
 
@@ -2779,12 +2830,22 @@ mod tests {
 
         let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
         let opacity = |l: &IncrementalLayout<<ScriptedDom as LayoutDom>::NodeId>| -> f32 {
-            l.computed_value(p, "opacity").expect("opacity").parse().expect("numeric")
+            l.computed_value(p, "opacity")
+                .expect("opacity")
+                .parse()
+                .expect("numeric")
         };
 
         layout.tick_animations(&dom, 3.0);
-        assert_close(opacity(&layout), 0.0, "past the end, forwards holds the final value");
-        assert!(!layout.has_active_animations(), "a filled-forwards animation is idle");
+        assert_close(
+            opacity(&layout),
+            0.0,
+            "past the end, forwards holds the final value",
+        );
+        assert!(
+            !layout.has_active_animations(),
+            "a filled-forwards animation is idle"
+        );
 
         // An unrelated inline-style change re-cascades `p`. The animation must
         // still be in the set to supply its `forwards` value.
@@ -2792,7 +2853,11 @@ mod tests {
         dom.set_attribute(p, attr("style"), "color: rgb(1, 2, 3)");
         let muts = drain(&mut dom);
         layout.apply(&dom, SHEET, &muts);
-        assert_close(opacity(&layout), 0.0, "the forwards fill survives an unrelated restyle");
+        assert_close(
+            opacity(&layout),
+            0.0,
+            "the forwards fill survives an unrelated restyle",
+        );
     }
 
     /// A negative `animation-delay` starts the animation mid-flight, a
@@ -2840,7 +2905,10 @@ mod tests {
             "a -1s delay means 1s of active time has already elapsed at start, got {}",
             events[0].1
         );
-        assert!(!layout.has_active_animations(), "forwards fill is idle after the end");
+        assert!(
+            !layout.has_active_animations(),
+            "forwards fill is idle after the end"
+        );
         // The `left` inset serializes through getComputedStyle (computed_query
         // lever): past the end with fill-mode:forwards it holds the `to` value.
         assert_eq!(
@@ -2899,8 +2967,7 @@ mod tests {
     #[test]
     fn a_fixed_box_is_not_offset_by_the_default_body_margin() {
         // No margin reset: the UA sheet's `body { margin: 8px }` applies.
-        const SHEET: &[&str] =
-            &["#d { position: fixed; top: 0; right: 0; bottom: 0; left: 0; }"];
+        const SHEET: &[&str] = &["#d { position: fixed; top: 0; right: 0; bottom: 0; left: 0; }"];
         let mut dom = ScriptedDom::new();
         let root = dom.document();
         let h = dom.create_element(html("html"));
@@ -3900,7 +3967,10 @@ mod tests {
         assert_eq!(started, ["animationstart"]);
 
         layout.tick_animations(&dom, 1.0);
-        assert!(layout.take_animation_events(&dom).is_empty(), "mid-flight is quiet");
+        assert!(
+            layout.take_animation_events(&dom).is_empty(),
+            "mid-flight is quiet"
+        );
 
         // Take the animation off the element: Stylo cancels it during the cascade.
         let _ = drain(&mut dom);
@@ -3916,7 +3986,10 @@ mod tests {
             "elapsedTime is the active time already run, got {}",
             events[0].elapsed_time
         );
-        assert!(!layout.has_active_animations(), "a canceled animation is idle");
+        assert!(
+            !layout.has_active_animations(),
+            "a canceled animation is idle"
+        );
         // The canceled animation is pruned, so a later drain is silent.
         assert!(layout.take_animation_events(&dom).is_empty());
     }
@@ -3963,21 +4036,30 @@ mod tests {
         layout.apply(&dom, SHEET, &muts);
         assert!(layout.has_active_animations(), "flip starts the transition");
         let _ = layout.take_transition_events(&dom); // model the host: drain each frame
-        assert!(opacity(&layout, p) < 0.001, "start value holds during the delay");
+        assert!(
+            opacity(&layout, p) < 0.001,
+            "start value holds during the delay"
+        );
 
         // Mid tick: t=2s = 1s past the 1s delay, halfway through the 2s active
         // duration.
         let applied = layout.tick_animations(&dom, 2.0);
         assert_ne!(applied, Applied::Unchanged, "mid tick restyles");
         let mid = opacity(&layout, p);
-        assert!((mid - 0.5).abs() < 0.01, "1s into 2s linear => ~0.5, got {mid}");
+        assert!(
+            (mid - 0.5).abs() < 0.01,
+            "1s into 2s linear => ~0.5, got {mid}"
+        );
         let _ = layout.take_transition_events(&dom);
         assert!(layout.has_active_animations());
 
         // Finishing tick: past delay+duration lands the end value; draining
         // then empties the set.
         layout.tick_animations(&dom, 3.5);
-        assert!((opacity(&layout, p) - 1.0).abs() < 0.001, "t>=delay+dur => 1");
+        assert!(
+            (opacity(&layout, p) - 1.0).abs() < 0.001,
+            "t>=delay+dur => 1"
+        );
         let _ = layout.take_transition_events(&dom);
         assert!(
             !layout.has_active_animations(),
@@ -4035,7 +4117,10 @@ mod tests {
         let end = layout.take_transition_events(&dom);
         assert_eq!(end.len(), 1, "one event at end: {end:?}");
         assert_eq!(end[0].kind, End);
-        assert!((end[0].elapsed_time - 2.0).abs() < 1e-9, "elapsed == duration");
+        assert!(
+            (end[0].elapsed_time - 2.0).abs() < 1e-9,
+            "elapsed == duration"
+        );
 
         // Drained and idle.
         assert!(layout.take_transition_events(&dom).is_empty());

@@ -35,7 +35,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod syntax;
-pub use syntax::{derive_syntax_palette, SyntaxPalette, SyntaxRole};
+pub use syntax::{SyntaxPalette, SyntaxRole, derive_syntax_palette};
 
 // =============================================================================
 // Colour type
@@ -512,9 +512,18 @@ mod tests {
             Srgb::rgb(0xDA, 0x5E, 0x3A),
         ] {
             let back = oklch::Oklch::from_srgb(c).to_srgb();
-            assert!((c.r as i32 - back.r as i32).abs() <= 2, "r {c:?} -> {back:?}");
-            assert!((c.g as i32 - back.g as i32).abs() <= 2, "g {c:?} -> {back:?}");
-            assert!((c.b as i32 - back.b as i32).abs() <= 2, "b {c:?} -> {back:?}");
+            assert!(
+                (c.r as i32 - back.r as i32).abs() <= 2,
+                "r {c:?} -> {back:?}"
+            );
+            assert!(
+                (c.g as i32 - back.g as i32).abs() <= 2,
+                "g {c:?} -> {back:?}"
+            );
+            assert!(
+                (c.b as i32 - back.b as i32).abs() <= 2,
+                "b {c:?} -> {back:?}"
+            );
         }
     }
 
@@ -573,10 +582,18 @@ mod tests {
         let hc_dark = derive_palette_with(&seeds, ModeProfile::HC_DARK);
 
         // Distinct surfaces across all four.
-        let surfaces = [light.surface, dark.surface, hc_light.surface, hc_dark.surface];
+        let surfaces = [
+            light.surface,
+            dark.surface,
+            hc_light.surface,
+            hc_dark.surface,
+        ];
         for i in 0..surfaces.len() {
             for j in (i + 1)..surfaces.len() {
-                assert_ne!(surfaces[i], surfaces[j], "modes {i} and {j} share a surface");
+                assert_ne!(
+                    surfaces[i], surfaces[j],
+                    "modes {i} and {j} share a surface"
+                );
             }
         }
 
@@ -620,7 +637,10 @@ mod tests {
         let surf = relative_luminance(p.surface);
         let body = relative_luminance(p.text);
         let dim = relative_luminance(p.text_dim);
-        assert!(dim > surf.min(body) && dim < surf.max(body), "dim between body+surface");
+        assert!(
+            dim > surf.min(body) && dim < surf.max(body),
+            "dim between body+surface"
+        );
     }
 
     #[test]

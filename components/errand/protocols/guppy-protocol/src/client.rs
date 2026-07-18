@@ -40,14 +40,19 @@ impl Default for FetchOptions {
 #[derive(Debug)]
 pub enum ClientError {
     BadUrl(String),
-    RequestTooLong { request_bytes: usize, max: usize },
+    RequestTooLong {
+        request_bytes: usize,
+        max: usize,
+    },
     Io(String),
     /// The overall deadline elapsed. Per the spec, only the EOF packet
     /// distinguishes a complete response from a truncated one, so a timeout
     /// means the response cannot be trusted.
     Timeout,
     Protocol(String),
-    BodyTooLarge { max: usize },
+    BodyTooLarge {
+        max: usize,
+    },
 }
 
 impl std::fmt::Display for ClientError {
@@ -63,7 +68,7 @@ impl std::fmt::Display for ClientError {
             Self::Protocol(message) => write!(formatter, "guppy protocol error: {message}"),
             Self::BodyTooLarge { max } => {
                 write!(formatter, "guppy response exceeds {max} bytes")
-            }
+            },
         }
     }
 }
@@ -191,16 +196,16 @@ async fn transact(
                 match &state {
                     None => {
                         send(request.as_bytes().to_vec()).await?;
-                    }
+                    },
                     Some(reassembly) => {
                         send(encode_ack(reassembly.contiguous_end)).await?;
                         if let Some(eof) = reassembly.eof_seq {
                             send(encode_ack(eof)).await?;
                         }
-                    }
+                    },
                 }
                 continue;
-            }
+            },
         };
 
         let packet = match parse_packet(&buffer[..count]) {
@@ -208,7 +213,7 @@ async fn transact(
             Err(error) => {
                 log::debug!("guppy: ignoring malformed packet: {error}");
                 continue;
-            }
+            },
         };
 
         match packet {
@@ -216,14 +221,14 @@ async fn transact(
             // after a success has started they are stray and ignored.
             Packet::Prompt { text } if state.is_none() => {
                 return Ok(GuppyResponse::Prompt { text });
-            }
+            },
             Packet::Redirect { target } if state.is_none() => {
                 return Ok(GuppyResponse::Redirect { target });
-            }
+            },
             Packet::Error { message } if state.is_none() => {
                 return Ok(GuppyResponse::Error { message });
-            }
-            Packet::Prompt { .. } | Packet::Redirect { .. } | Packet::Error { .. } => {}
+            },
+            Packet::Prompt { .. } | Packet::Redirect { .. } | Packet::Error { .. } => {},
             Packet::First { seq, mime, data } => {
                 // Always ack, duplicates included (a duplicate means our ack
                 // was lost).
@@ -241,7 +246,7 @@ async fn transact(
                     reassembly.chunks.insert(seq, data);
                     state = Some(reassembly);
                 }
-            }
+            },
             Packet::Continuation { seq, data } => {
                 // A continuation before the first packet cannot be anchored;
                 // cache-less clients are allowed to ignore it (the server
@@ -258,7 +263,7 @@ async fn transact(
                 } else {
                     reassembly.insert(seq, data);
                 }
-            }
+            },
         }
     }
 }

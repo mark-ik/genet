@@ -38,6 +38,10 @@
 use dpi::PhysicalSize;
 use embedder_traits::ViewportDetails;
 use euclid::{Scale, Size2D};
+use genet_layout::{
+    BackgroundImagePlane, ImagePlane, StylePlane, emit_paint_list_with_layouts, layout, run_cascade,
+};
+use genet_static_dom::StaticDocument;
 use netrender::{NetrenderOptions, boot, create_netrender_instance};
 use paint::Paint;
 use paint_api::display_list::{AxesScrollSensitivity, PaintDisplayListInfo, ScrollType};
@@ -45,10 +49,6 @@ use paint_api::wgpu_readback::read_texture_to_image;
 use paint_list_api::{DeviceIntSize, PaintEnvelope};
 use paint_types::PipelineId;
 use paint_types::units::{DeviceIntRect, LayoutSize};
-use genet_layout::{
-    BackgroundImagePlane, ImagePlane, StylePlane, emit_paint_list_with_layouts, layout, run_cascade,
-};
-use genet_static_dom::StaticDocument;
 use servo_base::id::{PainterId, PipelineNamespace, PipelineNamespaceId, WebViewId};
 
 const VIEWPORT: u32 = 128;

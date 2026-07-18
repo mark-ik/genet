@@ -75,7 +75,7 @@ fn map_native_frame(frame: ScryingNativeFrame, fence_handle: Option<u64>) -> Opt
             let sync = match (tex.producer_sync, tex.fence_value, fence_handle) {
                 (SyncMechanism::ExplicitFence, value, Some(handle)) if value > 0 => {
                     SurfaceSyncHandle::D3d12Fence { handle, value }
-                }
+                },
                 _ => SurfaceSyncHandle::None,
             };
             Some(SurfaceFrame {
@@ -85,7 +85,7 @@ fn map_native_frame(frame: ScryingNativeFrame, fence_handle: Option<u64>) -> Opt
                 height: tex.size.height,
                 resource_epoch: tex.generation,
             })
-        }
+        },
         ScryingNativeFrame::MetalTextureRef(tex) => {
             #[cfg(target_os = "macos")]
             let handle = tex.raw_metal_texture as u64;
@@ -98,7 +98,7 @@ fn map_native_frame(frame: ScryingNativeFrame, fence_handle: Option<u64>) -> Opt
                 height: tex.size.height,
                 resource_epoch: tex.generation,
             })
-        }
+        },
         ScryingNativeFrame::DmaBufImage(img) => {
             let primary_fd = img.planes.first().map(|p| p.fd as i64).unwrap_or(-1);
             Some(SurfaceFrame {
@@ -108,7 +108,7 @@ fn map_native_frame(frame: ScryingNativeFrame, fence_handle: Option<u64>) -> Opt
                 height: img.size.height,
                 resource_epoch: img.generation,
             })
-        }
+        },
         // `NativeFrame` is `#[non_exhaustive]`; future variants drop until mapped.
         _ => None,
     }
@@ -157,11 +157,11 @@ fn mouse_kind_to_scrying(kind: InkerMouseEventKind) -> (ScryingMouseEventKind, i
         InkerMouseEventKind::Released => (ScryingMouseEventKind::LeftButtonUp, 0),
         InkerMouseEventKind::ScrollPixels { delta_y, .. } => {
             (ScryingMouseEventKind::Wheel, delta_y as i32)
-        }
+        },
         InkerMouseEventKind::ScrollLines { delta_y, .. } => {
             // Convert lines to wheel deltas (120 per line, Win32 convention).
             (ScryingMouseEventKind::Wheel, (delta_y * 120.0) as i32)
-        }
+        },
     }
 }
 
@@ -173,7 +173,7 @@ fn mouse_buttons_to_scrying(button: Option<InkerMouseButton>) -> ScryingMouseVir
         Some(InkerMouseButton::Right) => vk.right_button = true,
         Some(InkerMouseButton::Back) => vk.x_button1 = true,
         Some(InkerMouseButton::Forward) => vk.x_button2 = true,
-        None => {}
+        None => {},
     }
     vk
 }
@@ -232,7 +232,7 @@ pub fn map_focus_reason(reason: InkerFocusReason) -> ScryingFocusReason {
     match reason {
         InkerFocusReason::Mouse | InkerFocusReason::Programmatic => {
             ScryingFocusReason::Programmatic
-        }
+        },
         InkerFocusReason::Tab => ScryingFocusReason::Next,
         InkerFocusReason::ShiftTab => ScryingFocusReason::Previous,
     }
@@ -371,7 +371,7 @@ pub fn map_navigation_event(ev: ScryingNavEvent) -> Option<InkerNavEvent> {
                     reason: "navigation failed".into(),
                 })
             }
-        }
+        },
         ScryingNavEvent::TitleChanged { title } => Some(InkerNavEvent::Finished {
             url: String::new(),
             title: Some(title),
@@ -384,12 +384,12 @@ pub fn map_web_event(ev: ScryingNavEvent) -> Option<WebSurfaceEvent> {
     match ev {
         ScryingNavEvent::Starting { url } => {
             Some(WebSurfaceEvent::Navigation(InkerNavEvent::Started { url }))
-        }
+        },
         ScryingNavEvent::SourceChanged { url } => {
             Some(WebSurfaceEvent::AddressChanged { url: url.clone() }).or(Some(
                 WebSurfaceEvent::Navigation(InkerNavEvent::Committed { url }),
             ))
-        }
+        },
         ScryingNavEvent::Completed { url, success } => {
             let nav = if success {
                 InkerNavEvent::Finished { url, title: None }
@@ -400,11 +400,11 @@ pub fn map_web_event(ev: ScryingNavEvent) -> Option<WebSurfaceEvent> {
                 }
             };
             Some(WebSurfaceEvent::Navigation(nav))
-        }
+        },
         ScryingNavEvent::TitleChanged { title } => Some(WebSurfaceEvent::TitleChanged { title }),
         ScryingNavEvent::NewWindowRequested { url } => {
             Some(WebSurfaceEvent::NewWindowRequested { url })
-        }
+        },
         ScryingNavEvent::ContentProcessTerminated => Some(WebSurfaceEvent::ProcessCrashed {
             reason: "web content process terminated".into(),
         }),
@@ -429,7 +429,7 @@ pub fn map_web_event(ev: ScryingNavEvent) -> Option<WebSurfaceEvent> {
                 severity: if error.is_some() { "warn" } else { "info" }.into(),
                 message: error.unwrap_or_else(|| "download finished".into()),
             })
-        }
+        },
         ScryingNavEvent::DownloadCancelled { .. } => Some(WebSurfaceEvent::BackendDiagnostic {
             severity: "warn".into(),
             message: "download cancelled".into(),

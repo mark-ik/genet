@@ -52,20 +52,20 @@ fn run() -> Result<(), String> {
             "--as" => {
                 i += 1;
                 format = args.get(i).cloned().ok_or("--as needs a format")?;
-            }
+            },
             "--djot" => djot = true,
             "--resolve" => resolve = true,
             "--host" => {
                 i += 1;
                 host = args.get(i).cloned().ok_or("--host needs a value")?;
-            }
+            },
             "--port" => {
                 i += 1;
                 port = args
                     .get(i)
                     .and_then(|p| p.parse().ok())
                     .ok_or("--port needs a number")?;
-            }
+            },
             other if file.is_none() => file = Some(other.to_string()),
             other => return Err(format!("unknown argument: {other}\n{usage}")),
         }

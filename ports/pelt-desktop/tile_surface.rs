@@ -61,10 +61,9 @@ pub(crate) fn scene_from_session_dom_with_leaves(
     let sizes: HashMap<u64, (f32, f32)> = session.custom_leaf_boxes().into_iter().collect();
     registry.render_into(
         |key| {
-            sizes.get(&key).map(|&(width, height)| Size {
-                width,
-                height,
-            })
+            sizes
+                .get(&key)
+                .map(|&(width, height)| Size { width, height })
         },
         cache,
     );
@@ -120,12 +119,10 @@ fn tile_view(state: &TileState) -> TileView {
         )
         .attr("class", "tile-statusbar")
     });
-    Box::new(
-        el::<_, TileState, ()>("div", (tree, status)).attr(
-            "style",
-            "display: flex; flex-direction: column; width: 100%; height: 100%;",
-        ),
-    )
+    Box::new(el::<_, TileState, ()>("div", (tree, status)).attr(
+        "style",
+        "display: flex; flex-direction: column; width: 100%; height: 100%;",
+    ))
 }
 
 /// Project the live tile tree onto the status-bar glyph: splits become gray
@@ -136,7 +133,11 @@ fn tree_glyph_topology(tree: &TileTree) -> (Vec<GraphGlyphNode>, Vec<(u16, u16)>
     fn depth_of(t: &TileTree) -> usize {
         match t {
             TileTree::Split { children, .. } => {
-                1 + children.iter().map(|b| depth_of(&b.tree)).max().unwrap_or(0)
+                1 + children
+                    .iter()
+                    .map(|b| depth_of(&b.tree))
+                    .max()
+                    .unwrap_or(0)
             },
             TileTree::Stack(_) => 0,
         }
@@ -163,12 +164,24 @@ fn tree_glyph_topology(tree: &TileTree) -> (Vec<GraphGlyphNode>, Vec<(u16, u16)>
                 nodes.push(GraphGlyphNode {
                     x: depth / max_depth,
                     y: 0.5,
-                    color: ColorF { r: 0.55, g: 0.55, b: 0.62, a: 1.0 },
+                    color: ColorF {
+                        r: 0.55,
+                        g: 0.55,
+                        b: 0.62,
+                        a: 1.0,
+                    },
                 });
                 let mut ys = Vec::new();
                 for branch in children {
-                    let child =
-                        walk(&branch.tree, depth + 1.0, max_depth, leaf_i, leaf_count, nodes, edges);
+                    let child = walk(
+                        &branch.tree,
+                        depth + 1.0,
+                        max_depth,
+                        leaf_i,
+                        leaf_count,
+                        nodes,
+                        edges,
+                    );
                     ys.push(nodes[child as usize].y);
                     edges.push((me, child));
                 }
@@ -195,8 +208,17 @@ fn tree_glyph_topology(tree: &TileTree) -> (Vec<GraphGlyphNode>, Vec<(u16, u16)>
                         b: a.background[2] as f32 / 255.0,
                         a: 1.0,
                     })
-                    .unwrap_or(ColorF { r: 0.40, g: 0.60, b: 0.95, a: 1.0 });
-                nodes.push(GraphGlyphNode { x: depth / max_depth, y, color });
+                    .unwrap_or(ColorF {
+                        r: 0.40,
+                        g: 0.60,
+                        b: 0.95,
+                        a: 1.0,
+                    });
+                nodes.push(GraphGlyphNode {
+                    x: depth / max_depth,
+                    y,
+                    color,
+                });
                 me
             },
         }
@@ -206,7 +228,15 @@ fn tree_glyph_topology(tree: &TileTree) -> (Vec<GraphGlyphNode>, Vec<(u16, u16)>
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
     let mut leaf_i = 0usize;
-    walk(tree, 0.0, max_depth, &mut leaf_i, leaf_count, &mut nodes, &mut edges);
+    walk(
+        tree,
+        0.0,
+        max_depth,
+        &mut leaf_i,
+        leaf_count,
+        &mut nodes,
+        &mut edges,
+    );
     (nodes, edges)
 }
 
@@ -461,14 +491,37 @@ impl TileSurface {
             },
         );
         let mut leaves = LeafRegistry::new();
-        let mut meter = Meter::new(false, Size { width: 64.0, height: 8.0 });
+        let mut meter = Meter::new(
+            false,
+            Size {
+                width: 64.0,
+                height: 8.0,
+            },
+        );
         // Frame-time scale: full bar = 2 missed 60hz frames (33.3ms).
-        meter.fill_color = ColorF { r: 0.45, g: 0.75, b: 0.95, a: 1.0 };
-        meter.track_color = ColorF { r: 0.10, g: 0.10, b: 0.13, a: 1.0 };
+        meter.fill_color = ColorF {
+            r: 0.45,
+            g: 0.75,
+            b: 0.95,
+            a: 1.0,
+        };
+        meter.track_color = ColorF {
+            r: 0.10,
+            g: 0.10,
+            b: 0.13,
+            a: 1.0,
+        };
         leaves.insert(FRAME_METER_LEAF_KEY, Box::new(meter));
         leaves.insert(
             TREE_GLYPH_LEAF_KEY,
-            Box::new(GraphGlyph::new(Vec::new(), Vec::new(), Size { width: 20.0, height: 20.0 })),
+            Box::new(GraphGlyph::new(
+                Vec::new(),
+                Vec::new(),
+                Size {
+                    width: 20.0,
+                    height: 20.0,
+                },
+            )),
         );
         let mut surface = Self {
             runner,
@@ -677,7 +730,11 @@ impl TileSurface {
     /// `tile-surface` feature, and it should not grow a field only the windowed
     /// viewer reads. Layout is rebuilt here for the same reason the hit-test
     /// entries rebuild it — the surface retains no session between calls.
-    pub fn a11y_tree(&mut self, width: u32, height: u32) -> (TreeUpdate, Vec<(AccessNodeId, NodeId)>) {
+    pub fn a11y_tree(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> (TreeUpdate, Vec<(AccessNodeId, NodeId)>) {
         let projection = self.projection(width, height);
         let route = projection
             .nodes
@@ -1264,8 +1321,7 @@ mod tests {
         assert!(
             projection
                 .find_one(
-                    &ElementQuery::role(Role::Button)
-                        .named(NameMatch::Exact("Close tab2".into()))
+                    &ElementQuery::role(Role::Button).named(NameMatch::Exact("Close tab2".into()))
                 )
                 .is_some(),
             "the close x announces as its own button"
@@ -1278,7 +1334,9 @@ mod tests {
         // Read back: selection moved, as state. The handle survived the rebuild
         // (xilem diffs the tab in place), so it resolves to the same element.
         let projection = surface.projection(800, 600);
-        let tab2 = projection.find_one(&tab2_query).expect("tab2 still present");
+        let tab2 = projection
+            .find_one(&tab2_query)
+            .expect("tab2 still present");
         assert_eq!(tab2.node.is_selected(), Some(true), "tab2 is now selected");
         assert_eq!(
             projection

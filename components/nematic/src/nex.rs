@@ -70,7 +70,7 @@ impl Engine for NexEngine {
                 };
                 doc.trust = DocumentTrustState::Unknown;
                 Ok(doc)
-            }
+            },
         }
     }
 }

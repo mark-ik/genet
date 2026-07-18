@@ -170,10 +170,10 @@ fn make_value(name: &QualName, value: String) -> AttrValue {
 
 #[cfg(test)]
 mod tests {
+    use genet_scripted_dom::ScriptedDom;
     use html5ever::{QualName, ns};
     use layout_dom_api::{LayoutDom, LayoutDomMut};
     use selectors::attr::CaseSensitivity;
-    use genet_scripted_dom::ScriptedDom;
     use style::Atom;
     use style::invalidation::element::element_wrapper::ElementSnapshot;
     use style::values::AtomIdent;

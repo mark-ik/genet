@@ -112,7 +112,7 @@ fn map_error(error: misfin::SendError) -> Error {
         )),
         SendError::MessageContainsCarriageReturn => {
             Error::Protocol("misfin messages must not contain carriage returns".into())
-        }
+        },
         SendError::InvalidHost(host) => Error::BadUrl(format!("invalid misfin host '{host}'")),
         SendError::FingerprintMismatch { expected, found } => Error::Protocol(format!(
             "misfin server fingerprint mismatch: expected {expected}, found {found}"
@@ -150,7 +150,10 @@ mod tests {
         assert_eq!(delivered.meta, "fp");
         assert!(delivered.body.is_empty());
 
-        let moved = map_receipt(&u, receipt(MisfinStatus::SendHereForever, "misfin://b@c.test"));
+        let moved = map_receipt(
+            &u,
+            receipt(MisfinStatus::SendHereForever, "misfin://b@c.test"),
+        );
         assert_eq!(moved.status, Status::Redirect);
         assert_eq!(moved.raw_status, Some(31));
 

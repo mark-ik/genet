@@ -263,7 +263,7 @@ impl DocumentStyleSheet {
                     color: self.token_color(h.color),
                     wrap: h.wrap,
                 }
-            }
+            },
             BlockRole::Body => self.resolve_block(&self.roles.body),
             BlockRole::Code => self.resolve_block(&self.roles.code),
             BlockRole::Metadata => self.resolve_block(&self.roles.metadata),

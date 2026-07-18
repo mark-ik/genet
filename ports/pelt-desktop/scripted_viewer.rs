@@ -11,8 +11,8 @@
 //! on both `viewer` (the present stack) and `scripted` (the runtime); the GPU-free
 //! document core lives in [`crate::scripted`].
 
-use script_engine_api::ScriptEngine;
 use genet_layout::ScrollKey;
+use script_engine_api::ScriptEngine;
 
 use crate::document::LocalFetcher;
 use crate::scripted::{ScriptedDocument, ScriptedEngine};

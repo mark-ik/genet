@@ -54,7 +54,7 @@ fn map_error(error: guppy_protocol::ClientError) -> Error {
         GuppyError::Protocol(message) => Error::Protocol(message),
         GuppyError::BodyTooLarge { max } => {
             Error::Protocol(format!("guppy response exceeds {max} bytes"))
-        }
+        },
     }
 }
 

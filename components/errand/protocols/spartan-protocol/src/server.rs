@@ -226,9 +226,7 @@ mod tests {
     use crate::client::{FetchOptions, fetch, submit};
     use crate::{FileHandler, Status};
 
-    async fn spawn(
-        handler: impl Handler,
-    ) -> (SocketAddr, tokio::sync::oneshot::Sender<()>) {
+    async fn spawn(handler: impl Handler) -> (SocketAddr, tokio::sync::oneshot::Sender<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
@@ -272,9 +270,13 @@ mod tests {
         assert_eq!(response.meta, "text/gemini");
         assert_eq!(response.body, b"# You asked for /about\n");
 
-        let echoed = submit("spartan://example.test/echo", b"Hello world!", &options_for(addr))
-            .await
-            .unwrap();
+        let echoed = submit(
+            "spartan://example.test/echo",
+            b"Hello world!",
+            &options_for(addr),
+        )
+        .await
+        .unwrap();
         assert_eq!(echoed.body, b"Hello world!");
     }
 
@@ -364,9 +366,13 @@ mod tests {
         .unwrap();
         assert_eq!(escape.status, Status::ClientError, "traversal refused");
 
-        let upload = submit("spartan://example.test/notes.txt", b"data", &options_for(addr))
-            .await
-            .unwrap();
+        let upload = submit(
+            "spartan://example.test/notes.txt",
+            b"data",
+            &options_for(addr),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             upload.status,
             Status::ClientError,

@@ -25,7 +25,7 @@ fn main() -> ExitCode {
         Err(message) => {
             eprintln!("{message}");
             ExitCode::FAILURE
-        }
+        },
     }
 }
 
@@ -60,19 +60,19 @@ fn run(args: Vec<String>) -> Result<(), String> {
                     std::io::stdout()
                         .write_all(&body)
                         .map_err(|error| error.to_string())
-                }
+                },
                 GuppyResponse::Prompt { text } => {
                     println!("input required: {text}");
                     println!("(repeat with the input as the URL query, e.g. ?your%20answer)");
                     Ok(())
-                }
+                },
                 GuppyResponse::Redirect { target } => {
                     println!("redirect: {target}");
                     Ok(())
-                }
+                },
                 GuppyResponse::Error { message } => Err(format!("error: {message}")),
             }
-        }
+        },
         "serve" => {
             let root = root.ok_or("guppy serve: --root DIR is required")?;
             let listen: SocketAddr = listen
@@ -84,7 +84,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 let socket = tokio::net::UdpSocket::bind(listen)
                     .await
                     .map_err(|error| format!("bind {listen}: {error}"))?;
-                eprintln!("guppy: serving {} on {listen} (ctrl-c to stop)", root.display());
+                eprintln!(
+                    "guppy: serving {} on {listen} (ctrl-c to stop)",
+                    root.display()
+                );
                 serve(
                     socket,
                     FileHandler::new(root),
@@ -96,11 +99,11 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 .await
                 .map_err(|error| error.to_string())
             })
-        }
+        },
         "--help" | "-h" | "help" => {
             println!("{USAGE}");
             Ok(())
-        }
+        },
         other => Err(format!("Unknown command '{other}'.\n\n{USAGE}")),
     }
 }

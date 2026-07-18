@@ -80,7 +80,7 @@ impl Engine for GopherEngine {
                         flush_info(&mut info_run, &mut blocks);
                         blocks.push(link_paragraph(item.display, url));
                     }
-                }
+                },
             }
         }
         flush_info(&mut info_run, &mut blocks);

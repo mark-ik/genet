@@ -20,10 +20,10 @@
 #![deny(unsafe_code)]
 
 use engine_observables_api::{DomArenaStats, DomNodeKindStats};
+use genet_static_dom::{StaticDocument, StaticNodeId};
 use layout_dom_api::{
     AttributeView, DomMutation, LayoutDom, LayoutDomMut, LocalName, Namespace, NodeKind, QualName,
 };
-use genet_static_dom::{StaticDocument, StaticNodeId};
 
 mod forms;
 mod serialize;

@@ -138,7 +138,10 @@ fn phase_at(animation: &Animation, now: f64) -> AnimationState {
 /// Which events a single animation's `(prior -> current)` phase change emits, in
 /// order. Iteration events are handled separately (they depend on the iteration
 /// index, not the phase). `prior == None` means newly observed.
-fn events_for(prior: Option<AnimationState>, current: AnimationState) -> &'static [AnimationEventKind] {
+fn events_for(
+    prior: Option<AnimationState>,
+    current: AnimationState,
+) -> &'static [AnimationEventKind] {
     use AnimationEventKind::*;
     use AnimationState::*;
     match (prior, current) {
@@ -263,7 +266,10 @@ where
             }
 
             if has(AnimationEventKind::End) {
-                push(AnimationEventKind::End, active_duration(animation).unwrap_or(0.0));
+                push(
+                    AnimationEventKind::End,
+                    active_duration(animation).unwrap_or(0.0),
+                );
             }
             if has(AnimationEventKind::Cancel) {
                 let elapsed = iterations * animation.duration
@@ -291,7 +297,8 @@ where
     // them. `Finished` ones stay: they may be filling forwards, and the clock-based
     // `has_active_animations` already reports the session idle.
     for set in sets.values_mut() {
-        set.animations.retain(|a| a.state != AnimationState::Canceled);
+        set.animations
+            .retain(|a| a.state != AnimationState::Canceled);
     }
     sets.retain(|_, set| !set.is_empty());
 

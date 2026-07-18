@@ -58,14 +58,14 @@ pub fn parse_packet(datagram: &[u8]) -> Result<Packet, String> {
                 mime: mime.trim().to_string(),
                 data,
             })
-        }
+        },
         None => {
             let seq: u32 = header
                 .trim()
                 .parse()
                 .map_err(|_| format!("bad packet header: {header:?}"))?;
             Ok(Packet::Continuation { seq, data })
-        }
+        },
     }
 }
 
@@ -100,8 +100,8 @@ pub(crate) fn parse_client_datagram(datagram: &[u8]) -> Result<ClientDatagram, S
         .windows(2)
         .position(|window| window == b"\r\n")
         .ok_or_else(|| "datagram has no CRLF".to_string())?;
-    let line = std::str::from_utf8(&datagram[..split])
-        .map_err(|_| "datagram is not UTF-8".to_string())?;
+    let line =
+        std::str::from_utf8(&datagram[..split]).map_err(|_| "datagram is not UTF-8".to_string())?;
     if datagram.len() == split + 2 {
         if let Ok(seq) = line.trim().parse::<u32>() {
             return Ok(ClientDatagram::Ack(seq));

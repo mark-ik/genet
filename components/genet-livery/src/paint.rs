@@ -719,8 +719,7 @@ where
     D: LayoutDom,
     D::NodeId: Copy,
 {
-    dom.kind(id) == NodeKind::Text
-        && dom.text(id).is_some_and(|text| !text.trim().is_empty())
+    dom.kind(id) == NodeKind::Text && dom.text(id).is_some_and(|text| !text.trim().is_empty())
         || dom
             .dom_children(id)
             .any(|child| has_text_descendant(dom, child))

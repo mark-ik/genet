@@ -64,11 +64,11 @@ pub fn parse_djot_knot_body_validated(body: &str) -> (Vec<Block>, Vec<DocumentDi
                 pending.url = attrs.get_value("url").map(|v| v.to_string());
                 pending.date = attrs.get_value("date").map(|v| v.to_string());
                 pending.rel = attrs.get_value("rel").map(|v| v.to_string());
-            }
+            },
             Event::Start(Container::Heading { level, .. }, _) => {
                 heading_level = Some(level as u8);
                 inline.clear();
-            }
+            },
             Event::End(Container::Heading { .. }) => {
                 if let Some(level) = heading_level.take() {
                     out.push(Block::Heading {
@@ -76,7 +76,7 @@ pub fn parse_djot_knot_body_validated(body: &str) -> (Vec<Block>, Vec<DocumentDi
                         spans: inline.take_spans(),
                     });
                 }
-            }
+            },
             Event::Start(Container::Div { class }, attrs) => {
                 div = Some(DivCtx {
                     class: class.to_string(),
@@ -94,7 +94,7 @@ pub fn parse_djot_knot_body_validated(body: &str) -> (Vec<Block>, Vec<DocumentDi
                         .or(pending.date.take()),
                 });
                 inline.clear();
-            }
+            },
             Event::End(Container::Div { .. }) => {
                 if let Some(ctx) = div.take() {
                     if let Some(diagnostic) = validate_div(&ctx) {
@@ -102,7 +102,7 @@ pub fn parse_djot_knot_body_validated(body: &str) -> (Vec<Block>, Vec<DocumentDi
                     }
                     out.push(ctx.into_block(inline.take_text()));
                 }
-            }
+            },
             Event::Start(Container::DescriptionList, _) => dl = Some(DlCtx::default()),
             Event::End(Container::DescriptionList) => dl = None,
             Event::Start(Container::DescriptionTerm, _) => inline.clear(),
@@ -110,7 +110,7 @@ pub fn parse_djot_knot_body_validated(body: &str) -> (Vec<Block>, Vec<DocumentDi
                 if let Some(d) = dl.as_mut() {
                     d.term = inline.take_text().trim().to_string();
                 }
-            }
+            },
             Event::Start(Container::DescriptionDetails, _) => inline.clear(),
             Event::End(Container::DescriptionDetails) => {
                 if let Some(d) = dl.as_mut() {
@@ -119,17 +119,17 @@ pub fn parse_djot_knot_body_validated(body: &str) -> (Vec<Block>, Vec<DocumentDi
                         value: inline.take_text().trim().to_string(),
                     });
                 }
-            }
+            },
             Event::Start(Container::CodeBlock { language }, _) => {
                 code_language = Some(language.to_string());
                 inline.clear();
-            }
+            },
             Event::End(Container::CodeBlock { .. }) => {
                 out.push(Block::CodeBlock {
                     language: code_language.take().filter(|s| !s.is_empty()),
                     text: inline.take_text(),
                 });
-            }
+            },
             // Inline link: capture the destination + the `rel` attribute (the
             // statements-over-schema predicate). `rel` arrives folded into the
             // link's `Start` attrs, with a standalone-`Attributes` fallback.
@@ -140,7 +140,7 @@ pub fn parse_djot_knot_body_validated(body: &str) -> (Vec<Block>, Vec<DocumentDi
                     .map(|v| v.to_string())
                     .or(pending.rel.take());
                 inline.start_link(dst.to_string(), title, predicate);
-            }
+            },
             Event::End(Container::Link(..)) => inline.end_link(),
             Event::End(Container::Paragraph) => {
                 // A *top-level* paragraph emits a block; a paragraph inside a div
@@ -152,11 +152,11 @@ pub fn parse_djot_knot_body_validated(body: &str) -> (Vec<Block>, Vec<DocumentDi
                         out.push(Block::Paragraph { spans });
                     }
                 }
-            }
+            },
             Event::Str(s) => inline.push_str(s.as_ref()),
             Event::Softbreak => inline.push_char(' '),
             Event::Hardbreak => inline.push_char('\n'),
-            _ => {}
+            _ => {},
         }
     }
     (out, diagnostics)
@@ -429,26 +429,26 @@ fn emit_block(block: &Block, out: &mut String) {
             out.push(' ');
             out.push_str(&inline_text(spans));
             out.push('\n');
-        }
+        },
         Block::Paragraph { spans } => {
             out.push_str(&inline_text(spans));
             out.push('\n');
-        }
+        },
         Block::Table { header, rows, .. } => {
             emit_djot_table(header, rows, out);
-        }
+        },
         Block::MetadataRow { label, value } => {
             out.push_str(": ");
             out.push_str(label);
             out.push_str("\n\n  ");
             out.push_str(value);
             out.push('\n');
-        }
+        },
         Block::Badge { text } => {
             out.push_str("::: badge\n");
             out.push_str(text);
             out.push_str("\n:::\n");
-        }
+        },
         Block::FeedEntry {
             title,
             date,
@@ -463,7 +463,7 @@ fn emit_block(block: &Block, out: &mut String) {
                 out.push('\n');
             }
             out.push_str(":::\n");
-        }
+        },
         Block::FeedHeader {
             title,
             summary,
@@ -477,7 +477,7 @@ fn emit_block(block: &Block, out: &mut String) {
                 out.push('\n');
             }
             out.push_str(":::\n");
-        }
+        },
         Block::CodeBlock { language, text } => {
             out.push_str("```");
             if let Some(lang) = language {
@@ -489,7 +489,7 @@ fn emit_block(block: &Block, out: &mut String) {
                 out.push('\n');
             }
             out.push_str("```\n");
-        }
+        },
         Block::Preformatted { text } => {
             out.push_str("```\n");
             out.push_str(text);
@@ -497,7 +497,7 @@ fn emit_block(block: &Block, out: &mut String) {
                 out.push('\n');
             }
             out.push_str("```\n");
-        }
+        },
         Block::Quote { blocks } => {
             let mut inner = String::new();
             for (i, b) in blocks.iter().enumerate() {
@@ -511,7 +511,7 @@ fn emit_block(block: &Block, out: &mut String) {
                 out.push_str(line);
                 out.push('\n');
             }
-        }
+        },
         Block::List { ordered, items } => {
             for item in items {
                 let mut inner = String::new();
@@ -525,14 +525,14 @@ fn emit_block(block: &Block, out: &mut String) {
                 out.push_str(inner.trim());
                 out.push('\n');
             }
-        }
+        },
         Block::Image { url, alt } => {
             out.push_str("![");
             out.push_str(alt);
             out.push_str("](");
             out.push_str(url);
             out.push_str(")\n");
-        }
+        },
         Block::Rule => out.push_str("----\n"),
     }
 }
