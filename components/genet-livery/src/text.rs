@@ -150,6 +150,17 @@ impl TextSystem {
         let mut right = 0.0_f32;
         let mut top = f32::INFINITY;
         let mut bottom = f32::NEG_INFINITY;
+        let empty_line_height = inline_boxes
+            .iter()
+            .filter(|inline_box| {
+                !inline_box.edge && !inline_box.paint && inline_box.line_width == 0.0
+            })
+            .map(|inline_box| inline_box.line_box_height)
+            .reduce(f32::max);
+        let parent_line_height = super::layout::line_height_px(
+            &parent_style.line_height,
+            super::paint::used_font_size(parent_style),
+        );
         for item in items {
             let fragment = match item {
                 ShapedItem::Text(run) => run.fragment,
@@ -160,12 +171,15 @@ impl TextSystem {
             bottom = bottom.max(fragment.y + fragment.height);
         }
         if top.is_finite() && bottom.is_finite() {
+            let measured_height = (bottom - top).max(strut_center_height.unwrap_or(0.0));
             Some((
                 right.max(0.0),
                 if zero_line_minimal_alignment {
                     0.0
+                } else if let Some(empty_line_height) = empty_line_height {
+                    empty_line_height.max(parent_line_height)
                 } else {
-                    (bottom - top).max(strut_center_height.unwrap_or(0.0))
+                    measured_height
                 },
             ))
         } else {
@@ -470,6 +484,24 @@ impl TextSystem {
         let mut result = Vec::new();
         for line in layout.lines() {
             let metrics = *line.metrics();
+            let strut_height = super::layout::line_height_px(
+                &root_style.line_height,
+                super::paint::used_font_size(root_style),
+            );
+            let empty_line_shift = inline_boxes
+                .iter()
+                .filter(|inline_box| {
+                    !inline_box.edge && !inline_box.paint && inline_box.line_width == 0.0
+                })
+                .map(|inline_box| {
+                    ((inline_box.line_box_height - strut_height).max(0.0)) * 0.5
+                        + ((metrics.block_max_coord
+                            - metrics.block_min_coord
+                            - inline_box.line_box_height)
+                            .max(0.0)
+                            * 0.5)
+                })
+                .fold(0.0, f32::max);
             for item in line.items() {
                 match item {
                     PositionedLayoutItem::GlyphRun(run) => {
@@ -501,7 +533,7 @@ impl TextSystem {
                             continue;
                         }
                         for glyph in &mut glyphs {
-                            glyph.point.y += vertical_shift;
+                            glyph.point.y += vertical_shift - empty_line_shift;
                         }
                         let [red, green, blue, alpha] = brush.color;
                         result.push(ShapedItem::Text(ShapedRun {

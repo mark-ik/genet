@@ -645,6 +645,15 @@ references at `diff=0%`. The focused `genet-livery` package wall remains green
 with 8 Cambium, 22 interaction, 44 paint, 1 reftest, and 1 replaced-image
 tests; broader inline baseline and font-metric gaps remain on the ratchet.
 
+### 2026-07-17 empty-inline strut receipt
+
+An explicit empty inline strut now measures at its requested line-height while
+the neighboring glyph keeps the parent strut's centered baseline. The shaped
+glyph receives only the extra-leading correction; the retained fragment keeps
+the flow geometry used by the paint walk. `empty-inline-001.xht`,
+`empty-inline-002.xht`, and `empty-inline-003.xht` pass through Livery, and the
+CSS2 line-box ratchet is now 162 passed, 28 failed, 59 skipped, and 0 errored.
+
 ## The destination, named
 
 *(Amended 2026-07-14.)* Livery's document profile grinds toward full browser
