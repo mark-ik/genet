@@ -3,7 +3,8 @@ use livery::cascade::{
     CascadeLayer, MatchedDeclaration, Origin, Specificity, cascade, parse_declaration_block,
 };
 use livery::values::{
-    Color, FontWeight, Length, LengthPercentage, Margin, Size, TransitionProperty,
+    Color, FontFamily, FontSize, FontStyle, FontWeight, Length, LengthPercentage, LineHeight,
+    Margin, Size, TransitionProperty,
 };
 
 fn matched(
@@ -95,6 +96,35 @@ fn background_color_shorthand_accepts_the_bounded_color_form() {
             blue: 0,
             alpha: 255,
         }))
+    ));
+}
+
+#[test]
+fn font_shorthand_expands_size_line_height_and_family() {
+    let block = parse_declaration_block("font: italic bold 20px/1.5 Ahem");
+    assert!(block.errors.is_empty(), "{:?}", block.errors);
+    assert_eq!(block.declarations.len(), 5);
+    assert!(matches!(
+        &block.declarations[0].value,
+        livery::cascade::DeclaredValue::Value(PropertyValue::FontStyle(FontStyle::Italic))
+    ));
+    assert!(matches!(
+        &block.declarations[1].value,
+        livery::cascade::DeclaredValue::Value(PropertyValue::FontWeight(FontWeight::Bold))
+    ));
+    assert!(matches!(
+        &block.declarations[2].value,
+        livery::cascade::DeclaredValue::Value(PropertyValue::FontSize(FontSize::Value(_)))
+    ));
+    assert!(matches!(
+        &block.declarations[3].value,
+        livery::cascade::DeclaredValue::Value(PropertyValue::LineHeight(LineHeight::Number(value)))
+            if (*value - 1.5).abs() < f32::EPSILON
+    ));
+    assert!(matches!(
+        &block.declarations[4].value,
+        livery::cascade::DeclaredValue::Value(PropertyValue::FontFamily(FontFamily::Named(name)))
+            if name.as_ref() == "Ahem"
     ));
 }
 

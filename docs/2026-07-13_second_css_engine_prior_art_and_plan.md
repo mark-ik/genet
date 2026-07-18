@@ -523,6 +523,18 @@ The walk-discovery `css/CSS2/linebox` run is 144 passed, 46 failed, 120
 skipped, and 0 errored. Font-relative `ex`/`ch`, inline decoration, empty
 inline boxes, vertical-align, and the remaining line-height groups stay open.
 
+### 2026-07-17 bounded font shorthand receipt
+
+The Livery cascade now expands the bounded `font` shorthand into its five
+consumed longhands: optional style and weight, required size, optional
+line-height, and family. The parser keeps CSS-wide reset behavior outside this
+slice and rejects malformed or family-less forms. The focused cascade wall has
+19 tests, the values wall 13, and the full `genet-livery` package wall remains
+green. The rebuilt Livery runner passes `line-height-002`, `004`, `005`, and
+`006`; the remaining selected font-heavy line-box cases still expose the open
+font-metric, inline-box, and line-height layout seams rather than shorthand
+parse errors.
+
 ## The destination, named
 
 *(Amended 2026-07-14.)* Livery's document profile grinds toward full browser

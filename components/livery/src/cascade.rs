@@ -3,8 +3,8 @@
 use std::{cmp::Ordering, fmt};
 
 use crate::values::{
-    AnimationName, BorderStyle, BorderWidth, Color, Duration, Margin, Padding, Radius,
-    TimingFunction, TransitionProperty,
+    AnimationName, BorderStyle, BorderWidth, Color, Duration, FontFamily, FontSize, FontStyle,
+    FontWeight, LineHeight, Margin, Padding, Radius, TimingFunction, TransitionProperty,
 };
 use crate::{ComputedValues, PropertyId, PropertyValue, ShorthandId};
 
@@ -486,6 +486,101 @@ fn expand_white_space(block: &mut DeclarationBlock, value: &str, important: bool
     push_longhand(block, "text-wrap-mode", wrap, important);
 }
 
+fn expand_font(block: &mut DeclarationBlock, value: &str, important: bool) {
+    let components = split_components(value);
+    let mut style = FontStyle::Normal;
+    let mut weight = FontWeight::Normal;
+    let mut size = None;
+    let mut line_height = LineHeight::Normal;
+    let mut family_start = None;
+    let mut index = 0;
+
+    while index < components.len() {
+        let component = components[index];
+        if let Some((size_value, line_value)) = component.split_once('/') {
+            let Ok(parsed_size) = size_value.parse::<FontSize>() else {
+                break;
+            };
+            let Ok(parsed_line_height) = line_value.parse::<LineHeight>() else {
+                break;
+            };
+            size = Some(parsed_size);
+            line_height = parsed_line_height;
+            family_start = Some(index + 1);
+            break;
+        }
+        if component == "/" {
+            break;
+        }
+        if let Ok(parsed_size) = component.parse::<FontSize>() {
+            size = Some(parsed_size);
+            if components.get(index + 1) == Some(&"/") {
+                let Some(line_value) = components.get(index + 2) else {
+                    break;
+                };
+                let Ok(parsed_line_height) = line_value.parse::<LineHeight>() else {
+                    break;
+                };
+                line_height = parsed_line_height;
+                family_start = Some(index + 3);
+            } else {
+                family_start = Some(index + 1);
+            }
+            break;
+        }
+        if let Ok(parsed_style) = component.parse::<FontStyle>() {
+            style = parsed_style;
+        } else if let Ok(parsed_weight) = component.parse::<FontWeight>() {
+            weight = parsed_weight;
+        } else {
+            break;
+        }
+        index += 1;
+    }
+
+    let Some(size) = size else {
+        block.errors.push(DeclarationError {
+            name: "font".to_owned(),
+            value: value.to_owned(),
+            kind: DeclarationErrorKind::InvalidValue,
+        });
+        return;
+    };
+    let Some(family_start) = family_start else {
+        block.errors.push(DeclarationError {
+            name: "font".to_owned(),
+            value: value.to_owned(),
+            kind: DeclarationErrorKind::InvalidValue,
+        });
+        return;
+    };
+    let family_value = components[family_start..].join(" ");
+    let Ok(family) = family_value.parse::<FontFamily>() else {
+        block.errors.push(DeclarationError {
+            name: "font".to_owned(),
+            value: value.to_owned(),
+            kind: DeclarationErrorKind::InvalidValue,
+        });
+        return;
+    };
+    for (property, value) in [
+        (PropertyId::FontStyle, PropertyValue::FontStyle(style)),
+        (PropertyId::FontWeight, PropertyValue::FontWeight(weight)),
+        (PropertyId::FontSize, PropertyValue::FontSize(size)),
+        (
+            PropertyId::LineHeight,
+            PropertyValue::LineHeight(line_height),
+        ),
+        (PropertyId::FontFamily, PropertyValue::FontFamily(family)),
+    ] {
+        block.declarations.push(Declaration {
+            property,
+            value: DeclaredValue::Value(value),
+            important,
+        });
+    }
+}
+
 fn expand_css_wide_shorthand(
     block: &mut DeclarationBlock,
     shorthand: ShorthandId,
@@ -561,6 +656,8 @@ pub fn parse_declaration_block(input: &str) -> DeclarationBlock {
             expand_border(&mut block, shorthand, value, important);
         } else if shorthand == ShorthandId::WhiteSpace {
             expand_white_space(&mut block, value, important);
+        } else if shorthand == ShorthandId::Font {
+            expand_font(&mut block, value, important);
         }
     }
     block

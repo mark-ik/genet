@@ -120,6 +120,12 @@ grammar = "normal | pre | pre-wrap | pre-line | <white-space-collapse> || <text-
 seed_values = ["normal", "pre"]
 source = "css_text_4"
 
+[shorthands.font]
+longhands = ["font-style", "font-weight", "font-size", "line-height", "font-family"]
+grammar = "[ normal | italic | oblique ] || [ normal | bold | <number> ] || <font-size> [ / <line-height> ]? <font-family>"
+seed_values = ["20px/1 Ahem", "1em sans-serif"]
+source = "css_fonts_4"
+
 [shorthands.border_radius]
 css_name = "border-radius"
 longhands = [
