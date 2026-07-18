@@ -834,11 +834,7 @@ fn apply_replaced_image_size<D>(
     {
         style.aspect_ratio = Some(intrinsic_width / intrinsic_height);
     }
-    match (
-        width,
-        height,
-        intrinsic,
-    ) {
+    match (width, height, intrinsic) {
         (Some(width), Some(height), _) => {
             style.size.width = Dimension::length(width);
             style.size.height = Dimension::length(height);
