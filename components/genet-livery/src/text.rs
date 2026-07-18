@@ -992,6 +992,9 @@ where
         style: &ComputedValues,
         owners: &[D::NodeId],
     ) {
+        if matches!(style.line_height, CssLineHeight::Normal) {
+            return;
+        }
         let font_size = super::paint::used_font_size(style);
         let height = super::layout::line_height_px(&style.line_height, font_size);
         if height <= 0.0 {

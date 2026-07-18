@@ -618,6 +618,20 @@ The focused WPT wall passes `line-height-126.xht`, `line-height-127.xht`,
 The table mapping is intentionally a CSS2 probe slice, not a claim of full
 table-layout parity.
 
+### 2026-07-17 inline-block descendant and empty-inline receipt
+
+The retained fragment plane now carries block descendants nested inside an
+inline-block atomic subtree from the preliminary tree into the paint walk.
+Collapsed whitespace in that preliminary text measure contributes no anonymous
+block height, while preserved whitespace keeps its existing line count. Empty
+inline elements with the default `normal` line-height likewise stay out of the
+line box; explicit line-height and decorated empty spans retain their influence.
+
+The CSS2 line-box ratchet is now 158 passed, 32 failed, 59 skipped, and 0
+errored. `baseline-block-with-overflow-001.html` and `empty-inline-001.xht`
+join the focused table and replaced-image probes; explicit empty-span baseline
+placement and inline border/padding bleed remain open.
+
 ## The destination, named
 
 *(Amended 2026-07-14.)* Livery's document profile grinds toward full browser

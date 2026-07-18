@@ -316,11 +316,37 @@ where
         &mut fragments,
     )?;
     for (id, fragment) in &preliminary.fragments {
-        if styles.get(*id).is_some_and(|style| {
-            style.display == CssDisplay::InlineBlock
-                || (style.display == CssDisplay::Inline && is_replaced_element(dom, *id))
-        }) {
+        let Some(style) = styles.get(*id) else {
+            continue;
+        };
+        if style.display == CssDisplay::InlineBlock
+            || (style.display == CssDisplay::Inline && is_replaced_element(dom, *id))
+        {
             fragments.atomic_fragments.insert(*id, *fragment);
+        }
+    }
+    for (id, fragment) in &preliminary.fragments {
+        let Some(style) = styles.get(*id) else {
+            continue;
+        };
+        if style.display != CssDisplay::Inline
+            && has_inline_block_ancestor(dom, styles, *id)
+        {
+            // The inline formatting pass treats an inline-block as atomic,
+            // so retain its nested block descendants from the preliminary
+            // tree for the paint walk.
+            let mut retained = *fragment;
+            if let Some(ancestor) = dom.parent(*id).filter(|parent| {
+                styles
+                    .get(*parent)
+                    .is_some_and(|style| style.display == CssDisplay::InlineBlock)
+            }) && first_flow_child(dom, styles, ancestor) == Some(*id)
+                && let Some(parent_fragment) = fragments.atomic_fragments.get(&ancestor)
+            {
+                retained.x = parent_fragment.x;
+                retained.y = parent_fragment.y;
+            }
+            fragments.fragments.insert(*id, retained);
         }
     }
     Ok(fragments)
@@ -535,14 +561,25 @@ where
                 let line_height = inherited
                     .map(|style| line_height_px(&style.line_height, font_size))
                     .unwrap_or(font_size * 1.2);
-                let width = text
-                    .lines()
-                    .map(|line| line.chars().count())
-                    .max()
-                    .unwrap_or(0) as f32
+                let width = if preserves_whitespace {
+                    text.lines()
+                        .map(|line| line.chars().count())
+                        .max()
+                        .unwrap_or(0)
+                } else {
+                    text.split_whitespace()
+                        .map(|word| word.chars().count())
+                        .max()
+                        .unwrap_or(0)
+                } as f32
                     * font_size
                     * 0.6;
-                let height = text.lines().count().max(1) as f32 * line_height;
+                let line_count = if preserves_whitespace {
+                    text.lines().count().max(1)
+                } else {
+                    1
+                };
+                let height = line_count as f32 * line_height;
                 let node = self
                     .tree
                     .new_leaf_with_context(
@@ -637,6 +674,42 @@ where
         }),
         _ => false,
     }
+}
+
+fn has_inline_block_ancestor<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    id: D::NodeId,
+) -> bool
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut ancestor = dom.parent(id);
+    while let Some(candidate) = ancestor {
+        if styles
+            .get(candidate)
+            .is_some_and(|style| style.display == CssDisplay::InlineBlock)
+        {
+            return true;
+        }
+        ancestor = dom.parent(candidate);
+    }
+    false
+}
+
+fn first_flow_child<D>(dom: &D, styles: &StylePlane<D::NodeId>, parent: D::NodeId) -> Option<D::NodeId>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    dom.dom_children(parent).find(|child| match dom.kind(*child) {
+        NodeKind::Text => dom.text(*child).is_some_and(|text| !text.trim().is_empty()),
+        NodeKind::Element => styles
+            .get(*child)
+            .is_some_and(|style| style.display != CssDisplay::None),
+        _ => false,
+    })
 }
 
 /// Return the topmost pointer-events-enabled element whose layout fragment
