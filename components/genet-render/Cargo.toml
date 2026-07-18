@@ -22,9 +22,14 @@ layout_dom_api = { workspace = true }
 # the paint/query value types.
 paint = { workspace = true }
 paint_list_api = { workspace = true }
+paint_list_render = { workspace = true }
 netrender = { workspace = true }
 # Engine-observable query surface: hit_test (point -> node) behind FragmentQuery.
 engine_observables_api = { workspace = true }
+# The introspection CONTRACT types (`ContentReport` / `OutlineEntry`) live in the
+# contracts crate so `DocumentSession::inspect` can name them; this crate keeps
+# the LayoutDom -> report builder and re-exports the types for its consumers.
+inker = { path = "../inker" }
 # Accessibility tree emission: ScriptedDom -> accesskit::TreeUpdate (a host
 # concern, kept out of the core layout crate).
 accesskit = { workspace = true }

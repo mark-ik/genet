@@ -17,30 +17,11 @@
 
 use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
 
-/// A structural report of a document's addressed content.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct ContentReport {
-    /// The `<title>` text, if any.
-    pub title: Option<String>,
-    /// The element outline (painted elements only; metadata tags are skipped), in
-    /// document order.
-    pub outline: Vec<OutlineEntry>,
-    /// Outgoing `<a href>` targets, in document order.
-    pub links: Vec<String>,
-    /// Heading (`<h1>`..`<h6>`) text, in document order.
-    pub headings: Vec<String>,
-}
-
-/// One element in the structural outline.
-#[derive(Clone, Debug, PartialEq)]
-pub struct OutlineEntry {
-    /// Nesting depth among painted elements (the document root is depth 0).
-    pub depth: usize,
-    /// A coarse semantic role (`"link"`, `"heading"`, `"paragraph"`, …).
-    pub role: &'static str,
-    /// The element's accessible name — its direct text content, trimmed.
-    pub name: String,
-}
+// The report TYPES are the introspection contract and live in inker (so
+// `DocumentSession::inspect` can name them without a render dep); re-exported
+// here so this crate's consumers keep their paths. The LayoutDom -> report
+// builder below is this crate's.
+pub use inker::{ContentReport, OutlineEntry};
 
 /// Produce a [`ContentReport`] for `dom`: a structural read of the addressed content.
 pub fn content_report<D: LayoutDom>(dom: &D) -> ContentReport {

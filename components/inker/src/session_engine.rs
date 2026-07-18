@@ -107,6 +107,37 @@ pub struct SessionLink {
     pub rect: [f32; 4],
 }
 
+/// A structural report of a session's addressed content — title, an outline
+/// of role + name, outgoing links, headings. The introspection CONTRACT for
+/// [`DocumentSession::inspect`]: pure data, so it lives here rather than in a
+/// render crate (genet-render's `content_report` builds one from a LayoutDom
+/// and re-exports these types). Hosts that cannot downcast a session to its
+/// concrete type (the type may be private to its engine crate) read this
+/// instead — merecat's Inspector pane is the first such consumer.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ContentReport {
+    /// The `<title>` text, if any.
+    pub title: Option<String>,
+    /// The element outline (painted elements only; metadata tags are skipped),
+    /// in document order.
+    pub outline: Vec<OutlineEntry>,
+    /// Outgoing `<a href>` targets, in document order.
+    pub links: Vec<String>,
+    /// Heading (`<h1>`..`<h6>`) text, in document order.
+    pub headings: Vec<String>,
+}
+
+/// One element in the structural outline.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutlineEntry {
+    /// Nesting depth among painted elements (the document root is depth 0).
+    pub depth: usize,
+    /// A coarse semantic role (`"link"`, `"heading"`, `"paragraph"`, …).
+    pub role: &'static str,
+    /// The element's accessible name — its direct text content, trimmed.
+    pub name: String,
+}
+
 /// What a click did, unifying the lanes' divergent returns
 /// (`ClickOutcome` / `bool` / `Option<String>`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,8 +173,10 @@ pub trait SessionEngine<F>: Send + Sync {
     /// [`crate::routing::EngineRouteDecision`] that selected this engine.
     fn engine_id(&self) -> &str;
 
-    fn spawn(&self, request: &SessionSpawnRequest)
-    -> Result<Box<dyn DocumentSession<F>>, SessionError>;
+    fn spawn(
+        &self,
+        request: &SessionSpawnRequest,
+    ) -> Result<Box<dyn DocumentSession<F>>, SessionError>;
 
     /// Sessions lay real content out through a real layout engine, so unlike
     /// surface engines they default to [`A11yCapability::Partial`]; a lane
@@ -202,6 +235,16 @@ pub trait DocumentSession<F>: Any {
 
     /// Visibility hint (a hidden tile may skip raster-adjacent work).
     fn set_hidden(&mut self, _hidden: bool) {}
+
+    /// A structural [`ContentReport`] of the addressed content, for hosts that
+    /// cannot downcast to the concrete session type (it may be private to its
+    /// engine crate — merecat's one registered lane is exactly that case, which
+    /// is why this is a trait method and not an `as_any` detour). `None` for
+    /// lanes without a structural read; the host reports the absence honestly
+    /// rather than synthesizing one.
+    fn inspect(&self) -> Option<ContentReport> {
+        None
+    }
 
     /// Lane-specific extras (a scripted lane's DOM stats, a static lane's
     /// content report) stay on the concrete type; hosts that need them
@@ -330,7 +373,14 @@ mod tests {
             dy != 0.0
         }
         fn scroll_for_key(&mut self, key: SessionScrollKey) -> bool {
-            self.scroll_by(0.0, if key == SessionScrollKey::PageDown { 100.0 } else { 0.0 })
+            self.scroll_by(
+                0.0,
+                if key == SessionScrollKey::PageDown {
+                    100.0
+                } else {
+                    0.0
+                },
+            )
         }
         fn click_at(&mut self, x: f32, _y: f32) -> SessionClick {
             if x < 10.0 {
@@ -382,7 +432,10 @@ mod tests {
         let request = SessionSpawnRequest::new("https://example.test").with_viewport(800, 600);
         let mut session = registry.spawn("echo.session", &request).expect("spawns");
 
-        assert_eq!(session.frame(800, 600), "https://example.test @ 800x600 scroll=0");
+        assert_eq!(
+            session.frame(800, 600),
+            "https://example.test @ 800x600 scroll=0"
+        );
         assert!(session.scroll_by(0.0, 42.0));
         assert!(session.frame(800, 600).ends_with("scroll=42"));
         assert_eq!(

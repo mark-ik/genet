@@ -104,6 +104,13 @@ impl DocumentSession<Scene> for StaticDocumentSession {
     fn links(&self) -> Vec<SessionLink> {
         Vec::new()
     }
+    /// The structural report, through the trait: this session type is private,
+    /// so a host cannot take the `as_any` detour meerkat uses on its own types
+    /// (the accessor merecat's Inspector pane needs — rung-5 plan, slice F's
+    /// "genet ask").
+    fn inspect(&self) -> Option<inker::ContentReport> {
+        Some(self.doc.inspect())
+    }
     fn as_any(&mut self) -> &mut dyn Any {
         self
     }
@@ -650,6 +657,27 @@ mod tests {
             SessionClick::Navigate(href) => assert_eq!(href, "/next"),
             other => panic!("expected the link to navigate, got {other:?}"),
         }
+    }
+
+    /// The structural report is reachable THROUGH THE TRAIT — the accessor a
+    /// host without downcast access (merecat: this session type is private)
+    /// stands on. Title, links, and headings come back from the live session.
+    #[test]
+    fn static_session_reports_structure_through_the_trait() {
+        let engine = StaticSessionEngine::new(NoFetch);
+        let request = SessionSpawnRequest::new("https://example.test/")
+            .with_body(
+                "<html><head><title>The Page</title></head>\
+                 <body><h1>Heading</h1><a href=\"/next\">next</a></body></html>",
+            )
+            .with_viewport(640, 480);
+        let session = engine.spawn(&request).expect("spawns");
+        let report = session
+            .inspect()
+            .expect("the static lane has a structural read");
+        assert_eq!(report.title.as_deref(), Some("The Page"));
+        assert_eq!(report.headings, vec!["Heading"]);
+        assert_eq!(report.links, vec!["/next"]);
     }
 
     #[test]
