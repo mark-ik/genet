@@ -324,10 +324,10 @@ where
         &mut fragments,
     )?;
     for (id, fragment) in &preliminary.fragments {
-        if styles
-            .get(*id)
-            .is_some_and(|style| style.display == CssDisplay::InlineBlock)
-        {
+        if styles.get(*id).is_some_and(|style| {
+            style.display == CssDisplay::InlineBlock
+                || (style.display == CssDisplay::Inline && is_replaced_element(dom, *id))
+        }) {
             fragments.atomic_fragments.insert(*id, *fragment);
         }
     }
@@ -793,6 +793,17 @@ fn collect_hit_candidates<D>(
     }
 }
 
+fn is_replaced_element<D>(dom: &D, id: D::NodeId) -> bool
+where
+    D: LayoutDom,
+    D::NodeId: Copy,
+{
+    dom.kind(id) == NodeKind::Element
+        && dom
+            .element_name(id)
+            .is_some_and(|name| name.local.as_ref().eq_ignore_ascii_case("img"))
+}
+
 fn apply_replaced_image_size<D>(
     style: &mut Style,
     dom: &D,
@@ -804,16 +815,9 @@ fn apply_replaced_image_size<D>(
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    let Some((intrinsic_width, intrinsic_height)) = image_intrinsic_size(dom, id, image_sources)
-    else {
-        return;
-    };
-    if intrinsic_width <= 0.0 || intrinsic_height <= 0.0 {
-        return;
-    }
-    if style.aspect_ratio.is_none() {
-        style.aspect_ratio = Some(intrinsic_width / intrinsic_height);
-    }
+    let intrinsic = image_intrinsic_size(dom, id, image_sources).filter(|(width, height)| {
+        *width > 0.0 && *height > 0.0
+    });
 
     // HTML width/height attributes are presentational hints for replaced
     // elements.  A definite CSS declaration wins, while an attribute fills
@@ -822,23 +826,42 @@ fn apply_replaced_image_size<D>(
         .or_else(|| image_attribute_size(dom, id, "width"));
     let height = definite_size(computed.height, font_size)
         .or_else(|| image_attribute_size(dom, id, "height"));
-    match (width.filter(|value| *value > 0.0), height.filter(|value| *value > 0.0)) {
-        (Some(width), Some(height)) => {
+    let width = width.filter(|value| *value > 0.0);
+    let height = height.filter(|value| *value > 0.0);
+    if let Some((intrinsic_width, intrinsic_height)) = intrinsic
+        && style.aspect_ratio.is_none()
+        && !(width.is_some() && height.is_some())
+    {
+        style.aspect_ratio = Some(intrinsic_width / intrinsic_height);
+    }
+    match (
+        width,
+        height,
+        intrinsic,
+    ) {
+        (Some(width), Some(height), _) => {
             style.size.width = Dimension::length(width);
             style.size.height = Dimension::length(height);
         },
-        (Some(width), None) => {
+        (Some(width), None, Some((intrinsic_width, intrinsic_height))) => {
             style.size.width = Dimension::length(width);
             style.size.height = Dimension::length(width * intrinsic_height / intrinsic_width);
         },
-        (None, Some(height)) => {
+        (Some(width), None, None) => {
+            style.size.width = Dimension::length(width);
+        },
+        (None, Some(height), Some((intrinsic_width, intrinsic_height))) => {
             style.size.width = Dimension::length(height * intrinsic_width / intrinsic_height);
             style.size.height = Dimension::length(height);
         },
-        (None, None) => {
+        (None, Some(height), None) => {
+            style.size.height = Dimension::length(height);
+        },
+        (None, None, Some((intrinsic_width, intrinsic_height))) => {
             style.size.width = Dimension::length(intrinsic_width);
             style.size.height = Dimension::length(intrinsic_height);
         },
+        (None, None, None) => {},
     }
 }
 

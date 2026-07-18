@@ -559,6 +559,18 @@ now pass. Ahem-heavy vertical-align cases remain open with the broader font
 metric and line-box work; the prior walk-discovery receipt remains 144 passed,
 46 failed, 120 skipped, and 0 errored.
 
+### 2026-07-17 inline replaced-image line-fragment receipt
+
+Inline `<img>` elements now retain their preliminary replaced fragment while
+the shaped line is built, so the block wrapper's stretched width cannot replace
+the image's intrinsic or definite dimensions. CSS and HTML dimensions apply
+even when intrinsic bytes are unavailable; the decoded aspect ratio fills only
+the remaining auto dimension. The focused native wall adds host-resolved
+intrinsic and vertical-offset coverage, and the full `genet-livery` package
+wall is green with 43 paint tests. The rebuilt Livery runner now passes
+`line-height-126.xht` and `line-box-height-002.xht`; `line-height-127.xht` and
+`line-height-128.xht` remain Ahem/font-metric cases.
+
 ## The destination, named
 
 *(Amended 2026-07-14.)* Livery's document profile grinds toward full browser

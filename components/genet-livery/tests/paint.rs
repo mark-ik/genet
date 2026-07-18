@@ -417,6 +417,79 @@ fn replaced_img_width_preserves_intrinsic_ratio() {
 }
 
 #[test]
+fn inline_replaced_image_uses_the_shaped_line_fragment() {
+    use base64::Engine as _;
+
+    let blue = image::RgbaImage::from_pixel(2, 3, image::Rgba([0, 0, 255, 255]));
+    let mut png = Vec::new();
+    blue.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("encode test PNG");
+    let data_uri = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png)
+    );
+    let html = format!(
+        r#"<html><body><div class="label"><img src="{data_uri}" class="image"></div></body></html>"#
+    );
+    let image_position = |extra: &str| {
+        let list = render(
+            &html,
+            &format!(
+                ".label {{ font-size: 20px; line-height: 40px; }} .image {{ width: 10px; height: 1px; {extra} }} body {{ margin: 0; }}"
+            ),
+            1,
+        );
+        list.commands()
+            .iter()
+            .find_map(|command| match command {
+                PaintCmd::DrawImage(image) => Some((
+                    image.placement.bounds.min.y,
+                    image.placement.bounds.size().height,
+                )),
+                _ => None,
+            })
+            .expect("inline image paint command")
+    };
+
+    let (baseline, baseline_height) = image_position("");
+    let (raised, raised_height) = image_position("vertical-align: 20px;");
+    assert_eq!((baseline_height, raised_height), (1.0, 1.0));
+    assert!(
+        raised < baseline - 1.0,
+        "baseline={baseline} raised={raised}"
+    );
+}
+
+#[test]
+fn inline_host_resolved_image_uses_intrinsic_size() {
+    let blue = image::RgbaImage::from_pixel(96, 96, image::Rgba([0, 0, 255, 255]));
+    let mut png = Vec::new();
+    blue.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("encode test PNG");
+    let document =
+        StaticDocument::parse(r#"<html><body><img src="support/blue96x96.png"></body></html>"#);
+    let mut retained = LiveryDocument::new(
+        document,
+        StyleSet::cambium(&["body { margin: 0; } img { display: inline; line-height: 2in; }"]),
+        Device::screen(320.0, 240.0),
+    );
+    retained.set_image_resource("support/blue96x96.png", png);
+    let list = retained.frame(320, 240).expect("frame with host image");
+    let PaintCmd::DrawImage(image) = list
+        .commands()
+        .iter()
+        .find(|command| matches!(command, PaintCmd::DrawImage(_)))
+        .expect("host-resolved inline image paints")
+    else {
+        unreachable!();
+    };
+    assert_eq!(
+        image.placement.bounds.size(),
+        paint_list_api::LayoutSize::new(96.0, 96.0)
+    );
+}
+
+#[test]
 fn retained_replaced_img_uses_host_resolved_bytes_for_intrinsic_size() {
     let blue = image::RgbaImage::from_pixel(2, 3, image::Rgba([0, 0, 255, 255]));
     let mut png = Vec::new();

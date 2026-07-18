@@ -699,6 +699,17 @@ where
     }
 }
 
+fn is_replaced_element<D>(dom: &D, id: D::NodeId) -> bool
+where
+    D: LayoutDom,
+    D::NodeId: Copy,
+{
+    dom.kind(id) == NodeKind::Element
+        && dom
+            .element_name(id)
+            .is_some_and(|name| name.local.as_ref().eq_ignore_ascii_case("img"))
+}
+
 struct InlineCollector<'a, D>
 where
     D: LayoutDom,
@@ -742,6 +753,31 @@ where
                     return;
                 };
                 if style.display == Display::None {
+                    return;
+                }
+                if is_replaced_element(self.dom, id) && style.display != Display::InlineBlock {
+                    if let Some(fragment) = self
+                        .fragments
+                        .atomic(id)
+                        .or_else(|| self.fragments.get(id))
+                        .copied()
+                    {
+                        let font_size = super::paint::used_font_size(&style);
+                        self.inline_boxes.push(InlineAtom {
+                            source: id,
+                            owners: self.owners.clone(),
+                            index: self.text.len(),
+                            fragment,
+                            edge: false,
+                            paint: true,
+                            vertical_align: style.vertical_align,
+                            font_size,
+                            line_height: super::layout::line_height_px(
+                                &style.line_height,
+                                font_size,
+                            ),
+                        });
+                    }
                     return;
                 }
                 if style.display == Display::InlineBlock {
