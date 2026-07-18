@@ -79,7 +79,7 @@ impl TextSystem {
         roots: &[D::NodeId],
         parent_style: &ComputedValues,
         width: f32,
-    ) -> (f32, f32)
+    ) -> Option<(f32, f32)>
     where
         D: LayoutDom,
         D::NodeId: Copy + Eq + Hash,
@@ -106,7 +106,7 @@ impl TextSystem {
             }
         }
         if spans.is_empty() && inline_boxes.is_empty() {
-            return (0.0, 0.0);
+            return None;
         }
 
         let items = self.shape(&text, &mut spans, &inline_boxes, width, parent_style);
@@ -116,16 +116,16 @@ impl TextSystem {
         for item in items {
             let fragment = match item {
                 ShapedItem::Text(run) => run.fragment,
-                ShapedItem::InlineBox { fragment, .. } => fragment,
+                ShapedItem::InlineBox { line_fragment, .. } => line_fragment,
             };
             right = right.max(fragment.x + fragment.width);
             top = top.min(fragment.y);
             bottom = bottom.max(fragment.y + fragment.height);
         }
         if top.is_finite() && bottom.is_finite() {
-            (right.max(0.0), (bottom - top).max(0.0))
+            Some((right.max(0.0), (bottom - top).max(0.0)))
         } else {
-            (0.0, 0.0)
+            Some((0.0, 0.0))
         }
     }
 
@@ -337,6 +337,7 @@ impl TextSystem {
                     source,
                     owners,
                     mut fragment,
+                    line_fragment: _,
                     edge,
                     paint,
                     mut line_y,
@@ -404,11 +405,11 @@ impl TextSystem {
                 id: u64::try_from(index).unwrap_or(u64::MAX),
                 kind: InlineBoxKind::InFlow,
                 index: inline_box.index,
-                width: inline_box.fragment.width,
+                width: inline_box.line_width,
                 height: if inline_box.edge {
                     0.0
                 } else {
-                    inline_box.fragment.height
+                    inline_box.line_box_height
                 },
             });
         }
@@ -506,6 +507,30 @@ impl TextSystem {
                             source: inline_box.source,
                             owners: inline_box.owners.clone(),
                             fragment: Fragment {
+                                x: positioned.x + if inline_box.edge {
+                                    0.0
+                                } else {
+                                    inline_box.margin_left
+                                },
+                                y: base_y
+                                    + vertical_shift
+                                    + if inline_box.edge {
+                                        0.0
+                                    } else {
+                                        inline_box.margin_top
+                                    },
+                                width: if inline_box.edge {
+                                    positioned.width
+                                } else {
+                                    inline_box.fragment.width
+                                },
+                                height: if inline_box.edge {
+                                    height
+                                } else {
+                                    inline_box.fragment.height
+                                },
+                            },
+                            line_fragment: Fragment {
                                 x: positioned.x,
                                 y: base_y + vertical_shift,
                                 width: positioned.width,
@@ -651,6 +676,10 @@ struct InlineAtom<Id> {
     owners: Vec<Id>,
     index: usize,
     fragment: Fragment,
+    line_width: f32,
+    line_box_height: f32,
+    margin_left: f32,
+    margin_top: f32,
     edge: bool,
     paint: bool,
     vertical_align: VerticalAlign,
@@ -664,6 +693,7 @@ enum ShapedItem<Id> {
         source: Id,
         owners: Vec<Id>,
         fragment: Fragment,
+        line_fragment: Fragment,
         edge: bool,
         paint: bool,
         line_y: f32,
@@ -763,11 +793,22 @@ where
                         .copied()
                     {
                         let font_size = super::paint::used_font_size(&style);
+                        let (line_width, line_box_height, margin_left, margin_top) =
+                            inline_margin_box(
+                                &style,
+                                fragment,
+                                font_size,
+                                self.percentage_basis,
+                            );
                         self.inline_boxes.push(InlineAtom {
                             source: id,
                             owners: self.owners.clone(),
                             index: self.text.len(),
                             fragment,
+                            line_width,
+                            line_box_height,
+                            margin_left,
+                            margin_top,
                             edge: false,
                             paint: true,
                             vertical_align: style.vertical_align,
@@ -787,11 +828,23 @@ where
                         .or_else(|| self.fragments.get(id))
                         .copied()
                     {
+                        let font_size = super::paint::used_font_size(&style);
+                        let (line_width, line_box_height, margin_left, margin_top) =
+                            inline_margin_box(
+                                &style,
+                                fragment,
+                                font_size,
+                                self.percentage_basis,
+                            );
                         self.inline_boxes.push(InlineAtom {
                             source: id,
                             owners: self.owners.clone(),
                             index: self.text.len(),
                             fragment,
+                            line_width,
+                            line_box_height,
+                            margin_left,
+                            margin_top,
                             edge: false,
                             paint: true,
                             vertical_align: style.vertical_align,
@@ -856,6 +909,10 @@ where
                         width,
                         ..Fragment::default()
                     },
+                    line_width: width,
+                    line_box_height: 0.0,
+                    margin_left: 0.0,
+                    margin_top: 0.0,
                     edge: true,
                     paint,
                     vertical_align: style.vertical_align,
@@ -893,6 +950,10 @@ where
                 height,
                 ..Fragment::default()
             },
+            line_width: 0.0,
+            line_box_height: height,
+            margin_left: 0.0,
+            margin_top: 0.0,
             edge: false,
             paint: false,
             vertical_align: style.vertical_align,
@@ -935,8 +996,28 @@ fn inline_decoration_edges(style: &ComputedValues, percentage_basis: f32) -> Inl
 fn inline_margin_px(value: Margin, em: f32, percentage_basis: f32) -> f32 {
     match value {
         Margin::Auto => 0.0,
-        Margin::Value(value) => super::layout::length_percentage_px(value, em, percentage_basis),
+        Margin::Value(value) => {
+            super::layout::signed_length_percentage_px(value, em, percentage_basis)
+        },
     }
+}
+
+fn inline_margin_box(
+    style: &ComputedValues,
+    fragment: Fragment,
+    font_size: f32,
+    percentage_basis: f32,
+) -> (f32, f32, f32, f32) {
+    let margin_left = inline_margin_px(style.margin_left, font_size, percentage_basis);
+    let margin_right = inline_margin_px(style.margin_right, font_size, percentage_basis);
+    let margin_top = inline_margin_px(style.margin_top, font_size, percentage_basis);
+    let margin_bottom = inline_margin_px(style.margin_bottom, font_size, percentage_basis);
+    (
+        (fragment.width + margin_left + margin_right).max(0.0),
+        (fragment.height + margin_top + margin_bottom).max(0.0),
+        margin_left,
+        margin_top,
+    )
 }
 
 fn decorated_inline_fragment<Id>(
@@ -1056,7 +1137,7 @@ fn text_alignment(style: TextAlign) -> Alignment {
 fn vertical_align_shift(
     value: VerticalAlign,
     font_size: f32,
-    line_height: f32,
+    line_box_height: f32,
     metrics: &parley::LineMetrics,
     item_y: f32,
     item_height: f32,
@@ -1067,7 +1148,7 @@ fn vertical_align_shift(
         VerticalAlign::Sub => font_size * 0.2,
         VerticalAlign::Super => -font_size * 0.4,
         VerticalAlign::Length(value) => {
-            -super::layout::signed_length_percentage_px(value, font_size, line_height)
+            -super::layout::signed_length_percentage_px(value, font_size, line_box_height)
         },
         VerticalAlign::Middle if is_inline_box => {
             metrics.baseline + font_size * 0.5 - (item_y + item_height * 0.5)

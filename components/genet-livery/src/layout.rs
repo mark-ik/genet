@@ -287,7 +287,7 @@ where
                     AvailableSpace::MinContent => 0.0,
                     AvailableSpace::MaxContent => context.width,
                 };
-                let (measured_width, measured_height) = text.measure_inline_group(
+                let measured = text.measure_inline_group(
                     dom,
                     styles,
                     preliminary,
@@ -295,16 +295,8 @@ where
                     &context.style,
                     known.width.unwrap_or(available_width),
                 );
-                let measured_width = if measured_width > 0.0 {
-                    measured_width
-                } else {
-                    context.width
-                };
-                let measured_height = if measured_height > 0.0 {
-                    measured_height
-                } else {
-                    context.height
-                };
+                let (measured_width, measured_height) =
+                    measured.unwrap_or((context.width, context.height));
                 Size {
                     width: known
                         .width

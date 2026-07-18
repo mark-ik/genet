@@ -571,6 +571,21 @@ wall is green with 43 paint tests. The rebuilt Livery runner now passes
 `line-height-126.xht` and `line-box-height-002.xht`; `line-height-127.xht` and
 `line-height-128.xht` remain Ahem/font-metric cases.
 
+### 2026-07-17 inline replaced-image margin-box receipt
+
+Inline replaced atoms now carry separate content and margin-box geometry. The
+content fragment remains the paint target, while Parley receives signed
+horizontal and vertical margins for line participation. This lets a negative
+bottom margin collapse a zero-height line box without swallowing the image
+paint, and preserves the same seam for inline-block replaced content. The
+native paint wall is green with 44 tests, including a retained 100px image
+regression.
+
+The focused runner now passes `line-height-129.xht` alongside
+`line-height-126.xht` and `line-box-height-002.xht`. `line-height-127.xht` and
+`line-height-128.xht` remain Ahem/font-metric cases; their failures are still
+font-resource limitations rather than margin-box geometry.
+
 ## The destination, named
 
 *(Amended 2026-07-14.)* Livery's document profile grinds toward full browser

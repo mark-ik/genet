@@ -490,6 +490,58 @@ fn inline_host_resolved_image_uses_intrinsic_size() {
 }
 
 #[test]
+fn inline_replaced_image_negative_margin_collapses_the_line_box() {
+    use base64::Engine as _;
+
+    let green = image::RgbaImage::from_pixel(100, 100, image::Rgba([0, 255, 0, 255]));
+    let mut png = Vec::new();
+    green
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .expect("encode test PNG");
+    let data_uri = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png)
+    );
+    let document = StaticDocument::parse(&format!(
+        r#"<html><body><div class="target"><img src="{data_uri}"></div></body></html>"#
+    ));
+    let mut document = LiveryDocument::new(
+        document,
+        StyleSet::cambium(&[
+            "body { margin: 0; } .target { line-height: 0; background-color: red; } \
+             img { margin-top: 0; margin-bottom: -100px; vertical-align: bottom; }",
+        ]),
+        Device::screen(320.0, 240.0),
+    );
+    let list = document
+        .frame(320, 240)
+        .expect("negative-margin inline image frame");
+    assert!(
+        !list.commands().iter().any(|command| matches!(
+            command,
+            PaintCmd::DrawRect(rect) if rect.color == ColorF::new(1.0, 0.0, 0.0, 1.0)
+        )),
+        "zero-height line box must not paint the target background"
+    );
+    let image = list
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::DrawImage(image) => Some(image),
+            _ => None,
+        })
+        .expect("inline image remains paintable outside the collapsed line box");
+    assert_eq!(
+        image.placement.bounds.min,
+        paint_list_api::LayoutPoint::new(0.0, 0.0)
+    );
+    assert_eq!(
+        image.placement.bounds.size(),
+        paint_list_api::LayoutSize::new(100.0, 100.0)
+    );
+}
+
+#[test]
 fn retained_replaced_img_uses_host_resolved_bytes_for_intrinsic_size() {
     let blue = image::RgbaImage::from_pixel(2, 3, image::Rgba([0, 0, 255, 255]));
     let mut png = Vec::new();
