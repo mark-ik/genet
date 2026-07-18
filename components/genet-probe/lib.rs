@@ -142,7 +142,7 @@ fn matches(dom: &ScriptedDom, node: NodeId, sel: &Selector) -> bool {
         Some(t) => {
             child_text(dom, node).contains(t.as_str())
                 || attr(dom, node, "aria-label").is_some_and(|l| l.contains(t.as_str()))
-        }
+        },
     };
     let attr_ok = match &sel.attr {
         None => true,
@@ -173,16 +173,17 @@ fn matching(dom: &ScriptedDom, sel: &Selector) -> Vec<NodeId> {
 /// that as a miss — the target is not on screen).
 pub fn resolve(surfaces: &[ProbeSurface], sel: &Selector) -> Option<Hit> {
     for surface in surfaces {
-        let layout =
-            IncrementalLayout::new(surface.dom, &[surface.sheet], surface.rect[2], surface.rect[3]);
+        let layout = IncrementalLayout::new(
+            surface.dom,
+            &[surface.sheet],
+            surface.rect[2],
+            surface.rect[3],
+        );
         for node in matching(surface.dom, sel) {
             if let Some((x, y, w, h)) = layout.absolute_rect(surface.dom, node) {
                 return Some(Hit {
                     surface: surface.name,
-                    point: (
-                        surface.rect[0] + x + w / 2.0,
-                        surface.rect[1] + y + h / 2.0,
-                    ),
+                    point: (surface.rect[0] + x + w / 2.0, surface.rect[1] + y + h / 2.0),
                 });
             }
         }
@@ -250,8 +251,15 @@ impl ProbeSnapshot {
 /// free — the point of the extraction: an app lists its surfaces and stops
 /// owning per-widget geometry lookups.
 pub trait Automatable {
-    /// The retained cambium surfaces to search and hit-test, this frame.
-    fn surfaces(&self) -> Vec<ProbeSurface<'_>>;
+    /// Provide the retained cambium surfaces to a visitor, for it to search and
+    /// hit-test this frame. A visitor rather than a returned `Vec` because an
+    /// app's DOMs are typically behind `RefCell` (cambium's `DomHandle` is
+    /// `Rc<RefCell<ScriptedDom>>`): the borrow guards live only for the closure,
+    /// so a returned `Vec<ProbeSurface>` borrowing through them could not
+    /// compile. The generic driver reaches surfaces only through here. (This
+    /// shape is the first correction the real consumer made to the abstract
+    /// trait — the mock held a plain DOM and hid it.)
+    fn with_surfaces<R>(&self, f: impl FnOnce(&[ProbeSurface<'_>]) -> R) -> R;
 
     /// A typed read of app state for assertions the DOM cannot express.
     fn snapshot(&self) -> ProbeSnapshot;
@@ -276,19 +284,19 @@ pub trait Automatable {
 }
 
 /// Provided methods every [`Automatable`] gets — the shared driving verbs built
-/// on `surfaces()` + pointer delivery, so no app writes them.
+/// on `with_surfaces` + pointer delivery, so no app writes them.
 pub trait AutomatableExt: Automatable {
     /// Resolve `sel` to a window point across this app's surfaces.
     fn resolve(&self, sel: &Selector) -> Option<Hit> {
-        resolve(&self.surfaces(), sel)
+        self.with_surfaces(|surfaces| resolve(surfaces, sel))
     }
 
     /// Resolve `sel` and click it (press+release at its centre). `true` if it
     /// hit; `false` is the driver's attributable miss.
     fn click(&mut self, sel: &Selector) -> bool {
-        // The surfaces borrow ends here — `resolve` returns an owned Hit — so
-        // the mutable pointer delivery below does not alias it.
-        match resolve(&self.surfaces(), sel) {
+        // `resolve` returns an owned Option<Hit> and the surfaces borrow ends
+        // with it, so the mutable pointer delivery below does not alias it.
+        match self.resolve(sel) {
             Some(hit) => {
                 self.press(hit.point.0, hit.point.1);
                 self.release(hit.point.0, hit.point.1);
@@ -299,7 +307,7 @@ pub trait AutomatableExt: Automatable {
     }
 }
 
-impl<A: Automatable + ?Sized> AutomatableExt for A {}
+impl<A: Automatable> AutomatableExt for A {}
 
 #[cfg(test)]
 mod tests {
@@ -319,12 +327,19 @@ mod tests {
         let root = dom.document();
         for (i, label) in ["Nodes", "Links"].iter().enumerate() {
             let tab = dom.create_element(qual("div"));
-            dom.set_attribute(tab, qual("class"), if i == 0 { "tab selected" } else { "tab" });
+            dom.set_attribute(
+                tab,
+                qual("class"),
+                if i == 0 { "tab selected" } else { "tab" },
+            );
             dom.set_attribute(tab, qual("role"), "tab");
             dom.set_attribute(
                 tab,
                 qual("style"),
-                &format!("position:absolute;left:{}px;top:0px;width:80px;height:24px;", i * 80),
+                &format!(
+                    "position:absolute;left:{}px;top:0px;width:80px;height:24px;",
+                    i * 80
+                ),
             );
             let t = dom.create_text(label);
             dom.append_child(tab, t);
@@ -441,13 +456,13 @@ mod tests {
             released: Option<(f32, f32)>,
         }
         impl Automatable for MockApp {
-            fn surfaces(&self) -> Vec<ProbeSurface<'_>> {
-                vec![ProbeSurface {
+            fn with_surfaces<R>(&self, f: impl FnOnce(&[ProbeSurface<'_>]) -> R) -> R {
+                f(&[ProbeSurface {
                     name: "strip",
                     dom: &self.dom,
                     rect: [500.0, 10.0, 300.0, 200.0],
                     sheet: "",
-                }]
+                }])
             }
             fn snapshot(&self) -> ProbeSnapshot {
                 ProbeSnapshot::default().with_field("tabs", "2")
