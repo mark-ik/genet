@@ -815,26 +815,45 @@ fn apply_replaced_image_size<D>(
         style.aspect_ratio = Some(intrinsic_width / intrinsic_height);
     }
 
-    let width_auto = matches!(computed.width, CssSize::Auto);
-    let height_auto = matches!(computed.height, CssSize::Auto);
-    match (
-        width_auto,
-        height_auto,
-        definite_size(computed.width, font_size),
-        definite_size(computed.height, font_size),
-    ) {
-        (true, true, _, _) => {
+    // HTML width/height attributes are presentational hints for replaced
+    // elements.  A definite CSS declaration wins, while an attribute fills
+    // an otherwise-auto dimension before the intrinsic ratio is applied.
+    let width = definite_size(computed.width, font_size)
+        .or_else(|| image_attribute_size(dom, id, "width"));
+    let height = definite_size(computed.height, font_size)
+        .or_else(|| image_attribute_size(dom, id, "height"));
+    match (width.filter(|value| *value > 0.0), height.filter(|value| *value > 0.0)) {
+        (Some(width), Some(height)) => {
+            style.size.width = Dimension::length(width);
+            style.size.height = Dimension::length(height);
+        },
+        (Some(width), None) => {
+            style.size.width = Dimension::length(width);
+            style.size.height = Dimension::length(width * intrinsic_height / intrinsic_width);
+        },
+        (None, Some(height)) => {
+            style.size.width = Dimension::length(height * intrinsic_width / intrinsic_height);
+            style.size.height = Dimension::length(height);
+        },
+        (None, None) => {
             style.size.width = Dimension::length(intrinsic_width);
             style.size.height = Dimension::length(intrinsic_height);
         },
-        (true, false, _, Some(height)) if height > 0.0 => {
-            style.size.width = Dimension::length(height * intrinsic_width / intrinsic_height);
-        },
-        (false, true, Some(width), _) if width > 0.0 => {
-            style.size.height = Dimension::length(width * intrinsic_height / intrinsic_width);
-        },
-        _ => {},
     }
+}
+
+fn image_attribute_size<D>(dom: &D, id: D::NodeId, name: &str) -> Option<f32>
+where
+    D: LayoutDom,
+    D::NodeId: Copy,
+{
+    dom.attributes(id).find_map(|attribute| {
+        (attribute.name.ns.as_ref().is_empty()
+            && attribute.name.local.as_ref().eq_ignore_ascii_case(name))
+            .then(|| attribute.value.trim().parse::<f32>().ok())
+            .flatten()
+            .filter(|value| value.is_finite() && *value > 0.0)
+    })
 }
 
 fn image_intrinsic_size<D>(

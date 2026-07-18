@@ -495,6 +495,21 @@ image stays at one `DrawImage` before 50ms, then switches to repeated tiles at
 the midpoint and after settlement. The focused Livery value wall has 12 tests,
 the cascade wall 18, and the genet-livery interaction wall 22; all pass.
 
+### 2026-07-17 replaced-image dimension receipt
+
+Livery's replaced-box sizing now consumes positive HTML `width` and `height`
+attributes as presentational dimensions. A definite CSS width or height wins;
+an omitted dimension keeps the decoded intrinsic ratio. This closes the
+reference-image seam used by the CSS2 line-height corpus without changing the
+neutral image resource payload. The focused `genet-livery` replaced-image test
+and the full package wall pass. Through the rebuilt clean-room WPT runner,
+`line-height-006.xht` and `line-height-072.xht` now pass with their 96px and
+120px image references; the walk-discovery `css/CSS2/linebox` run is currently
+118 passed, 72 failed, 120 skipped, and 0 errored. The remaining failures are
+the physical-unit, inline-decoration, empty-inline, vertical-align, and
+line-height groups, so the old 142/48 count is retained only as the
+pre-attribute-sizing snapshot.
+
 ## The destination, named
 
 *(Amended 2026-07-14.)* Livery's document profile grinds toward full browser
