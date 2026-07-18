@@ -53,6 +53,11 @@ pub struct GraphCanvasNode<Id, Kind> {
     pub position: (f32, f32),
     /// Accessible name for the node's native hit target.
     pub label: String,
+    /// An optional stable key emitted as `data-key` on the node's hit target,
+    /// for targeting by identity when the `label` is not unique (two nodes may
+    /// share a title). The component does not interpret it — a driver or test
+    /// selects on it; a screen reader still reads `label`.
+    pub key: Option<String>,
 }
 
 /// One app-facing edge. Endpoints that are absent from the subgraph are skipped.
@@ -279,6 +284,9 @@ where
             if selected {
                 target = target.attr("aria-current", "true");
             }
+            if let Some(key) = &node.key {
+                target = target.attr("data-key", key.clone());
+            }
 
             let click = on_node_click.clone();
             let click_id = node.id.clone();
@@ -373,12 +381,14 @@ mod tests {
                         kind: "document",
                         position: (0.1, 0.5),
                         label: "First node".into(),
+                        key: None,
                     },
                     GraphCanvasNode {
                         id: 2,
                         kind: "person",
                         position: (0.9, 0.5),
                         label: "Second node".into(),
+                        key: None,
                     },
                 ],
                 edges: vec![GraphCanvasEdge { from: 1, to: 2 }],
