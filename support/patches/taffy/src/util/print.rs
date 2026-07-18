@@ -63,7 +63,7 @@ pub fn write_tree(mut writer: impl io::Write, tree: &impl PrintTree, root: NodeI
             width = layout.size.width,
             height = layout.size.height,
             key = node_id,
-        );
+        )?;
         let bar = if has_sibling { "│   " } else { "    " };
         let new_string = lines_string + bar;
 
