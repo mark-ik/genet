@@ -510,6 +510,19 @@ the physical-unit, inline-decoration, empty-inline, vertical-align, and
 line-height groups, so the old 142/48 count is retained only as the
 pre-attribute-sizing snapshot.
 
+### 2026-07-17 physical absolute-length receipt
+
+Livery now carries the CSS absolute units used by the linebox corpus:
+`in`, `cm`, `mm`, `q`, `pt`, and `pc`. The typed values serialize and resolve
+through the 96dpi reference-pixel conversion, and the same helper feeds
+Taffy geometry, Parley spacing, paint offsets, shadows, transforms, and
+computed font metrics. The focused value wall has 13 tests and the full
+`genet-livery` wall remains green. Nine physical-unit line-height probes
+(`017`, `018`, `028`, `029`, `039`, `040`, `050`, `051`, and `058`) now pass.
+The walk-discovery `css/CSS2/linebox` run is 144 passed, 46 failed, 120
+skipped, and 0 errored. Font-relative `ex`/`ch`, inline decoration, empty
+inline boxes, vertical-align, and the remaining line-height groups stay open.
+
 ## The destination, named
 
 *(Amended 2026-07-14.)* Livery's document profile grinds toward full browser

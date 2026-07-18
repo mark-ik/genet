@@ -1174,12 +1174,7 @@ pub(crate) fn length_percentage_px(
 }
 
 fn absolute_length(length: Length, em: f32, rem: f32) -> f32 {
-    length.value
-        * match length.unit {
-            LengthUnit::Px => 1.0,
-            LengthUnit::Em => em,
-            LengthUnit::Rem => rem,
-        }
+    length.unit.to_px(length.value, em, rem)
 }
 
 pub(crate) fn border_width_px(style: BorderStyle, width: BorderWidth, em: f32) -> f32 {

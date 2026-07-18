@@ -210,14 +210,7 @@ fn resolve_font_metrics(computed: &mut ComputedValues, parent: Option<&ComputedV
 fn resolve_length_percentage(value: LengthPercentage, em: f32, percentage_basis: f32) -> f32 {
     match value {
         LengthPercentage::Zero => 0.0,
-        LengthPercentage::Length(length) => {
-            length.value
-                * match length.unit {
-                    LengthUnit::Px => 1.0,
-                    LengthUnit::Em => em,
-                    LengthUnit::Rem => 16.0,
-                }
-        },
+        LengthPercentage::Length(length) => length.unit.to_px(length.value, em, 16.0),
         LengthPercentage::Percentage(value) => percentage_basis * value,
         LengthPercentage::Calc(calc) => {
             percentage_basis * calc.percentage + calc.px + calc.em * em + calc.rem * 16.0

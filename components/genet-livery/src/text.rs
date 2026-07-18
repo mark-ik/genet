@@ -942,13 +942,7 @@ fn text_alignment(style: TextAlign) -> Alignment {
 fn spacing_px(spacing: Spacing) -> Option<f32> {
     match spacing {
         Spacing::Normal => None,
-        Spacing::Length(length) => Some(
-            length.value
-                * match length.unit {
-                    livery::values::LengthUnit::Px => 1.0,
-                    livery::values::LengthUnit::Em | livery::values::LengthUnit::Rem => 16.0,
-                },
-        ),
+        Spacing::Length(length) => Some(length.unit.to_px(length.value, 16.0, 16.0)),
     }
 }
 

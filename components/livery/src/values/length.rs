@@ -8,6 +8,12 @@ pub enum LengthUnit {
     Px,
     Em,
     Rem,
+    In,
+    Cm,
+    Mm,
+    Q,
+    Pt,
+    Pc,
 }
 
 impl LengthUnit {
@@ -16,7 +22,31 @@ impl LengthUnit {
             Self::Px => "px",
             Self::Em => "em",
             Self::Rem => "rem",
+            Self::In => "in",
+            Self::Cm => "cm",
+            Self::Mm => "mm",
+            Self::Q => "q",
+            Self::Pt => "pt",
+            Self::Pc => "pc",
         }
+    }
+
+    /// Resolve an absolute or font-relative unit against the current CSS
+    /// font size (`em`) and root font size (`rem`). CSS absolute units use the
+    /// 96dpi reference pixel defined by CSS Values.
+    pub const fn to_px(self, value: f32, em: f32, rem: f32) -> f32 {
+        value
+            * match self {
+                Self::Px => 1.0,
+                Self::Em => em,
+                Self::Rem => rem,
+                Self::In => 96.0,
+                Self::Cm => 96.0 / 2.54,
+                Self::Mm => 96.0 / 25.4,
+                Self::Q => 96.0 / 101.6,
+                Self::Pt => 96.0 / 72.0,
+                Self::Pc => 16.0,
+            }
     }
 }
 
@@ -63,15 +93,19 @@ impl FromStr for Length {
         if input == "0" || input == "+0" || input == "-0" {
             return Ok(Self::ZERO);
         }
+        let lower = input.to_ascii_lowercase();
         for (suffix, unit) in [
             ("rem", LengthUnit::Rem),
             ("px", LengthUnit::Px),
             ("em", LengthUnit::Em),
+            ("in", LengthUnit::In),
+            ("cm", LengthUnit::Cm),
+            ("mm", LengthUnit::Mm),
+            ("pt", LengthUnit::Pt),
+            ("pc", LengthUnit::Pc),
+            ("q", LengthUnit::Q),
         ] {
-            if let Some(number) = input
-                .strip_suffix(suffix)
-                .or_else(|| input.strip_suffix(&suffix.to_ascii_uppercase()))
-            {
+            if let Some(number) = lower.strip_suffix(suffix) {
                 let value = number
                     .trim()
                     .parse::<f32>()
@@ -81,7 +115,7 @@ impl FromStr for Length {
                 }
             }
         }
-        Err(ParseError::expected("a px, em, or rem length"))
+        Err(ParseError::expected("a CSS length"))
     }
 }
 
@@ -120,6 +154,16 @@ impl CalcLengthPercentage {
                 LengthUnit::Px => self.px += sign * length.value,
                 LengthUnit::Em => self.em += sign * length.value,
                 LengthUnit::Rem => self.rem += sign * length.value,
+                LengthUnit::In
+                | LengthUnit::Cm
+                | LengthUnit::Mm
+                | LengthUnit::Q
+                | LengthUnit::Pt
+                | LengthUnit::Pc => {
+                    return Err(ParseError::expected(
+                        "calc() with px, em, rem, and percentage terms",
+                    ));
+                },
             },
             LengthPercentage::Percentage(value) => self.percentage += sign * value,
             LengthPercentage::Calc(_) => {

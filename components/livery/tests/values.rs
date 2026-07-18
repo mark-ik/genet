@@ -4,9 +4,10 @@ use livery::values::{
     Alignment, AnimationName, AspectRatio, BackgroundImage, BackgroundPosition, BackgroundRepeat,
     BorderStyle, BorderWidth, BoxShadow, BoxSizing, Color, CssValue, Display, Duration,
     FlexDirection, FlexFactor, FlexWrap, Float, FontFamily, FontSize, FontStyle, FontWeight, Gap,
-    Inset, LengthPercentage, LineHeight, ListStyleType, Margin, Opacity, Order, Overflow, Padding,
-    PointerEvents, Position, Radius, Size, Spacing, TextAlign, TextDecorationLine, TextWrapMode,
-    TimingFunction, Transform, TransitionProperty, Visibility, WhiteSpaceCollapse, ZIndex,
+    Inset, LengthPercentage, LengthUnit, LineHeight, ListStyleType, Margin, Opacity, Order,
+    Overflow, Padding, PointerEvents, Position, Radius, Size, Spacing, TextAlign,
+    TextDecorationLine, TextWrapMode, TimingFunction, Transform, TransitionProperty, Visibility,
+    WhiteSpaceCollapse, ZIndex,
 };
 
 fn assert_round_trip<T>(css: &str)
@@ -231,4 +232,27 @@ fn invalid_seed_values_are_rejected() {
     assert!("perspective(20px)".parse::<Transform>().is_err());
     assert_eq!("120%".parse::<Opacity>().unwrap().value(), 1.0);
     assert_eq!("-0.5".parse::<Opacity>().unwrap().value(), 0.0);
+}
+
+#[test]
+fn absolute_css_length_units_round_trip_and_resolve() {
+    let cases = [
+        ("1in", LengthUnit::In, 96.0),
+        ("2.54cm", LengthUnit::Cm, 96.0),
+        ("25.4mm", LengthUnit::Mm, 96.0),
+        ("101.6q", LengthUnit::Q, 96.0),
+        ("72pt", LengthUnit::Pt, 96.0),
+        ("6pc", LengthUnit::Pc, 96.0),
+    ];
+    for (source, unit, expected_px) in cases {
+        let LengthPercentage::Length(length) = source
+            .parse::<LengthPercentage>()
+            .expect("absolute CSS length")
+        else {
+            panic!("expected a length value for {source}");
+        };
+        assert_eq!(length.unit, unit);
+        assert!((unit.to_px(length.value, 16.0, 16.0) - expected_px).abs() < 0.001);
+        assert_eq!(length.to_string(), source);
+    }
 }

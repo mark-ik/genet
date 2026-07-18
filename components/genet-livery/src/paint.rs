@@ -730,11 +730,7 @@ fn transform_spec(style: &ComputedValues, fragment: &Fragment) -> Option<Transfo
 }
 
 fn transform_length(length: Length, em: f32) -> f32 {
-    match length.unit {
-        LengthUnit::Px => length.value,
-        LengthUnit::Em => length.value * em,
-        LengthUnit::Rem => length.value * 16.0,
-    }
+    length.unit.to_px(length.value, em, 16.0)
 }
 
 fn descendant_clip(
@@ -1140,11 +1136,7 @@ fn emit_background_image(list: &mut LiveryPaintList, style: &ComputedValues, fra
 fn resolve_length_percentage(value: LengthPercentage, basis: f32, em: f32) -> f32 {
     match value {
         LengthPercentage::Zero => 0.0,
-        LengthPercentage::Length(length) => match length.unit {
-            LengthUnit::Px => length.value,
-            LengthUnit::Em => length.value * em,
-            LengthUnit::Rem => length.value * 16.0,
-        },
+        LengthPercentage::Length(length) => length.unit.to_px(length.value, em, 16.0),
         LengthPercentage::Percentage(value) => basis * value,
         LengthPercentage::Calc(calc) => {
             calc.percentage * basis + calc.px + calc.em * em + calc.rem * 16.0
@@ -1173,14 +1165,7 @@ fn emit_shadow(list: &mut LiveryPaintList, style: &ComputedValues, fragment: &Fr
         return;
     };
     let em = used_font_size(style);
-    let length = |value: Length| {
-        value.value
-            * match value.unit {
-                LengthUnit::Px => 1.0,
-                LengthUnit::Em => em,
-                LengthUnit::Rem => 16.0,
-            }
-    };
+    let length = |value: Length| value.unit.to_px(value.value, em, 16.0);
     list.commands.push(PaintCmd::DrawShadow(ShadowItem {
         placement: CommonPlacement::new(bounds(fragment)),
         box_bounds: bounds(fragment),
