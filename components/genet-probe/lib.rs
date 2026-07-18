@@ -49,15 +49,21 @@ pub enum Match {
     Role(String),
 }
 
-/// An element selector: a [`Match`] and optional text. The text (a substring)
-/// matches either the element's own child text (a tab's `<div>Links</div>`) or
-/// its `aria-label` (a graph-canvas node button, which carries its name there
-/// rather than as text) — so one selector spans both the text-labelled and the
-/// aria-labelled widgets without the caller knowing which a component used.
+/// An element selector: a [`Match`] plus optional filters, all AND-ed. The text
+/// (a substring) matches either the element's own child text (a tab's
+/// `<div>Links</div>`) or its `aria-label` (a graph-canvas node button, which
+/// carries its name there rather than as text) — so one selector spans both the
+/// text-labelled and the aria-labelled widgets. The attribute filter matches a
+/// named attribute's value: for a target whose visible label is not unique (two
+/// graph nodes both titled "Example Domain"), the app puts a stable key in a
+/// `data-*` attribute and the driver selects on it. Both filters are the same
+/// principle — a target is only findable through identity the DOM carries.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Selector {
     pub matcher: Match,
     pub text: Option<String>,
+    /// `(name, value-substring)`: the element's `name` attribute must contain it.
+    pub attr: Option<(String, String)>,
 }
 
 impl Selector {
@@ -66,6 +72,7 @@ impl Selector {
         Self {
             matcher: Match::Class(class.into()),
             text: None,
+            attr: None,
         }
     }
 
@@ -74,12 +81,21 @@ impl Selector {
         Self {
             matcher: Match::Role(role.into()),
             text: None,
+            attr: None,
         }
     }
 
     /// Narrow to elements whose child text or `aria-label` contains `text`.
     pub fn containing(mut self, text: impl Into<String>) -> Self {
         self.text = Some(text.into());
+        self
+    }
+
+    /// Narrow to elements whose `name` attribute value contains `value` — for
+    /// targeting by a stable key the DOM carries (e.g. `data-key`) rather than by
+    /// a visible label that may not be unique.
+    pub fn with_attr(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.attr = Some((name.into(), value.into()));
         self
     }
 }
@@ -119,13 +135,18 @@ fn matches(dom: &ScriptedDom, node: NodeId, sel: &Selector) -> bool {
     if !by_kind {
         return false;
     }
-    match &sel.text {
+    let text_ok = match &sel.text {
         None => true,
         Some(t) => {
             child_text(dom, node).contains(t.as_str())
                 || attr(dom, node, "aria-label").is_some_and(|l| l.contains(t.as_str()))
         }
-    }
+    };
+    let attr_ok = match &sel.attr {
+        None => true,
+        Some((name, value)) => attr(dom, node, name).is_some_and(|a| a.contains(value.as_str())),
+    };
+    text_ok && attr_ok
 }
 
 /// Every matching element in pre-order (document order). The caller takes the
@@ -210,16 +231,27 @@ mod tests {
             dom.append_child(tab, t);
             dom.append_child(root, tab);
         }
-        // A node button labelled only by aria-label (no child text).
-        let node = dom.create_element(qual("button"));
-        dom.set_attribute(node, qual("class"), "graph-canvas-swatch-node");
-        dom.set_attribute(node, qual("aria-label"), "example.com");
-        dom.set_attribute(
-            node,
-            qual("style"),
-            "position:absolute;left:200px;top:40px;width:20px;height:20px;",
-        );
-        dom.append_child(root, node);
+        // Two node buttons sharing a display label ("Example Domain"), each with
+        // a unique `data-key` (its url) — the ambiguous-label case that forces
+        // attribute targeting.
+        for (i, url) in ["https://example.com/", "https://example.org/"]
+            .iter()
+            .enumerate()
+        {
+            let node = dom.create_element(qual("button"));
+            dom.set_attribute(node, qual("class"), "graph-canvas-swatch-node");
+            dom.set_attribute(node, qual("aria-label"), "Example Domain");
+            dom.set_attribute(node, qual("data-key"), url);
+            dom.set_attribute(
+                node,
+                qual("style"),
+                &format!(
+                    "position:absolute;left:{}px;top:40px;width:20px;height:20px;",
+                    200 + i * 30
+                ),
+            );
+            dom.append_child(root, node);
+        }
         dom
     }
 
@@ -245,16 +277,32 @@ mod tests {
     }
 
     #[test]
-    fn resolves_an_aria_labelled_node_the_same_way() {
+    fn resolves_an_aria_labelled_node_by_its_shared_label() {
         let dom = strip_dom();
         let s = surfaces(&dom);
+        // Both nodes share this label; the resolver returns the first in order.
         let hit = resolve(
             &s,
-            &Selector::class("graph-canvas-swatch-node").containing("example.com"),
+            &Selector::class("graph-canvas-swatch-node").containing("Example Domain"),
         )
         .expect("the aria-labelled node must resolve by the same selector shape");
-        // left 200..220 centre 210 + 500 = 710; top 40..60 centre 50 + 10 = 60.
+        // First node: left 200..220 centre 210 + 500 = 710; top 40..60 centre 50 + 10 = 60.
         assert_eq!(hit.point, (710.0, 60.0));
+    }
+
+    #[test]
+    fn an_attribute_selector_disambiguates_a_shared_label() {
+        let dom = strip_dom();
+        let s = surfaces(&dom);
+        // The two nodes share a label; only their `data-key` (url) tells them
+        // apart. Selecting on it resolves the SECOND node, not the first.
+        let hit = resolve(
+            &s,
+            &Selector::class("graph-canvas-swatch-node").with_attr("data-key", "example.org"),
+        )
+        .expect("the org node must resolve by its data-key");
+        // Second node: left 230..250 centre 240 + 500 = 740.
+        assert_eq!(hit.point.0, 740.0);
     }
 
     #[test]
