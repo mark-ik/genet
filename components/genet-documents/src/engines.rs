@@ -356,6 +356,14 @@ impl DocumentSession<Scene> for LiveryDocumentSession {
         self.doc.settled()
     }
 
+    /// The structural report through the trait, off the Livery document's own
+    /// DOM — the same read the static lane serves, so a viewer-pinned livery
+    /// session inspects (and a11y-projects) instead of answering "none for
+    /// this lane".
+    fn inspect(&self) -> Option<inker::ContentReport> {
+        Some(genet_render::content_report(self.doc.dom()))
+    }
+
     fn as_any(&mut self) -> &mut dyn Any {
         self
     }
@@ -742,6 +750,28 @@ mod tests {
         assert_eq!(concrete.document().text_system().shape_count(), shape_count);
         assert!(!session.scroll_by(0.0, 100.0));
         assert_eq!(session.click_at(20.0, 20.0), SessionClick::Miss);
+    }
+
+    /// The livery lane's structural report through the trait — the same
+    /// contract the static lane serves, so a viewer override to livery keeps
+    /// the Inspector/a11y read instead of degrading to "none for this lane".
+    #[cfg(feature = "livery")]
+    #[test]
+    fn livery_session_reports_structure_through_the_trait() {
+        let engine = LiverySessionEngine::new(NoFetch);
+        let request = SessionSpawnRequest::new("https://example.test/")
+            .with_body(
+                "<html><head><title>The Page</title></head>\
+                 <body><h1>Heading</h1><a href=\"/next\">next</a></body></html>",
+            )
+            .with_viewport(640, 480);
+        let session = engine.spawn(&request).expect("livery lane spawns");
+        let report = session
+            .inspect()
+            .expect("the livery lane has a structural read");
+        assert_eq!(report.title.as_deref(), Some("The Page"));
+        assert_eq!(report.headings, vec!["Heading"]);
+        assert_eq!(report.links, vec!["/next"]);
     }
 
     #[cfg(feature = "livery")]
