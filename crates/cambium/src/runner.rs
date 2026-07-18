@@ -55,8 +55,14 @@ where
     view: V,
     view_state: V::ViewState,
     /// The retained root element produced by the current `view`. Its `node`
-    /// stays attached under the document root for the tree's lifetime.
+    /// stays attached under [`mount`](Self::mount) for the tree's lifetime.
     root: GenetElement,
+    /// The node the tree's root attaches under. The document root for an
+    /// ordinary single-tree/N-doms projection ([`build`](Self::build)); a
+    /// **window-root element** for a forest-dom projection
+    /// ([`build_at`](Self::build_at)), so N windows share one document as
+    /// sibling subtrees and a cross-window `move_before` stays intra-document.
+    mount: NodeId,
     /// The currently focused node, if any. A click sets this to the nearest
     /// focusable (key-handler-bearing) ancestor of the click target, or clears
     /// it to `None` when the click lands outside any focusable element.
@@ -84,9 +90,25 @@ where
     V: View<State, Action, GenetCtx, Element = GenetElement>,
 {
     /// Build the initial tree from `state` and attach its root under the
-    /// document root of `dom`.
+    /// document root of `dom` (the ordinary single-tree / N-doms path).
     pub(crate) fn build(
         dom: DomHandle,
+        logic: &mut impl FnMut(&State) -> V,
+        state: &mut State,
+    ) -> Self {
+        let doc_root = dom.borrow().document();
+        Self::build_at(dom, doc_root, logic, state)
+    }
+
+    /// Build the initial tree and attach its root under `mount` — the
+    /// **forest-dom** path (F1: a runner tree mounts at a node, not the
+    /// document root), so several projections can share one document as
+    /// sibling window-root subtrees. `build` is the `mount == document()`
+    /// case. The retained root, rebuild, and teardown all stay scoped to
+    /// `mount`, so a mutation or teardown in one window never reaches another.
+    pub(crate) fn build_at(
+        dom: DomHandle,
+        mount: NodeId,
         logic: &mut impl FnMut(&State) -> V,
         state: &mut State,
     ) -> Self {
@@ -94,9 +116,8 @@ where
         let view = logic(state);
         let (root, view_state) = view.build(&mut ctx, state);
 
-        // Attach the produced root under the document root (append).
-        let doc_root = dom.borrow().document();
-        dom.borrow_mut().insert_before(doc_root, root.node, None);
+        // Attach the produced root under the mount node (append).
+        dom.borrow_mut().insert_before(mount, root.node, None);
         let focus = ctx
             .take_focus_request()
             .filter(|&node| dom.borrow().is_live(node));
@@ -107,11 +128,18 @@ where
             view,
             view_state,
             root,
+            mount,
             focus,
             pointer_capture: None,
             last_default_prevented: false,
             phantom: PhantomData,
         }
+    }
+
+    /// The node this tree's root attaches under (its window-root, or the
+    /// document root for a non-forest tree).
+    pub(crate) fn mount(&self) -> NodeId {
+        self.mount
     }
 
     /// Re-run the logic against the current state and diff the produced view
@@ -134,15 +162,17 @@ where
             view_state,
             root,
             dom,
+            mount,
             ..
         } = self;
 
         let mut_ref = GenetElementMut {
             node: &mut root.node,
             dom: dom.clone(),
-            // The root is attached under the document, so a type-changing
-            // `AnyView` root can swap its node there via `replace_inner`.
-            parent: Some(dom.borrow().document()),
+            // The root is attached under `mount` (the document root, or a
+            // window-root in the forest dom), so a type-changing `AnyView`
+            // root can swap its node there via `replace_inner`.
+            parent: Some(*mount),
         };
         next.rebuild(view, view_state, ctx, mut_ref, state);
 
@@ -193,12 +223,13 @@ where
             view_state,
             root,
             dom,
+            mount,
             ..
         } = &mut self;
         let mut_ref = GenetElementMut {
             node: &mut root.node,
             dom: dom.clone(),
-            parent: Some(dom.borrow().document()),
+            parent: Some(*mount),
         };
         view.teardown(view_state, ctx, mut_ref);
         let root_node = root.node;

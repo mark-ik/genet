@@ -21,17 +21,33 @@
 //! (`portable.rs`'s ordering caveat). Hosts arrange tear-out source windows
 //! before targets, or accept the safe fresh-build degradation.
 //!
-//! At this step each projection still owns a distinct `ScriptedDom` (N doms):
-//! per-tree nursery draining confines parked elements to their own dom, so a
-//! cross-**window** move degrades to fresh-build until the forest dom (design
-//! step 3) makes every window a subtree of one document — at which point
-//! same-document `move_before` covers cross-window moves too.
+//! Two topologies, one runner API:
+//!
+//! - [`push_projection`](GenetMultiRunner::push_projection) — **N doms**: each
+//!   projection owns a distinct `ScriptedDom`, building under its document root.
+//!   Per-tree nursery draining confines parked elements to their own dom, so a
+//!   cross-**window** `PortableKeyed` move degrades to fresh-build (correct, no
+//!   leak; the tile's DOM node/scroll/focus do not survive).
+//! - [`push_forest_projection`](GenetMultiRunner::push_forest_projection) —
+//!   the **forest dom** (design step 3): every projection shares ONE document
+//!   and builds under its own **window-root** element (a runner tree that
+//!   mounts at a node, not the document root — genet-layout's `ForestDom` /
+//!   `layout_subtree` lay each window-root out at its own size). Because the
+//!   windows are subtrees of one document, a cross-window `move_before` is
+//!   intra-document, so a torn-out tile keeps its DOM node, scroll, focus, and
+//!   animation. This is the substrate genet-layout's forest-dom spike de-risked.
 
 use genet_scripted_dom::NodeId;
+use layout_dom_api::{LayoutDom, LayoutDomMut};
 use meristem::View;
 
 use crate::runner::RunnerTree;
 use crate::{DomHandle, GenetCtx, GenetElement, KeyEvent, PointerClick, PointerEvent, WheelEvent};
+
+/// The class marking a forest-dom window-root element (matches
+/// `genet_layout::WINDOW_ROOT_CLASS`, so a host can find window roots the
+/// same way on the layout side).
+pub const WINDOW_ROOT_CLASS: &str = "window-root";
 
 /// A stable handle to one projection (one OS window's tree). Handles stay
 /// valid across removals of *other* projections; slots are not reused, so a
@@ -100,6 +116,40 @@ where
         let id = ProjectionId(self.projections.len());
         self.projections.push(Some(Projection { logic, tree }));
         id
+    }
+
+    /// Add a **forest-dom** projection: all forest projections share the one
+    /// `dom`, and this mints a window-root element under its document for the
+    /// projection to build under. So N windows are sibling subtrees of ONE
+    /// document, and a `PortableKeyed` tile dragged between windows moves by an
+    /// intra-document `move_before` (identity, scroll, focus preserved) instead
+    /// of degrading to fresh-build — the payoff the module doc's "until the
+    /// forest dom" note describes, now available. Mixing forest and N-doms
+    /// projections in one runner is allowed but pointless; pick one per runner.
+    ///
+    /// The host lays out each window from [`window_root`](Self::window_root) at
+    /// its own size via `genet_layout::layout_subtree` / `ForestDom`.
+    pub fn push_forest_projection(&mut self, dom: DomHandle, mut logic: Logic) -> ProjectionId {
+        let window_root = {
+            let mut d = dom.borrow_mut();
+            let doc = d.document();
+            let root = d.create_element(crate::html_qual("div"));
+            d.set_attribute(root, crate::attr_qual("class"), WINDOW_ROOT_CLASS);
+            d.insert_before(doc, root, None);
+            root
+        };
+        let tree = RunnerTree::build_at(dom, window_root, &mut logic, &mut self.state);
+        let id = ProjectionId(self.projections.len());
+        self.projections.push(Some(Projection { logic, tree }));
+        id
+    }
+
+    /// The window-root element projection `id` builds under — the document
+    /// root for a plain [`push_projection`](Self::push_projection), or the
+    /// minted window-root for a [`push_forest_projection`](Self::push_forest_projection).
+    /// The host lays this out as its window's subtree.
+    pub fn window_root(&self, id: ProjectionId) -> Option<NodeId> {
+        self.projection(id).map(|p| p.tree.mount())
     }
 
     /// Remove a projection (a window closing): tear its view tree down and
@@ -346,5 +396,86 @@ where
 
     fn projection(&self, id: ProjectionId) -> Option<&Projection<State, Logic, V, Action>> {
         self.projections.get(id.0).and_then(Option::as_ref)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use genet_scripted_dom::ScriptedDom;
+    use layout_dom_api::{LayoutDom, LayoutDomMut};
+
+    use super::*;
+    use crate::{AnyView, GenetElement, el};
+
+    // Each window's lens shows the shared counter, so both re-read one truth.
+    type V = Box<dyn AnyView<i32, (), GenetCtx, GenetElement>>;
+    fn lens(label: &'static str) -> impl FnMut(&i32) -> V {
+        move |n: &i32| Box::new(el::<_, i32, ()>("div", format!("{label}:{n}")))
+    }
+
+    /// Forest dom: two projections share ONE document as sibling window-root
+    /// subtrees (the substrate that turns a cross-window move intra-document).
+    #[test]
+    fn forest_projections_share_one_document_as_window_root_siblings() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner: GenetMultiRunner<i32, _, V, ()> = GenetMultiRunner::new(0);
+        let a = runner.push_forest_projection(dom.clone(), lens("A"));
+        let b = runner.push_forest_projection(dom.clone(), lens("B"));
+
+        let d = dom.borrow();
+        let doc = d.document();
+        let root_a = runner.window_root(a).unwrap();
+        let root_b = runner.window_root(b).unwrap();
+        assert_ne!(root_a, root_b, "distinct window-roots");
+        // Both window-roots are children of the ONE document (the forest).
+        let children: Vec<_> = d.dom_children(doc).collect();
+        assert!(children.contains(&root_a) && children.contains(&root_b));
+        assert_eq!(children.len(), 2, "exactly the two window-roots under the doc");
+        // Each are class window-root, and each projection's content is under
+        // its OWN window-root, isolated from the other's.
+        assert!(d.all_with_class(doc, WINDOW_ROOT_CLASS).len() == 2);
+        assert!(d.dom_children(root_a).next().is_some(), "A built content under A's root");
+        assert!(d.dom_children(root_b).next().is_some(), "B built content under B's root");
+    }
+
+    /// The N-doms path still gives each projection its own document (the
+    /// `mount == document()` case is unchanged).
+    #[test]
+    fn n_doms_projections_keep_their_own_document_root() {
+        let dom_a: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let dom_b: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner: GenetMultiRunner<i32, _, V, ()> = GenetMultiRunner::new(0);
+        let a = runner.push_projection(dom_a.clone(), lens("A"));
+        let _b = runner.push_projection(dom_b.clone(), lens("B"));
+        // A non-forest projection mounts at its own document root.
+        assert_eq!(runner.window_root(a), Some(dom_a.borrow().document()));
+    }
+
+    /// The one-state contract holds in forest mode: one update, every window
+    /// re-reads the single truth.
+    #[test]
+    fn one_update_refreshes_every_forest_window() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner: GenetMultiRunner<i32, _, V, ()> = GenetMultiRunner::new(0);
+        let a = runner.push_forest_projection(dom.clone(), lens("A"));
+        let b = runner.push_forest_projection(dom.clone(), lens("B"));
+        runner.update(|n| *n = 7);
+        let d = dom.borrow();
+        let text_under = |root: NodeId| -> String {
+            let mut out = String::new();
+            let mut stack: Vec<NodeId> = d.dom_children(root).collect();
+            while let Some(n) = stack.pop() {
+                if let Some(t) = d.text(n) {
+                    out.push_str(t);
+                }
+                stack.extend(d.dom_children(n));
+            }
+            out
+        };
+        assert!(text_under(runner.window_root(a).unwrap()).contains("A:7"));
+        assert!(text_under(runner.window_root(b).unwrap()).contains("B:7"));
     }
 }
