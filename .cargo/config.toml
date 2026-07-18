@@ -18,4 +18,20 @@ paths = [
     "C:/Users/mark_/Code/repos/netfetcher",
     "C:/Users/mark_/Code/crates/boa",
     "C:/Users/mark_/Code/crates/piccolo",
+    "C:/Users/mark_/Code/crates/vano/nova_vm",
 ]
+
+# The LOCAL stylo fork (Code/crates/stylo): carries the subtree-cascade
+# sharing-cache fix (insert_if_possible skips candidates whose traversal
+# parent has no style data - the forest-dom window-root shape). Local dev
+# loop until genet-stylo 0.19.1 publishes; the committed manifest stays on
+# the registry family.
+[patch.crates-io]
+genet-stylo = { path = "C:/Users/mark_/Code/crates/stylo/style" }
+genet-stylo-atoms = { path = "C:/Users/mark_/Code/crates/stylo/stylo_atoms" }
+genet-stylo-dom = { path = "C:/Users/mark_/Code/crates/stylo/stylo_dom" }
+genet-stylo-static-prefs = { path = "C:/Users/mark_/Code/crates/stylo/stylo_static_prefs" }
+genet-stylo-traits = { path = "C:/Users/mark_/Code/crates/stylo/style_traits" }
+stylo_malloc_size_of = { path = "C:/Users/mark_/Code/crates/stylo/malloc_size_of" }
+servo_arc = { path = "C:/Users/mark_/Code/crates/stylo/servo_arc" }
+selectors = { path = "C:/Users/mark_/Code/crates/stylo/selectors" }

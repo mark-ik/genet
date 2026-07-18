@@ -179,6 +179,47 @@ mod tests {
         el
     }
 
+    /// The style-sharing repro (found by merecat's chrome migration,
+    /// 2026-07-18): a subtree-rooted cascade over DENSE SAME-CLASS SIBLING
+    /// runs trips genet-stylo's style-sharing cache — `parent_style_identity`
+    /// unwraps an inheritance parent (`sharing/mod.rs:259`) that an element
+    /// root does not have, a shape upstream never sees because a whole
+    /// document's root is the document, which never enters sharing. The F0
+    /// spike's sparse shape did not trigger the cache; a chrome card's row
+    /// run does. This must NOT panic.
+    #[test]
+    fn subtree_cascade_survives_same_class_sibling_runs() {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let win = dom.create_element(qual("div"));
+        dom.set_attribute(win, qual("class"), "window-root");
+        dom.append_child(root, win);
+        // A card holding a dense run of same-class rows — the sharing
+        // cache's favorite shape (identical class, identical parent).
+        let card = dom.create_element(qual("div"));
+        dom.set_attribute(card, qual("class"), "card");
+        dom.append_child(win, card);
+        let mut rows = Vec::new();
+        for i in 0..12 {
+            let row = dom.create_element(qual("div"));
+            dom.set_attribute(row, qual("class"), "row");
+            let t = dom.create_text(&format!("row {i}"));
+            dom.append_child(row, t);
+            dom.append_child(card, row);
+            rows.push(row);
+        }
+        const ROWS_SHEET: &str =
+            "div { display: block; } .card { width: 300px; } .row { height: 20px; }";
+        let layout = layout_subtree(&dom, win, &[ROWS_SHEET], 400.0, 600.0);
+        let view = SubtreeView::new(&dom, win);
+        for row in rows {
+            assert!(
+                layout.absolute_rect(&view, row).is_some(),
+                "every row lays out under the subtree root"
+            );
+        }
+    }
+
     #[test]
     fn two_window_roots_lay_out_independently_and_survive_a_cross_root_move() {
         let mut dom = ScriptedDom::new();
