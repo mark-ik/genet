@@ -13,8 +13,8 @@ use livery::{
     ComputedValues,
     values::{
         Display, FontFamily as CssFontFamily, FontStyle as CssFontStyle,
-        FontWeight as CssFontWeight, LineHeight as CssLineHeight, Margin, Spacing, TextAlign,
-        TextWrapMode, VerticalAlign,
+        FontWeight as CssFontWeight, LineHeight as CssLineHeight, Margin, Position, Spacing,
+        TextAlign, TextWrapMode, VerticalAlign,
     },
 };
 use paint_list_api::{
@@ -227,6 +227,13 @@ impl TextSystem {
         else {
             return;
         };
+        let mut inline_parent_style = parent_style.clone();
+        if matches!(
+            parent_style.position,
+            Position::Absolute | Position::Fixed
+        ) {
+            inline_parent_style.vertical_align = VerticalAlign::Baseline;
+        }
         let mut group = Vec::new();
         for child in dom.dom_children(parent) {
             if is_inline(dom, styles, child) {
@@ -238,7 +245,7 @@ impl TextSystem {
                     styles,
                     fragments,
                     &group,
-                    (&parent_fragment, parent_style),
+                    (&parent_fragment, &inline_parent_style),
                     parent,
                 );
                 group.clear();
@@ -250,7 +257,7 @@ impl TextSystem {
             styles,
             fragments,
             &group,
-            (&parent_fragment, parent_style),
+            (&parent_fragment, &inline_parent_style),
             parent,
         );
     }
@@ -834,6 +841,7 @@ where
         NodeKind::Text => true,
         NodeKind::Element => styles.get(id).is_some_and(|style| {
             matches!(style.display, Display::Inline | Display::InlineBlock)
+                && !matches!(style.position, Position::Absolute | Position::Fixed)
                 && !(style.display == Display::Inline
                     && dom.dom_children(id).any(|child| {
                         !is_inline(dom, styles, child)

@@ -10,7 +10,8 @@ use livery::{
         GridAutoFlow as CssGridAutoFlow, GridPlacement as CssGridPlacement,
         GridTemplate as CssGridTemplate, GridTrack as CssGridTrack, Inset, Length,
         LengthPercentage as CssLengthPercentage, LineHeight, Margin,
-        Overflow as CssOverflow, Position as CssPosition, Size as CssSize, WhiteSpaceCollapse,
+        Overflow as CssOverflow, Position as CssPosition, Size as CssSize, VerticalAlign,
+        WhiteSpaceCollapse,
     },
 };
 use taffy::{
@@ -393,7 +394,14 @@ where
             NodeKind::Element => {
                 let computed = self.styles.get(id).cloned().unwrap_or_default();
                 let font_size = font_size_px(&computed.font_size, parent_font_size);
-                let children = self.build_children(id, &computed, font_size)?;
+                let mut inline_container_style = computed.clone();
+                if matches!(computed.position, CssPosition::Absolute | CssPosition::Fixed) {
+                    // Once positioned, an inline element establishes a block
+                    // container; its own vertical-align does not offset the
+                    // text inside that container.
+                    inline_container_style.vertical_align = VerticalAlign::Baseline;
+                }
+                let children = self.build_children(id, &inline_container_style, font_size)?;
                 let mut taffy_style = to_taffy_style(&computed, font_size);
                 // An inline box that contains a block box is split around the
                 // block in CSS's anonymous-block construction.  The wrapper's
@@ -714,6 +722,7 @@ where
         NodeKind::Text => true,
         NodeKind::Element => styles.get(id).is_some_and(|style| {
             matches!(style.display, CssDisplay::Inline | CssDisplay::InlineBlock)
+                && !matches!(style.position, CssPosition::Absolute | CssPosition::Fixed)
                 && !(style.display == CssDisplay::Inline
                     && dom.dom_children(id).any(|child| {
                         !is_inline(dom, styles, child)

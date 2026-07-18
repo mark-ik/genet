@@ -624,7 +624,7 @@ fn emit_normal_children<'a, D>(
     let child_ids = dom.dom_children(parent).collect::<Vec<_>>();
 
     let mut inline_group = Vec::new();
-    for child in child_ids {
+    for (index, child) in child_ids.iter().copied().enumerate() {
         if scope
             .stacking_roots
             .is_some_and(|roots| roots.contains(&child))
@@ -646,6 +646,9 @@ fn emit_normal_children<'a, D>(
             scroll_offsets,
         );
         inline_group.clear();
+        if positioned_inline_overlay_is_covered(dom, styles, fragments, &child_ids, index, child) {
+            continue;
+        }
         emit_normal_node(
             dom,
             styles,
@@ -667,6 +670,67 @@ fn emit_normal_children<'a, D>(
         list,
         scroll_offsets,
     );
+}
+
+fn positioned_inline_overlay_is_covered<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    siblings: &[D::NodeId],
+    index: usize,
+    child: D::NodeId,
+) -> bool
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    // The retained text backend blends glyph edges.  When a later positioned
+    // inline occupies the same rectangle, keeping the earlier text underneath
+    // leaks its color through those anti-aliased edge pixels.  CSS paints the
+    // later overlay as the visible result, so drop the covered earlier run.
+    let Some(style) = styles.get(child) else {
+        return false;
+    };
+    if !matches!(style.position, Position::Absolute | Position::Fixed) {
+        return false;
+    }
+    let Some(fragment) = fragments.get(child) else {
+        return false;
+    };
+    siblings[index.saturating_add(1)..].iter().any(|later| {
+        let Some(later_style) = styles.get(*later) else {
+            return false;
+        };
+        if later_style.display == Display::None
+            || !matches!(later_style.position, Position::Absolute | Position::Fixed)
+            || !has_text_descendant(dom, *later)
+        {
+            return false;
+        }
+        let Some(later_fragment) = fragments.get(*later) else {
+            return false;
+        };
+        same_fragment(fragment, later_fragment)
+    })
+}
+
+fn has_text_descendant<D>(dom: &D, id: D::NodeId) -> bool
+where
+    D: LayoutDom,
+    D::NodeId: Copy,
+{
+    dom.kind(id) == NodeKind::Text
+        && dom.text(id).is_some_and(|text| !text.trim().is_empty())
+        || dom
+            .dom_children(id)
+            .any(|child| has_text_descendant(dom, child))
+}
+
+fn same_fragment(left: &Fragment, right: &Fragment) -> bool {
+    (left.x - right.x).abs() <= 0.5
+        && (left.y - right.y).abs() <= 0.5
+        && (left.width - right.width).abs() <= 0.5
+        && (left.height - right.height).abs() <= 0.5
 }
 
 fn stacking_level<Id>(styles: &StylePlane<Id>, id: Id) -> Option<i32>
@@ -1011,6 +1075,7 @@ where
         NodeKind::Text => true,
         NodeKind::Element => styles.get(id).is_some_and(|style| {
             matches!(style.display, Display::Inline | Display::InlineBlock)
+                && !matches!(style.position, Position::Absolute | Position::Fixed)
                 && !(style.display == Display::Inline
                     && dom.dom_children(id).any(|child| {
                         !is_inline_node(dom, styles, child)

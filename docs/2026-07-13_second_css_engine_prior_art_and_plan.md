@@ -679,6 +679,18 @@ background.
 `leading-001.xht` now matches its reference. Table-formatting and
 vertical-align cases remain separate metric or container-model slices.
 
+### 2026-07-17 positioned inline overlay receipt
+
+Absolutely and fixed-positioned inline elements now leave the shared inline
+group before layout and paint, so their text is shaped in the positioned
+container at one containing-block origin. A later same-rectangle positioned
+text sibling suppresses the covered earlier run in the retained paint walk;
+this keeps anti-aliased glyph edges from leaking the earlier color through the
+overlay.
+
+`vertical-align-sub-001.xht` and `vertical-align-super-001.xht` now match their
+references. Baseline and inline vertical-align cases remain open.
+
 ## The destination, named
 
 *(Amended 2026-07-14.)* Livery's document profile grinds toward full browser
