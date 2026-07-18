@@ -176,6 +176,11 @@ impl Renderer {
                 session.set_image_resource(url, bytes);
             }
         }
+        for url in livery_font_urls(&sheets) {
+            if let Some(bytes) = image_loader.load(&url) {
+                session.set_font_resource(url, bytes);
+            }
+        }
         let list = session
             .frame(width, height)
             .expect("Livery WPT reftest layout");
@@ -281,6 +286,50 @@ fn livery_image_urls(stylesheets: &[String]) -> Vec<String> {
     urls
 }
 
+fn livery_font_urls(stylesheets: &[String]) -> Vec<String> {
+    let mut urls = Vec::new();
+    for stylesheet in stylesheets {
+        let lower = stylesheet.to_ascii_lowercase();
+        let mut cursor = 0;
+        while let Some(face_offset) = lower[cursor..].find("@font-face") {
+            let face_start = cursor + face_offset;
+            let Some(open) = stylesheet[face_start..].find('{') else {
+                break;
+            };
+            let body_start = face_start + open + 1;
+            let Some(close) = stylesheet[body_start..].find('}') else {
+                break;
+            };
+            let body_end = body_start + close;
+            let body = &stylesheet[body_start..body_end];
+            let body_lower = body.to_ascii_lowercase();
+            let mut body_cursor = 0;
+            while let Some(offset) = body_lower[body_cursor..].find("url(") {
+                let start = body_cursor + offset + 4;
+                let Some(close) = body[start..].find(')') else {
+                    break;
+                };
+                let raw = body[start..start + close].trim();
+                let url = raw
+                    .strip_prefix('"')
+                    .and_then(|value| value.strip_suffix('"'))
+                    .or_else(|| {
+                        raw.strip_prefix('\'')
+                            .and_then(|value| value.strip_suffix('\''))
+                    })
+                    .unwrap_or(raw)
+                    .trim();
+                if !url.is_empty() && !urls.iter().any(|seen| seen == url) {
+                    urls.push(url.to_owned());
+                }
+                body_cursor = start + close + 1;
+            }
+            cursor = body_end + 1;
+        }
+    }
+    urls
+}
+
 fn livery_dom_image_urls(document: &StaticDocument) -> Vec<String> {
     let mut urls = Vec::new();
     let mut stack = vec![document.document()];
@@ -307,7 +356,7 @@ fn livery_dom_image_urls(document: &StaticDocument) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{isolate_image_keys, livery_dom_image_urls, livery_image_urls};
+    use super::{isolate_image_keys, livery_dom_image_urls, livery_font_urls, livery_image_urls};
     use genet_static_dom::StaticDocument;
     use paint_list_api::{
         AlphaType, ColorF, CommonPlacement, DeviceIntSize, EngineId, IdNamespace, ImageItem,
@@ -336,6 +385,15 @@ mod tests {
             livery_dom_image_urls(&document),
             vec!["a.png".to_owned(), "b.png".to_owned()]
         );
+    }
+
+    #[test]
+    fn livery_font_urls_collects_font_face_sources() {
+        let sheets = vec![
+            "@font-face { font-family: Ahem; src: url('/fonts/Ahem.ttf'); }".to_owned(),
+            ".x { background: url(other.png); }".to_owned(),
+        ];
+        assert_eq!(livery_font_urls(&sheets), vec!["/fonts/Ahem.ttf".to_owned()]);
     }
 
     #[test]

@@ -583,8 +583,24 @@ regression.
 
 The focused runner now passes `line-height-129.xht` alongside
 `line-height-126.xht` and `line-box-height-002.xht`. `line-height-127.xht` and
-`line-height-128.xht` remain Ahem/font-metric cases; their failures are still
-font-resource limitations rather than margin-box geometry.
+`line-height-128.xht` remained open at this receipt; the later host-font
+receipt below closes `line-height-128.xht` and leaves the table-formatting case
+explicit.
+
+### 2026-07-17 host-font and shaped max-content receipt
+
+The Livery document now accepts host-resolved font bytes through
+`set_font_resource`; the WPT bridge extracts `@font-face` URL sources from
+the already-loaded stylesheet text and feeds local bytes into Parley before
+the first frame. The inline-group max-content probe also stops reusing the
+preliminary scalar text estimate, so a shaped intrinsic width can reach the
+float's shrink-to-fit calculation.
+
+The focused runner now passes both `line-height-128.xht` and the prior
+`line-height-126.xht`, `line-height-129.xht`, and `line-box-height-002.xht`
+probes. `line-height-127.xht` remains red because its table/table-row/table-cell
+formatting context is still outside Livery's bounded block mapping; this is a
+container-model gap, not a missing Ahem resource.
 
 ## The destination, named
 

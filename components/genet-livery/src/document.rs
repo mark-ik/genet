@@ -396,6 +396,13 @@ where
         self.cached = None;
     }
 
+    /// Supply host-resolved font bytes for a non-data URL. The host owns URL
+    /// resolution and fetching; Parley owns font registration and shaping.
+    pub fn set_font_resource(&mut self, _url: impl Into<String>, bytes: Vec<u8>) {
+        self.text.register_font_bytes(bytes);
+        self.cached = None;
+    }
+
     pub fn frame(&mut self, width: u32, height: u32) -> Result<LiveryPaintList, LayoutError> {
         if let Some((viewport, list)) = &self.cached
             && *viewport == (width, height)

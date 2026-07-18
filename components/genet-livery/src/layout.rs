@@ -285,7 +285,11 @@ where
                 let available_width = match available.width {
                     AvailableSpace::Definite(width) => width,
                     AvailableSpace::MinContent => 0.0,
-                    AvailableSpace::MaxContent => context.width,
+                    // The preliminary pass supplies a scalar estimate in
+                    // `context.width`; using it for max-content would freeze
+                    // the second pass at that estimate instead of asking
+                    // Parley for the shaped intrinsic width.
+                    AvailableSpace::MaxContent => viewport_width,
                 };
                 let measured = text.measure_inline_group(
                     dom,
@@ -298,9 +302,7 @@ where
                 let (measured_width, measured_height) =
                     measured.unwrap_or((context.width, context.height));
                 Size {
-                    width: known
-                        .width
-                        .unwrap_or(measured_width.min(available_width.max(0.0))),
+                    width: known.width.unwrap_or(measured_width.min(available_width.max(0.0))),
                     height: known.height.unwrap_or(measured_height),
                 }
             },

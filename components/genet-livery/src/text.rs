@@ -69,6 +69,12 @@ impl TextSystem {
         self.fonts.len()
     }
 
+    pub(crate) fn register_font_bytes(&mut self, bytes: Vec<u8>) {
+        self.font_context
+            .collection
+            .register_fonts(parley::fontique::Blob::new(Arc::new(bytes)), None);
+    }
+
     /// Measure one consecutive inline group with the same collection, styles,
     /// atomic boxes, and line breaking used by paint.
     pub(crate) fn measure_inline_group<D>(
