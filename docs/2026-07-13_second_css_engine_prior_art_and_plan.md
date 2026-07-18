@@ -535,6 +535,17 @@ green. The rebuilt Livery runner passes `line-height-002`, `004`, `005`, and
 font-metric, inline-box, and line-height layout seams rather than shorthand
 parse errors.
 
+### 2026-07-17 empty-inline line-box receipt
+
+Empty inline elements now contribute a zero-width, non-painted inline atom
+whose height is their computed `line-height`. Borders, padding, and margins
+continue to use the existing edge atoms, while nested inline content prevents
+the synthetic atom from duplicating a real child. The focused `genet-livery`
+package wall remains green. `empty-inline-002.xht` now passes through the
+rebuilt Livery runner; `empty-inline-003.xht` reaches a zero-percent image
+diff but still fails the exact-match threshold, leaving its surrounding line
+box and metric reconciliation open.
+
 ## The destination, named
 
 *(Amended 2026-07-14.)* Livery's document profile grinds toward full browser

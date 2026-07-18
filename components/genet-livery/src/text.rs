@@ -728,7 +728,9 @@ where
                     return;
                 }
                 let ancestor_owners = self.owners.clone();
+                let text_start = self.text.len();
                 self.push_edge(id, &style, &ancestor_owners, true);
+                let content_start = self.inline_boxes.len();
                 self.owners.push(id);
                 for child in self.dom.dom_children(id) {
                     if is_inline(self.dom, self.styles, child) {
@@ -736,7 +738,11 @@ where
                     }
                 }
                 self.owners.pop();
+                let has_inline_content = self.inline_boxes.len() > content_start;
                 self.push_edge(id, &style, &ancestor_owners, false);
+                if self.text.len() == text_start && !has_inline_content {
+                    self.push_empty_line_box(id, &style, &ancestor_owners);
+                }
             },
             _ => {},
         }
@@ -785,6 +791,31 @@ where
         if !start {
             push(margin, false);
         }
+    }
+
+    fn push_empty_line_box(
+        &mut self,
+        source: D::NodeId,
+        style: &ComputedValues,
+        owners: &[D::NodeId],
+    ) {
+        let font_size = super::paint::used_font_size(style);
+        let height = super::layout::line_height_px(&style.line_height, font_size);
+        if height <= 0.0 {
+            return;
+        }
+        self.inline_boxes.push(InlineAtom {
+            source,
+            owners: owners.to_vec(),
+            index: self.text.len(),
+            fragment: Fragment {
+                width: 0.0,
+                height,
+                ..Fragment::default()
+            },
+            edge: false,
+            paint: false,
+        });
     }
 }
 
