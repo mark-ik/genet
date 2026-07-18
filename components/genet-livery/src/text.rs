@@ -1017,6 +1017,39 @@ fn text_alignment(style: TextAlign) -> Alignment {
     }
 }
 
+fn vertical_align_shift(
+    value: VerticalAlign,
+    font_size: f32,
+    line_height: f32,
+    metrics: &parley::LineMetrics,
+    item_y: f32,
+    item_height: f32,
+    is_inline_box: bool,
+) -> f32 {
+    match value {
+        VerticalAlign::Baseline => 0.0,
+        VerticalAlign::Sub => font_size * 0.2,
+        VerticalAlign::Super => -font_size * 0.4,
+        VerticalAlign::Length(value) => {
+            -super::layout::signed_length_percentage_px(value, font_size, line_height)
+        },
+        VerticalAlign::Middle if is_inline_box => {
+            metrics.baseline + font_size * 0.5 - (item_y + item_height * 0.5)
+        },
+        VerticalAlign::Top | VerticalAlign::TextTop if is_inline_box => {
+            metrics.block_min_coord - item_y
+        },
+        VerticalAlign::Bottom | VerticalAlign::TextBottom if is_inline_box => {
+            metrics.block_max_coord - (item_y + item_height)
+        },
+        VerticalAlign::Middle
+        | VerticalAlign::Top
+        | VerticalAlign::TextTop
+        | VerticalAlign::Bottom
+        | VerticalAlign::TextBottom => 0.0,
+    }
+}
+
 fn spacing_px(spacing: Spacing) -> Option<f32> {
     match spacing {
         Spacing::Normal => None,
