@@ -101,6 +101,21 @@ fn emit(
 /// Empty `styles` renders the plain field (unstyled text nodes); non-empty paints
 /// the highlight classes. This is the one body behind the plain and styled fields.
 pub(crate) fn field_children(input: &TextInput, styles: &[StyleRange]) -> Vec<FieldChild> {
+    field_children_impl(input, styles, false)
+}
+
+/// The class on the in-flow caret span a [`caret_text_field`] renders, for the
+/// host's stylesheet to theme (colour, weight — e.g. `.field-caret { color: … }`).
+pub const FIELD_CARET_CLASS: &str = "field-caret";
+
+/// The one field body, with or without a rendered caret. `show_caret` splices a
+/// `<span class="field-caret">▍</span>` at the caret split, *after* the preedit
+/// (composition text lands before the caret, matching platform IME fields).
+fn field_children_impl(
+    input: &TextInput,
+    styles: &[StyleRange],
+    show_caret: bool,
+) -> Vec<FieldChild> {
     let text = input.text();
     let (before, preedit, _after) = input.render_parts();
     let at = before.len();
@@ -112,6 +127,11 @@ pub(crate) fn field_children(input: &TextInput, styles: &[StyleRange]) -> Vec<Fi
         kids.push(Box::new(
             el::<_, TextInput, ()>("span", preedit)
                 .attr("style", "text-decoration-line: underline;"),
+        ));
+    }
+    if show_caret {
+        kids.push(Box::new(
+            el::<_, TextInput, ()>("span", "▍").attr("class", FIELD_CARET_CLASS),
         ));
     }
     emit(&mut kids, text, &runs, at, text.len());
@@ -145,6 +165,24 @@ pub fn styled_textarea(input: &TextInput, styles: &[StyleRange]) -> crate::TextF
 pub fn styled_text_field(input: &TextInput, styles: &[StyleRange]) -> crate::TextField {
     on_key(
         el::<_, TextInput, ()>("input", field_children(input, styles)),
+        edit as fn(&mut TextInput, KeyEvent),
+    )
+}
+
+/// A single-line field that renders its own caret: the `▍` glyph as an in-flow
+/// `<span class="field-caret">` at the caret split (after any preedit), themed by
+/// the host through [`FIELD_CARET_CLASS`]. For hosts that paint the whole scene
+/// from the DOM (no overlay layer) — merecat's omnibar is the first consumer.
+///
+/// Trade-off vs [`text_field`](crate::text_field): the glyph is in flow, so the
+/// runs no longer concatenate to exactly the committed text and a `caret_rect`
+/// overlay would land a glyph-width off past the split. A host draws the caret
+/// one way or the other — pick this constructor *instead of* an overlay, not
+/// alongside one. Focus-conditional display is the host's call too: build with
+/// this constructor when focused, [`styled_text_field`] when not.
+pub fn caret_text_field(input: &TextInput, styles: &[StyleRange]) -> crate::TextField {
+    on_key(
+        el::<_, TextInput, ()>("input", field_children_impl(input, styles, true)),
         edit as fn(&mut TextInput, KeyEvent),
     )
 }
@@ -189,5 +227,42 @@ mod tests {
         }];
         // end past len is filtered, leaving a plain run.
         assert_eq!(flatten(4, &styles), vec![(0..4, None)]);
+    }
+
+    /// The caret field mounts with the `▍` span *at the split*: text-before,
+    /// `<span class="field-caret">`, text-after — the in-flow caret a
+    /// scene-painting host renders instead of an overlay.
+    #[test]
+    fn caret_field_renders_the_caret_span_at_the_split() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use genet_scripted_dom::ScriptedDom;
+        use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
+
+        use crate::runner::GenetAppRunner;
+        use crate::{DomHandle, TextField};
+
+        let mut input = TextInput::default();
+        input.insert_str("abcd");
+        input.set_caret_byte(2, false);
+
+        fn view(s: &TextInput) -> TextField {
+            super::caret_text_field(s, &[])
+        }
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let runner = GenetAppRunner::new(dom.clone(), view, input);
+
+        let dom = runner.dom();
+        let dom = dom.borrow();
+        let kids: Vec<_> = dom.dom_children(runner.root()).collect();
+        assert_eq!(kids.len(), 3, "text-before, caret span, text-after");
+        assert_eq!(dom.text(kids[0]), Some("ab"));
+        assert_eq!(dom.kind(kids[1]), NodeKind::Element);
+        assert_eq!(
+            dom.attribute(kids[1], &Namespace::from(""), &LocalName::from("class")),
+            Some(super::FIELD_CARET_CLASS)
+        );
+        assert_eq!(dom.text(kids[2]), Some("cd"));
     }
 }

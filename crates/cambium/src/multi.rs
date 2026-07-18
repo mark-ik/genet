@@ -405,7 +405,7 @@ mod tests {
     use std::rc::Rc;
 
     use genet_scripted_dom::ScriptedDom;
-    use layout_dom_api::{LayoutDom, LayoutDomMut};
+    use layout_dom_api::LayoutDom;
 
     use super::*;
     use crate::{AnyView, GenetElement, el};

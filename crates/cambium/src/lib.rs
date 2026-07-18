@@ -139,7 +139,10 @@ pub use selection_bar::{
 pub use slider::{Slider, slider};
 pub use splice::GenetChildrenSplice;
 pub use sprigging::{GraphCanvas, GraphViewport, GridColumn, GridSpec};
-pub use styled_field::{FieldChild, StyleRange, styled_text_field, styled_textarea};
+pub use styled_field::{
+    FIELD_CARET_CLASS, FieldChild, StyleRange, caret_text_field, styled_text_field,
+    styled_textarea,
+};
 pub use summary_body::{SummaryBody, summary_body};
 // Per-tag element-view helpers: `div`, `span`, `p`, `input`, `label`, `a`,
 // `h1`/`h2`/`h3`, `ul`/`ol`/`li`. (No `button` here — `controls::button` is the
