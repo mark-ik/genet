@@ -309,6 +309,9 @@ pub trait AutomatableExt: Automatable {
 
 impl<A: Automatable> AutomatableExt for A {}
 
+mod scenario;
+pub use scenario::{Cmp, Driveable, Outcome, Progress, Scenario};
+
 #[cfg(test)]
 mod tests {
     use super::*;
