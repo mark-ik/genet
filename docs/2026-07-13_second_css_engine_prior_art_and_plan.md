@@ -598,9 +598,25 @@ float's shrink-to-fit calculation.
 
 The focused runner now passes both `line-height-128.xht` and the prior
 `line-height-126.xht`, `line-height-129.xht`, and `line-box-height-002.xht`
-probes. `line-height-127.xht` remains red because its table/table-row/table-cell
-formatting context is still outside Livery's bounded block mapping; this is a
-container-model gap, not a missing Ahem resource.
+probes. At this receipt, `line-height-127.xht` remained red because its
+table/table-row/table-cell formatting context was still outside Livery's
+bounded block mapping; this was a container-model gap, not a missing Ahem
+resource.
+
+### 2026-07-17 bounded table-flow receipt
+
+The Cambium UA sheet now supplies the table display defaults needed by the
+CSS2 line-box fixtures. Livery's layout adapter maps `table` and `table-row`
+through a bounded row-flex fallback, with the table itself taking the
+shrink-to-fit float path; row groups and cells retain their block fallback
+until a full table track model is warranted. Zero-line-height inline replaced
+groups now measure the loaded font's Parley strut center against the replaced
+margin box, while top/bottom alignment can minimize the line box to zero.
+
+The focused WPT wall passes `line-height-126.xht`, `line-height-127.xht`,
+`line-height-128.xht`, `line-height-129.xht`, and `line-box-height-002.xht`.
+The table mapping is intentionally a CSS2 probe slice, not a claim of full
+table-layout parity.
 
 ## The destination, named
 

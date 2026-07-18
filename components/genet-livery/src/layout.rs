@@ -7,11 +7,10 @@ use livery::{
         Alignment as CssAlignment, AspectRatio, BorderStyle, BorderWidth,
         BoxSizing as CssBoxSizing, Display as CssDisplay, FlexDirection as CssFlexDirection,
         FlexWrap as CssFlexWrap, Float as CssFloat, FontSize, Gap as CssGap,
-        GridAutoFlow as CssGridAutoFlow,
-        GridPlacement as CssGridPlacement, GridTemplate as CssGridTemplate,
-        GridTrack as CssGridTrack, Inset, Length, LengthPercentage as CssLengthPercentage,
-        LengthUnit, LineHeight, Margin, Overflow as CssOverflow, Position as CssPosition,
-        Size as CssSize, WhiteSpaceCollapse,
+        GridAutoFlow as CssGridAutoFlow, GridPlacement as CssGridPlacement,
+        GridTemplate as CssGridTemplate, GridTrack as CssGridTrack, Inset, Length,
+        LengthPercentage as CssLengthPercentage, LineHeight, Margin,
+        Overflow as CssOverflow, Position as CssPosition, Size as CssSize, WhiteSpaceCollapse,
     },
 };
 use taffy::{
@@ -23,9 +22,8 @@ use taffy::{
     },
     style::{
         AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyword, BoxSizing, Display,
-        Float as TaffyFloat, FlexDirection, FlexWrap, GridAutoFlow, GridPlacement,
-        GridTemplateComponent,
-        JustifyContent, Overflow, Position, Style,
+        FlexDirection, FlexWrap, Float as TaffyFloat, GridAutoFlow, GridPlacement,
+        GridTemplateComponent, JustifyContent, Overflow, Position, Style,
     },
 };
 
@@ -913,18 +911,34 @@ fn definite_size(size: CssSize, font_size: f32) -> Option<f32> {
 }
 
 fn to_taffy_style(computed: &ComputedValues, font_size: f32) -> Style {
+    let table = computed.display == CssDisplay::Table;
+    let table_row = computed.display == CssDisplay::TableRow;
+    let display = match computed.display {
+        CssDisplay::None => Display::None,
+        CssDisplay::Flex => Display::Flex,
+        CssDisplay::Grid => Display::Grid,
+        CssDisplay::Table | CssDisplay::TableRow => Display::Flex,
+        _ => Display::Block,
+    };
+    let flex_direction = if table || table_row {
+        FlexDirection::Row
+    } else {
+        match computed.flex_direction {
+            CssFlexDirection::Row => FlexDirection::Row,
+            CssFlexDirection::RowReverse => FlexDirection::RowReverse,
+            CssFlexDirection::Column => FlexDirection::Column,
+            CssFlexDirection::ColumnReverse => FlexDirection::ColumnReverse,
+        }
+    };
+    let float = match computed.float {
+        CssFloat::None if table => TaffyFloat::Left,
+        CssFloat::None => TaffyFloat::None,
+        CssFloat::Left => TaffyFloat::Left,
+        CssFloat::Right => TaffyFloat::Right,
+    };
     Style {
-        display: match computed.display {
-            CssDisplay::None => Display::None,
-            CssDisplay::Flex => Display::Flex,
-            CssDisplay::Grid => Display::Grid,
-            _ => Display::Block,
-        },
-        float: match computed.float {
-            CssFloat::None => TaffyFloat::None,
-            CssFloat::Left => TaffyFloat::Left,
-            CssFloat::Right => TaffyFloat::Right,
-        },
+        display,
+        float,
         box_sizing: match computed.box_sizing {
             CssBoxSizing::ContentBox => BoxSizing::ContentBox,
             CssBoxSizing::BorderBox => BoxSizing::BorderBox,
@@ -963,12 +977,7 @@ fn to_taffy_style(computed: &ComputedValues, font_size: f32) -> Style {
             AspectRatio::Auto => None,
             AspectRatio::Ratio(value) => Some(value),
         },
-        flex_direction: match computed.flex_direction {
-            CssFlexDirection::Row => FlexDirection::Row,
-            CssFlexDirection::RowReverse => FlexDirection::RowReverse,
-            CssFlexDirection::Column => FlexDirection::Column,
-            CssFlexDirection::ColumnReverse => FlexDirection::ColumnReverse,
-        },
+        flex_direction,
         flex_wrap: match computed.flex_wrap {
             CssFlexWrap::NoWrap => FlexWrap::NoWrap,
             CssFlexWrap::Wrap => FlexWrap::Wrap,

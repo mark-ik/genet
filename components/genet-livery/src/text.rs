@@ -116,6 +116,37 @@ impl TextSystem {
         }
 
         let items = self.shape(&text, &mut spans, &inline_boxes, width, parent_style);
+        let zero_line_strut = text.is_empty()
+            && spans.is_empty()
+            && !inline_boxes.is_empty()
+            && super::layout::line_height_px(
+                &parent_style.line_height,
+                super::paint::used_font_size(parent_style),
+            ) <= 0.0;
+        let zero_line_minimal_alignment = zero_line_strut
+            && inline_boxes.iter().all(|inline_box| {
+                matches!(
+                    inline_box.vertical_align,
+                    VerticalAlign::Top
+                        | VerticalAlign::TextTop
+                        | VerticalAlign::Bottom
+                        | VerticalAlign::TextBottom
+                )
+            });
+        let strut_center_height = if zero_line_strut {
+            let mut strut_spans = Vec::<SourceSpan<()>>::new();
+            let strut_items = self.shape::<()>("\u{200b}", &mut strut_spans, &[], width, parent_style);
+            strut_items.into_iter().find_map(|item| match item {
+                ShapedItem::Text(run) => Some(
+                    (run.line_baseline
+                        - (run.line_block_min + run.line_block_max) * 0.5)
+                        .abs(),
+                ),
+                ShapedItem::InlineBox { .. } => None,
+            })
+        } else {
+            None
+        };
         let mut right = 0.0_f32;
         let mut top = f32::INFINITY;
         let mut bottom = f32::NEG_INFINITY;
@@ -129,7 +160,14 @@ impl TextSystem {
             bottom = bottom.max(fragment.y + fragment.height);
         }
         if top.is_finite() && bottom.is_finite() {
-            Some((right.max(0.0), (bottom - top).max(0.0)))
+            Some((
+                right.max(0.0),
+                if zero_line_minimal_alignment {
+                    0.0
+                } else {
+                    (bottom - top).max(strut_center_height.unwrap_or(0.0))
+                },
+            ))
         } else {
             Some((0.0, 0.0))
         }
@@ -365,18 +403,18 @@ impl TextSystem {
                             },
                             line_y,
                         );
-                        for owner in owners {
-                            frame.record_inline_fragment(
+                    }
+                    for owner in owners {
+                        frame.record_inline_fragment(
+                            owner,
+                            decorated_inline_fragment(
+                                styles,
                                 owner,
-                                decorated_inline_fragment(
-                                    styles,
-                                    owner,
-                                    fragment,
-                                    parent_fragment.width,
-                                ),
-                                line_y,
-                            );
-                        }
+                                fragment,
+                                parent_fragment.width,
+                            ),
+                            line_y,
+                        );
                     }
                 },
             }
@@ -396,9 +434,9 @@ impl TextSystem {
         Id: Copy,
     {
         self.shape_count = self.shape_count.saturating_add(1);
-        let mut builder =
-            self.layout_context
-                .ranged_builder(&mut self.font_context, text, 1.0, true);
+        let mut builder = self
+            .layout_context
+            .ranged_builder(&mut self.font_context, text, 1.0, true);
         push_defaults(
             &mut builder,
             spans.first().map_or(root_style, |span| &span.style),
@@ -424,7 +462,10 @@ impl TextSystem {
             .then_some(width)
             .filter(|width| width.is_finite() && *width > 0.0);
         layout.break_all_lines(wrap_width);
-        layout.align(text_alignment(root_style.text_align), AlignmentOptions::default());
+        layout.align(
+            text_alignment(root_style.text_align),
+            AlignmentOptions::default(),
+        );
 
         let mut result = Vec::new();
         for line in layout.lines() {
@@ -466,6 +507,9 @@ impl TextSystem {
                         result.push(ShapedItem::Text(ShapedRun {
                             source: span.and_then(|span| span.source),
                             owners: span.map_or_else(Vec::new, |span| span.owners.clone()),
+                            line_baseline: metrics.baseline,
+                            line_block_min: metrics.block_min_coord,
+                            line_block_max: metrics.block_max_coord,
                             fragment: Fragment {
                                 x: run.offset(),
                                 y: metrics.block_min_coord + vertical_shift,
@@ -486,8 +530,11 @@ impl TextSystem {
                         else {
                             continue;
                         };
+                        let line_height = (metrics.block_max_coord - metrics.block_min_coord)
+                            .max(positioned.height)
+                            .max(0.0);
                         let height = if inline_box.edge {
-                            (metrics.block_max_coord - metrics.block_min_coord).max(0.0)
+                            line_height
                         } else {
                             positioned.height
                         };
@@ -540,7 +587,7 @@ impl TextSystem {
                                 x: positioned.x,
                                 y: base_y + vertical_shift,
                                 width: positioned.width,
-                                height,
+                                height: line_height,
                             },
                             edge: inline_box.edge,
                             paint: inline_box.paint,
@@ -709,6 +756,9 @@ enum ShapedItem<Id> {
 struct ShapedRun<Id> {
     source: Option<Id>,
     owners: Vec<Id>,
+    line_baseline: f32,
+    line_block_min: f32,
+    line_block_max: f32,
     fragment: Fragment,
     font_instance: FontInstanceKey,
     font_size: f32,

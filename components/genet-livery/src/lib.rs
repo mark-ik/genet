@@ -33,6 +33,12 @@ div, h1, h2, h3, h4, h5, h6, p, ul, ol, li, pre {
     display: block;
 }
 
+table { display: table; }
+thead, tbody, tfoot { display: table-row-group; }
+tr { display: table-row; }
+td, th { display: table-cell; }
+caption { display: table-caption; }
+
 button, input, select, textarea {
     display: inline-block;
 }
