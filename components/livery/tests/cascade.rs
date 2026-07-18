@@ -80,6 +80,29 @@ fn directional_border_shorthands_expand_to_their_three_longhands() {
 }
 
 #[test]
+fn border_side_list_shorthands_expand_to_four_longhands() {
+    let block = parse_declaration_block(
+        "border-style: solid none solid none; border-width: 1px 2px; border-color: red blue",
+    );
+    assert!(block.errors.is_empty(), "{:?}", block.errors);
+    assert_eq!(block.declarations.len(), 12);
+    assert_eq!(
+        block
+            .declarations
+            .iter()
+            .take(4)
+            .map(|declaration| declaration.property.metadata().name)
+            .collect::<Vec<_>>(),
+        vec![
+            "border-top-style",
+            "border-right-style",
+            "border-bottom-style",
+            "border-left-style",
+        ]
+    );
+}
+
+#[test]
 fn background_color_shorthand_accepts_the_bounded_color_form() {
     let block = parse_declaration_block("background: black");
     assert!(block.errors.is_empty(), "{:?}", block.errors);

@@ -654,6 +654,20 @@ the flow geometry used by the paint walk. `empty-inline-001.xht`,
 `empty-inline-002.xht`, and `empty-inline-003.xht` pass through Livery, and the
 CSS2 line-box ratchet is now 162 passed, 28 failed, 59 skipped, and 0 errored.
 
+### 2026-07-17 mixed inline/block flow receipt
+
+Inline elements containing a block child now enter the bounded anonymous-block
+path instead of being collapsed into one inline measure leaf. The block child
+keeps its own flow origin while the wrapper's computed border remains available
+to the line-fragment paint walk. Livery also expands the four-value
+`border-color`, `border-style`, and `border-width` shorthands, which keeps the
+CSS2 reference fixtures on the same declaration path as the test.
+
+`inline-box-001.xht` and `inline-box-002.xht` now match their references. The
+CSS2 line-box ratchet is 164 passed, 26 failed, 59 skipped, and 0 errored; the
+remaining failures are concentrated in line-height leading and vertical-align
+metrics.
+
 ## The destination, named
 
 *(Amended 2026-07-14.)* Livery's document profile grinds toward full browser

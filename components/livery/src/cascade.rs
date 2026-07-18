@@ -244,6 +244,31 @@ fn expand_box_shorthand(
             .ok()
             .and_then(|values| box_sides(&values))
             .map(|values| values.map(|value| DeclaredValue::Value(PropertyValue::Gap(value)))),
+        ShorthandId::BorderColor => split_components(value)
+            .into_iter()
+            .map(str::parse::<Color>)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()
+            .and_then(|values| box_sides(&values))
+            .map(|values| values.map(|value| DeclaredValue::Value(PropertyValue::Color(value)))),
+        ShorthandId::BorderStyle => split_components(value)
+            .into_iter()
+            .map(str::parse::<BorderStyle>)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()
+            .and_then(|values| box_sides(&values))
+            .map(|values| {
+                values.map(|value| DeclaredValue::Value(PropertyValue::BorderStyle(value)))
+            }),
+        ShorthandId::BorderWidth => split_components(value)
+            .into_iter()
+            .map(str::parse::<BorderWidth>)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()
+            .and_then(|values| box_sides(&values))
+            .map(|values| {
+                values.map(|value| DeclaredValue::Value(PropertyValue::BorderWidth(value)))
+            }),
         _ => return false,
     };
     let Some(values) = parsed else {

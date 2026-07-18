@@ -239,6 +239,7 @@ impl TextSystem {
                     fragments,
                     &group,
                     (&parent_fragment, parent_style),
+                    parent,
                 );
                 group.clear();
             }
@@ -250,6 +251,7 @@ impl TextSystem {
             fragments,
             &group,
             (&parent_fragment, parent_style),
+            parent,
         );
     }
 
@@ -301,6 +303,7 @@ impl TextSystem {
         fragments: &FragmentPlane<D::NodeId>,
         roots: &[D::NodeId],
         parent: (&Fragment, &ComputedValues),
+        owner: D::NodeId,
     ) where
         D: LayoutDom,
         D::NodeId: Copy + Eq + Hash,
@@ -312,7 +315,7 @@ impl TextSystem {
         let mut text = String::new();
         let mut spans = Vec::new();
         let mut inline_boxes = Vec::new();
-        let mut owners = Vec::new();
+        let mut owners = vec![owner];
         {
             let mut collector = InlineCollector {
                 dom,
@@ -816,9 +819,16 @@ where
 {
     match dom.kind(id) {
         NodeKind::Text => true,
-        NodeKind::Element => styles
-            .get(id)
-            .is_some_and(|style| matches!(style.display, Display::Inline | Display::InlineBlock)),
+        NodeKind::Element => styles.get(id).is_some_and(|style| {
+            matches!(style.display, Display::Inline | Display::InlineBlock)
+                && !(style.display == Display::Inline
+                    && dom.dom_children(id).any(|child| {
+                        !is_inline(dom, styles, child)
+                            && !styles
+                                .get(child)
+                                .is_some_and(|child_style| child_style.display == Display::None)
+                    }))
+        }),
         _ => false,
     }
 }

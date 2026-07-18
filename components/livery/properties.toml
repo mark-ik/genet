@@ -113,6 +113,24 @@ grammar = "<line-width> || <line-style> || <color>"
 seed_values = ["px", "solid", "hex"]
 source = "css_backgrounds_3"
 
+[shorthands.border_color]
+longhands = ["border-top-color", "border-right-color", "border-bottom-color", "border-left-color"]
+grammar = "<color>, one to four values"
+seed_values = ["hex", "named"]
+source = "css_backgrounds_3"
+
+[shorthands.border_style]
+longhands = ["border-top-style", "border-right-style", "border-bottom-style", "border-left-style"]
+grammar = "<line-style>, one to four values"
+seed_values = ["solid", "none"]
+source = "css_backgrounds_3"
+
+[shorthands.border_width]
+longhands = ["border-top-width", "border-right-width", "border-bottom-width", "border-left-width"]
+grammar = "<line-width>, one to four values"
+seed_values = ["px", "medium"]
+source = "css_backgrounds_3"
+
 [shorthands.white_space]
 css_name = "white-space"
 longhands = ["white-space-collapse", "text-wrap-mode"]

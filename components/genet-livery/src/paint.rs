@@ -1009,9 +1009,16 @@ where
 {
     match dom.kind(id) {
         NodeKind::Text => true,
-        NodeKind::Element => styles
-            .get(id)
-            .is_some_and(|style| matches!(style.display, Display::Inline | Display::InlineBlock)),
+        NodeKind::Element => styles.get(id).is_some_and(|style| {
+            matches!(style.display, Display::Inline | Display::InlineBlock)
+                && !(style.display == Display::Inline
+                    && dom.dom_children(id).any(|child| {
+                        !is_inline_node(dom, styles, child)
+                            && !styles
+                                .get(child)
+                                .is_some_and(|child_style| child_style.display == Display::None)
+                    }))
+        }),
         _ => false,
     }
 }

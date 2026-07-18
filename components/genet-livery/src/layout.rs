@@ -395,6 +395,21 @@ where
                 let font_size = font_size_px(&computed.font_size, parent_font_size);
                 let children = self.build_children(id, &computed, font_size)?;
                 let mut taffy_style = to_taffy_style(&computed, font_size);
+                // An inline box that contains a block box is split around the
+                // block in CSS's anonymous-block construction.  The wrapper's
+                // border is retained by the paint walk, but it must not enter
+                // the block child's flow geometry here.
+                if computed.display == CssDisplay::Inline
+                    && self.dom.dom_children(id).any(|child| {
+                        !is_inline(self.dom, self.styles, child)
+                            && !self
+                                .styles
+                                .get(child)
+                                .is_some_and(|child_style| child_style.display == CssDisplay::None)
+                    })
+                {
+                    taffy_style.border = Rect::zero();
+                }
                 apply_replaced_image_size(
                     &mut taffy_style,
                     self.dom,
@@ -412,7 +427,8 @@ where
             },
             NodeKind::Text => {
                 let style = inherited.cloned().unwrap_or_default();
-                self.build_inline_group(&[id], &style).map(Some)
+                self.build_inline_group(&[id], &style, parent_font_size)
+                    .map(Some)
             },
             _ => Ok(None),
         }
@@ -433,7 +449,11 @@ where
                 continue;
             }
             if !inline_group.is_empty() {
-                children.push(self.build_inline_group(&inline_group, parent_style)?);
+                children.push(self.build_inline_group(
+                    &inline_group,
+                    parent_style,
+                    parent_font_size,
+                )?);
                 inline_group.clear();
             }
             if let Some(node) = self.build_node(child, Some(parent_style), parent_font_size)? {
@@ -441,7 +461,7 @@ where
             }
         }
         if !inline_group.is_empty() {
-            children.push(self.build_inline_group(&inline_group, parent_style)?);
+            children.push(self.build_inline_group(&inline_group, parent_style, parent_font_size)?);
         }
         Ok(children)
     }
@@ -450,7 +470,30 @@ where
         &mut self,
         roots: &[D::NodeId],
         parent_style: &ComputedValues,
+        parent_font_size: f32,
     ) -> Result<NodeId, LayoutError> {
+        let mixed_inline_root = roots.iter().copied().find(|root| {
+            self.dom.kind(*root) == NodeKind::Element
+                && self
+                    .styles
+                    .get(*root)
+                    .is_some_and(|style| style.display == CssDisplay::Inline)
+                && self
+                    .dom
+                    .dom_children(*root)
+                    .any(|child| !is_inline(self.dom, self.styles, child))
+        });
+        if let Some(root) = mixed_inline_root
+            && roots.iter().all(|candidate| {
+                *candidate == root
+                    || (self.dom.kind(*candidate) == NodeKind::Text
+                        && self.dom.text(*candidate).is_some_and(|text| text.trim().is_empty()))
+            })
+        {
+            return self
+                .build_node(root, Some(parent_style), parent_font_size)?
+                .ok_or_else(|| LayoutError("inline block child disappeared".into()));
+        }
         let width = roots
             .iter()
             .filter_map(|id| self.preliminary.get(*id))
@@ -671,6 +714,13 @@ where
         NodeKind::Text => true,
         NodeKind::Element => styles.get(id).is_some_and(|style| {
             matches!(style.display, CssDisplay::Inline | CssDisplay::InlineBlock)
+                && !(style.display == CssDisplay::Inline
+                    && dom.dom_children(id).any(|child| {
+                        !is_inline(dom, styles, child)
+                            && !styles
+                                .get(child)
+                                .is_some_and(|child_style| child_style.display == CssDisplay::None)
+                    }))
         }),
         _ => false,
     }
