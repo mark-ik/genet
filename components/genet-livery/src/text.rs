@@ -690,6 +690,12 @@ where
         self.inline_fragments.get(&source).map(Vec::as_slice)
     }
 
+    pub(crate) fn first_inline_line(&self, source: Id) -> Option<f32> {
+        self.inline_line_keys
+            .get(&source)
+            .and_then(|lines| lines.first().copied())
+    }
+
     fn record_inline_fragment(&mut self, source: Id, fragment: Fragment, line_y: f32) {
         let fragments = self.inline_fragments.entry(source).or_default();
         let line_keys = self.inline_line_keys.entry(source).or_default();

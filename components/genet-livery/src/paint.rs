@@ -789,16 +789,23 @@ fn emit_inline_group<'a, D>(
     if roots.is_empty() {
         return;
     }
-    for root in roots {
-        emit_inline_descendant_decorations(
-            dom,
-            styles,
-            fragments,
-            *root,
-            scope.stacking_roots,
-            text.frame,
-            list,
-        );
+    if let Some(first_line) = roots
+        .iter()
+        .filter_map(|root| text.frame.first_inline_line(*root))
+        .min_by(|left, right| left.total_cmp(right))
+    {
+        for root in roots {
+            emit_inline_descendant_decorations(
+                dom,
+                styles,
+                fragments,
+                *root,
+                scope.stacking_roots,
+                first_line,
+                text.frame,
+                list,
+            );
+        }
     }
     for root in roots {
         emit_normal_node(
@@ -820,13 +827,18 @@ fn emit_inline_descendant_decorations<D>(
     fragments: &FragmentPlane<D::NodeId>,
     id: D::NodeId,
     stacking_roots: Option<&HashSet<D::NodeId>>,
+    first_line: f32,
     frame: &mut TextFrame<D::NodeId>,
     list: &mut LiveryPaintList,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    if stacking_roots.is_some_and(|roots| roots.contains(&id)) {
+    if stacking_roots.is_some_and(|roots| roots.contains(&id))
+        || frame
+            .first_inline_line(id)
+            .is_some_and(|line| (line - first_line).abs() > 0.5)
+    {
         return;
     }
     let NodeKind::Element = dom.kind(id) else {
@@ -848,6 +860,7 @@ fn emit_inline_descendant_decorations<D>(
                     fragments,
                     child,
                     stacking_roots,
+                    first_line,
                     frame,
                     list,
                 );

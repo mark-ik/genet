@@ -632,6 +632,19 @@ errored. `baseline-block-with-overflow-001.html` and `empty-inline-001.xht`
 join the focused table and replaced-image probes; explicit empty-span baseline
 placement and inline border/padding bleed remain open.
 
+### 2026-07-17 inline decoration paint-order receipt
+
+Inline decoration prepass is now line-aware. Decorations whose first shaped
+fragment begins on the current group line stay behind the shared text stream,
+preserving the native background and bidi ordering receipts. Decorations that
+begin on a later line are deferred to their source-order walk, allowing their
+top border or padding to bleed over the preceding line box as CSS2 requires.
+
+`border-padding-bleed-001.xht`, `002.xht`, and `003.xht` now match their
+references at `diff=0%`. The focused `genet-livery` package wall remains green
+with 8 Cambium, 22 interaction, 44 paint, 1 reftest, and 1 replaced-image
+tests; broader inline baseline and font-metric gaps remain on the ratchet.
+
 ## The destination, named
 
 *(Amended 2026-07-14.)* Livery's document profile grinds toward full browser
