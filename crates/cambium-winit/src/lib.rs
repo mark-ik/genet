@@ -2,10 +2,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Platform input translation for Cambium applications hosted with winit.
+//! Platform integration for Cambium applications hosted with winit.
 //!
-//! Window presentation remains the host's responsibility. This crate only
-//! translates winit's keyboard vocabulary into Cambium events.
+//! Window presentation remains the host's responsibility. This crate translates
+//! winit's keyboard vocabulary into Cambium events, and (in [`a11y`]) hosts the
+//! OS accessibility tree so every Cambium app reaches a screen reader.
+
+pub mod a11y;
+
+pub use a11y::{A11yHost, SpriggingA11y};
 
 use cambium::{Key, KeyEvent, Modifiers, NamedKey};
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey as WinitNamedKey};
