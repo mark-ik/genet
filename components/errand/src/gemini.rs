@@ -12,11 +12,11 @@
 //! [`Error::CertificateChanged`] before the request is ever sent.
 
 use rustls::pki_types::ServerName;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use url::Url;
 
-use crate::{tls, tofu, Error, Response, Scheme, Status};
+use crate::{Error, Response, Scheme, Status, tls, tofu};
 
 /// The largest request line gemini permits, in bytes (the spec caps the URL at
 /// 1024; the trailing CRLF rides within that budget here).
@@ -28,11 +28,6 @@ pub(crate) async fn fetch(url: &Url) -> Result<Response, Error> {
         .host_str()
         .ok_or_else(|| Error::BadUrl("gemini URL has no host".into()))?;
     let port = url.port().unwrap_or_else(|| Scheme::Gemini.default_port());
-
-    let request = format!("{url}\r\n");
-    if request.len() > MAX_REQUEST {
-        return Err(Error::Protocol(format!("request exceeds {MAX_REQUEST} bytes")));
-    }
 
     // Look the host's pin up before connecting (so the verifier stays
     // 'static), then wrap TCP in a pinning TLS handshake.
@@ -60,7 +55,7 @@ pub(crate) async fn fetch(url: &Url) -> Result<Response, Error> {
                 }
             }
             return Err(Error::Connect(format!("tls handshake: {e}")));
-        }
+        },
     };
 
     // Clean handshake: pin the fingerprint on first contact.
@@ -70,13 +65,39 @@ pub(crate) async fn fetch(url: &Url) -> Result<Response, Error> {
         }
     }
 
-    // Send the request line, then read the whole response to EOF (the server
-    // closes the stream when done).
-    tls.write_all(request.as_bytes())
+    // The request/response is transport-independent from here; run it over the
+    // TLS stream we just established.
+    exchange(url, &mut tls).await
+}
+
+/// Run a gemini request/response over an already-connected, ready stream: send the
+/// absolute URL followed by `\r\n`, read the whole response to EOF, and parse it.
+///
+/// This is the transport-independent half of the protocol, split out from
+/// [`fetch`] so gemini can ride any bidirectional stream, not only TLS-over-TCP.
+/// The caller supplies a connected `AsyncRead + AsyncWrite`; nothing here assumes
+/// TCP, TLS, or IP. An already-encrypted carrier needs no TLS at all — e.g. a
+/// Reticulum link, where the destination hash *is* the peer identity and there is
+/// no certificate to pin — so it drives this same code with the TLS/TOFU layer
+/// simply absent.
+pub async fn exchange<S>(url: &Url, stream: &mut S) -> Result<Response, Error>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let request = format!("{url}\r\n");
+    if request.len() > MAX_REQUEST {
+        return Err(Error::Protocol(format!(
+            "request exceeds {MAX_REQUEST} bytes"
+        )));
+    }
+    stream
+        .write_all(request.as_bytes())
         .await
         .map_err(|e| Error::Io(e.to_string()))?;
+    // Smolweb servers close the stream when the response ends, so read to EOF.
     let mut raw = Vec::new();
-    tls.read_to_end(&mut raw)
+    stream
+        .read_to_end(&mut raw)
         .await
         .map_err(|e| Error::Io(e.to_string()))?;
 
@@ -108,7 +129,11 @@ pub(crate) fn parse(url: &Url, raw: &[u8]) -> Result<Response, Error> {
         b'3' => Status::Redirect,
         b'4' | b'5' => Status::Failure,
         b'6' => Status::CertRequired,
-        _ => return Err(Error::Protocol(format!("unknown gemini status class: {code}"))),
+        _ => {
+            return Err(Error::Protocol(format!(
+                "unknown gemini status class: {code}"
+            )));
+        },
     };
 
     Ok(Response {
@@ -117,7 +142,11 @@ pub(crate) fn parse(url: &Url, raw: &[u8]) -> Result<Response, Error> {
         raw_status: Some(code),
         meta,
         // Only a success carries a body; for other statuses meta is the payload.
-        body: if status == Status::Success { body } else { Vec::new() },
+        body: if status == Status::Success {
+            body
+        } else {
+            Vec::new()
+        },
     })
 }
 
@@ -171,12 +200,47 @@ mod tests {
 
     #[test]
     fn missing_crlf_is_a_protocol_error() {
-        assert!(matches!(parse(&u(), b"20 text/gemini"), Err(Error::Protocol(_))));
+        assert!(matches!(
+            parse(&u(), b"20 text/gemini"),
+            Err(Error::Protocol(_))
+        ));
     }
 
     #[test]
     fn non_numeric_status_is_a_protocol_error() {
-        assert!(matches!(parse(&u(), b"xx nope\r\n"), Err(Error::Protocol(_))));
+        assert!(matches!(
+            parse(&u(), b"xx nope\r\n"),
+            Err(Error::Protocol(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn exchange_runs_over_any_stream() {
+        // A mock gemini capsule over an in-memory duplex: no TCP, no TLS. This is
+        // the proof the exchange is transport-independent — the exact code path a
+        // Reticulum `LinkStream` (also `AsyncRead + AsyncWrite`) would drive.
+        let (client, mut server) = tokio::io::duplex(4096);
+        let url = Url::parse("gemini://capsule.example/hello").unwrap();
+
+        let server = tokio::spawn(async move {
+            let mut buf = [0u8; 1024];
+            let n = server.read(&mut buf).await.unwrap();
+            assert_eq!(&buf[..n], b"gemini://capsule.example/hello\r\n");
+            server
+                .write_all(b"20 text/gemini\r\n# Hello over an arbitrary stream\n")
+                .await
+                .unwrap();
+            // Close so the client's read-to-EOF completes.
+            server.shutdown().await.unwrap();
+        });
+
+        let mut client = client;
+        let resp = exchange(&url, &mut client).await.unwrap();
+        server.await.unwrap();
+
+        assert_eq!(resp.status, Status::Success);
+        assert_eq!(resp.mime(), Some("text/gemini"));
+        assert_eq!(resp.body, b"# Hello over an arbitrary stream\n");
     }
 
     #[tokio::test]
@@ -186,7 +250,11 @@ mod tests {
             .await
             .expect("fetch the gemini project capsule");
         assert_eq!(r.status, Status::Success, "meta was {:?}", r.meta);
-        assert!(r.body.len() > 100, "expected a real page, got {} bytes", r.body.len());
+        assert!(
+            r.body.len() > 100,
+            "expected a real page, got {} bytes",
+            r.body.len()
+        );
     }
 
     /// The full TOFU loop against a real capsule: first fetch pins, second
@@ -216,7 +284,9 @@ mod tests {
         // Corrupt the pin to simulate a changed cert: the next fetch must
         // refuse before sending the request.
         store.pin("geminiprotocol.net", [0u8; 32]);
-        let err = crate::fetch("gemini://geminiprotocol.net/").await.unwrap_err();
+        let err = crate::fetch("gemini://geminiprotocol.net/")
+            .await
+            .unwrap_err();
         assert!(
             matches!(err, Error::CertificateChanged { .. }),
             "a changed cert must surface as CertificateChanged, got {err:?}"

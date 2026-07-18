@@ -44,9 +44,10 @@ mod tofu;
 /// See [`parse`] for the per-format submodules.
 pub mod parse;
 
-pub use misfin::{send as misfin_send, ClientIdentity, MISFIN_PORT};
+pub use gemini::exchange as gemini_exchange;
+pub use misfin::{ClientIdentity, MISFIN_PORT, send as misfin_send};
 pub use titan::upload as titan_upload;
-pub use tofu::{set_trust_store, InMemoryTofu, PermissiveTofu, TofuStore};
+pub use tofu::{InMemoryTofu, PermissiveTofu, TofuStore, set_trust_store};
 pub use url::Url;
 
 /// A small-web scheme `errand` can route.
@@ -229,7 +230,7 @@ pub async fn fetch_url(url: &Url) -> Result<Response, Error> {
                 elapsed_ms,
                 "smolweb fetch complete"
             );
-        }
+        },
         Err(error) => {
             tracing::warn!(
                 target: "errand",
@@ -239,7 +240,7 @@ pub async fn fetch_url(url: &Url) -> Result<Response, Error> {
                 elapsed_ms,
                 "smolweb fetch failed"
             );
-        }
+        },
     }
     result
 }
@@ -281,7 +282,10 @@ mod tests {
     #[test]
     fn scheme_round_trips_and_ports() {
         assert_eq!(Scheme::parse("gemini"), Some(Scheme::Gemini));
-        assert_eq!(Scheme::parse("spartan").map(Scheme::default_port), Some(300));
+        assert_eq!(
+            Scheme::parse("spartan").map(Scheme::default_port),
+            Some(300)
+        );
         assert_eq!(Scheme::parse("https"), None);
     }
 
@@ -314,7 +318,9 @@ mod tests {
 
     #[test]
     fn every_smolweb_scheme_is_recognized() {
-        for s in ["gemini", "gopher", "finger", "spartan", "nex", "guppy", "titan"] {
+        for s in [
+            "gemini", "gopher", "finger", "spartan", "nex", "guppy", "titan",
+        ] {
             assert!(Scheme::parse(s).is_some(), "{s} should route");
         }
     }
