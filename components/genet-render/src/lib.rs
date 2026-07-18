@@ -16,22 +16,27 @@ pub mod render;
 pub use a11y::accesskit_tree;
 pub use inspect::{ContentReport, OutlineEntry, content_report};
 pub use render::{
-    TextCursor, caret_byte_at, caret_screen_rect, fragments_from_scripted_dom, hit_test_node,
-    paint_list_from_scripted_dom, paint_list_from_session, scene_from_layout_dom,
-    scene_from_scripted_dom, scene_from_session, scene_from_session_dom, soft_wrap_caret_byte,
+    ExternalTextureDraw, RenderedFrame, TextCursor, caret_byte_at, caret_screen_rect,
+    fragments_from_scripted_dom, hit_test_node, paint_list_from_scripted_dom,
+    paint_list_from_session, scene_from_layout_dom, scene_from_scripted_dom, scene_from_session,
+    scene_from_session_dom, soft_wrap_caret_byte, translated_frame_from_session_dom,
 };
 
 #[cfg(test)]
 mod tests {
-    use layout_dom_api::{LayoutDom, LayoutDomMut, QualName};
     use genet_scripted_dom::ScriptedDom;
+    use layout_dom_api::{LayoutDom, LayoutDomMut, QualName};
 
     use crate::{fragments_from_scripted_dom, hit_test_node, scene_from_scripted_dom};
 
     const SHEET: &[&str] = &["div { display: block; }"];
 
     fn html(local: &str) -> QualName {
-        QualName::new(None, layout_dom_api::Namespace::from("http://www.w3.org/1999/xhtml"), local.into())
+        QualName::new(
+            None,
+            layout_dom_api::Namespace::from("http://www.w3.org/1999/xhtml"),
+            local.into(),
+        )
     }
 
     fn counter_dom(value: u32) -> (ScriptedDom, genet_scripted_dom::NodeId) {
@@ -52,14 +57,8 @@ mod tests {
         let mut dom = ScriptedDom::new();
         let root = dom.document();
         dom.set_inner_html(root, html);
-        let scene = scene_from_scripted_dom(
-            &dom,
-            BLOCK_SHEET,
-            width,
-            height,
-            None,
-            &Default::default(),
-        );
+        let scene =
+            scene_from_scripted_dom(&dom, BLOCK_SHEET, width, height, None, &Default::default());
         format!("{:?}", scene.ops)
     }
 
@@ -80,7 +79,10 @@ mod tests {
             .map(|_| std::thread::spawn(|| render_ops_debug(HTML, 420, 360)))
             .collect();
         for handle in handles {
-            assert_eq!(handle.join().expect("concurrent cascade panicked"), baseline);
+            assert_eq!(
+                handle.join().expect("concurrent cascade panicked"),
+                baseline
+            );
         }
     }
 
@@ -94,14 +96,7 @@ mod tests {
             let fragments = fragments_from_scripted_dom(&dom, SHEET, 800, 600);
             assert!(fragments.rect_of(counter).is_some());
 
-            let scene = scene_from_scripted_dom(
-                &dom,
-                SHEET,
-                800,
-                600,
-                None,
-                &Default::default(),
-            );
+            let scene = scene_from_scripted_dom(&dom, SHEET, 800, 600, None, &Default::default());
             assert_eq!(scene.viewport_width, 800);
             assert_eq!(scene.viewport_height, 600);
             assert!(!scene.ops.is_empty());

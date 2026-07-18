@@ -3,8 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use super::pipeline::{
-    build_group_zero_bind_group, build_render_pipeline, effective_vertex_stride,
-    vertex_component_count, vertex_stride,
+    build_group_zero_bind_group, build_render_pipeline, effective_vertex_stride, vertex_stride,
 };
 use super::*;
 
@@ -29,12 +28,23 @@ impl WebGlContext {
                 .attribs
                 .get(attribute.location as usize)
                 .ok_or(WebGlError::InvalidOperation)?;
-            let kind = attribute.kind;
-            if !attrib.enabled || attrib.size != vertex_component_count(kind) {
+            if !attrib.enabled || !matches!(attrib.size, 1 | 2 | 3 | 4) {
                 return Err(WebGlError::InvalidOperation);
             }
-            let kind_bytes = vertex_stride(kind);
-            let stride = effective_vertex_stride(attrib, kind);
+            // WebGL fills missing components when the vertex array format
+            // has fewer components than the shader input (and ignores extra
+            // components in the opposite direction). Keep the configured
+            // array width for the GPU vertex format instead of requiring an
+            // exact match with the reflected shader type.
+            let format = match attrib.size {
+                1 => VertexAttributeKind::Float32,
+                2 => VertexAttributeKind::Float32x2,
+                3 => VertexAttributeKind::Float32x3,
+                4 => VertexAttributeKind::Float32x4,
+                _ => unreachable!(),
+            };
+            let kind_bytes = vertex_stride(format);
+            let stride = effective_vertex_stride(attrib, format);
             if stride < kind_bytes {
                 return Err(WebGlError::InvalidOperation);
             }
@@ -48,6 +58,7 @@ impl WebGlContext {
                 return Err(WebGlError::InvalidOperation);
             }
             layouts.push(AttributeBufferLayout {
+                format,
                 stride,
                 offset: attrib.offset,
             });

@@ -1,4 +1,24 @@
 (function() {
+  // Annex B compatibility used by the upstream WebGL helpers. Nova and some
+  // Boa builds intentionally omit this legacy method from the base realm;
+  // install the small ES-compatible surface at the browser-host boundary so
+  // third-party web content sees the same String API on both engines.
+  if (typeof String.prototype.substr !== 'function') {
+    String.prototype.substr = function(start, length) {
+      var value = String(this);
+      var size = value.length;
+      start = start === undefined ? 0 : Number(start);
+      if (start !== start) start = 0;
+      start = start < 0 ? Math.max(size + start, 0) : Math.min(start, size);
+      start = start < 0 ? Math.ceil(start) : Math.floor(start);
+      if (length === undefined) return value.slice(start);
+      length = Number(length);
+      if (length !== length || length <= 0) return '';
+      length = length < 0 ? Math.ceil(length) : Math.floor(length);
+      return value.slice(start, start + length);
+    };
+  }
+
   // Wrapper cache keyed by the canonical reflector (engine-side `reflector_for`
   // returns the same reflector object per node), so the same node yields the same
   // wrapper: document.getElementById('x') === document.getElementById('x').
@@ -1495,6 +1515,10 @@
       var w = parseInt(this.getAttribute('width'), 10); if (!(w > 0)) w = 300;
       var h = parseInt(this.getAttribute('height'), 10); if (!(h > 0)) h = 150;
       this.__webglContext = new Ctor(w, h);
+      // WebGL helpers use the standard back-reference for drawing-buffer
+      // dimensions and context classification. Keep it on the context rather
+      // than making the runtime API know about DOM wrapper identity.
+      this.__webglContext.canvas = this;
       if (this.__webglContext._externalTextureKey) {
         this.setAttribute('data-genet-external-texture-key', this.__webglContext._externalTextureKey);
       }

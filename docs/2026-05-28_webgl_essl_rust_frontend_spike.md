@@ -12,10 +12,11 @@ differential oracle.
 
 ---
 
-## 0. Status update (2026-06-02)
+## 0. Status update (2026-07-16)
 
-Refresh of the per-step status lines below, kept compact so the rest
-of the doc can stay as the original spec. Suite: 235/235 green.
+Refresh of the per-step status lines below. The old 235-test snapshot is
+historical; current verification is package-level plus the first real WPT
+fixture through the Genet binding.
 
 | Step | Status |
 | --- | --- |
@@ -24,9 +25,9 @@ of the doc can stay as the original spec. Suite: 235/235 green.
 | 3. ESSL 3.00 delta | shift / bitwise / `~`, `#version` directive, `in` / `out` / `centroid` / `flat` / `smooth`, `switch` / `case` / `default` shipped; layout qualifiers, integer literal suffixes, sized arrays + `length()` postfix, uint / uvec / ivec / bvec types queued |
 | 4. Typecheck | ✓ ESSL 1.00 (symbol resolution, literal / ident / binary / unary / ternary / member / call / index types, ESSL constructor rules, swizzles, §8 built-in registry) |
 | 5. WebGL validator | R1 recursion, R2 stage-gated `discard`, R3 `main` signature, R4 Appendix A `for` loops, R5 reserved identifiers, R6 expression complexity, R7 call-stack depth, R8 fragment float-family precision shipped; packing, indirect-array clamping, switch-discriminant-int, case-value-constant queued |
-| 6. Lowering | Path A chosen (ESSL → SPIR-V via rspirv → naga `spv-in` → WGSL via `wgsl-out`); accepts literals, attributes, uniforms (including matrix uniforms with correct per-matrix `MatrixStride`), vec_n constructors, float/vec_n binary arithmetic, matrix multiplication (mat\*vec, vec\*mat, mat\*mat, mat\*scalar); varyings, function calls, swizzles, texture samples queued |
-| 7. WebGL CTS | not started |
-| 8. Production path swap | not started |
+| 6. Lowering | ✓ live through `webgl-wgpu`: ESSL → WGSL with attributes, uniforms, varyings, function calls, swizzles, and texture samples covered by the current adapter tests |
+| 7. WebGL CTS | first real `conformance/rendering/gl-clear.html` fixture green through `genet-wpt` on Boa and Vano-backed `nova_vm`; broader Khronos categories and differential coverage remain open |
+| 8. Production path swap | ✓ live: `webgl-wgpu` compiles linked programs through `webgl-essl`; Genet's Boa/Vano-backed `nova_vm` WebGL factory seam is wired before scripts |
 | 9. mozangle removed | not started |
 
 Production-shaped entry: `pub fn compile(source, stage) -> Result<CompileResult, CompileError>` in
@@ -41,10 +42,10 @@ that are now closed: production `compile()` seam, `validate()` source
 threading for real line numbers, lib.rs module doc lag, lowering of
 binary ops + uniforms + matrix uniforms + mat\*vec.
 
-Items the audit named that are still open: SPIR-V panic-catch + 8 MB
-stack thread on the lowering path, mozangle differential job, CTS
-harness, Nova / Boa canvas binding, lowering for function calls /
-swizzles / texture samples / varyings.
+Items still open: the mozangle differential job, broader CTS ratcheting,
+host-owned shared-device texture registration, and eventual mozangle removal.
+The Boa/Vano-backed `nova_vm` factory seam and first in-page WebGL fixture are
+now wired.
 
 ---
 
@@ -147,17 +148,17 @@ calendar bet.
 
 - **Step 7 — WebGL CTS.** Wire `conformance/glsl/*` and friends as a
   test suite. Ratchet by category (compilation, linking, errors,
-  reflection). *Done condition:* the categories the suite covers all
-  pass; the remaining gaps are documented as either spec-incomplete
-  (named in this doc) or upstream-blocked (named with reason).
+  reflection). *Status:* the harness is wired and
+  `conformance/rendering/gl-clear.html` is green through the real Boa/WGPU and
+  Vano-backed `nova_vm`/WGPU paths. Broader category coverage and differential
+  comparison are still open.
 
-- **Step 8 — Production path swap.** `webgl-wgpu` switches from its
-  current canonical-pair recognizer to `webgl_essl::parse_source` + the
-  step-6 lowering. mozangle stays in the build graph as the differential
-  oracle, gated behind a cargo feature, run in CI on every WebGL change.
-  *Done condition:* the W4 paint receipt
-  (`webgl_canvas_texture_e2e.rs`) still passes with the Rust-frontend
-  path driving the canvas texture.
+- **Step 8 — Production path swap.** `webgl-wgpu` now uses
+  `webgl_essl::parse_source` plus the Rust lowering path for linked programs.
+  The Genet scripted-document seam installs a host-provided factory before
+  inline scripts for both Boa and Vano's `nova_vm` backend. *Done condition:*
+  keep the W4 paint receipt and the first WPT fixture green while the desktop
+  host wires its shared-device texture registry.
 
 - **Step 9 — mozangle removed.** When step 8 has been the production
   path long enough for the differential CI job to be silent for K

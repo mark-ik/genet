@@ -1,12 +1,36 @@
 # Grand audit: genet + netrender (WPT, capabilities, wasm/async, architecture)
 
-**Date:** 2026-06-24
-**Status:** audit (code-grounded). Spins out four scoped plans + three extensions; see the index at the foot.
+**Date:** 2026-06-24 (status refresh 2026-07-16)
+**Status:** audit (code-grounded). Historical WebGL wording below is refreshed in this section; the remaining WebGL work is host extraction and composition for Merecat.
 **Method:** an 18-agent fan-out read the actual code (not just docs) and cited everything at file:line; the WPT baselines were re-measured against the repo, an adversarial pass verified each candidate lever, and a completeness critic checked the drafts. Numbers below are from the repo's logs/docs or an agent re-measure, attributed inline.
-**Scope:** genet (engine), netrender (renderer), meerkat (the Mere host, `repos/mere/crates/meerkat`), and the sibling crates errand / netfetcher / tincture / wgpu-{graft,scry,weld}.
+**Scope:** genet (engine), netrender (renderer), the current transitional Mere host
+checkout (`repos/mere/crates/meerkat`, slated for extraction into Merecat), and
+the sibling crates errand / netfetcher / tincture / wgpu-{graft,scry,weld}.
 **Headline correction:** the conformance baselines in circulation are stale by 5x to 40x. Floats is 42/197 not 7/197, css-backgrounds 334/1325 not 15/1326, normal-flow 462/1044 not 1/1045. DOM core is panic-free on both Nova and Boa. genet is well past the dangerous early phase; the remaining distance is dominated by **harness plumbing**, then the **CSS layout long tail**, in that order.
 
-**Related:** the CSS conformance plan (`2026-05-31_css_rendering_conformance_plan.md`), the WPT runner plan (`2026-05-26_wpt_runner_plan.md`), the wasm-enablement plan (`2026-06-06_wasm_enablement_and_crate_rename_plan.md`), the element-view + scripted-tier plan (`2026-06-16_element_view_and_scripted_tier_plan.md`), the holistic + capability audits (`2026-06-02_genet_holistic_audit.md`, `2026-06-14_engine_capability_audit.md`); netrender notes (`repos/netrender/netrender-notes/PROGRESS.md`); the mere-side meerkat plan spun out below.
+**Related:** the CSS conformance plan (`2026-05-31_css_rendering_conformance_plan.md`), the WPT runner plan (`2026-05-26_wpt_runner_plan.md`), the wasm-enablement plan (`2026-06-06_wasm_enablement_and_crate_rename_plan.md`), the element-view + scripted-tier plan (`2026-06-16_element_view_and_scripted_tier_plan.md`), the holistic + capability audits (`2026-06-02_genet_holistic_audit.md`, `2026-06-14_engine_capability_audit.md`); netrender notes (`repos/netrender/netrender-notes/PROGRESS.md`); the mere-side host extraction plan spun out below.
+
+### Current WebGL status (2026-07-16)
+
+The old “two finished halves never joined” description is now too broad. The
+Genet-side seam is integrated:
+
+- `webgl-essl` is the live shader frontend through `components/webgl-wgpu`.
+- `ScriptedDocument` accepts an engine-neutral `WebGlFactory` before DOM
+  scripts run. Boa and Vano's `nova_vm` backend exercise the same factory
+  contract; the WebGL binding stays above the engine choice.
+- Genet render frames carry external-texture metadata from the session paint
+  list, including the WebGL canvas texture key and destination placement.
+- The first real in-page Khronos fixture, `conformance/rendering/gl-clear.html`,
+  is green through both the Boa and Vano-backed `nova_vm` WPT harness paths and
+  the WGPU adapter.
+
+The remaining boundary is the Merecat extraction host: construct the WebGL
+handler from its shared WGPU device, register its canvas texture with the
+compositor, and route `RenderedFrame.external_textures` into the composition
+path. The current Meerkat checkout is useful as a donor seam, not the target
+architecture. Broader Khronos categories and the mozangle differential lane
+remain open.
 
 ---
 
@@ -32,7 +56,7 @@ Ranked by scoreboard impact, harness-gating first. Two candidate levers were re-
 4. **Per-tag HTML interface hierarchy + interface table (ENGINE/DOM, medium mechanism / incremental payload).** `createElement('button')` returns a generic HTMLElement; only HTMLCanvasElement of ~100 interfaces is wired, and the whole DOM surface is built from a ~900-line JS bootstrap string (`components/script-runtime-api/dom.rs:1066`, `:1989-2015`). Build a declarative interface table to hang the ~100 prototypes + reflected IDL attributes on the existing chain. Honest hedge: adding HTMLElement alone did not fix the dom/nodes count-tail, so this is breadth across many small tests, not one jump; prerequisite for moving custom-elements off 3/2807. *(Plan: HTML interface table.)*
 5. **Re-run dom/+fetch corpora, publish aggregates, add a checked-in expectations/regression guard (HARNESS, small-to-medium).** Levers were being sized against numbers that no longer exist. Re-scoring restores prioritization. Updated 2026-06-30: the default hostable `testharness` lane now has checked Boa baselines for full `dom`, focused `dom/abort`, focused `dom/nodes`, and `html/webappapis/timers`, enforced by `support/wpt/check-testharness-baselines.ps1` and `.github/workflows/wpt-harness.yml`. Fetch remains a separate server-mode/netfetch guard because it needs `wpt serve`, `--features netfetch`, and local host mapping. *(Plan: WPT harness exactness.)*
 
-## 3. Five best next moves in meerkat
+## 3. Five best next moves for the Merecat extraction
 
 Breadth-first. render.rs is 2001 LOC, input.rs 2405, plus main.rs/content.rs/window_view.rs/card.rs all over Mere's enforced 600-LOC ceiling.
 
@@ -42,7 +66,7 @@ Breadth-first. render.rs is 2001 LOC, input.rs 2405, plus main.rs/content.rs/win
 4. **HTML-lane link + find parity (render ladder Phase 5).** `link_at` walks an `Activation.links` Vec "empty until Phase 5 lane parity" (`constellation.rs:643-657`); the lane rasterizes one capped texture until then (`render.rs:1286-1287`). Until this lands, click-a-link and find-in-page only fully work on one of the two render lanes. *(Folds into the render ladder plan.)*
 5. **Advance the scripted/extraction lane (2026-06-23 plan).** Add a `pump()` before scripted extract so timer/promise content is captured, dispatch keyboard events (needs a genet focus model, flagged "not thin after all"), and give the crawl actor a real frontier (depth, politeness, robots).
 
-> Spun out, with §4, into the mere-side meerkat render-path + GUI-perf plan.
+> Spun out, with §4, into the mere-side host extraction/render-path + GUI-perf plan.
 
 ## 4. Five best GUI efficiency / performance improvements
 
@@ -60,8 +84,13 @@ Each rides on something already built and tested; the work is wiring.
 
 1. **Activate XPath via `Document.evaluate()`.** `components/xpath` is a complete, test-covered XPath 1.0 engine (3,077 LOC, all axes, ~30 functions) with zero consumers. One binding over its generic trait lights it up for scripting, crawling, and devtools selectors at once.
 2. **Wire genet-extract into the Inspector + crawler frontier.** `components/genet-extract` (650 LOC, single dep `layout_dom_api`, zero render stack) already produces title/outline/links/headings/metadata/reader-mode text. The Inspector prints "no EngineDocument diagnostics" for genet pages; the producer exists, only the consumer slice is open. Feeds devtools, a structure-regression oracle, and the eidetic/RAG sink.
-3. **Live `<canvas>` WebGL via the external-texture element.** webgl-wgpu (same-device, runs the real Khronos suite) and the `<external-texture>` element view (done end-to-end across four crates, `components/xilem-serval/src/tags.rs:74-82`) are two finished halves never joined. Bind the canvas texture key to the element; no renderer or GL backend to build.
-4. **Register graft(Servo) and weld(CEF) as inker SurfaceEngines.** The multiplexer is seated: traits + registry + engine-id vocabulary + one live reference engine (`repos/mere/crates/inker/src/surface_engine.rs:247-358`). wgpu-graft and wgpu-weld already produce importable textures. *(Folds into the inker engine-picker plan, Phase 5; its Phase 0 routing fold-in already shipped, but meerkat's scry pool still binds the producer concretely, so registry producer-construction is the Phase-5 companion.)*
+3. **Live `<canvas>` WebGL via the external-texture element.** The Genet
+   binding and frame metadata seam is now live: a pre-script WebGL factory is
+   available to Boa and Vano's `nova_vm` backend, and `gl-clear.html` renders
+   through the WGPU adapter on both. The remaining work is host-owned
+   shared-device construction and texture registration in the Merecat
+   extraction before `compose_external_texture` can consume the frame metadata.
+4. **Register graft(Servo) and weld(CEF) as inker SurfaceEngines.** The multiplexer is seated: traits + registry + engine-id vocabulary + one live reference engine (`repos/mere/crates/inker/src/surface_engine.rs:247-358`). wgpu-graft and wgpu-weld already produce importable textures. *(Folds into the inker engine-picker plan, Phase 5; its Phase 0 routing fold-in already shipped, but the transitional host's scry pool still binds the producer concretely, so registry producer-construction is the Phase-5 companion.)*
 5. **Stand up genet CI + a dependency-cone witness guard.** There is no CI in the genet repo, so the witness boundaries that make the profile ladder real (genet-extract's render-free cone) can silently regress. Cheap, and it protects every sidequest above.
 
 > Sidequests 1, 2, 3, 5 spun out into the capability-activation plan; 4 is tracked in the inker engine-picker plan.
@@ -76,7 +105,7 @@ Each rides on something already built and tested; the work is wiring.
 
 Near-term viable target: a DOM-only / structured-HTML / smolweb reader PWA (layout is wasm-green, netfetcher binds browser fetch). A Boa-scripted tier is provisioned but is the next milestone, not v1.
 
-**Async is further along than the docs suggest, and dual-engine-tested.** genet models the WHATWG HTML event loop in `script-runtime-api` (Layer 1) on engine-neutral VM primitives, not in any engine: microtask checkpoint, timer task source over a virtual clock, capture/target/bubble dispatch, and a deferred-async fetch seam (`new_host_promise`/`settle_host_promise`) so a native callback mints a Promise and resolves it out-of-band. Boa's Job queue and Nova's async map onto the same shape via the trait; tested on both (`microtasks_on_boa/nova`, `event_loop_on_boa/nova`). Off-thread fetch integrates via the actor model: the engine is single-threaded and `!Send`, the host runs netfetcher off-thread on tokio and wakes the loop, which meerkat already does via `EventLoopProxy` (`repos/mere/crates/meerkat/src/fetch.rs:145-195`).
+**Async is further along than the docs suggest, and dual-engine-tested.** genet models the WHATWG HTML event loop in `script-runtime-api` (Layer 1) on engine-neutral VM primitives, not in any engine: microtask checkpoint, timer task source over a virtual clock, capture/target/bubble dispatch, and a deferred-async fetch seam (`new_host_promise`/`settle_host_promise`) so a native callback mints a Promise and resolves it out-of-band. Boa's Job queue and Nova's async map onto the same shape via the trait; tested on both (`microtasks_on_boa/nova`, `event_loop_on_boa/nova`). Off-thread fetch integrates via the actor model: the engine is single-threaded and `!Send`, the host runs netfetcher off-thread on tokio and wakes the loop, which the current host checkout already does via `EventLoopProxy` (`repos/mere/crates/meerkat/src/fetch.rs:145-195`).
 
 **Honest gaps are granularity, not architecture:** the loop is cooperative (delays order tasks, they do not truly wait), microtask checkpoints are coarse (around timer batches, not per-task), Boa has no preemption (so `set_deadline` is not a trust boundary; hostile JS needs an externally-killable worker), and ReadableStream is buffered (no BYOB). The event-loop shape is correct; what is missing is concurrency granularity and task-source breadth.
 
@@ -107,9 +136,9 @@ genet is not "a browser engine" in the Servo sense. It is a deliberately decompo
 - *Layout/style/paint:* genet-layout (~21k LOC) drives Stylo for the cascade and implements Taffy's traits against its own box tree (not Servo layout; the Stylo firewall holds). It emits an engine-neutral `GenetPaintList` over the closed `PaintCmd` vocabulary in `paint_list_api` (the crate with no netrender dependency). `paint_list_render` lowers to a netrender Scene. netrender (vello-0.9, ~11.9k LOC) is the rasterization leaf and knows nothing about CSS.
 - *Network:* netfetcher (WHATWG http(s) Fetch: CORS, RFC6265bis cookies, RFC9111 cache, HSTS, SRI, h1/h2/h3) + errand (smolweb transport, 7 schemes, no http), behind one loader actor routing by scheme. CSP is the one advertised-but-absent capability.
 - *Scripting:* the DOM binds to JS not via Web-IDL codegen but a native-sink + JS-bootstrap pattern over the `ScriptEngine` trait; reflectors carry an opaque `u64 NodeId` and DOM data lives in a NodeId-keyed arena (`ScriptedDom`) shared with the native host lane. Above it, `script-runtime-api` models the WHATWG event loop on engine-neutral primitives.
-- *Host UI:* xilem_serval diffs into the same `ScriptedDom`, so host chrome and web documents render through one engine, one hit-test, one a11y tree. meerkat already consolidates chrome + all panes into one runner over one DOM.
+- *Host UI:* xilem_serval diffs into the same `ScriptedDom`, so host chrome and web documents render through one engine, one hit-test, one a11y tree. The current host implementation already consolidates chrome + all panes into one runner over one DOM.
 
-**The two dials.** The profile ladder (static -> interactive -> scripted -> fullweb) scales capability down as well as up, enforced by witnessed dependency cones (genet-extract proves a tier below paint; layout-on-wasm proves a tier below scripting). The SurfaceEngine multiplexer (mere/inker) scales sideways across web engines via the `compose_external_texture` / `<external-texture>` seam: scry plugged today, graft(Servo)/weld(CEF) exist as standalone producers not yet registered. The vision is code-seated; operationally only one engine is fully plugged, and even scry currently bypasses the registry in meerkat's shipped pool.
+**The two dials.** The profile ladder (static -> interactive -> scripted -> fullweb) scales capability down as well as up, enforced by witnessed dependency cones (genet-extract proves a tier below paint; layout-on-wasm proves a tier below scripting). The SurfaceEngine multiplexer (mere/inker) scales sideways across web engines via the `compose_external_texture` / `<external-texture>` seam: scry plugged today, graft(Servo)/weld(CEF) exist as standalone producers not yet registered. The vision is code-seated; operationally only one engine is fully plugged, and even scry currently bypasses the registry in the transitional host's shipped pool.
 
 **Where it is converging: Blitz-shaped and modular**, with three things Blitz lacks: a multi-engine multiplexer, a profile ladder enforced by dependency-cone witnesses, and host-UI through the same engine. Two assets make it more than a refactor of someone else's engine: webgl-essl (from-scratch pure-Rust ESSL->SPIR-V->WGSL compiler, ~6,500 LOC, 487 tests, already live in production) and genet-extract's render-free lane.
 
@@ -131,7 +160,7 @@ New, genet (this directory):
 
 New, mere:
 
-- `repos/mere/design_docs/mere_docs/implementation_strategy/2026-06-24_meerkat_render_perf_plan.md` — §3 dev moves + §4 GUI perf.
+- `repos/mere/design_docs/mere_docs/implementation_strategy/2026-06-24_meerkat_render_perf_plan.md` — current transitional-host §3 dev moves + §4 GUI perf, to be carried into Merecat extraction.
 
 Extended (existing plans carry this audit's deltas):
 

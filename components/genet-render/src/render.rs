@@ -25,19 +25,18 @@
 use std::hash::Hash;
 
 use engine_observables_api::{FragmentQuery, Point};
-use layout_dom_api::LayoutDom;
-use paint_list_api::{ColorF, DeviceIntSize};
-#[cfg(test)]
-use paint_list_api::PaintCmd;
 use genet_layout::{
-    BackgroundImagePlane, BoxTree, FragmentPlane, ImageLoader, ImagePlane, IncrementalLayout,
-    ScrollOffsets, GenetLaneView, GenetPaintList, StylePlane, TextMeasureCtx,
-    TextRange, accumulate_painted_origins, accumulated_translate, caret_byte_at_point,
-    caret_byte_vertical, caret_color, caret_rect, emit_paint_list_with_layouts,
-    layout, paint_list_from_layout_dom, push_scrollbars, range_rects,
-    run_cascade, selection_rects, selection_style,
+    BackgroundImagePlane, BoxTree, FragmentPlane, GenetLaneView, GenetPaintList, ImageLoader,
+    ImagePlane, IncrementalLayout, ScrollOffsets, StylePlane, TextMeasureCtx, TextRange,
+    accumulate_painted_origins, accumulated_translate, caret_byte_at_point, caret_byte_vertical,
+    caret_color, caret_rect, emit_paint_list_with_layouts, layout, paint_list_from_layout_dom,
+    push_scrollbars, range_rects, run_cascade, selection_rects, selection_style,
 };
 use genet_scripted_dom::{NodeId, ScriptedDom};
+use layout_dom_api::LayoutDom;
+#[cfg(test)]
+use paint_list_api::PaintCmd;
+use paint_list_api::{ColorF, DeviceIntSize};
 
 /// Caret bar thickness, device px.
 const CARET_WIDTH: f32 = 2.0;
@@ -78,6 +77,50 @@ pub struct TextCursor {
     /// Whether the focused node is an editable text field — gates the caret + selection
     /// paint. `false` for a focused non-text control (a button), which still rings.
     pub editable: bool,
+}
+
+/// Host-neutral metadata for a producer texture emitted by a paint list.
+///
+/// The scripted/layout tier supplies the stable key and placement; the host
+/// supplies the same-device texture registry. Keeping this side channel beside
+/// the Scene is what lets a browser host compose WebGL without putting `wgpu`
+/// into the DOM or layout crates.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExternalTextureDraw {
+    pub texture_key: u64,
+    pub dest_rect: [f32; 4],
+    pub opacity: f32,
+    pub scene_op_boundary: usize,
+}
+
+/// A rendered document frame plus the producer-texture draws that the host must
+/// composite against the same renderer device.
+#[derive(Clone, Debug)]
+pub struct RenderedFrame {
+    pub scene: netrender::Scene,
+    pub external_textures: Vec<ExternalTextureDraw>,
+}
+
+fn translate_frame<L: paint_list_api::PaintList>(list: &L) -> RenderedFrame {
+    let translated = paint_list_render::translate_paint_cmd_stream(
+        list.viewport(),
+        list.commands(),
+        list.fonts(),
+        list.images(),
+    );
+    RenderedFrame {
+        scene: translated.scene,
+        external_textures: translated
+            .external_textures
+            .into_iter()
+            .map(|draw| ExternalTextureDraw {
+                texture_key: draw.texture_key,
+                dest_rect: draw.placement.dest_rect,
+                opacity: draw.placement.opacity,
+                scene_op_boundary: draw.scene_op_boundary,
+            })
+            .collect(),
+    }
 }
 
 /// Run cascade → layout → paint-emit over `dom` and translate the paint list to
@@ -273,12 +316,27 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash + Send + Sync + 'static,
 {
+    translated_frame_from_session_dom(session, dom, width, height).scene
+}
+
+/// Emit and translate a retained document session, preserving the external
+/// producer-texture side channel alongside the ordinary Scene.
+pub fn translated_frame_from_session_dom<D>(
+    session: &IncrementalLayout<D::NodeId>,
+    dom: &D,
+    width: u32,
+    height: u32,
+) -> RenderedFrame
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash + Send + Sync + 'static,
+{
     let plist = session.emit_paint_list(
         dom,
         &ScrollOffsets::default(),
         DeviceIntSize::new(width as i32, height as i32),
     );
-    paint::translate_paint_list(&plist)
+    translate_frame(&plist)
 }
 
 /// The [`GenetPaintList`] half of [`scene_from_session`] — emit from the session

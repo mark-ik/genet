@@ -38,15 +38,6 @@ pub(super) fn vertex_stride(kind: VertexAttributeKind) -> u64 {
     }
 }
 
-pub(super) fn vertex_component_count(kind: VertexAttributeKind) -> u32 {
-    match kind {
-        VertexAttributeKind::Float32 => 1,
-        VertexAttributeKind::Float32x2 => 2,
-        VertexAttributeKind::Float32x3 => 3,
-        VertexAttributeKind::Float32x4 => 4,
-    }
-}
-
 pub(super) fn effective_vertex_stride(attrib: VertexAttribState, kind: VertexAttributeKind) -> u64 {
     if attrib.stride == 0 {
         vertex_stride(kind)
@@ -74,7 +65,7 @@ pub(super) fn build_render_pipeline(
         .zip(pipeline_key.attribute_layouts.iter())
         .map(|(attribute, layout)| {
             [wgpu::VertexAttribute {
-                format: vertex_format(attribute.kind),
+                format: vertex_format(layout.format),
                 offset: layout.offset,
                 shader_location: attribute.location,
             }]

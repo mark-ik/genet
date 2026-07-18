@@ -244,6 +244,7 @@ struct PipelineObject {
 
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 struct AttributeBufferLayout {
+    format: VertexAttributeKind,
     stride: u64,
     offset: u64,
 }

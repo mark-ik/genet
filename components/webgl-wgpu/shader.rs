@@ -78,7 +78,7 @@ pub(crate) struct VertexAttributeReflection {
     pub(crate) kind: VertexAttributeKind,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 pub(crate) enum VertexAttributeKind {
     Float32,
     Float32x2,

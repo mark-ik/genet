@@ -30,7 +30,16 @@ impl WebGlContext {
             self.record_error(WebGlError::InvalidOperation);
             return;
         };
-        shader.source = source.to_string();
+        // WebGL 1's draw-buffer form is commonly emitted by the Khronos
+        // helpers as `gl_FragData[0]`. The current Rust frontend owns one
+        // fragment output (`gl_FragColor`), so normalize the primary slot at
+        // this boundary before validation and lowering. Higher draw-buffer
+        // indices remain unsupported and must not be silently collapsed.
+        shader.source = if matches!(shader.stage, ShaderStage::Fragment) {
+            source.replace("gl_FragData[0]", "gl_FragColor")
+        } else {
+            source.to_string()
+        };
         shader.compile_status = false;
         shader.info_log.clear();
     }
@@ -191,7 +200,10 @@ impl WebGlContext {
         };
         program_object.translated = Some(translated);
         program_object.uniform_block_bytes = vec![0u8; reflection.uniform_block_size as usize];
-        program_object.sampler_texture_units = vec![None; reflection.samplers.len()];
+        // WebGL initializes sampler uniforms to texture unit 0. Keeping them
+        // unset here makes helper programs that rely on the default sampler
+        // value fail at draw time even though link succeeds.
+        program_object.sampler_texture_units = vec![Some(0); reflection.samplers.len()];
         program_object.reflection = Some(reflection);
         program_object.pipelines.clear();
         program_object.link_status = true;

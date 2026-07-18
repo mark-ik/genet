@@ -416,7 +416,7 @@ mod tests {
 
     /// Run one conformance HTML (path relative to `tests/wpt/webgl/tests`)
     /// through the harness with a real WebGL context, returning the outcome.
-    fn run_conformance(rel: &str) -> HarnessOutcome {
+    fn run_conformance(rel: &str, engine: Engine) -> HarnessOutcome {
         let wpt = wpt_root();
         let testharness_js = fs::read_to_string(wpt.join("tests/resources/testharness.js"))
             .expect("read testharness.js");
@@ -436,14 +436,40 @@ mod tests {
             None,
             None,
             Some(webgl_factory()),
-            Engine::Boa,
+            engine,
         )
+    }
+
+    fn assert_gl_clear(engine: Engine) {
+        let outcome = run_conformance("conformance/rendering/gl-clear.html", engine);
+        match outcome {
+            HarnessOutcome::Ran(results) => {
+                // The real Khronos gl-clear test, run end to end: js-test-pre +
+                // webgl-test-utils + js-test-post loaded from disk, drawing
+                // against wgpu, reporting via the testharness shim. We want it
+                // to produce subtest results and for them to pass.
+                assert!(
+                    !results.is_empty(),
+                    "gl-clear reported no subtests (harness ran but the test \
+                     never called testPassed/testFailed)"
+                );
+                let failures: Vec<_> = results.iter().filter(|r| !r.passed()).collect();
+                assert!(
+                    failures.is_empty(),
+                    "gl-clear had {} failing subtest(s): {:#?}",
+                    failures.len(),
+                    failures
+                );
+            },
+            HarnessOutcome::Threw(msg) => {
+                panic!("gl-clear threw before reporting: {msg}");
+            },
+        }
     }
 
     #[test]
     #[ignore = "diagnostic: prints where the Khronos helpers throw"]
     fn diagnostic_eval_helpers_in_order() {
-        use script_engine_api::ScriptEngine;
         use script_engine_boa::BoaEngine;
         use script_runtime_api::Runtime;
 
@@ -456,7 +482,7 @@ mod tests {
         let mut rt = Runtime::<BoaEngine>::new().expect("runtime");
         rt.set_webgl_factory(webgl_factory());
 
-        let mut step = |rt: &mut Runtime<BoaEngine>, label: &str, src: &str| match rt.eval(src) {
+        let step = |rt: &mut Runtime<BoaEngine>, label: &str, src: &str| match rt.eval(src) {
             Ok(_) => println!("OK   {label}"),
             Err(e) => println!("FAIL {label}: {e:?}"),
         };
@@ -517,29 +543,13 @@ mod tests {
 
     #[test]
     fn gl_clear_conformance_runs_through_the_harness() {
-        let outcome = run_conformance("conformance/rendering/gl-clear.html");
-        match outcome {
-            HarnessOutcome::Ran(results) => {
-                // The real Khronos gl-clear test, run end to end: js-test-pre +
-                // webgl-test-utils + js-test-post loaded from disk, drawing
-                // against wgpu, reporting via the testharness shim. We want it
-                // to produce subtest results and for them to pass.
-                assert!(
-                    !results.is_empty(),
-                    "gl-clear reported no subtests (harness ran but the test \
-                     never called testPassed/testFailed)"
-                );
-                let failures: Vec<_> = results.iter().filter(|r| !r.passed()).collect();
-                assert!(
-                    failures.is_empty(),
-                    "gl-clear had {} failing subtest(s): {:#?}",
-                    failures.len(),
-                    failures
-                );
-            },
-            HarnessOutcome::Threw(msg) => {
-                panic!("gl-clear threw before reporting: {msg}");
-            },
-        }
+        assert_gl_clear(Engine::Boa);
+    }
+
+    #[test]
+    fn gl_clear_conformance_runs_through_the_harness_on_vano() {
+        // The CLI still calls this engine `nova`; the resolved local package is
+        // Vano's `nova_vm` checkout under crates/vano.
+        assert_gl_clear(Engine::Nova);
     }
 }

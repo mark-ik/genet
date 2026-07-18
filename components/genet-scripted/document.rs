@@ -50,17 +50,17 @@ use std::rc::Rc;
 use engine_observables_api::DomArenaStats;
 #[cfg(feature = "render")]
 use engine_observables_api::LayoutBatchStats;
-use script_engine_api::ScriptEngine;
-#[cfg(feature = "render")]
-use script_runtime_api::ComputedStyleHandler;
-use script_runtime_api::{CookieProvider, Runtime};
 #[cfg(feature = "render")]
 use genet_layout::{IncrementalLayout, ScrollKey, ScrollOffsets, inline_stylesheets};
 #[cfg(feature = "render")]
-use genet_render::scene_from_session_dom;
+use genet_render::translated_frame_from_session_dom;
 #[cfg(feature = "render")]
 use genet_scripted_dom::NodeId;
 use genet_static_dom::{StaticDocument, StaticNodeId};
+use script_engine_api::ScriptEngine;
+#[cfg(feature = "render")]
+use script_runtime_api::ComputedStyleHandler;
+use script_runtime_api::{CookieProvider, Runtime, WebGlFactory};
 
 use crate::ResourceFetcher;
 use crate::capture::DomCaptureRecorder;
@@ -159,6 +159,26 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
     /// same `fetcher`). `Err` on a failed fetch of the document, or a runtime that
     /// would not initialize.
     pub fn load(fetcher: &impl ResourceFetcher, url: &str) -> Result<Self, String> {
+        Self::load_inner(fetcher, url, None)
+    }
+
+    /// Load a document with a host-owned WebGL factory installed before any
+    /// parser-blocking script runs. A browser host uses this when the page can
+    /// call `canvas.getContext('webgl')` during document load; installing the
+    /// factory after [`load`](Self::load) is too late for that script timing.
+    pub fn load_with_webgl_factory(
+        fetcher: &impl ResourceFetcher,
+        url: &str,
+        webgl: WebGlFactory,
+    ) -> Result<Self, String> {
+        Self::load_inner(fetcher, url, Some(webgl))
+    }
+
+    fn load_inner(
+        fetcher: &impl ResourceFetcher,
+        url: &str,
+        webgl: Option<WebGlFactory>,
+    ) -> Result<Self, String> {
         // Split a `url#id` fragment off before fetching (the fetcher takes the
         // resource, not the fragment).
         let (resource, fragment) = match url.split_once('#') {
@@ -174,6 +194,7 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
             &String::from_utf8_lossy(&bytes),
             Some((fetcher, resource)),
             None,
+            webgl,
         )?;
         #[cfg(feature = "render")]
         let me = {
@@ -191,7 +212,14 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
     /// `data:` content — with no fetcher, external `<script src>` is reported and
     /// skipped. `Err` if the runtime fails to initialize.
     pub fn parse(html: &str) -> Result<Self, String> {
-        Self::build(html, None, None)
+        Self::build(html, None, None, None)
+    }
+
+    /// Parse a document with a host-owned WebGL factory installed before its
+    /// inline scripts run. This is the fetch-free companion to
+    /// [`load_with_webgl_factory`](Self::load_with_webgl_factory).
+    pub fn parse_with_webgl_factory(html: &str, webgl: WebGlFactory) -> Result<Self, String> {
+        Self::build(html, None, None, Some(webgl))
     }
 
     /// Parse an already-fetched `html` body and run its scripts, fetching external
@@ -208,7 +236,19 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         base_url: &str,
         cookies: Option<Box<dyn CookieProvider>>,
     ) -> Result<Self, String> {
-        Self::build(html, Some((fetcher, base_url)), cookies)
+        Self::build(html, Some((fetcher, base_url)), cookies, None)
+    }
+
+    /// Parse an already-fetched body with a host-owned WebGL factory installed
+    /// before parser-blocking scripts run.
+    pub fn from_body_with_webgl_factory(
+        html: &str,
+        fetcher: &dyn ResourceFetcher,
+        base_url: &str,
+        cookies: Option<Box<dyn CookieProvider>>,
+        webgl: WebGlFactory,
+    ) -> Result<Self, String> {
+        Self::build(html, Some((fetcher, base_url)), cookies, Some(webgl))
     }
 
     /// Parse `html` into a live DOM and run its scripts in document order. With a
@@ -221,6 +261,7 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         html: &str,
         loader: Option<(&dyn ResourceFetcher, &str)>,
         cookies: Option<Box<dyn CookieProvider>>,
+        webgl: Option<WebGlFactory>,
     ) -> Result<Self, String> {
         let doc = StaticDocument::parse(html);
         #[cfg(feature = "render")]
@@ -262,6 +303,12 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         // a page reading / writing `document.cookie` on load sees the live session.
         if let Some(cookies) = cookies {
             rt.set_cookie_provider(cookies);
+        }
+        // Install the graphics seam before the parsed body enters the runtime
+        // and before any parser-blocking script executes. Vano's nova_vm backend
+        // and Boa receive the same engine-neutral factory contract here.
+        if let Some(webgl) = webgl {
+            rt.set_webgl_factory(webgl);
         }
         // The parsed body becomes the live DOM, so script querying it (document.body,
         // getElementById, querySelector) sees the page's elements.
@@ -456,6 +503,18 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
     /// follow-up).
     #[cfg(feature = "render")]
     pub fn frame(&mut self, width: u32, height: u32) -> Scene {
+        self.frame_with_external_textures(width, height).scene
+    }
+
+    /// Render the live DOM and preserve the host-neutral external-texture side
+    /// channel beside the Scene. A WGPU host uses the keys and placements to
+    /// look up the same-device textures created by its WebGL factory.
+    #[cfg(feature = "render")]
+    pub fn frame_with_external_textures(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> genet_render::RenderedFrame {
         let (w, h) = (width.max(1), height.max(1));
         // Sync the host-owned scroll into the script-visible mirror, and take any
         // pending scrollIntoView target. Short mutable borrow, dropped before layout.
@@ -482,7 +541,7 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         }
         let scroll = session.viewport_scroll();
         let range = session.scroll_range(dom);
-        let scene = scene_from_session_dom(&session, dom, w, h);
+        let frame = translated_frame_from_session_dom(&session, dom, w, h);
         drop(host);
 
         // Retain this frame's cascade so the `getComputedStyle` bridge can read
@@ -491,7 +550,7 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         self.scroll = scroll;
         self.scroll_range = range;
         self.size = (w, h);
-        scene
+        frame
     }
 
     /// Every link's hit rect(s) + href, in full-document px (unscrolled) — see
@@ -1083,6 +1142,118 @@ mod tests {
     use super::*;
     use engine_observables_api::LayoutApplyKind;
     use script_engine_boa::BoaEngine;
+    use script_runtime_api::WebGlHandler;
+
+    struct NullWebGl;
+
+    impl WebGlHandler for NullWebGl {
+        fn external_texture_key(&self) -> Option<u64> {
+            Some(17)
+        }
+        fn clear_color(&mut self, _r: f32, _g: f32, _b: f32, _a: f32) {}
+        fn clear(&mut self, _mask: u32) {}
+        fn viewport(&mut self, _x: i32, _y: i32, _width: u32, _height: u32) {}
+        fn enable(&mut self, _cap: u32) {}
+        fn disable(&mut self, _cap: u32) {}
+        fn is_enabled(&mut self, _cap: u32) -> bool {
+            false
+        }
+        fn color_mask(&mut self, _r: bool, _g: bool, _b: bool, _a: bool) {}
+        fn create_buffer(&mut self) -> u64 {
+            1
+        }
+        fn bind_buffer(&mut self, _target: u32, _buffer: Option<u64>) {}
+        fn buffer_data_f32(&mut self, _target: u32, _data: &[f32], _usage: u32) {}
+        fn create_shader(&mut self, _stage: u32) -> u64 {
+            1
+        }
+        fn shader_source(&mut self, _shader: u64, _source: &str) {}
+        fn compile_shader(&mut self, _shader: u64) {}
+        fn get_shader_compile_status(&mut self, _shader: u64) -> bool {
+            true
+        }
+        fn get_shader_info_log(&mut self, _shader: u64) -> String {
+            String::new()
+        }
+        fn create_program(&mut self) -> u64 {
+            1
+        }
+        fn attach_shader(&mut self, _program: u64, _shader: u64) {}
+        fn link_program(&mut self, _program: u64) {}
+        fn get_program_link_status(&mut self, _program: u64) -> bool {
+            true
+        }
+        fn get_program_info_log(&mut self, _program: u64) -> String {
+            String::new()
+        }
+        fn use_program(&mut self, _program: Option<u64>) {}
+        fn get_attrib_location(&mut self, _program: u64, _name: &str) -> i32 {
+            0
+        }
+        fn get_uniform_location(&mut self, _program: u64, _name: &str) -> i32 {
+            -1
+        }
+        fn enable_vertex_attrib_array(&mut self, _index: u32) {}
+        fn vertex_attrib_pointer_f32(
+            &mut self,
+            _index: u32,
+            _size: u32,
+            _normalized: bool,
+            _stride: u32,
+            _offset: u32,
+        ) {
+        }
+        fn uniform4f(&mut self, _location: i32, _x: f32, _y: f32, _z: f32, _w: f32) {}
+        fn uniform_matrix4fv(&mut self, _location: i32, _transpose: bool, _value: &[f32]) {}
+        fn uniform1i(&mut self, _location: i32, _value: i32) {}
+        fn create_texture(&mut self) -> u64 {
+            1
+        }
+        fn bind_texture_2d(&mut self, _texture: Option<u64>) {}
+        fn active_texture(&mut self, _unit: u32) {}
+        fn tex_image_2d_rgba8(&mut self, _width: u32, _height: u32, _pixels: &[u8]) {}
+        fn draw_arrays(&mut self, _mode: u32, _first: i32, _count: i32) {}
+        fn get_error(&mut self) -> u32 {
+            0
+        }
+        fn read_pixels_rgba8(&mut self, _x: i32, _y: i32, _width: u32, _height: u32) -> Vec<u8> {
+            Vec::new()
+        }
+    }
+
+    fn webgl_factory_is_installed_before_inline_script<E: ScriptEngine>() {
+        let created = std::rc::Rc::new(std::cell::Cell::new(false));
+        let marker = created.clone();
+        let html = r#"<body><canvas id="c"></canvas><script>
+            document.getElementById('c').getContext('webgl');
+        </script></body>"#;
+        let _doc = ScriptedDocument::<E>::parse_with_webgl_factory(
+            html,
+            Box::new(move |_width, _height| {
+                marker.set(true);
+                Box::new(NullWebGl)
+            }),
+        )
+        .expect("runtime inits");
+        assert!(
+            created.get(),
+            "the factory ran during parser-blocking script execution"
+        );
+    }
+
+    fn canvas_external_texture_metadata_reaches_the_frame<E: ScriptEngine>() {
+        let html = r#"<body><canvas id="c" width="4" height="4"></canvas><script>
+            document.getElementById('c').getContext('webgl');
+        </script></body>"#;
+        let mut doc = ScriptedDocument::<E>::parse_with_webgl_factory(
+            html,
+            Box::new(|_width, _height| Box::new(NullWebGl)),
+        )
+        .expect("runtime inits");
+        let frame = doc.frame_with_external_textures(200, 100);
+        assert_eq!(frame.external_textures.len(), 1);
+        assert_eq!(frame.external_textures[0].texture_key, 17);
+    }
 
     /// A page whose inline script injects a `<p>` with text: the rendered scene gains
     /// glyph runs that an empty body would not have — the load → run-script → mutate →
@@ -2063,7 +2234,9 @@ mod tests {
         }
         let session = {
             let host = rt.host().borrow();
-            Rc::new(RefCell::new(IncrementalLayout::new(&host.dom, SHEETS, 400.0, 300.0)))
+            Rc::new(RefCell::new(IncrementalLayout::new(
+                &host.dom, SHEETS, 400.0, 300.0,
+            )))
         };
 
         // Drain the layout's harvested transition events and dispatch each at
@@ -2157,7 +2330,9 @@ mod tests {
         }
         let session = {
             let host = rt.host().borrow();
-            Rc::new(RefCell::new(IncrementalLayout::new(&host.dom, SHEETS, 400.0, 300.0)))
+            Rc::new(RefCell::new(IncrementalLayout::new(
+                &host.dom, SHEETS, 400.0, 300.0,
+            )))
         };
 
         fn pump<E: ScriptEngine>(
@@ -2328,6 +2503,14 @@ mod tests {
         mutation_renders::<BoaEngine>();
     }
     #[test]
+    fn webgl_factory_is_installed_before_inline_script_on_boa() {
+        webgl_factory_is_installed_before_inline_script::<BoaEngine>();
+    }
+    #[test]
+    fn canvas_external_texture_metadata_reaches_the_frame_on_boa() {
+        canvas_external_texture_metadata_reaches_the_frame::<BoaEngine>();
+    }
+    #[test]
     fn dom_and_layout_stats_surface_on_boa() {
         dom_and_layout_stats_surface::<BoaEngine>();
     }
@@ -2484,6 +2667,14 @@ mod tests {
         #[test]
         fn mutation_renders_on_nova() {
             mutation_renders::<NovaEngine>();
+        }
+        #[test]
+        fn webgl_factory_is_installed_before_inline_script_on_nova() {
+            webgl_factory_is_installed_before_inline_script::<NovaEngine>();
+        }
+        #[test]
+        fn canvas_external_texture_metadata_reaches_the_frame_on_nova() {
+            canvas_external_texture_metadata_reaches_the_frame::<NovaEngine>();
         }
         #[test]
         fn get_computed_style_reads_cascade_on_nova() {
