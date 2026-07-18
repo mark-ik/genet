@@ -668,6 +668,17 @@ CSS2 line-box ratchet is 164 passed, 26 failed, 59 skipped, and 0 errored; the
 remaining failures are concentrated in line-height leading and vertical-align
 metrics.
 
+### 2026-07-17 explicit inline leading receipt
+
+The shaped line now takes the largest explicit line-height among its root
+strut, text spans, and in-flow inline atoms. The extra leading is split around
+the glyph baseline while the retained line fragment expands to the CSS line
+box, so a 200px span line-height centers a 100px glyph inside its 200px parent
+background.
+
+`leading-001.xht` now matches its reference. Table-formatting and
+vertical-align cases remain separate metric or container-model slices.
+
 ## The destination, named
 
 *(Amended 2026-07-14.)* Livery's document profile grinds toward full browser

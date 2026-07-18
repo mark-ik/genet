@@ -486,7 +486,20 @@ impl TextSystem {
 
         let mut result = Vec::new();
         for line in layout.lines() {
-            let metrics = *line.metrics();
+            let source_metrics = *line.metrics();
+            let content_height = (source_metrics.block_max_coord
+                - source_metrics.block_min_coord)
+            .max(0.0);
+            let line_height_floor = std::iter::once(root_style)
+                .chain(spans.iter().map(|span| &span.style))
+                .filter_map(explicit_line_height)
+                .chain(inline_boxes.iter().map(|inline_box| inline_box.line_box_height))
+                .fold(content_height, f32::max);
+            let extra_leading = (line_height_floor - content_height).max(0.0);
+            let mut metrics = source_metrics;
+            metrics.line_height = metrics.line_height.max(line_height_floor);
+            metrics.block_max_coord = metrics.block_min_coord + metrics.line_height;
+            metrics.baseline += extra_leading * 0.5;
             let strut_height = super::layout::line_height_px(
                 &root_style.line_height,
                 super::paint::used_font_size(root_style),
@@ -536,7 +549,8 @@ impl TextSystem {
                             continue;
                         }
                         for glyph in &mut glyphs {
-                            glyph.point.y += vertical_shift - empty_line_shift;
+                            glyph.point.y +=
+                                vertical_shift + extra_leading * 0.5 - empty_line_shift;
                         }
                         let [red, green, blue, alpha] = brush.color;
                         result.push(ShapedItem::Text(ShapedRun {
@@ -549,8 +563,7 @@ impl TextSystem {
                                 x: run.offset(),
                                 y: metrics.block_min_coord + vertical_shift,
                                 width: run.advance().max(0.0),
-                                height: (metrics.block_max_coord - metrics.block_min_coord)
-                                    .max(0.0),
+                                height: metrics.line_height.max(0.0),
                             },
                             font_instance: self.intern_font(parley_run.font()),
                             font_size: parley_run.font_size(),
@@ -1324,6 +1337,17 @@ fn line_height(style: &ComputedValues) -> StyleProperty<'static, Brush> {
         )),
     };
     StyleProperty::LineHeight(value)
+}
+
+fn explicit_line_height(style: &ComputedValues) -> Option<f32> {
+    if matches!(style.line_height, CssLineHeight::Normal) {
+        None
+    } else {
+        Some(super::layout::line_height_px(
+            &style.line_height,
+            super::paint::used_font_size(style),
+        ))
+    }
 }
 
 fn content_key(bytes: &[u8], index: u32) -> FontInstanceKey {
