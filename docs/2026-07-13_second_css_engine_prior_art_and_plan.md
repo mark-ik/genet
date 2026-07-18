@@ -691,6 +691,19 @@ overlay.
 `vertical-align-sub-001.xht` and `vertical-align-super-001.xht` now match their
 references. Baseline and inline vertical-align cases remain open.
 
+### 2026-07-17 zero-line-height overflow receipt
+
+The line builder now keeps an explicit line-height as the line box itself,
+including zero, while glyph bounds remain independent overflow. Positive
+leading still expands the retained line fragment; a zero-height child box can
+therefore let its glyphs bleed without painting a background rectangle.
+Inline decoration uses the glyph-content fragment when a smaller line-height
+would otherwise hide its padding; in-flow replaced atoms retain the font-strut
+center used by the table/image probes.
+
+`line-height-bleed-001.xht` now matches its reference. The remaining line-box
+failures are table-formatting and baseline/negative-leading cases.
+
 ## The destination, named
 
 *(Amended 2026-07-14.)* Livery's document profile grinds toward full browser

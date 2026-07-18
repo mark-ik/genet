@@ -163,7 +163,7 @@ impl TextSystem {
         );
         for item in items {
             let fragment = match item {
-                ShapedItem::Text(run) => run.fragment,
+                ShapedItem::Text(run) => run.line_fragment,
                 ShapedItem::InlineBox { line_fragment, .. } => line_fragment,
             };
             right = right.max(fragment.x + fragment.width);
@@ -366,7 +366,7 @@ impl TextSystem {
                         continue;
                     };
                     translate_fragment(&mut run.fragment, origin);
-                    let line_y = run.fragment.y;
+                    let line_y = run.line_y + origin.1;
                     for glyph in &mut run.glyphs {
                         glyph.point.x += origin.0;
                         glyph.point.y += origin.1;
@@ -497,14 +497,29 @@ impl TextSystem {
             let content_height = (source_metrics.block_max_coord
                 - source_metrics.block_min_coord)
             .max(0.0);
-            let line_height_floor = std::iter::once(root_style)
+            let requested_line_height = std::iter::once(root_style)
                 .chain(spans.iter().map(|span| &span.style))
                 .filter_map(explicit_line_height)
-                .chain(inline_boxes.iter().map(|inline_box| inline_box.line_box_height))
-                .fold(content_height, f32::max);
-            let extra_leading = (line_height_floor - content_height).max(0.0);
+                .chain(
+                    inline_boxes
+                        .iter()
+                        .map(|inline_box| inline_box.line_box_height)
+                        .filter(|height| *height > 0.0),
+                )
+                .reduce(f32::max);
+            let has_in_flow_atom = inline_boxes.iter().any(|inline_box| !inline_box.edge);
+            let line_box_height = if has_in_flow_atom {
+                source_metrics
+                    .line_height
+                    .max(content_height)
+                    .max(requested_line_height.unwrap_or(0.0))
+            } else {
+                requested_line_height.unwrap_or(source_metrics.line_height.max(content_height))
+            }
+            .max(0.0);
+            let extra_leading = (line_box_height - content_height).max(0.0);
             let mut metrics = source_metrics;
-            metrics.line_height = metrics.line_height.max(line_height_floor);
+            metrics.line_height = line_box_height;
             metrics.block_max_coord = metrics.block_min_coord + metrics.line_height;
             metrics.baseline += extra_leading * 0.5;
             let strut_height = super::layout::line_height_px(
@@ -560,13 +575,25 @@ impl TextSystem {
                                 vertical_shift + extra_leading * 0.5 - empty_line_shift;
                         }
                         let [red, green, blue, alpha] = brush.color;
+                        let paint_height = metrics.line_height.max(content_height);
                         result.push(ShapedItem::Text(ShapedRun {
                             source: span.and_then(|span| span.source),
                             owners: span.map_or_else(Vec::new, |span| span.owners.clone()),
-                            line_baseline: metrics.baseline,
-                            line_block_min: metrics.block_min_coord,
-                            line_block_max: metrics.block_max_coord,
+                            // Keep the font-content metrics separate from the
+                            // explicit line box.  Zero-height struts use this
+                            // center to place replaced atoms without turning
+                            // glyph overflow into flow height.
+                            line_baseline: source_metrics.baseline,
+                            line_block_min: source_metrics.block_min_coord,
+                            line_block_max: source_metrics.block_max_coord,
+                            line_y: metrics.block_min_coord,
                             fragment: Fragment {
+                                x: run.offset(),
+                                y: metrics.block_min_coord + vertical_shift,
+                                width: run.advance().max(0.0),
+                                height: paint_height.max(0.0),
+                            },
+                            line_fragment: Fragment {
                                 x: run.offset(),
                                 y: metrics.block_min_coord + vertical_shift,
                                 width: run.advance().max(0.0),
@@ -820,7 +847,9 @@ struct ShapedRun<Id> {
     line_baseline: f32,
     line_block_min: f32,
     line_block_max: f32,
+    line_y: f32,
     fragment: Fragment,
+    line_fragment: Fragment,
     font_instance: FontInstanceKey,
     font_size: f32,
     color: ColorF,
