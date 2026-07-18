@@ -618,10 +618,7 @@ where
                         .max()
                         .unwrap_or(0)
                 } else {
-                    text.split_whitespace()
-                        .map(|word| word.chars().count())
-                        .max()
-                        .unwrap_or(0)
+                    collapsed_word_width(text)
                 } as f32
                     * font_size
                     * 0.6;
@@ -1040,6 +1037,20 @@ fn definite_size(size: CssSize, font_size: f32) -> Option<f32> {
         },
         _ => None,
     }
+}
+
+fn collapsed_word_width(text: &str) -> usize {
+    let mut maximum = 0;
+    let mut current = 0;
+    for character in text.chars() {
+        if matches!(character, '\u{0009}' | '\u{000A}' | '\u{000C}' | '\u{000D}' | ' ') {
+            maximum = maximum.max(current);
+            current = 0;
+        } else {
+            current += 1;
+        }
+    }
+    maximum.max(current)
 }
 
 fn to_taffy_style(computed: &ComputedValues, font_size: f32) -> Style {

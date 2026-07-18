@@ -704,6 +704,17 @@ center used by the table/image probes.
 `line-height-bleed-001.xht` now matches its reference. The remaining line-box
 failures are table-formatting and baseline/negative-leading cases.
 
+### 2026-07-17 non-breaking whitespace and table-cell receipt
+
+The collapsed text path now treats ordinary CSS whitespace as collapsible but
+keeps U+00A0 as a real non-breaking character. The same rule feeds the
+preliminary width estimate, so an otherwise empty-looking table cell still
+gets its inline line box and declared line-height.
+
+All `line-height-applies-to-*` probes now match. The CSS2 line-box ratchet is
+178 passed, 12 failed, 59 skipped, and 0 errored; the remaining failures are
+inline formatting floats and vertical-align baseline/negative-leading cases.
+
 ## The destination, named
 
 *(Amended 2026-07-14.)* Livery's document profile grinds toward full browser

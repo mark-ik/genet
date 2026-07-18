@@ -1204,7 +1204,7 @@ fn normalized_text<'a>(source: &'a str, style: &ComputedValues) -> Cow<'a, str> 
     ) {
         return Cow::Borrowed(source);
     }
-    Cow::Owned(source.split_whitespace().collect::<Vec<_>>().join(" "))
+    Cow::Owned(collapse_css_whitespace(source))
 }
 
 fn append_inline_text(target: &mut String, source: &str, style: &ComputedValues) {
@@ -1218,20 +1218,45 @@ fn append_inline_text(target: &mut String, source: &str, style: &ComputedValues)
         return;
     }
 
-    let leading = source.chars().next().is_some_and(char::is_whitespace);
-    let trailing = source.chars().next_back().is_some_and(char::is_whitespace);
+    let leading = source.chars().next().is_some_and(is_css_whitespace);
+    let trailing = source.chars().next_back().is_some_and(is_css_whitespace);
     if leading && !target.is_empty() && !target.ends_with(char::is_whitespace) {
         target.push(' ');
     }
-    for word in source.split_whitespace() {
-        if !target.is_empty() && !target.ends_with(char::is_whitespace) {
+    let collapsed = collapse_css_whitespace(source);
+    if !collapsed.is_empty() {
+        if !target.is_empty() && !target.ends_with(char::is_whitespace) && !leading {
             target.push(' ');
         }
-        target.push_str(word);
+        target.push_str(&collapsed);
     }
     if trailing && !target.is_empty() && !target.ends_with(char::is_whitespace) {
         target.push(' ');
     }
+}
+
+fn is_css_whitespace(character: char) -> bool {
+    matches!(character, '\u{0009}' | '\u{000A}' | '\u{000C}' | '\u{000D}' | ' ')
+}
+
+fn collapse_css_whitespace(source: &str) -> String {
+    let mut output = String::new();
+    let mut pending_space = false;
+    for character in source.chars() {
+        if is_css_whitespace(character) {
+            pending_space = true;
+            continue;
+        }
+        if pending_space && !output.is_empty() {
+            output.push(' ');
+        }
+        pending_space = false;
+        output.push(character);
+    }
+    if pending_space && !output.is_empty() {
+        output.push(' ');
+    }
+    output
 }
 
 fn push_defaults(builder: &mut parley::RangedBuilder<'_, Brush>, style: &ComputedValues) {
