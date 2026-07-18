@@ -105,6 +105,7 @@ impl TextSystem {
                 text: &mut text,
                 spans: &mut spans,
                 inline_boxes: &mut inline_boxes,
+                negative_margin_offset: 0.0,
                 percentage_basis: width,
             };
             for root in roots {
@@ -281,6 +282,7 @@ impl TextSystem {
             owners: Vec::new(),
             style: style.clone(),
             range: 0..text.len(),
+            negative_margin_offset: 0.0,
         }];
         for item in self.shape(text.as_ref(), &mut spans, &[], fragment.width, style) {
             let ShapedItem::Text(mut run) = item else {
@@ -333,6 +335,7 @@ impl TextSystem {
                 text: &mut text,
                 spans: &mut spans,
                 inline_boxes: &mut inline_boxes,
+                negative_margin_offset: 0.0,
                 percentage_basis: parent_fragment.width,
             };
             for root in roots {
@@ -494,9 +497,22 @@ impl TextSystem {
         let mut result = Vec::new();
         for line in layout.lines() {
             let source_metrics = *line.metrics();
-            let content_height = (source_metrics.block_max_coord
-                - source_metrics.block_min_coord)
-            .max(0.0);
+            let content_height =
+                (source_metrics.block_max_coord - source_metrics.block_min_coord).max(0.0);
+            let (has_text_top, has_text_bottom) =
+                line.items()
+                    .fold((false, false), |(has_text_top, has_text_bottom), item| {
+                        let PositionedLayoutItem::GlyphRun(run) = item else {
+                            return (has_text_top, has_text_bottom);
+                    };
+                    let value = spans
+                        .get(run.style().brush.source_index)
+                        .map(|span| span.style.vertical_align);
+                        (
+                            has_text_top || matches!(value, Some(VerticalAlign::TextTop)),
+                            has_text_bottom || matches!(value, Some(VerticalAlign::TextBottom)),
+                        )
+                    });
             let requested_line_height = std::iter::once(root_style)
                 .chain(spans.iter().map(|span| &span.style))
                 .filter_map(explicit_line_height)
@@ -515,9 +531,25 @@ impl TextSystem {
                     .max(requested_line_height.unwrap_or(0.0))
             } else {
                 requested_line_height.unwrap_or(source_metrics.line_height.max(content_height))
+            } + if has_text_top || has_text_bottom {
+                (source_metrics.leading * 0.5).max(0.0)
+            } else {
+                0.0
             }
             .max(0.0);
             let extra_leading = (line_box_height - content_height).max(0.0);
+            let edge_leading = if has_text_top || has_text_bottom {
+                (source_metrics.leading * 0.5).max(0.0)
+            } else {
+                0.0
+            };
+            let common_vertical_shift = if has_text_bottom {
+                edge_leading - extra_leading * 0.5
+            } else if has_text_top {
+                -extra_leading * 0.5
+            } else {
+                0.0
+            };
             let mut metrics = source_metrics;
             metrics.line_height = line_box_height;
             metrics.block_max_coord = metrics.block_min_coord + metrics.line_height;
@@ -546,25 +578,37 @@ impl TextSystem {
                         let parley_run = run.run();
                         let brush = &run.style().brush;
                         let span = spans.get(brush.source_index);
+                        let negative_margin_offset =
+                            span.map_or(0.0, |span| span.negative_margin_offset);
                         let vertical_shift = span.map_or(0.0, |span| {
-                            vertical_align_shift(
-                                span.style.vertical_align,
-                                super::paint::used_font_size(&span.style),
-                                super::layout::line_height_px(
-                                    &span.style.line_height,
+                            let edge_shift = match span.style.vertical_align {
+                                VerticalAlign::TextTop if has_text_top => edge_leading,
+                                VerticalAlign::TextBottom if has_text_bottom => -edge_leading,
+                                _ => 0.0,
+                            };
+                            common_vertical_shift
+                                + edge_shift
+                                + vertical_align_shift(
+                                    span.style.vertical_align,
                                     super::paint::used_font_size(&span.style),
-                                ),
-                                &metrics,
-                                metrics.block_min_coord,
-                                metrics.block_max_coord - metrics.block_min_coord,
-                                false,
-                            )
+                                    super::layout::line_height_px(
+                                        &span.style.line_height,
+                                        super::paint::used_font_size(&span.style),
+                                    ),
+                                    &metrics,
+                                    source_metrics.block_min_coord,
+                                    super::layout::line_height_px(
+                                        &span.style.line_height,
+                                        super::paint::used_font_size(&span.style),
+                                    ),
+                                    false,
+                                )
                         });
                         let mut glyphs = run
                             .positioned_glyphs()
                             .map(|glyph| GlyphInstance {
                                 index: glyph.id,
-                                point: LayoutPoint::new(glyph.x, glyph.y),
+                                point: LayoutPoint::new(glyph.x + negative_margin_offset, glyph.y),
                             })
                             .collect::<Vec<_>>();
                         if glyphs.is_empty() {
@@ -588,14 +632,19 @@ impl TextSystem {
                             line_block_max: source_metrics.block_max_coord,
                             line_y: metrics.block_min_coord,
                             fragment: Fragment {
-                                x: run.offset(),
+                                x: run.offset() + negative_margin_offset,
                                 y: metrics.block_min_coord + vertical_shift,
                                 width: run.advance().max(0.0),
                                 height: paint_height.max(0.0),
                             },
                             line_fragment: Fragment {
-                                x: run.offset(),
-                                y: metrics.block_min_coord + vertical_shift,
+                                x: run.offset() + negative_margin_offset,
+                                y: metrics.block_min_coord
+                                    + if has_text_top || has_text_bottom {
+                                        common_vertical_shift
+                                    } else {
+                                        vertical_shift
+                                    },
                                 width: run.advance().max(0.0),
                                 height: metrics.line_height.max(0.0),
                             },
@@ -667,7 +716,12 @@ impl TextSystem {
                             },
                             line_fragment: Fragment {
                                 x: positioned.x,
-                                y: base_y + vertical_shift,
+                                y: base_y
+                                    + if inline_box.edge && (has_text_top || has_text_bottom) {
+                                        common_vertical_shift
+                                    } else {
+                                        vertical_shift
+                                    },
                                 width: positioned.width,
                                 height: line_height,
                             },
@@ -810,6 +864,7 @@ struct SourceSpan<Id> {
     owners: Vec<Id>,
     style: ComputedValues,
     range: Range<usize>,
+    negative_margin_offset: f32,
 }
 
 struct InlineAtom<Id> {
@@ -906,6 +961,7 @@ where
     text: &'a mut String,
     spans: &'a mut Vec<SourceSpan<D::NodeId>>,
     inline_boxes: &'a mut Vec<InlineAtom<D::NodeId>>,
+    negative_margin_offset: f32,
     percentage_basis: f32,
 }
 
@@ -930,6 +986,7 @@ where
                     owners: self.owners.clone(),
                     style: inherited.clone(),
                     range: start..self.text.len(),
+                    negative_margin_offset: self.negative_margin_offset,
                 });
             },
             NodeKind::Element => {
@@ -1015,6 +1072,20 @@ where
                 let text_start = self.text.len();
                 self.push_edge(id, &style, &ancestor_owners, true);
                 let content_start = self.inline_boxes.len();
+                let previous_negative_margin = self.negative_margin_offset;
+                let leading_negative_margin = inline_margin_px(
+                    style.margin_left,
+                    super::paint::used_font_size(&style),
+                    self.percentage_basis,
+                )
+                .min(0.0);
+                self.negative_margin_offset += leading_negative_margin;
+                let trailing_negative_margin = inline_margin_px(
+                    style.margin_right,
+                    super::paint::used_font_size(&style),
+                    self.percentage_basis,
+                )
+                .min(0.0);
                 self.owners.push(id);
                 for child in self.dom.dom_children(id) {
                     if is_inline(self.dom, self.styles, child) {
@@ -1022,6 +1093,9 @@ where
                     }
                 }
                 self.owners.pop();
+                self.negative_margin_offset = previous_negative_margin
+                    + leading_negative_margin
+                    + trailing_negative_margin;
                 let has_inline_content = self.inline_boxes.len() > content_start;
                 self.push_edge(id, &style, &ancestor_owners, false);
                 if self.text.len() == text_start && !has_inline_content {
@@ -1054,7 +1128,7 @@ where
         };
         let decoration = if start { edges.left } else { edges.right };
         let mut push = |width: f32, paint: bool| {
-            if width > 0.0 {
+            if width.is_finite() && width.abs() > f32::EPSILON {
                 self.inline_boxes.push(InlineAtom {
                     source,
                     owners: owners.to_vec(),
