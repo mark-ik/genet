@@ -681,6 +681,16 @@ animation = "by-computed-value"
 source = "css_inline_3"
 
 [[property]]
+name = "vertical-align"
+value_type = "vertical-align"
+inherited = false
+initial = "baseline"
+grammar = "baseline | sub | super | text-top | text-bottom | middle | top | bottom | <length-percentage>"
+seed_values = ["baseline", "sub", "super", "middle", "top", "bottom", "px", "percentage"]
+animation = "by-computed-value"
+source = "css_inline_3"
+
+[[property]]
 name = "list-style-type"
 value_type = "list-style-type"
 inherited = true

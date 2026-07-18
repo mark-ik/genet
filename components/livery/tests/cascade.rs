@@ -4,7 +4,7 @@ use livery::cascade::{
 };
 use livery::values::{
     Color, FontFamily, FontSize, FontStyle, FontWeight, Length, LengthPercentage, LineHeight,
-    Margin, Size, TransitionProperty,
+    Margin, Size, TransitionProperty, VerticalAlign,
 };
 
 fn matched(
@@ -125,6 +125,27 @@ fn font_shorthand_expands_size_line_height_and_family() {
         &block.declarations[4].value,
         livery::cascade::DeclaredValue::Value(PropertyValue::FontFamily(FontFamily::Named(name)))
             if name.as_ref() == "Ahem"
+    ));
+}
+
+#[test]
+fn vertical_align_accepts_keyword_and_offset_forms() {
+    let keyword = parse_declaration_block("vertical-align: text-bottom");
+    assert!(keyword.errors.is_empty(), "{:?}", keyword.errors);
+    assert!(matches!(
+        &keyword.declarations[0].value,
+        livery::cascade::DeclaredValue::Value(PropertyValue::VerticalAlign(
+            VerticalAlign::TextBottom
+        ))
+    ));
+
+    let offset = parse_declaration_block("vertical-align: -2px");
+    assert!(offset.errors.is_empty(), "{:?}", offset.errors);
+    assert!(matches!(
+        &offset.declarations[0].value,
+        livery::cascade::DeclaredValue::Value(PropertyValue::VerticalAlign(
+            VerticalAlign::Length(LengthPercentage::Length(length))
+        )) if length.value == -2.0
     ));
 }
 

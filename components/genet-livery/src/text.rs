@@ -14,7 +14,7 @@ use livery::{
     values::{
         Display, FontFamily as CssFontFamily, FontStyle as CssFontStyle,
         FontWeight as CssFontWeight, LineHeight as CssLineHeight, Margin, Spacing, TextAlign,
-        TextWrapMode,
+        TextWrapMode, VerticalAlign,
     },
 };
 use paint_list_api::{
@@ -428,7 +428,21 @@ impl TextSystem {
                         let parley_run = run.run();
                         let brush = &run.style().brush;
                         let span = spans.get(brush.source_index);
-                        let glyphs = run
+                        let vertical_shift = span.map_or(0.0, |span| {
+                            vertical_align_shift(
+                                span.style.vertical_align,
+                                super::paint::used_font_size(&span.style),
+                                super::layout::line_height_px(
+                                    &span.style.line_height,
+                                    super::paint::used_font_size(&span.style),
+                                ),
+                                &metrics,
+                                metrics.block_min_coord,
+                                metrics.block_max_coord - metrics.block_min_coord,
+                                false,
+                            )
+                        });
+                        let mut glyphs = run
                             .positioned_glyphs()
                             .map(|glyph| GlyphInstance {
                                 index: glyph.id,
@@ -438,13 +452,16 @@ impl TextSystem {
                         if glyphs.is_empty() {
                             continue;
                         }
+                        for glyph in &mut glyphs {
+                            glyph.point.y += vertical_shift;
+                        }
                         let [red, green, blue, alpha] = brush.color;
                         result.push(ShapedItem::Text(ShapedRun {
                             source: span.and_then(|span| span.source),
                             owners: span.map_or_else(Vec::new, |span| span.owners.clone()),
                             fragment: Fragment {
                                 x: run.offset(),
-                                y: metrics.block_min_coord,
+                                y: metrics.block_min_coord + vertical_shift,
                                 width: run.advance().max(0.0),
                                 height: (metrics.block_max_coord - metrics.block_min_coord)
                                     .max(0.0),
@@ -462,22 +479,37 @@ impl TextSystem {
                         else {
                             continue;
                         };
+                        let height = if inline_box.edge {
+                            (metrics.block_max_coord - metrics.block_min_coord).max(0.0)
+                        } else {
+                            positioned.height
+                        };
+                        let base_y = if inline_box.edge {
+                            metrics.block_min_coord
+                        } else {
+                            positioned.y
+                        };
+                        let vertical_shift = if inline_box.edge {
+                            0.0
+                        } else {
+                            vertical_align_shift(
+                                inline_box.vertical_align,
+                                inline_box.font_size,
+                                inline_box.line_height,
+                                &metrics,
+                                base_y,
+                                height,
+                                true,
+                            )
+                        };
                         result.push(ShapedItem::InlineBox {
                             source: inline_box.source,
                             owners: inline_box.owners.clone(),
                             fragment: Fragment {
                                 x: positioned.x,
-                                y: if inline_box.edge {
-                                    metrics.block_min_coord
-                                } else {
-                                    positioned.y
-                                },
+                                y: base_y + vertical_shift,
                                 width: positioned.width,
-                                height: if inline_box.edge {
-                                    (metrics.block_max_coord - metrics.block_min_coord).max(0.0)
-                                } else {
-                                    positioned.height
-                                },
+                                height,
                             },
                             edge: inline_box.edge,
                             paint: inline_box.paint,
@@ -621,6 +653,9 @@ struct InlineAtom<Id> {
     fragment: Fragment,
     edge: bool,
     paint: bool,
+    vertical_align: VerticalAlign,
+    font_size: f32,
+    line_height: f32,
 }
 
 enum ShapedItem<Id> {
@@ -723,6 +758,12 @@ where
                             fragment,
                             edge: false,
                             paint: true,
+                            vertical_align: style.vertical_align,
+                            font_size: super::paint::used_font_size(&style),
+                            line_height: super::layout::line_height_px(
+                                &style.line_height,
+                                super::paint::used_font_size(&style),
+                            ),
                         });
                     }
                     return;
@@ -781,6 +822,9 @@ where
                     },
                     edge: true,
                     paint,
+                    vertical_align: style.vertical_align,
+                    font_size: em,
+                    line_height: super::layout::line_height_px(&style.line_height, em),
                 });
             }
         };
@@ -815,6 +859,9 @@ where
             },
             edge: false,
             paint: false,
+            vertical_align: style.vertical_align,
+            font_size,
+            line_height: height,
         });
     }
 }

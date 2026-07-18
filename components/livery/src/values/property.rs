@@ -779,6 +779,53 @@ keyword_value! {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VerticalAlign {
+    Baseline,
+    Sub,
+    Super,
+    TextTop,
+    TextBottom,
+    Middle,
+    Top,
+    Bottom,
+    Length(LengthPercentage),
+}
+
+impl FromStr for VerticalAlign {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        match input.trim().to_ascii_lowercase().as_str() {
+            "baseline" => Ok(Self::Baseline),
+            "sub" => Ok(Self::Sub),
+            "super" => Ok(Self::Super),
+            "text-top" => Ok(Self::TextTop),
+            "text-bottom" => Ok(Self::TextBottom),
+            "middle" => Ok(Self::Middle),
+            "top" => Ok(Self::Top),
+            "bottom" => Ok(Self::Bottom),
+            _ => input.parse().map(Self::Length),
+        }
+    }
+}
+
+impl fmt::Display for VerticalAlign {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Baseline => formatter.write_str("baseline"),
+            Self::Sub => formatter.write_str("sub"),
+            Self::Super => formatter.write_str("super"),
+            Self::TextTop => formatter.write_str("text-top"),
+            Self::TextBottom => formatter.write_str("text-bottom"),
+            Self::Middle => formatter.write_str("middle"),
+            Self::Top => formatter.write_str("top"),
+            Self::Bottom => formatter.write_str("bottom"),
+            Self::Length(value) => value.fmt(formatter),
+        }
+    }
+}
+
 keyword_value! {
     pub enum FlexDirection {
         Row => "row",

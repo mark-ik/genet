@@ -6,8 +6,8 @@ use livery::values::{
     FlexDirection, FlexFactor, FlexWrap, Float, FontFamily, FontSize, FontStyle, FontWeight, Gap,
     Inset, LengthPercentage, LengthUnit, LineHeight, ListStyleType, Margin, Opacity, Order,
     Overflow, Padding, PointerEvents, Position, Radius, Size, Spacing, TextAlign,
-    TextDecorationLine, TextWrapMode, TimingFunction, Transform, TransitionProperty, Visibility,
-    WhiteSpaceCollapse, ZIndex,
+    TextDecorationLine, TextWrapMode, TimingFunction, Transform, TransitionProperty, VerticalAlign,
+    Visibility, WhiteSpaceCollapse, ZIndex,
 };
 
 fn assert_round_trip<T>(css: &str)
@@ -125,6 +125,8 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<TextDecorationLine>("underline overline");
     assert_round_trip::<TextWrapMode>("nowrap");
     assert_round_trip::<Visibility>("hidden");
+    assert_round_trip::<VerticalAlign>("text-top");
+    assert_round_trip::<VerticalAlign>("-2px");
     assert_round_trip::<WhiteSpaceCollapse>("preserve");
     assert_round_trip::<ZIndex>("10");
 }

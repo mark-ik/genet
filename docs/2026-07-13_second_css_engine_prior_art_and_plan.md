@@ -546,6 +546,19 @@ rebuilt Livery runner; `empty-inline-003.xht` reaches a zero-percent image
 diff but still fails the exact-match threshold, leaving its surrounding line
 box and metric reconciliation open.
 
+### 2026-07-17 bounded vertical-align receipt
+
+Livery now carries the CSS `vertical-align` family through the generated
+catalog: baseline, sub/super, text-top/text-bottom, middle, top/bottom, and
+signed length or percentage offsets. Parley text runs apply the bounded
+baseline shifts, while inline-block atoms align against the shaped line
+metrics for middle, top, and bottom. The focused cascade wall has 20 tests,
+the values wall 13, and the full `genet-livery` package wall remains green.
+The focused `vertical-align-088.xht` through `vertical-align-092.xht` probes
+now pass. Ahem-heavy vertical-align cases remain open with the broader font
+metric and line-box work; the prior walk-discovery receipt remains 144 passed,
+46 failed, 120 skipped, and 0 errored.
+
 ## The destination, named
 
 *(Amended 2026-07-14.)* Livery's document profile grinds toward full browser

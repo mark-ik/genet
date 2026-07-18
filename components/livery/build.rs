@@ -125,6 +125,7 @@ fn value_type_path(value_type: &str) -> &'static str {
         "transform" => "crate::values::Transform",
         "transition-property" => "crate::values::TransitionProperty",
         "visibility" => "crate::values::Visibility",
+        "vertical-align" => "crate::values::VerticalAlign",
         "white-space-collapse" => "crate::values::WhiteSpaceCollapse",
         "z-index" => "crate::values::ZIndex",
         _ => panic!("unsupported value_type {value_type}"),
@@ -196,6 +197,7 @@ fn initial_expression(property: &Property) -> &'static str {
         ("transform", "none") => "crate::values::Transform::None",
         ("transition-property", "all") => "crate::values::TransitionProperty::All",
         ("visibility", "visible") => "crate::values::Visibility::Visible",
+        ("vertical-align", "baseline") => "crate::values::VerticalAlign::Baseline",
         ("white-space-collapse", "collapse") => "crate::values::WhiteSpaceCollapse::Collapse",
         ("z-index", "auto") => "crate::values::ZIndex::Auto",
         _ => panic!(

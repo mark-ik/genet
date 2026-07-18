@@ -15,7 +15,7 @@ pub use property::{
     Float, GridAutoFlow, GridPlacement, GridTemplate, GridTrack, Inset, LineHeight, ListStyleType, Margin,
     Opacity, Order, Overflow, Padding, PointerEvents, Position, Radius, Size, Spacing, TextAlign,
     TextDecorationColor, TextDecorationLine, TextWrapMode, TimingFunction, Transform,
-    TransformFunction, TransitionProperty, Visibility, WhiteSpaceCollapse, ZIndex,
+    TransformFunction, TransitionProperty, VerticalAlign, Visibility, WhiteSpaceCollapse, ZIndex,
 };
 
 /// A rejected CSS value from Livery's bounded first-lane grammar.
