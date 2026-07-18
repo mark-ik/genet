@@ -24,6 +24,8 @@
 //!
 //! [`ScriptedDom`]: genet_scripted_dom::ScriptedDom
 
+use std::collections::BTreeMap;
+
 use genet_layout::IncrementalLayout;
 use genet_scripted_dom::{NodeId, ScriptedDom};
 use layout_dom_api::{LayoutDom, LocalName, Namespace};
@@ -202,6 +204,103 @@ pub fn text_present(surfaces: &[ProbeSurface], substr: &str) -> bool {
         .any(|s| walk(s.dom, s.dom.document(), substr))
 }
 
+/// A typed read of app state the DOM cannot express — focus, counts, a mode.
+/// Deliberately minimal (a focused label plus a string-keyed field map) and
+/// grown by need: the event stream carries most app-specific assertions, and a
+/// fat shared snapshot type would couple every app to one shape. An app fills
+/// only what it can answer.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ProbeSnapshot {
+    /// The focused target's label, if the app has a singular focus.
+    pub focused: Option<String>,
+    /// Named observations as strings — `"node-count" -> "12"`, `"tab" ->
+    /// "Nodes"`. An `assert snap <name> <op> <value>` verb reads these.
+    pub fields: BTreeMap<String, String>,
+}
+
+impl ProbeSnapshot {
+    /// A named field's value, if present.
+    pub fn field(&self, name: &str) -> Option<&str> {
+        self.fields.get(name).map(String::as_str)
+    }
+
+    /// Builder: set the focused label.
+    #[must_use]
+    pub fn with_focus(mut self, label: impl Into<String>) -> Self {
+        self.focused = Some(label.into());
+        self
+    }
+
+    /// Builder: add a named field.
+    #[must_use]
+    pub fn with_field(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.fields.insert(name.into(), value.into());
+        self
+    }
+}
+
+/// The small app-specific surface a genet app implements to become drivable. The
+/// generic driver (the scenario parser, the verb loop, selector resolution)
+/// lives in this crate and calls these; everything an app must supply is here:
+/// its retained DOMs, a typed snapshot, its event stream, a named-command entry
+/// point, and pointer delivery routed through its own surface plan.
+///
+/// Implementing it also grants the [`AutomatableExt`] provided methods
+/// ([`resolve`](AutomatableExt::resolve), [`click`](AutomatableExt::click)) for
+/// free — the point of the extraction: an app lists its surfaces and stops
+/// owning per-widget geometry lookups.
+pub trait Automatable {
+    /// The retained cambium surfaces to search and hit-test, this frame.
+    fn surfaces(&self) -> Vec<ProbeSurface<'_>>;
+
+    /// A typed read of app state for assertions the DOM cannot express.
+    fn snapshot(&self) -> ProbeSnapshot;
+
+    /// Drain the semantic events emitted since the last call, as the
+    /// grep-friendly describe-strings an `assert event` matches.
+    fn drain_events(&mut self) -> Vec<String>;
+
+    /// Run one app-named command (the `act <label>` verb). `false` if no such
+    /// command, so the driver fails loudly rather than silently no-op.
+    fn act(&mut self, label: &str) -> bool;
+
+    /// Deliver a synthetic pointer press at window coords; the app routes it
+    /// through its own surface plan (that routing is app-specific).
+    fn press(&mut self, x: f32, y: f32);
+
+    /// Deliver a synthetic pointer move (for drags).
+    fn moved(&mut self, x: f32, y: f32);
+
+    /// Deliver a synthetic pointer release.
+    fn release(&mut self, x: f32, y: f32);
+}
+
+/// Provided methods every [`Automatable`] gets — the shared driving verbs built
+/// on `surfaces()` + pointer delivery, so no app writes them.
+pub trait AutomatableExt: Automatable {
+    /// Resolve `sel` to a window point across this app's surfaces.
+    fn resolve(&self, sel: &Selector) -> Option<Hit> {
+        resolve(&self.surfaces(), sel)
+    }
+
+    /// Resolve `sel` and click it (press+release at its centre). `true` if it
+    /// hit; `false` is the driver's attributable miss.
+    fn click(&mut self, sel: &Selector) -> bool {
+        // The surfaces borrow ends here — `resolve` returns an owned Hit — so
+        // the mutable pointer delivery below does not alias it.
+        match resolve(&self.surfaces(), sel) {
+            Some(hit) => {
+                self.press(hit.point.0, hit.point.1);
+                self.release(hit.point.0, hit.point.1);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+impl<A: Automatable + ?Sized> AutomatableExt for A {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,5 +426,66 @@ mod tests {
         let s = surfaces(&dom);
         assert!(text_present(&s, "Links"));
         assert!(!text_present(&s, "Graphlets"));
+    }
+
+    /// A minimal `Automatable`: it supplies only its surfaces and pointer
+    /// delivery (recording where a click landed), yet gets `click(sel)` for free
+    /// and it lands on the resolved element's centre. This is the extraction's
+    /// payoff — an app implements the small surface and the driving verbs come
+    /// with it.
+    #[test]
+    fn a_mock_app_gets_click_for_free() {
+        struct MockApp {
+            dom: ScriptedDom,
+            pressed: Option<(f32, f32)>,
+            released: Option<(f32, f32)>,
+        }
+        impl Automatable for MockApp {
+            fn surfaces(&self) -> Vec<ProbeSurface<'_>> {
+                vec![ProbeSurface {
+                    name: "strip",
+                    dom: &self.dom,
+                    rect: [500.0, 10.0, 300.0, 200.0],
+                    sheet: "",
+                }]
+            }
+            fn snapshot(&self) -> ProbeSnapshot {
+                ProbeSnapshot::default().with_field("tabs", "2")
+            }
+            fn drain_events(&mut self) -> Vec<String> {
+                Vec::new()
+            }
+            fn act(&mut self, _label: &str) -> bool {
+                false
+            }
+            fn press(&mut self, x: f32, y: f32) {
+                self.pressed = Some((x, y));
+            }
+            fn moved(&mut self, _x: f32, _y: f32) {}
+            fn release(&mut self, x: f32, y: f32) {
+                self.released = Some((x, y));
+            }
+        }
+
+        let mut app = MockApp {
+            dom: strip_dom(),
+            pressed: None,
+            released: None,
+        };
+        // The provided `click` resolves and delivers, with no app-written geometry.
+        let hit = app.click(&Selector::class("tab").containing("Links"));
+        assert!(hit, "the Links tab must be found and clicked");
+        assert_eq!(app.pressed, Some((620.0, 22.0)));
+        assert_eq!(app.released, Some((620.0, 22.0)));
+        assert_eq!(app.snapshot().field("tabs"), Some("2"));
+
+        // A miss returns false and delivers nothing new.
+        let mut app2 = MockApp {
+            dom: strip_dom(),
+            pressed: None,
+            released: None,
+        };
+        assert!(!app2.click(&Selector::class("tab").containing("Nope")));
+        assert_eq!(app2.pressed, None);
     }
 }
