@@ -1,0 +1,16 @@
+[package]
+name = "genet-probe"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mark-ik/genet"
+description = "Shared automatability substrate for genet apps: resolve semantic selectors (role/class + text) over cambium ScriptedDom surfaces to window points, for scripting, testing, and model-driving."
+
+[lib]
+name = "genet_probe"
+path = "lib.rs"
+
+[dependencies]
+genet-layout = { path = "../genet-layout" }
+genet-scripted-dom = { path = "../genet-scripted-dom" }
+layout-dom-api = { path = "../shared/layout-dom" }

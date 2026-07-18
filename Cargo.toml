@@ -8,6 +8,7 @@ members = [
     "components/webgl-wgpu",
     "components/webgl-essl",
     "components/genet-layout",
+    "components/genet-probe",
     "components/livery",
     "components/genet-livery",
     "components/genet-static-dom",
@@ -525,12 +526,13 @@ taffy = { path = "support/patches/taffy" }
 # taken as-is. See support/patches/stylo_taffy/ and
 # docs/2026-07-12_ring3_fork_rename_publish_plan.md (T2).
 stylo_taffy = { path = "support/patches/stylo_taffy" }
-# Nova fork (genet-embedder branch on github.com/mark-ik/nova). Carries the
+# Vano fork (genet-embedder branch on github.com/mark-ik/nova). Carries the
 # EmbedderObject native-data patch plus the reflector-liveness weak-ref API
 # (`EmbedderObject::into_weak_ref`/`from_weak_ref` + `clear_weak_ref_kept_objects`,
 # G1 in docs/2026-06-11_gc_arena_dom_plan.md). Git dep so a bare clone resolves
-# without the sibling checkout; for local nova dev, the gitignored
-# `Code/.cargo/config.toml` `paths` override redirects this to `../../crates/nova`.
+# without the sibling checkout; for local Vano dev, the gitignored
+# `Code/.cargo/config.toml` `paths` override redirects this to
+# `../../crates/vano/nova_vm`.
 nova_vm = { git = "https://github.com/mark-ik/nova", branch = "genet-embedder" }
 # Boa fork (genet branch on github.com/mark-ik/boa) tracking boa-upstream main
 # (the 1.0.0-dev line). Carries an additive source patch — `JsObject::downgrade()`
