@@ -33,7 +33,7 @@
 
 use std::hash::Hash;
 
-use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, QualName};
+use layout_dom_api::{LayoutDomMut, LocalName, Namespace, QualName};
 
 use crate::{IncrementalLayout, layout_subtree, subtree::SubtreeView};
 
