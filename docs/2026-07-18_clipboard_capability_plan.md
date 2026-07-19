@@ -191,6 +191,7 @@ the hand-off UI plan so it is not mistaken for the final layering.
   backend is verified on the Windows host by an ignored `SystemClipboard`
   round-trip test (set then get, restoring the prior clipboard). P1 (typed
   multi-format items) and beyond remain future phases, not loose ends; the text
-  capability is a coherent, closed increment. A headed GUI screenshot of the
-  circle's collaboration controls is the one check left, and it doubles as the
-  visual-design pass.
+  capability is a coherent, closed increment. Headed receipt taken: Hocket
+  adopted the genet-probe self-drive scenario harness and a green run captured
+  the circle with the clipboard-backed controls (Copy token, Paste recipient)
+  rendered and asserted present. P0 is fully verified, backend and UI.
