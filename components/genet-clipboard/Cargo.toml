@@ -1,0 +1,21 @@
+[package]
+name = "genet-clipboard"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mark-ik/genet"
+description = "genet's shared clipboard service: a text clipboard today (arboard-backed system access plus an in-memory fake behind one trait), widening to typed multi-format items (images, url-lists, custom formats, audio) for web content, browser chrome, and cambium application hosts."
+
+[lib]
+name = "genet_clipboard"
+path = "lib.rs"
+
+[features]
+# The system backend (arboard) is on by default. Turning it off leaves the
+# trait plus the in-memory fake, for headless or wasm builds that still want to
+# name the clipboard seam without an OS dependency.
+default = ["system"]
+system = ["dep:arboard"]
+
+[dependencies]
+arboard = { workspace = true, optional = true }

@@ -9,6 +9,7 @@ members = [
     "components/webgl-essl",
     "components/genet-layout",
     "components/genet-probe",
+    "components/genet-clipboard",
     "components/livery",
     "components/genet-livery",
     "components/genet-static-dom",
