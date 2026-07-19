@@ -37,3 +37,9 @@ cargo run -p cambium --example component_catalog --all-features
 
 The same assertions run in CI as an example test. See
 [docs/component-catalog.md](docs/component-catalog.md) for the coverage rule.
+
+## License
+
+Mixed by crate: `crates/cambium` is MPL-2.0 (Serval-derived), `crates/sprigging`
+is dual MIT OR Apache-2.0, `crates/meristem` is Apache-2.0. See
+[`LICENSES.md`](LICENSES.md).
