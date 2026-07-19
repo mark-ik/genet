@@ -1,7 +1,7 @@
 # tinct
 
 Perceptual seed-to-palette derivation for the Merely family (Woodshed,
-Strophe, merecat's mere).
+Hocket, merecat's mere).
 
 > **Home:** [`mark-ik/genet`](https://github.com/mark-ik/genet), at
 > `components/tinct` (adopted 2026-07). The former standalone repository is archived

@@ -1,7 +1,7 @@
 # inker
 
 `inker` is the engine/renderer controller for the genet engine family and
-its hosts (merecat's mere, pelt, strophe, isometry). It owns the question
+its hosts (merecat's mere, pelt, hocket, isometry). It owns the question
 "*which engine should handle this content,*" taking into account the URI
 scheme, the content type, which engines are actually available on the host,
 and any user preference — and it defines the three engine kinds the answer
