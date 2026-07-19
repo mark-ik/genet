@@ -195,3 +195,26 @@ the hand-off UI plan so it is not mistaken for the final layering.
   adopted the genet-probe self-drive scenario harness and a green run captured
   the circle with the clipboard-backed controls (Copy token, Paste recipient)
   rendered and asserted present. P0 is fully verified, backend and UI.
+- 2026-07-18: **P1 + P2 landed.** genet-clipboard is now the typed
+  `ClipboardItem` model: a `Clipboard` trait reads/writes items carrying text,
+  html, image (RGBA), and uri-list, with `TextClipboard` demoted to a blanket
+  convenience over any `Clipboard` so pelt and hocket keep working unchanged.
+  `MemoryClipboard` holds every representation at once (the full model exercised
+  in tests); the arboard `SystemClipboard` enumerates all four on read and
+  writes one primary per set. Verified on Windows: an on-host test round-trips
+  text+html and an image through the real clipboard.
+  Backend-ceiling finding that reshapes the rest: arboard covers text, html,
+  image, and file/uri lists both directions, but NOT arbitrary MIME and NOT
+  simultaneous text+image (each set empties the clipboard; html carries a text
+  alternative, which is why text+html co-exist). So P2's four types are done on
+  arboard, but P3 (custom formats, audio, text+image together) genuinely needs a
+  per-platform backend, not an arboard extension.
+- 2026-07-18: **P3-P5 status (honest).** P3 wants a per-platform clipboard
+  backend (Win32 clipboard formats, macOS `NSPasteboard` UTIs, X11/Wayland
+  custom targets) behind the `Clipboard` trait; the Windows path is buildable and
+  verifiable here (e.g. via `clipboard-win`), macOS and Linux need those hosts.
+  P4 (Wayland persistence, X11 PRIMARY) is a flag plus behaviour that only the
+  Fedora-Wayland and Mint-X11 machines can verify. P5 (the DOM async Clipboard
+  API in scripted-dom, permission-gated) is a distinct genet web-platform
+  feature touching the JS engine and the embedder seam. The typed model from P1
+  is the seam all three plug into.
