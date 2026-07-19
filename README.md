@@ -33,13 +33,13 @@ Consumers, both via a `git`/`branch` dependency on this repo:
 - `mere/crates/meerkat`: a non-optional dependency. Its loader actor routes
   http(s) to netfetcher and smolweb schemes to errand, running the async fetch
   on a tokio runtime and waking the UI via an `EventLoopProxy`.
-- `serval` ports (`pelt-desktop`, `serval-wpt`): an **optional** dependency
+- `genet` ports (`pelt-desktop`, `genet-wpt`): an **optional** dependency
   behind a `netfetch` feature (off by default), used to back the runtime's
   `FetchHandler` seam so `fetch()` and remote `static https://...` documents
-  load over this engine. The serval engine components themselves stay
+  load over this engine. The genet engine components themselves stay
   byte-consuming.
 
-The dependency direction is one-way: Mere and serval consume netfetcher;
+The dependency direction is one-way: Mere and genet consume netfetcher;
 netfetcher does not depend on them.
 
 ## Status
