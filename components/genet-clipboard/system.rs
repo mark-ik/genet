@@ -48,3 +48,27 @@ fn map_error(error: arboard::Error) -> ClipboardError {
         other => ClipboardError::Backend(other.to_string()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Round-trips text through the real OS clipboard on the host running the
+    /// test. Ignored by default because it touches shared machine state and
+    /// needs a display; it restores whatever was on the clipboard first, so a
+    /// local `--ignored` run does not clobber the user's copy buffer.
+    #[test]
+    #[ignore = "touches the real OS clipboard; run locally with --ignored"]
+    fn system_clipboard_round_trips_on_this_host() {
+        let mut clipboard = SystemClipboard::new().expect("a clipboard on this host");
+        let restore = clipboard.get_text().ok();
+
+        clipboard.set_text("genet-clipboard-probe").unwrap();
+        assert_eq!(clipboard.get_text().unwrap(), "genet-clipboard-probe");
+
+        match restore {
+            Some(text) => clipboard.set_text(&text).unwrap(),
+            None => clipboard.clear().unwrap(),
+        }
+    }
+}

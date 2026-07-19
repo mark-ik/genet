@@ -183,3 +183,14 @@ the hand-off UI plan so it is not mistaken for the final layering.
   so the cambium front door is app-held consumption plus pelt-style key
   interception. Its validation is the Hocket hand-off UI consuming the service,
   which is where P0's text round-trip is proven end to end.
+- 2026-07-18: **P0 complete.** Hocket exercises both directions of the text
+  service in its hand-off UI: Copy token writes the contact token
+  (`set_text`) and Paste recipient reads a peer's token (`get_text`). Both host
+  worlds now go through `genet-clipboard` (the pelt browser omnibar and the
+  Hocket app host), so the shared seam has real consumers on both sides. The OS
+  backend is verified on the Windows host by an ignored `SystemClipboard`
+  round-trip test (set then get, restoring the prior clipboard). P1 (typed
+  multi-format items) and beyond remain future phases, not loose ends; the text
+  capability is a coherent, closed increment. A headed GUI screenshot of the
+  circle's collaboration controls is the one check left, and it doubles as the
+  visual-design pass.
