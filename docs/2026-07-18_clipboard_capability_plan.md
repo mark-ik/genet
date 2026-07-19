@@ -111,9 +111,9 @@ Organized by capability and validation, not time.
    `text/uri-list`.
    - Done: an image and a uri-list copy and paste across the three desktop
      platforms.
-4. **P3 Custom formats and audio interchange.** Arbitrary MIME (the `web `
-   prefix for web-origin formats; native custom formats per platform). Light up
-   audio.
+4. **P3 Custom formats and audio interchange.** Arbitrary MIME (the `web`
+   prefix, with its required trailing space, for web-origin formats; native
+   custom formats per platform). Light up audio.
    - Done: Hocket copies a loop that pastes into a DAW as audio, pastes an
      external WAV in as a layer, and round-trips a custom Hocket format
      losslessly Hocket-to-Hocket.
@@ -137,11 +137,18 @@ the hand-off UI plan so it is not mistaken for the final layering.
 
 ## Open questions
 
-- Service crate name and home. Proposal: `genet-clipboard` under
-  `components/shared/`.
-- Whether the cambium app-host front door lives in `genet-winit-host` or the
-  cambium runner. The runner is more reusable across hosts; the winit host is
-  where OS handles already live.
+- **Resolved: crate home.** `components/genet-clipboard`, matching the
+  `genet-probe` founded-component convention. `components/shared/` is where the
+  Servo-derived MPL crates live; a clean-room MIT/Apache crate sits beside the
+  other `genet-*` components.
+- **Resolved: the cambium front door is app-held, not a host API.**
+  `genet-winit-host` is a render host (wgpu boot, rasterize, surfaces), not an
+  app framework with an update context, and cambium's pure elm-style update has
+  no clean seam for a side-effectful clipboard read mid-key-handling. So cambium
+  apps hold a `genet_clipboard::SystemClipboard` directly and intercept
+  copy/paste keys at the winit/app level, exactly as the pelt chrome already
+  does (`read_clipboard()` on Ctrl/Cmd+V). If a second app duplicates that
+  interception, extract a small key-to-clipboard helper then, not before.
 - Whether to keep the text `EmbedderMsg` variants during P1 for a transition or
   replace them outright.
 
@@ -160,5 +167,19 @@ the hand-off UI plan so it is not mistaken for the final layering.
 - 2026-07-18: Scoped against the current genet tree (embedder seam, pelt-desktop
   arboard backend, cambium host path, scripted-dom clipboard absence) and the
   Rust clipboard prior art (arboard, clipboard-rs, copypasta, smithay-clipboard;
-  the web `ClipboardItem` model; Servo's `ClipboardDelegate`). Nothing
-  implemented. Motivated by the Hocket hand-off UI plan's clipboard need.
+  the web `ClipboardItem` model; Servo's `ClipboardDelegate`). Motivated by the
+  Hocket hand-off UI plan's clipboard need.
+- 2026-07-18: **P0a landed.** `components/genet-clipboard` created (MIT/Apache):
+  a `TextClipboard` trait, an arboard-backed `SystemClipboard` holding a live
+  handle, and an in-memory `MemoryClipboard`; `Empty` and `Unavailable` kept
+  distinct; system backend behind a default feature so headless/wasm builds keep
+  the trait and fake. Tests + clippy green.
+- 2026-07-18: **P0b landed.** pelt-desktop's omnibar paste reads via
+  `genet_clipboard::SystemClipboard`; pelt's direct arboard dependency removed
+  (arboard now transitive, behind the service). The embedder clipboard seam has
+  no port handler today, so nothing else in pelt needed routing.
+- 2026-07-18: **P0c resolved (no host API needed).** genet-winit-host is
+  render-only and cambium's update model can't hold a side-effectful clipboard,
+  so the cambium front door is app-held consumption plus pelt-style key
+  interception. Its validation is the Hocket hand-off UI consuming the service,
+  which is where P0's text round-trip is proven end to end.
