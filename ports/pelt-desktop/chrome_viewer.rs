@@ -390,7 +390,8 @@ pub(crate) mod windowed {
     /// Read UTF-8 text from the OS clipboard, or `None` if the clipboard can't be opened
     /// (e.g. a headless host) or holds no text.
     fn read_clipboard() -> Option<String> {
-        arboard::Clipboard::new().ok()?.get_text().ok()
+        use genet_clipboard::{SystemClipboard, TextClipboard};
+        SystemClipboard::new().ok()?.get_text().ok()
     }
 
     impl<C: BrowsableContent> ApplicationHandler for BrowserApp<C> {

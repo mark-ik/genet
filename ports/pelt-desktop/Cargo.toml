@@ -61,7 +61,7 @@ scripted-nova = ["scripted", "dep:script-engine-nova"]
 # needs `viewer` for the present stack + the content document.
 chrome = [
     "dep:netrender", "dep:genet-render", "dep:genet-layout", "dep:genet-scripted-dom",
-    "dep:layout-dom-api", "dep:cambium", "dep:arboard",
+    "dep:layout-dom-api", "dep:cambium", "dep:genet-clipboard",
 ]
 # The windowed tile-tree demo (V5): the GPU-free `tile-surface` lib plus the windowed
 # shell (`tile_viewer`). `chrome` for the Cambium render path it shares, `viewer`
@@ -194,7 +194,7 @@ base64 = { workspace = true, optional = true }
 cambium = { version = "0.2.0", optional = true }
 # OS clipboard access for the omnibar's Ctrl/Cmd+V paste (chrome feature). Reads only;
 # a failed open (e.g. a headless host) degrades to a no-op paste.
-arboard = { workspace = true, optional = true }
+genet-clipboard = { path = "../../components/genet-clipboard", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Windows-only types (HWND) used by the `windows-present` feature's
