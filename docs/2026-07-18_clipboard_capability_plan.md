@@ -218,3 +218,15 @@ the hand-off UI plan so it is not mistaken for the final layering.
   API in scripted-dom, permission-gated) is a distinct genet web-platform
   feature touching the JS engine and the embedder seam. The typed model from P1
   is the seam all three plug into.
+- 2026-07-20: **P3 backend started via an arboard fork.** Forked arboard to
+  `mark-ik/arboard` (branch `custom-formats`) and added, additively, the two
+  things stock arboard lacks: `Clipboard::set_data(&ClipboardData)` (write text,
+  html, image, and arbitrary custom MIME in one session so they coexist) and
+  `Clipboard::get_custom(mime)`. Windows is implemented (register_format +
+  set_without_clear over clipboard-win) and verified on-host: a `set_data` of
+  text+html+image+custom round-trips every format. macOS, X11, and Wayland return
+  an explicit not-implemented error for now (loud, so the crate builds
+  everywhere), to be filled and verified on the iMac / Fedora / Mint hosts. Next:
+  point genet-clipboard's `SystemClipboard` at the fork (real multi-format writes
+  + `Mime::Custom`), then Hocket's audio interchange. Fork plan:
+  `mark-ik/arboard` `design_docs/2026-07-20_custom_formats_plan.md`.
