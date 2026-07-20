@@ -1039,13 +1039,21 @@ pub(crate) fn walk<Id>(
         // in-bounds abs tiles adds no clip-layers (each clip is a scene layer;
         // per-tile clip-layers would overwhelm the rasterizer). Only a box that
         // spills its clip (a scrolled grid row) keeps the clip.
+        //
+        // The inside-test is static (unscrolled coordinates), so it is only
+        // valid for a layer that does not move: a layer riding an ancestor
+        // scroll paints at a shifted position, where "inside when unscrolled"
+        // proves nothing — an Expand chip pinned in a scrolled panel would
+        // float loose above it. Any accumulated scroll keeps every clip.
         let nl = node.final_layout;
         let (bx0, by0) = (origin.0 + nl.location.x, origin.1 + nl.location.y);
         let (bx1, by1) = (bx0 + nl.size.width, by0 + nl.size.height);
+        let scrolled = accumulated_scroll != (0.0, 0.0);
         let ancestor_clip: Vec<LayoutRect> = abs_clips
             .iter()
             .filter(|c| {
-                bx0 < c.min.x - 0.5
+                scrolled
+                    || bx0 < c.min.x - 0.5
                     || by0 < c.min.y - 0.5
                     || bx1 > c.max.x + 0.5
                     || by1 > c.max.y + 0.5
