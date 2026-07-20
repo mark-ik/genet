@@ -2408,6 +2408,37 @@ mod tests {
         assert_eq!(applied, Applied::Unchanged);
     }
 
+    /// A hovered node the host removes (the click's dispatch deletes the very
+    /// button under the cursor — woodshed's "Close N cards") leaves the style
+    /// plane holding interaction state for a dead id. The next `set_interaction`
+    /// clears that state; it must skip the dead node per the `is_live` dangle
+    /// contract, not walk its parents (which panics in a mutable backend).
+    #[test]
+    fn set_interaction_survives_a_removed_hover_target() {
+        const SHEET: &[&str] =
+            &["p{width:100px;height:20px;color:rgb(0,0,255)} p:hover{color:rgb(255,0,0)}"];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let p = dom.create_element(html("p"));
+        dom.append_child(body, p);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        let hover = InteractionState {
+            hovered: Some(engine_observables_api::SourceNodeId(dom.opaque_id(p))),
+            ..Default::default()
+        };
+        layout.set_interaction(&dom, &hover);
+
+        // The dispatch removes the hovered node; the cursor's next move clears
+        // the hover. Must not panic dereferencing the dead id.
+        dom.remove_child(p);
+        let _ = layout.set_interaction(&dom, &InteractionState::default());
+    }
+
     /// The WHATWG rendering spec renders form controls as `inline-block`, and
     /// never renders `input[type=hidden]`. genet shipped no UA `display` for any
     /// of them, leaving them `inline`, where CSS `width` / `height` are ignored

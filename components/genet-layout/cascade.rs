@@ -753,7 +753,12 @@ where
 {
     plane.reset_damage();
 
-    let changed = apply_interaction(dom, plane, state);
+    let mut changed = apply_interaction(dom, plane, state);
+    // The plane retains state for nodes the host has since removed — e.g. a
+    // hovered "close" button deleted by the very click that changed the state.
+    // Clearing its bits still reports it as changed, but a dead node has no
+    // boxes and no parents to walk; restyling it would dereference a dead id.
+    changed.retain(|(node, _)| dom.is_live(*node));
     if changed.is_empty() {
         return RestyleOutcome::default();
     }
