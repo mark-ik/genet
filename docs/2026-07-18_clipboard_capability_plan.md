@@ -228,5 +228,16 @@ the hand-off UI plan so it is not mistaken for the final layering.
   an explicit not-implemented error for now (loud, so the crate builds
   everywhere), to be filled and verified on the iMac / Fedora / Mint hosts. Next:
   point genet-clipboard's `SystemClipboard` at the fork (real multi-format writes
-  + `Mime::Custom`), then Hocket's audio interchange. Fork plan:
+  and `Mime::Custom`), then Hocket's audio interchange. Fork plan:
   `mark-ik/arboard` `design_docs/2026-07-20_custom_formats_plan.md`.
+- 2026-07-20: **Fork complete across all four platforms.** macOS (`f40763b`) and
+  Linux X11 + Wayland (`fac2660`) landed via a per-host hand-off note: the fork
+  branch and note were pushed, Claude on the Mac and Linux machines implemented
+  each platform against the Windows reference, and pushed back. Reviewed the code
+  and it is idiomatic per platform (X11 interns targets with `only_if_exists` so
+  an absent format leaks no atom; macOS gathers reps before writing so a bad
+  image cannot half-write; Wayland advertises multiple `MimeSource`s from one
+  data source). Windows still green after the pull. On-host verification of the
+  `custom_formats` test on each machine is the confirmation. The pass-the-mic
+  hand-off Hocket exists to enable is what delivered this. Next: the
+  genet-clipboard rewire and Hocket audio interchange, both Windows-verifiable.

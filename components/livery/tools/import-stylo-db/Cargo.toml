@@ -1,0 +1,20 @@
+[package]
+name = "import-stylo-db"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Maintainer-side harvest tool (H0 of the stylo-harvest plan): reads the
+# stylo fork's property database TOMLs and rewrites the generated
+# unimplemented-property section of livery's properties.toml, plus the
+# PROPERTY_SPACE.md census. Standalone workspace on the netrender_smoke
+# pattern; never part of the genet build graph. Re-run after each fork
+# realignment:
+#
+#   cargo run -- --stylo-properties <stylo>/style/properties --source-rev <sha>
+
+[workspace]
+
+[dependencies]
+toml = "0.8"

@@ -1,10 +1,18 @@
 # The stylo fork: decomposition and opportunistic divergence
 
 **Date:** 2026-07-13
-**Status:** Track U landed; decomposition tracks remain proposed (Mark's
-framing: "we have a fork, and we should use it," opportunistically taking
-from upstream as with every fork). Grounding facts verified against the fork
-and the Genet repository currently named `genet` this session.
+**Status:** Track U landed. **2026-07-20 supersession:** Tracks 1b (crate
+split) and 2a (Genet product lane) are SUPERSEDED by
+[2026-07-20_stylo_harvest_into_livery_plan.md](./2026-07-20_stylo_harvest_into_livery_plan.md)
+— the investment direction reversed on 2026-07-18: instead of pruning and
+splitting stylo down, Livery grows up by lifting stylo subsystems. The
+fork's remaining role is incumbent and quarry: realign per tagged release,
+keep the WPT walls green, carry nothing new. Its retirement trigger (Livery
+takes the fullweb default with parity receipts) is named in the harvest
+plan. Track 0 and the measure-first 2b/2c/2d remain valid while the fork is
+the incumbent. (Original framing, kept for the record: "we have a fork, and
+we should use it." Grounding facts were verified against the fork and the
+Genet repository this session.)
 
 **Naming migration:** Genet is the engine formerly called Genet.
 `genet-stylo` supersedes the `genet-stylo` package family; current repository,

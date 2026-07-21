@@ -1499,11 +1499,20 @@ pub(crate) fn walk<Id>(
         None => accumulated_scroll,
     };
 
-    // An abs/fixed descendant is clipped by this node's overflow only if this
-    // node establishes its containing block; otherwise it escapes (CSS 2.1
-    // §11.1.2). Accumulate in absolute scene coords for the clean-stack painter.
+    // Accumulate every overflow clip for abs/fixed descendants, in absolute
+    // scene coords for the clean-stack painter. Spec-wise (CSS 2.1 §11.1.2) an
+    // abs box is clipped by an overflow ancestor only when that ancestor is in
+    // its containing-block chain — but `child_scroll` above already accumulates
+    // walk-wide with no such gate, and clips must ride with scrolls or a chip
+    // pinned in a scrolled static panel paints scrolled-shifted yet unclipped,
+    // floating loose outside its panel (the woodshed Related "Expand" chip).
+    // Containment for the true escape case (CB above the clipper) is the wrong
+    // half of the pair to keep; the exact rule needs clips depth-tagged by the
+    // nearest CB-establishing ancestor, tracked for the conformance ratchet.
+    // The Deferred-site violates-filter still drops in-bounds clips for the
+    // unscrolled fast path, so a board of in-bounds abs tiles stays clip-free.
     let child_abs_clips: Vec<LayoutRect> = match clip_rect {
-        Some(r) if establishes_abs_cb(cv) => {
+        Some(r) => {
             // The clip rect is relative to this node's border box, whose absolute
             // top-left is `child_origin` (parent origin + this node's location).
             let mut v = abs_clips.to_vec();

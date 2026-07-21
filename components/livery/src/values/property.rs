@@ -577,6 +577,68 @@ impl TransitionProperty {
         self.includes_flag(524288)
     }
 
+    /// Every longhand the retained transition clock may drive (harvest H2).
+    /// The `border-radius` flag covers its four corner longhands.
+    pub const TRANSITIONABLE: &'static [crate::PropertyId] = &[
+        crate::PropertyId::Opacity,
+        crate::PropertyId::BackgroundColor,
+        crate::PropertyId::Color,
+        crate::PropertyId::BorderTopColor,
+        crate::PropertyId::BorderBottomColor,
+        crate::PropertyId::BorderLeftColor,
+        crate::PropertyId::BorderRightColor,
+        crate::PropertyId::BorderTopWidth,
+        crate::PropertyId::BorderBottomWidth,
+        crate::PropertyId::BorderLeftWidth,
+        crate::PropertyId::BorderRightWidth,
+        crate::PropertyId::BorderTopStyle,
+        crate::PropertyId::BorderBottomStyle,
+        crate::PropertyId::BorderLeftStyle,
+        crate::PropertyId::BorderRightStyle,
+        crate::PropertyId::BorderTopLeftRadius,
+        crate::PropertyId::BorderTopRightRadius,
+        crate::PropertyId::BorderBottomRightRadius,
+        crate::PropertyId::BorderBottomLeftRadius,
+        crate::PropertyId::Transform,
+        crate::PropertyId::BackgroundPosition,
+        crate::PropertyId::BoxShadow,
+        crate::PropertyId::BackgroundImage,
+        crate::PropertyId::BackgroundRepeat,
+    ];
+
+    /// Whether this transition-property value accepts one longhand
+    /// (harvest H2: the generic form of the `includes_*` family).
+    pub fn includes_property(self, property: crate::PropertyId) -> bool {
+        use crate::PropertyId as P;
+        match property {
+            P::Opacity => self.includes_opacity(),
+            P::BackgroundColor => self.includes_background_color(),
+            P::Color => self.includes_color(),
+            P::BorderTopColor => self.includes_border_top_color(),
+            P::BorderBottomColor => self.includes_border_bottom_color(),
+            P::BorderLeftColor => self.includes_border_left_color(),
+            P::BorderRightColor => self.includes_border_right_color(),
+            P::BorderTopWidth => self.includes_border_top_width(),
+            P::BorderBottomWidth => self.includes_border_bottom_width(),
+            P::BorderLeftWidth => self.includes_border_left_width(),
+            P::BorderRightWidth => self.includes_border_right_width(),
+            P::BorderTopStyle => self.includes_border_top_style(),
+            P::BorderBottomStyle => self.includes_border_bottom_style(),
+            P::BorderLeftStyle => self.includes_border_left_style(),
+            P::BorderRightStyle => self.includes_border_right_style(),
+            P::BorderTopLeftRadius
+            | P::BorderTopRightRadius
+            | P::BorderBottomRightRadius
+            | P::BorderBottomLeftRadius => self.includes_border_radius(),
+            P::Transform => self.includes_transform(),
+            P::BackgroundPosition => self.includes_background_position(),
+            P::BoxShadow => self.includes_box_shadow(),
+            P::BackgroundImage => self.includes_background_image(),
+            P::BackgroundRepeat => self.includes_background_repeat(),
+            _ => false,
+        }
+    }
+
     pub fn includes_background_repeat(self) -> bool {
         self.includes_flag(1048576)
     }

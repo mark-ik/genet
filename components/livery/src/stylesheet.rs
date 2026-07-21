@@ -3,8 +3,10 @@
 use std::{error::Error, fmt};
 
 use crate::ComputedValues;
+use crate::custom::CustomProperties;
 use crate::cascade::{
-    CascadeLayer, DeclarationBlock, MatchedDeclaration, Origin, cascade, parse_declaration_block,
+    CascadeLayer, DeclarationBlock, MatchedCustomDeclaration, MatchedDeclaration, Origin,
+    cascade_with_custom, parse_declaration_block,
 };
 use crate::media::{Device, MediaParseError, MediaQueryList};
 use crate::selector::{Element, SelectorList, SelectorParseError};
@@ -183,6 +185,43 @@ impl StyleRule {
             })
             .collect()
     }
+
+    /// The rule's matched `--name` declarations, with the same media and
+    /// selector gate as [`Self::matched_declarations`].
+    pub fn matched_custom_declarations<E>(
+        &self,
+        element: &E,
+        device: &Device,
+    ) -> Vec<MatchedCustomDeclaration>
+    where
+        E: Element<Impl = crate::selector::LiverySelectorImpl>,
+    {
+        if self
+            .media
+            .as_ref()
+            .is_some_and(|condition| !condition.matches(device))
+        {
+            return Vec::new();
+        }
+        let Some(specificity) = self.selectors.matching_specificity(element) else {
+            return Vec::new();
+        };
+        self.declarations
+            .custom
+            .iter()
+            .enumerate()
+            .map(|(index, declaration)| MatchedCustomDeclaration {
+                declaration: declaration.clone(),
+                origin: self.origin,
+                layer: self.layer,
+                specificity,
+                source_order: self
+                    .source_order
+                    .saturating_mul(65_536)
+                    .saturating_add(index as u64),
+            })
+            .collect()
+    }
 }
 
 /// Match and cascade a hand-built rule corpus for one element.
@@ -195,11 +234,30 @@ pub fn cascade_rules<E>(
 where
     E: Element<Impl = crate::selector::LiverySelectorImpl>,
 {
-    cascade(
+    cascade_rules_with_custom(parent, None, element, device, rules).0
+}
+
+/// [`cascade_rules`] with custom properties threaded from the parent and
+/// returned alongside the computed style.
+pub fn cascade_rules_with_custom<E>(
+    parent: Option<&ComputedValues>,
+    parent_custom: Option<&CustomProperties>,
+    element: &E,
+    device: &Device,
+    rules: &[StyleRule],
+) -> (ComputedValues, CustomProperties)
+where
+    E: Element<Impl = crate::selector::LiverySelectorImpl>,
+{
+    cascade_with_custom(
         parent,
+        parent_custom,
         rules
             .iter()
             .flat_map(|rule| rule.matched_declarations(element, device)),
+        rules
+            .iter()
+            .flat_map(|rule| rule.matched_custom_declarations(element, device)),
     )
 }
 

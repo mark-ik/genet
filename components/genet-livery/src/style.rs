@@ -4,9 +4,10 @@ use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
 use livery::{
     ComputedValues,
     cascade::{
-        CascadeLayer, DeclarationError, MatchedDeclaration, Origin, Specificity, cascade,
-        parse_declaration_block,
+        CascadeLayer, DeclarationError, MatchedCustomDeclaration, MatchedDeclaration, Origin,
+        Specificity, cascade_with_custom, parse_declaration_block,
     },
+    custom::CustomProperties,
     media::Device,
     stylesheet::{Keyframes, StyleRule, Stylesheet, StylesheetDiagnostic},
     values::{FontSize, Length, LengthPercentage, LengthUnit, LineHeight},
@@ -65,6 +66,7 @@ impl StyleSet {
 #[derive(Clone, Debug)]
 pub struct StylePlane<Id> {
     values: HashMap<Id, ComputedValues>,
+    custom: HashMap<Id, CustomProperties>,
     inline_diagnostics: HashMap<Id, Vec<DeclarationError>>,
 }
 
@@ -72,6 +74,7 @@ impl<Id> Default for StylePlane<Id> {
     fn default() -> Self {
         Self {
             values: HashMap::new(),
+            custom: HashMap::new(),
             inline_diagnostics: HashMap::new(),
         }
     }
@@ -83,6 +86,11 @@ where
 {
     pub fn get(&self, id: Id) -> Option<&ComputedValues> {
         self.values.get(&id)
+    }
+
+    /// The element's computed custom-property map (harvest H1).
+    pub fn custom_properties(&self, id: Id) -> Option<&CustomProperties> {
+        self.custom.get(&id)
     }
 
     pub(crate) fn get_mut(&mut self, id: Id) -> Option<&mut ComputedValues> {
@@ -121,6 +129,7 @@ where
         device,
         dom.document(),
         None,
+        None,
         &mut plane,
     );
     plane
@@ -132,6 +141,7 @@ fn resolve_subtree<D>(
     device: &Device,
     id: D::NodeId,
     parent: Option<&ComputedValues>,
+    parent_custom: Option<&CustomProperties>,
     plane: &mut StylePlane<D::NodeId>,
 ) where
     D: LayoutDom,
@@ -139,11 +149,12 @@ fn resolve_subtree<D>(
 {
     if selector_tree.dom().kind(id) == NodeKind::Element {
         let element = selector_tree.element(id).expect("element kind has adapter");
-        let mut matched = style_set
-            .rules
-            .iter()
-            .flat_map(|rule| rule.matched_declarations(&element, device))
-            .collect::<Vec<_>>();
+        let mut matched = Vec::new();
+        let mut matched_custom = Vec::new();
+        for rule in &style_set.rules {
+            matched.extend(rule.matched_declarations(&element, device));
+            matched_custom.extend(rule.matched_custom_declarations(&element, device));
+        }
 
         if let Some(inline) =
             selector_tree
@@ -154,18 +165,29 @@ fn resolve_subtree<D>(
             if !block.errors.is_empty() {
                 plane.inline_diagnostics.insert(id, block.errors);
             }
+            let inline_order = u64::MAX.saturating_sub(65_535);
             matched.extend(block.declarations.into_iter().enumerate().map(
                 |(index, declaration)| MatchedDeclaration {
                     declaration,
                     origin: Origin::Author,
                     layer: CascadeLayer::Unlayered,
                     specificity: Specificity::INLINE,
-                    source_order: u64::MAX.saturating_sub(65_535).saturating_add(index as u64),
+                    source_order: inline_order.saturating_add(index as u64),
+                },
+            ));
+            matched_custom.extend(block.custom.into_iter().enumerate().map(
+                |(index, declaration)| MatchedCustomDeclaration {
+                    declaration,
+                    origin: Origin::Author,
+                    layer: CascadeLayer::Unlayered,
+                    specificity: Specificity::INLINE,
+                    source_order: inline_order.saturating_add(index as u64),
                 },
             ));
         }
 
-        let mut computed = cascade(parent, matched);
+        let (mut computed, custom) =
+            cascade_with_custom(parent, parent_custom, matched, matched_custom);
         resolve_font_metrics(&mut computed, parent);
         for child in selector_tree.dom().dom_children(id) {
             resolve_subtree(
@@ -174,13 +196,23 @@ fn resolve_subtree<D>(
                 device,
                 child,
                 Some(&computed),
+                Some(&custom),
                 plane,
             );
         }
         plane.values.insert(id, computed);
+        plane.custom.insert(id, custom);
     } else {
         for child in selector_tree.dom().dom_children(id) {
-            resolve_subtree(selector_tree, style_set, device, child, parent, plane);
+            resolve_subtree(
+                selector_tree,
+                style_set,
+                device,
+                child,
+                parent,
+                parent_custom,
+                plane,
+            );
         }
     }
 }

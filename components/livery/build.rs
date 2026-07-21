@@ -16,6 +16,13 @@ struct Database {
     sources: BTreeMap<String, Source>,
     shorthands: BTreeMap<String, Shorthand>,
     property: Vec<Property>,
+    /// Harvest H0: the servo-lane property space livery does not implement
+    /// yet, imported as data by tools/import-stylo-db. Known to the
+    /// catalog and rejected with a known-unimplemented diagnostic.
+    #[serde(default)]
+    unimplemented: Vec<Unimplemented>,
+    #[serde(default)]
+    unimplemented_shorthand: Vec<UnimplementedShorthandEntry>,
 }
 
 #[derive(Deserialize)]
@@ -42,6 +49,28 @@ struct Property {
     seed_values: Vec<String>,
     animation: String,
     source: String,
+}
+
+#[derive(Deserialize)]
+struct Unimplemented {
+    name: String,
+    group: String,
+    inherited: bool,
+    animation: String,
+    #[serde(default)]
+    logical: bool,
+    #[serde(default)]
+    aliases: Vec<String>,
+    spec: String,
+}
+
+#[derive(Deserialize)]
+struct UnimplementedShorthandEntry {
+    name: String,
+    sub_properties: Vec<String>,
+    #[serde(default)]
+    aliases: Vec<String>,
+    spec: String,
 }
 
 fn rust_name(css_name: &str) -> String {
@@ -278,6 +307,78 @@ fn validate(db: &Database) {
             assert!(
                 names.contains(longhand.as_str()),
                 "{css_name} expands to missing longhand {longhand}"
+            );
+        }
+    }
+
+    let shorthand_names: BTreeSet<String> = db
+        .shorthands
+        .iter()
+        .map(|(key, shorthand)| {
+            shorthand
+                .css_name
+                .clone()
+                .unwrap_or_else(|| key.replace('_', "-"))
+        })
+        .collect();
+    let mut known = BTreeSet::new();
+    for entry in &db.unimplemented {
+        assert!(
+            !names.contains(entry.name.as_str()) && !shorthand_names.contains(&entry.name),
+            "{} is implemented; remove its [[unimplemented]] entry",
+            entry.name
+        );
+        assert!(
+            known.insert(entry.name.clone()),
+            "duplicate unimplemented entry {}",
+            entry.name
+        );
+        assert!(!entry.group.is_empty(), "{} has no group", entry.name);
+        assert!(!entry.spec.is_empty(), "{} has no spec", entry.name);
+        assert!(
+            matches!(
+                entry.animation.as_str(),
+                "by-computed-value" | "discrete" | "none"
+            ),
+            "{} has unsupported animation class {}",
+            entry.name,
+            entry.animation
+        );
+    }
+    for entry in &db.unimplemented_shorthand {
+        assert!(
+            !names.contains(entry.name.as_str()) && !shorthand_names.contains(&entry.name),
+            "{} is implemented; remove its [[unimplemented_shorthand]] entry",
+            entry.name
+        );
+        assert!(
+            known.insert(entry.name.clone()),
+            "duplicate unimplemented entry {}",
+            entry.name
+        );
+        assert!(
+            !entry.sub_properties.is_empty(),
+            "{} has no sub_properties",
+            entry.name
+        );
+        assert!(!entry.spec.is_empty(), "{} has no spec", entry.name);
+    }
+    for (aliases, owner) in db
+        .unimplemented
+        .iter()
+        .map(|entry| (&entry.aliases, &entry.name))
+        .chain(
+            db.unimplemented_shorthand
+                .iter()
+                .map(|entry| (&entry.aliases, &entry.name)),
+        )
+    {
+        for alias in aliases {
+            assert!(
+                !names.contains(alias.as_str())
+                    && !shorthand_names.contains(alias)
+                    && !known.contains(alias),
+                "alias {alias} of {owner} collides with a catalog name"
             );
         }
     }
@@ -543,7 +644,144 @@ fn generate(db: &Database) -> String {
             source = literal(source),
         ));
     }
-    out.push_str("        }\n    }\n}\n");
+    out.push_str("        }\n    }\n}\n\n");
+
+    // Harvest H2: general interpolation and tagged property reads.
+    out.push_str(
+        "impl PropertyValue {\n\
+         \x20   /// Interpolate two values of one property (harvest H2). Same-family\n\
+         \x20   /// pairs delegate to the family's `Interpolate` impl; a family without\n\
+         \x20   /// defined interpolation, or a cross-family pair, flips at the midpoint\n\
+         \x20   /// per css-transitions discrete animation.\n\
+         \x20   pub fn interpolate(&self, other: &Self, progress: f32) -> Self {\n\
+         \x20       match (self, other) {\n",
+    );
+    for value_type in &value_types {
+        let variant = rust_name(value_type);
+        out.push_str(&format!(
+            "            (Self::{variant}(a), Self::{variant}(b)) => Self::{variant}(crate::values::Interpolate::interpolate_value(a, b, progress)),\n"
+        ));
+    }
+    out.push_str(
+        "            _ => {\n\
+         \x20               if progress < 0.5 {\n\
+         \x20                   self.clone()\n\
+         \x20               } else {\n\
+         \x20                   other.clone()\n\
+         \x20               }\n\
+         \x20           },\n\
+         \x20       }\n\
+         \x20   }\n\
+         }\n\n",
+    );
+    out.push_str(
+        "impl ComputedValues {\n\
+         \x20   /// Read one generated property as a tagged value.\n\
+         \x20   pub fn get(&self, property: PropertyId) -> PropertyValue {\n\
+         \x20       match property {\n",
+    );
+    for property in &db.property {
+        let read = if value_type_is_copy(&property.value_type) {
+            ""
+        } else {
+            ".clone()"
+        };
+        out.push_str(&format!(
+            "            PropertyId::{variant} => PropertyValue::{value_variant}(self.{field}{read}),\n",
+            variant = rust_name(&property.name),
+            value_variant = rust_name(&property.value_type),
+            field = rust_field(&property.name),
+        ));
+    }
+    out.push_str("        }\n    }\n}\n\n");
+
+    // Harvest H0: the known-unimplemented property space, as metadata.
+    out.push_str(
+        "#[derive(Clone, Copy, Debug, Eq, PartialEq)]\n\
+         pub enum UnimplementedAnimation {\n\
+         \x20   ByComputedValue,\n\
+         \x20   Discrete,\n\
+         \x20   NotAnimatable,\n\
+         }\n\n\
+         #[derive(Clone, Copy, Debug, Eq, PartialEq)]\n\
+         pub struct UnimplementedLonghand {\n\
+         \x20   pub name: &'static str,\n\
+         \x20   /// The fork's style struct: the future ComputedValues grouping seam.\n\
+         \x20   pub group: &'static str,\n\
+         \x20   pub inherited: bool,\n\
+         \x20   pub animation: UnimplementedAnimation,\n\
+         \x20   pub logical: bool,\n\
+         \x20   pub spec_url: &'static str,\n\
+         }\n\n\
+         #[derive(Clone, Copy, Debug, Eq, PartialEq)]\n\
+         pub struct UnimplementedShorthand {\n\
+         \x20   pub name: &'static str,\n\
+         \x20   pub sub_properties: &'static [&'static str],\n\
+         \x20   pub spec_url: &'static str,\n\
+         }\n\n",
+    );
+    out.push_str("pub const UNIMPLEMENTED_LONGHANDS: &[UnimplementedLonghand] = &[\n");
+    for entry in &db.unimplemented {
+        let animation = match entry.animation.as_str() {
+            "by-computed-value" => "UnimplementedAnimation::ByComputedValue",
+            "discrete" => "UnimplementedAnimation::Discrete",
+            "none" => "UnimplementedAnimation::NotAnimatable",
+            _ => unreachable!("validated animation class"),
+        };
+        out.push_str(&format!(
+            "    UnimplementedLonghand {{ name: {name}, group: {group}, inherited: {inherited}, animation: {animation}, logical: {logical}, spec_url: {spec} }},\n",
+            name = literal(&entry.name),
+            group = literal(&entry.group),
+            inherited = entry.inherited,
+            logical = entry.logical,
+            spec = literal(&entry.spec),
+        ));
+    }
+    out.push_str("];\n\n");
+    out.push_str("pub const UNIMPLEMENTED_SHORTHANDS: &[UnimplementedShorthand] = &[\n");
+    for entry in &db.unimplemented_shorthand {
+        out.push_str(&format!(
+            "    UnimplementedShorthand {{ name: {name}, sub_properties: {subs}, spec_url: {spec} }},\n",
+            name = literal(&entry.name),
+            subs = string_slice(&entry.sub_properties),
+            spec = literal(&entry.spec),
+        ));
+    }
+    out.push_str("];\n\n");
+    out.push_str(
+        "/// Look up a known-but-unimplemented longhand by canonical name or alias.\n\
+         pub fn unimplemented_longhand(name: &str) -> Option<&'static UnimplementedLonghand> {\n\
+         \x20   let index = match name {\n",
+    );
+    for (index, entry) in db.unimplemented.iter().enumerate() {
+        out.push_str(&format!(
+            "        {} => {index}usize,\n",
+            literal(&entry.name)
+        ));
+        for alias in &entry.aliases {
+            out.push_str(&format!("        {} => {index}usize,\n", literal(alias)));
+        }
+    }
+    out.push_str(
+        "        _ => return None,\n    };\n    Some(&UNIMPLEMENTED_LONGHANDS[index])\n}\n\n",
+    );
+    out.push_str(
+        "/// Look up a known-but-unimplemented shorthand by canonical name or alias.\n\
+         pub fn unimplemented_shorthand(name: &str) -> Option<&'static UnimplementedShorthand> {\n\
+         \x20   let index = match name {\n",
+    );
+    for (index, entry) in db.unimplemented_shorthand.iter().enumerate() {
+        out.push_str(&format!(
+            "        {} => {index}usize,\n",
+            literal(&entry.name)
+        ));
+        for alias in &entry.aliases {
+            out.push_str(&format!("        {} => {index}usize,\n", literal(alias)));
+        }
+    }
+    out.push_str(
+        "        _ => return None,\n    };\n    Some(&UNIMPLEMENTED_SHORTHANDS[index])\n}\n",
+    );
     out
 }
 

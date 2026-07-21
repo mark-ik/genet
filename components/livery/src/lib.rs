@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod cascade;
+pub mod custom;
 pub mod media;
 pub mod selector;
 pub mod stylesheet;

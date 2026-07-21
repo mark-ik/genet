@@ -2,11 +2,24 @@
 
 use std::{cmp::Ordering, fmt};
 
+use crate::custom::{
+    CustomDeclaration, CustomDeclaredValue, CustomProperties, contains_var, substitute,
+};
 use crate::values::{
     AnimationName, BorderStyle, BorderWidth, Color, Duration, FontFamily, FontSize, FontStyle,
     FontWeight, LineHeight, Margin, Padding, Radius, TimingFunction, TransitionProperty,
 };
 use crate::{ComputedValues, PropertyId, PropertyValue, ShorthandId};
+
+/// A declaration whose value contains `var()` and therefore cannot parse
+/// until the element's custom properties are known (harvest H1). A pending
+/// shorthand stores one copy per expanded longhand, the fork's
+/// `WithVariables` shape.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingSubstitution {
+    pub raw: String,
+    pub from_shorthand: Option<ShorthandId>,
+}
 
 /// A parsed longhand value, including the CSS-wide keywords supported by the
 /// first lane.
@@ -16,6 +29,8 @@ pub enum DeclaredValue {
     Initial,
     Inherit,
     Unset,
+    /// Deferred until `var()` substitution at computed-value time.
+    Pending(PendingSubstitution),
 }
 
 impl DeclaredValue {
@@ -41,6 +56,10 @@ pub struct Declaration {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeclarationErrorKind {
     UnknownProperty,
+    /// The name is in the catalog's imported property space (harvest H0)
+    /// but livery does not implement it yet. Distinguishable from a typo
+    /// so diagnostics can say what was ignored and why.
+    KnownUnimplemented,
     InvalidValue,
     MalformedDeclaration,
 }
@@ -58,6 +77,8 @@ pub struct DeclarationError {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DeclarationBlock {
     pub declarations: Vec<Declaration>,
+    /// `--name` declarations, case-sensitive, in source order.
+    pub custom: Vec<CustomDeclaration>,
     pub errors: Vec<DeclarationError>,
 }
 
@@ -172,6 +193,17 @@ fn push_longhand(block: &mut DeclarationBlock, name: &str, value: &str, importan
     let Some(property) = PropertyId::from_css_name(name) else {
         return false;
     };
+    if contains_var(value) {
+        block.declarations.push(Declaration {
+            property,
+            value: DeclaredValue::Pending(PendingSubstitution {
+                raw: value.to_owned(),
+                from_shorthand: None,
+            }),
+            important,
+        });
+        return true;
+    }
     match DeclaredValue::parse(property, value) {
         Ok(value) => block.declarations.push(Declaration {
             property,
@@ -645,16 +677,66 @@ pub fn parse_declaration_block(input: &str) -> DeclarationBlock {
             });
             continue;
         }
-        let name = declaration[..colon].trim().to_ascii_lowercase();
+        let raw_name = declaration[..colon].trim();
         let (value, important) = strip_important(&declaration[colon + 1..]);
+        if let Some(custom_tail) = raw_name.strip_prefix("--") {
+            if custom_tail.is_empty() {
+                block.errors.push(DeclarationError {
+                    name: raw_name.to_owned(),
+                    value: value.to_owned(),
+                    kind: DeclarationErrorKind::MalformedDeclaration,
+                });
+                continue;
+            }
+            // Custom property names stay case-sensitive; CSS-wide keywords
+            // in the value position keep their usual meaning.
+            let declared = match value.trim().to_ascii_lowercase().as_str() {
+                "initial" => CustomDeclaredValue::Initial,
+                "inherit" => CustomDeclaredValue::Inherit,
+                "unset" => CustomDeclaredValue::Unset,
+                _ => CustomDeclaredValue::Value(value.trim().to_owned()),
+            };
+            block.custom.push(CustomDeclaration {
+                name: raw_name.to_owned(),
+                value: declared,
+                important,
+            });
+            continue;
+        }
+        let name = raw_name.to_ascii_lowercase();
         if push_longhand(&mut block, &name, value, important) {
             continue;
         }
+        if let Some(shorthand) = ShorthandId::from_css_name(&name)
+            && contains_var(value)
+        {
+            // The fork's WithVariables shape: every expanded longhand
+            // carries the raw shorthand value and re-expands after
+            // substitution at computed-value time.
+            for longhand in shorthand.metadata().longhands {
+                block.declarations.push(Declaration {
+                    property: *longhand,
+                    value: DeclaredValue::Pending(PendingSubstitution {
+                        raw: value.to_owned(),
+                        from_shorthand: Some(shorthand),
+                    }),
+                    important,
+                });
+            }
+            continue;
+        }
         let Some(shorthand) = ShorthandId::from_css_name(&name) else {
+            let kind = if crate::unimplemented_longhand(&name).is_some()
+                || crate::unimplemented_shorthand(&name).is_some()
+            {
+                DeclarationErrorKind::KnownUnimplemented
+            } else {
+                DeclarationErrorKind::UnknownProperty
+            };
             block.errors.push(DeclarationError {
                 name,
                 value: value.to_owned(),
-                kind: DeclarationErrorKind::UnknownProperty,
+                kind,
             });
             continue;
         };
@@ -733,8 +815,23 @@ struct Priority {
 
 impl Priority {
     fn new(declaration: &MatchedDeclaration) -> Self {
-        let important = declaration.declaration.important;
-        let cascade_level = match (important, declaration.origin) {
+        Self::from_parts(
+            declaration.declaration.important,
+            declaration.origin,
+            declaration.layer,
+            declaration.specificity,
+            declaration.source_order,
+        )
+    }
+
+    fn from_parts(
+        important: bool,
+        origin: Origin,
+        layer: CascadeLayer,
+        specificity: Specificity,
+        source_order: u64,
+    ) -> Self {
+        let cascade_level = match (important, origin) {
             (false, Origin::UserAgent) => 0,
             (false, Origin::User) => 1,
             (false, Origin::Author) => 2,
@@ -742,7 +839,7 @@ impl Priority {
             (true, Origin::User) => 4,
             (true, Origin::UserAgent) => 5,
         };
-        let layer = match (important, declaration.layer) {
+        let layer = match (important, layer) {
             (false, CascadeLayer::Layer(order)) => order,
             (false, CascadeLayer::Unlayered) => u32::MAX,
             (true, CascadeLayer::Unlayered) => 0,
@@ -751,8 +848,8 @@ impl Priority {
         Self {
             cascade_level,
             layer,
-            specificity: declaration.specificity,
-            source_order: declaration.source_order,
+            specificity,
+            source_order,
         }
     }
 }
@@ -780,11 +877,68 @@ impl PartialOrd for Priority {
     }
 }
 
+/// One matched `--name` declaration with its cascade coordinates.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MatchedCustomDeclaration {
+    pub declaration: CustomDeclaration,
+    pub origin: Origin,
+    pub layer: CascadeLayer,
+    pub specificity: Specificity,
+    pub source_order: u64,
+}
+
 /// Resolve a set of already-matched declarations into one concrete style.
+/// Declarations that used `var()` resolve against an empty custom map here;
+/// use [`cascade_with_custom`] to thread real custom properties.
 pub fn cascade(
     parent: Option<&ComputedValues>,
     declarations: impl IntoIterator<Item = MatchedDeclaration>,
 ) -> ComputedValues {
+    cascade_with_custom(parent, None, declarations, std::iter::empty()).0
+}
+
+/// Resolve matched longhand and custom declarations into one concrete
+/// style plus the element's computed custom-property map. The map starts
+/// from the parent's (custom properties inherit wholesale), applies this
+/// element's winners with the same priority rules as longhands, and then
+/// substitutes every pending `var()` declaration; a substitution or
+/// reparse failure is invalid at computed-value time and behaves as
+/// `unset`, per css-variables-1.
+pub fn cascade_with_custom(
+    parent: Option<&ComputedValues>,
+    parent_custom: Option<&CustomProperties>,
+    declarations: impl IntoIterator<Item = MatchedDeclaration>,
+    custom_declarations: impl IntoIterator<Item = MatchedCustomDeclaration>,
+) -> (ComputedValues, CustomProperties) {
+    let mut custom_winners: std::collections::BTreeMap<String, (Priority, CustomDeclaredValue)> =
+        std::collections::BTreeMap::new();
+    for matched in custom_declarations {
+        let priority = Priority::from_parts(
+            matched.declaration.important,
+            matched.origin,
+            matched.layer,
+            matched.specificity,
+            matched.source_order,
+        );
+        let entry = custom_winners.entry(matched.declaration.name);
+        match entry {
+            std::collections::btree_map::Entry::Vacant(vacant) => {
+                vacant.insert((priority, matched.declaration.value));
+            },
+            std::collections::btree_map::Entry::Occupied(mut occupied) => {
+                if priority >= occupied.get().0 {
+                    occupied.insert((priority, matched.declaration.value));
+                }
+            },
+        }
+    }
+    let custom = crate::custom::resolve_custom_map(
+        parent_custom,
+        custom_winners
+            .into_iter()
+            .map(|(name, (_, value))| (name, value)),
+    );
+
     let mut winners = (0..PropertyId::ALL.len())
         .map(|_| None)
         .collect::<Vec<Option<(Priority, DeclaredValue)>>>();
@@ -806,6 +960,10 @@ pub fn cascade(
             continue;
         };
         let property = PropertyId::ALL[index];
+        let value = match value {
+            DeclaredValue::Pending(pending) => resolve_pending(&pending, property, &custom),
+            other => other,
+        };
         match value {
             DeclaredValue::Value(value) => {
                 result
@@ -823,9 +981,44 @@ pub fn cascade(
                     result.copy_property_from(property, &initial);
                 }
             },
+            DeclaredValue::Pending(_) => unreachable!("pending values resolve above"),
         }
     }
-    result
+    (result, custom)
+}
+
+/// Substitute and parse one pending declaration. Any failure is invalid at
+/// computed-value time, which css-variables-1 defines as `unset`.
+fn resolve_pending(
+    pending: &PendingSubstitution,
+    property: PropertyId,
+    custom: &CustomProperties,
+) -> DeclaredValue {
+    let Ok(substituted) = substitute(&pending.raw, custom) else {
+        return DeclaredValue::Unset;
+    };
+    match pending.from_shorthand {
+        None => DeclaredValue::parse(property, &substituted).unwrap_or(DeclaredValue::Unset),
+        Some(shorthand) => {
+            let reparsed = parse_declaration_block(&format!(
+                "{}: {}",
+                shorthand.metadata().name,
+                substituted
+            ));
+            match reparsed
+                .declarations
+                .into_iter()
+                .find(|declaration| declaration.property == property)
+            {
+                Some(Declaration {
+                    value: DeclaredValue::Pending(_),
+                    ..
+                })
+                | None => DeclaredValue::Unset,
+                Some(declaration) => declaration.value,
+            }
+        },
+    }
 }
 
 impl fmt::Display for Origin {

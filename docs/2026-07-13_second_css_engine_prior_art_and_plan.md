@@ -177,14 +177,21 @@ theme adds 18 longhands for a guarded 40-property contract.
 
 ## Licensing and home
 
-**Clean-room, MIT/Apache-2.0, edition 2024** (founding convention). No
-stylo/Gecko code may be ported in — MPL infects files it derives from.
-Reading Ladybird (BSD-2) and gosub (MIT) is fine; *depending on*
-cssparser/selectors (MPL-2.0) is fine (file-level copyleft does not
-reach dependents); copying stylo source is not. This is also the
-practical reason the engine is a new codebase rather than a stripped
-fork: a stripped stylo is forever MPL and forever merge-taxed;
-Livery is neither.
+**REVERSED 2026-07-18 (Mark, direct); amended 2026-07-20.** The founding
+clean-room posture below is superseded: lifting stylo source into Livery,
+then decomposing and reshaping it, is now the endorsed climb toward the
+fullweb tiers. Mark: "even an mpl-2.0 livery is worth more than servo's
+stylo to me. the proof is genet itself." The value is ownership and
+decomposability, not license purity. Lifted files stay MPL-2.0 with
+provenance notes; clean-room code keeps MIT/Apache until mixing gets
+awkward, then Livery flips to MPL-2.0 whole (cambium is the precedent).
+Mechanics, stages, and the fork's retirement trigger:
+[2026-07-20_stylo_harvest_into_livery_plan.md](./2026-07-20_stylo_harvest_into_livery_plan.md).
+
+*(Historical posture, kept for the record: clean-room MIT/Apache-2.0,
+edition 2024; no stylo/Gecko code ported in. Still true: reading
+Ladybird/gosub is fine, and depending on cssparser/selectors (MPL-2.0)
+is fine, since file-level copyleft does not reach dependents.)*
 
 **Home:** `components/livery` in Genet, for the tight edit loop with the current
 `genet-layout`, with
@@ -717,30 +724,35 @@ inline formatting floats and vertical-align baseline/negative-leading cases.
 
 ## The destination, named
 
-*(Amended 2026-07-14.)* Livery's document profile grinds toward full browser
-conformance: every longhand, on the WPT ratchet, Ladybird-style. That is a
-destination, not a schedule. The stages above are unchanged, fullweb ships on
-genet-stylo, and the switch happens per lane when receipts beat the incumbent
-rather than by decree. Naming the destination costs four decisions made now so
-that day stays reachable:
+*(Amended 2026-07-14; revised 2026-07-20 for the harvest reversal.)*
+Livery's document profile grinds toward full browser conformance: every
+longhand, on the WPT ratchet, Ladybird-style. That is a destination, not a
+schedule. The stages above are unchanged, fullweb ships on genet-stylo, and
+the switch happens per lane when receipts beat the incumbent rather than by
+decree. Since 2026-07-18 the growth has two authorship modes: clean-room
+slices on the ratchet (as before), and lifted-then-reshaped stylo
+subsystems per the
+[harvest plan](./2026-07-20_stylo_harvest_into_livery_plan.md). Both land
+through the same walls. The decisions made at the 07-14 amendment, updated:
 
-- **ComputedValues plans a grouping layer.** A flat 40-field struct is right
-  for the seed and wrong at 450; all three majors partition computed style
-  into shared groups with copy-on-write rare data. The generator reserves the
-  grouping seam now, even while every profile emits a single group.
-- **Custom properties get their slot early.** `var()` substitution forces an
-  unparsed-value deferral through the parsing path, and retrofitting that slot
-  is the classic pain. The declaration representation carries the slot before
-  any lane implements it; chisel theming remains the implementation trigger.
-- **The schema is written for 450, populated with 40.** `properties.toml`
-  stays shaped like the full property space (the same TOML shape upstream
-  stylo migrated to); lane-specific shortcuts live in profiles, never in the
-  schema.
+- **ComputedValues plans a grouping layer.** A flat struct is right at the
+  seed scale and wrong at 450; all three majors partition computed style
+  into shared groups with copy-on-write rare data. The generator reserves
+  the grouping seam now, even while every profile emits a single group.
+- **Custom properties arrive by harvest.** The original guardrail (design
+  the unparsed-value slot early, implement later) is superseded by lifting
+  `custom_properties.rs` whole (harvest H1); chisel theming remains the
+  consumer trigger.
+- **The schema is written for 450, populated by harvest H0.** The fork's
+  own longhands/shorthands TOMLs populate `properties.toml` as data, so
+  the full property space is enumerated with unimplemented families
+  explicitly marked; lane-specific shortcuts live in profiles, never in
+  the schema.
 - **Spec-illegal extensions get a namespace.** Host-lane inventions (spring
   timing functions, field-bound values, host cascade origins) live behind a
   host profile or a prefixed lane, so the document profile stays WPT-clean
-  from day one. The two identities, host GUI engine and future fullweb engine,
-  never share a namespace and so never conflict.
+  from day one. The two identities, host GUI engine and future fullweb
+  engine, never share a namespace and so never conflict.
 
 ## Non-goals, named
 

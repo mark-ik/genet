@@ -51,6 +51,129 @@ pub trait CssValue: Sized + fmt::Display + FromStr<Err = ParseError> {
 
 impl<T> CssValue for T where T: Sized + fmt::Display + FromStr<Err = ParseError> {}
 
+/// Computed-value interpolation (harvest H2), the general machinery the
+/// retained transition clock dispatches through. The default is the
+/// discrete midpoint flip of css-transitions; families with a defined
+/// interpolation override it. Every generated `PropertyValue` variant type
+/// must have an impl below, so adding a value family without deciding its
+/// interpolation is a compile error.
+pub trait Interpolate: Clone {
+    fn interpolate_value(&self, other: &Self, progress: f32) -> Self {
+        if progress < 0.5 {
+            self.clone()
+        } else {
+            other.clone()
+        }
+    }
+}
+
+macro_rules! discrete_interpolation {
+    ($($name:ident),+ $(,)?) => {
+        $(impl Interpolate for $name {})+
+    };
+}
+
+discrete_interpolation!(
+    Alignment,
+    AnimationName,
+    AspectRatio,
+    BoxSizing,
+    Display,
+    Duration,
+    FlexDirection,
+    FlexFactor,
+    FlexWrap,
+    Float,
+    FontFamily,
+    FontSize,
+    FontStyle,
+    FontWeight,
+    Gap,
+    GridAutoFlow,
+    GridPlacement,
+    GridTemplate,
+    Inset,
+    LineHeight,
+    ListStyleType,
+    Margin,
+    Order,
+    Overflow,
+    Padding,
+    PointerEvents,
+    Position,
+    Size,
+    Spacing,
+    TextAlign,
+    TextDecorationLine,
+    TextWrapMode,
+    TimingFunction,
+    TransitionProperty,
+    VerticalAlign,
+    Visibility,
+    WhiteSpaceCollapse,
+    ZIndex,
+);
+
+impl Interpolate for Color {
+    fn interpolate_value(&self, other: &Self, progress: f32) -> Self {
+        Self::interpolate(*self, *other, progress)
+    }
+}
+
+impl Interpolate for Opacity {
+    fn interpolate_value(&self, other: &Self, progress: f32) -> Self {
+        Self::from_value(self.value() + (other.value() - self.value()) * progress)
+    }
+}
+
+impl Interpolate for BackgroundImage {
+    fn interpolate_value(&self, other: &Self, progress: f32) -> Self {
+        self.interpolate(other, progress)
+    }
+}
+
+impl Interpolate for BackgroundPosition {
+    fn interpolate_value(&self, other: &Self, progress: f32) -> Self {
+        Self::interpolate(*self, *other, progress)
+    }
+}
+
+impl Interpolate for BackgroundRepeat {
+    fn interpolate_value(&self, other: &Self, progress: f32) -> Self {
+        Self::interpolate(*self, *other, progress)
+    }
+}
+
+impl Interpolate for BorderStyle {
+    fn interpolate_value(&self, other: &Self, progress: f32) -> Self {
+        Self::interpolate(*self, *other, progress)
+    }
+}
+
+impl Interpolate for BorderWidth {
+    fn interpolate_value(&self, other: &Self, progress: f32) -> Self {
+        Self::interpolate(*self, *other, progress)
+    }
+}
+
+impl Interpolate for Radius {
+    fn interpolate_value(&self, other: &Self, progress: f32) -> Self {
+        Self::interpolate(*self, *other, progress)
+    }
+}
+
+impl Interpolate for BoxShadow {
+    fn interpolate_value(&self, other: &Self, progress: f32) -> Self {
+        self.interpolate(other, progress)
+    }
+}
+
+impl Interpolate for Transform {
+    fn interpolate_value(&self, other: &Self, progress: f32) -> Self {
+        self.interpolate(other, progress)
+    }
+}
+
 pub(crate) fn format_number(value: f32) -> String {
     if value == 0.0 {
         return "0".to_owned();
