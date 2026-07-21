@@ -295,6 +295,7 @@ fn crowded_graph_swatch() -> GraphCanvasSwatch<u8, &'static str> {
                 0.12 + (index / 4) as f32 * 0.36,
             ),
             label: format!("Crowded node {}", index + 1),
+            key: None,
         })
         .collect();
     let edges = (0..11)

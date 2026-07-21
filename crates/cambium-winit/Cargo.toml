@@ -17,6 +17,6 @@ winit = "0.30.13"
 # Genet crates by git branch (apps redirect to local checkouts via [patch]).
 genet-layout = { git = "https://github.com/mark-ik/genet.git", branch = "main" }
 genet-winit-host = { git = "https://github.com/mark-ik/genet.git", branch = "main" }
-genet-scripted-dom = "0.1.0"
-layout-dom-api = "0.1.0"
+genet-scripted-dom = { git = "https://github.com/mark-ik/genet.git", branch = "main" }
+layout-dom-api = { git = "https://github.com/mark-ik/genet.git", branch = "main" }
 accesskit = "0.24"

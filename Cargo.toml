@@ -17,3 +17,19 @@ repository = "https://github.com/mark-ik/cambium"
 [workspace.dependencies]
 tracing = "0.1.44"
 kurbo = "0.13.1"
+
+[patch.crates-io]
+# Genet's layout consumes a VENDORED stylo_taffy fork (its `style` dep points
+# at the published genet-stylo fork surface); genet wires that with a path
+# patch, and path patches do not transit to git consumers — without this,
+# cambium-winit's git genet-layout pulls the registry stylo_taffy, whose
+# upstream `stylo` collides with genet-stylo on `links = servo_style_crate`.
+# Mirror the patch from the same repo so there is exactly one stylo lineage.
+stylo_taffy = { git = "https://github.com/mark-ik/genet.git", branch = "main" }
+# Same non-transiting-patch story: genet vendors a gpu-allocator aligned with
+# wgpu-hal's `windows` crate; without it the fresh resolution pairs wgpu-hal
+# 29's dx12 backend with a mismatched gpu-allocator and it fails to compile.
+gpu-allocator = { git = "https://github.com/mark-ik/genet.git", branch = "main" }
+# And the taffy fork the vendored stylo_taffy compiles against (re-vendored
+# 0.12.1 with genet's layout patches; registry taffy lacks its surface).
+taffy = { git = "https://github.com/mark-ik/genet.git", branch = "main" }

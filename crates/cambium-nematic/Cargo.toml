@@ -14,5 +14,5 @@ cambium = { version = "0.2.0", path = "../cambium" }
 errand = "0.1.3"
 
 [dev-dependencies]
-layout_dom_api = { package = "layout-dom-api", version = "0.1.0" }
-genet-scripted-dom = "0.1.0"
+layout_dom_api = { package = "layout-dom-api", git = "https://github.com/mark-ik/genet.git", branch = "main" }
+genet-scripted-dom = { git = "https://github.com/mark-ik/genet.git", branch = "main" }
