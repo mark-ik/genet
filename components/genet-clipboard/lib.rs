@@ -19,6 +19,7 @@
 //! app-format lane) are the per-platform backend's follow-on, tracked in the
 //! capability plan's P3.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 /// A clipboard representation's media type. The named types round-trip through
@@ -53,6 +54,8 @@ pub struct ClipboardItem {
     html: Option<String>,
     image: Option<Image>,
     uris: Option<Vec<String>>,
+    /// Arbitrary representations keyed by MIME type: audio, app-specific formats.
+    custom: BTreeMap<String, Vec<u8>>,
 }
 
 impl ClipboardItem {
@@ -80,6 +83,12 @@ impl ClipboardItem {
         self
     }
 
+    /// Add an arbitrary representation by MIME type (e.g. `audio/wav`).
+    pub fn with_custom(mut self, media_type: impl Into<String>, data: Vec<u8>) -> Self {
+        self.custom.insert(media_type.into(), data);
+        self
+    }
+
     pub fn text(&self) -> Option<&str> {
         self.text.as_deref()
     }
@@ -96,8 +105,24 @@ impl ClipboardItem {
         self.uris.as_deref()
     }
 
+    /// The bytes of a custom representation by MIME type, if present.
+    pub fn custom(&self, media_type: &str) -> Option<&[u8]> {
+        self.custom.get(media_type).map(Vec::as_slice)
+    }
+
+    /// Every custom representation as `(media_type, bytes)`.
+    pub fn customs(&self) -> impl Iterator<Item = (&str, &[u8])> {
+        self.custom
+            .iter()
+            .map(|(mime, data)| (mime.as_str(), data.as_slice()))
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.text.is_none() && self.html.is_none() && self.image.is_none() && self.uris.is_none()
+        self.text.is_none()
+            && self.html.is_none()
+            && self.image.is_none()
+            && self.uris.is_none()
+            && self.custom.is_empty()
     }
 
     /// The MIME types this item carries, richest first, so a reader can pick.
@@ -115,6 +140,9 @@ impl ClipboardItem {
         if self.text.is_some() {
             formats.push(Mime::TextPlain);
         }
+        for mime in self.custom.keys() {
+            formats.push(Mime::Custom(mime.clone()));
+        }
         formats
     }
 }
@@ -126,6 +154,11 @@ pub trait Clipboard {
 
     /// Offer `item`'s representations to the clipboard.
     fn write(&mut self, item: &ClipboardItem) -> Result<(), ClipboardError>;
+
+    /// Read one custom representation by MIME type. Unlike [`read`](Self::read),
+    /// which returns the standard representations at once, arbitrary formats are
+    /// fetched by name, since the OS clipboard cannot always enumerate them.
+    fn read_format(&mut self, media_type: &str) -> Result<Vec<u8>, ClipboardError>;
 
     /// Empty the clipboard.
     fn clear(&mut self) -> Result<(), ClipboardError>;
@@ -214,6 +247,13 @@ impl Clipboard for MemoryClipboard {
         Ok(())
     }
 
+    fn read_format(&mut self, media_type: &str) -> Result<Vec<u8>, ClipboardError> {
+        self.item
+            .custom(media_type)
+            .map(<[u8]>::to_vec)
+            .ok_or(ClipboardError::Empty)
+    }
+
     fn clear(&mut self) -> Result<(), ClipboardError> {
         self.item = ClipboardItem::default();
         Ok(())
@@ -242,7 +282,8 @@ mod tests {
                 height: 1,
                 rgba: vec![10, 20, 30, 255],
             })
-            .with_uris(vec!["file:///song.wav".to_string()]);
+            .with_uris(vec!["file:///song.wav".to_string()])
+            .with_custom("audio/wav", vec![1, 2, 3]);
         clipboard.write(&item).unwrap();
 
         let read = clipboard.read().unwrap();
@@ -251,6 +292,8 @@ mod tests {
         assert_eq!(read.html(), Some("<b>a loop</b>"));
         assert_eq!(read.image().unwrap().rgba, vec![10, 20, 30, 255]);
         assert_eq!(read.uris(), Some(["file:///song.wav".to_string()].as_slice()));
+        assert_eq!(read.custom("audio/wav"), Some([1, 2, 3].as_slice()));
+        assert_eq!(clipboard.read_format("audio/wav").unwrap(), vec![1, 2, 3]);
 
         clipboard.clear().unwrap();
         assert!(matches!(clipboard.read(), Err(ClipboardError::Empty)));
