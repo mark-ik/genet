@@ -91,7 +91,7 @@ pub use host_loader::{
 pub use image_decode::{
     BackgroundImagePlane, DecodedImage, ImageLoader, ImagePlane, NoImageLoader, decode_image_bytes,
 };
-pub use incremental::{AnimationMode, Applied, IncrementalLayout};
+pub use incremental::{AnimationMode, Applied, IncrementalLayout, ScrollTarget};
 pub use invalidate::{Invalidation, classify, coalesce};
 pub use layout::layout;
 pub use overlays::OverlaySlot;
@@ -100,6 +100,7 @@ pub use paint_emit::{
     emit_paint_list, emit_paint_list_scrolled, emit_paint_list_scrolled_excluding_subtrees,
     emit_paint_list_scrolled_with_leaves, emit_paint_list_with_layouts,
     emit_paint_list_with_leaves, emit_subtree_paint_list_scrolled, push_scrollbars,
+    push_scrollbars_faded,
 };
 pub use query::{ElementQuery, Handle, NameMatch, Resolution};
 pub use snapshot::build_snapshot_map;

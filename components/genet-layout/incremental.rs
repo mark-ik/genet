@@ -131,6 +131,15 @@ fn damage_class(applied: Applied, damage: RestyleDamage) -> LayoutDamageClass {
     }
 }
 
+/// What consumed a wheel delta in [`IncrementalLayout::scroll_at_target`]: a
+/// nested overflow container, or the document viewport. Hosts key per-target
+/// chrome (an auto-hiding scrollbar's fade clock) by this.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ScrollTarget<Id> {
+    Document,
+    Element(Id),
+}
+
 /// A persistent cascade + layout session over one `LayoutDom`.
 pub struct IncrementalLayout<Id: Copy + Eq + Hash> {
     styles: StylePlane<Id>,
@@ -790,20 +799,38 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     where
         D: LayoutDom<NodeId = Id>,
     {
+        self.scroll_at_target(dom, x, y, dx, dy).is_some()
+    }
+
+    /// [`scroll_at`](Self::scroll_at), reporting *what* consumed the delta — the
+    /// element container or the document — so a host can key per-container
+    /// chrome (an auto-hiding scrollbar's fade clock) to the scrolled target.
+    /// `None` = nothing scrolled (every candidate already at its limit).
+    pub fn scroll_at_target<D>(
+        &mut self,
+        dom: &D,
+        x: f32,
+        y: f32,
+        dx: f32,
+        dy: f32,
+    ) -> Option<ScrollTarget<Id>>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
         // Hit-test through the current element scroll (so a click on already-scrolled
         // content resolves to the right node); the host passes no extra offset here.
         let mut node = self.hit_test(dom, x, y, &ScrollOffsets::default());
         while let Some(n) = node {
             if let Some(next) = self.scroll_step(dom, n, dx, dy) {
                 self.element_scroll.insert(n, next);
-                return true;
+                return Some(ScrollTarget::Element(n));
             }
             node = dom.parent(n);
         }
         // No nested scroll container consumed the delta → scroll the document.
         let before = self.viewport.scroll;
         self.scroll_by(dom, dx, dy);
-        self.viewport.scroll != before
+        (self.viewport.scroll != before).then_some(ScrollTarget::Document)
     }
 
     /// The clamped new element-scroll offset for scrolling `node` by `(dx, dy)` from
@@ -1459,6 +1486,57 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         );
         self.append_highlights(dom, &mut plist);
         plist
+    }
+
+    /// Append scrollbar thumbs for everything this session can scroll: each
+    /// element container in the retained element scroll (both axes, via
+    /// [`push_scrollbars_faded`](crate::paint_emit::push_scrollbars_faded)) plus
+    /// the document viewport itself. `alpha_of` maps each [`ScrollTarget`] to
+    /// its current opacity (`0.0..=1.0`; `0` skips the bar) — the seam an
+    /// auto-hiding host drives from its fade clock; an always-visible host
+    /// passes `|_| 1.0`. Call after [`emit_paint_list`](Self::emit_paint_list)
+    /// so the thumbs overlay the content.
+    pub fn append_scrollbars<D>(
+        &self,
+        dom: &D,
+        plist: &mut GenetPaintList,
+        alpha_of: &dyn Fn(ScrollTarget<Id>) -> f32,
+    ) where
+        D: LayoutDom<NodeId = Id>,
+    {
+        crate::paint_emit::push_scrollbars_faded(
+            plist,
+            dom,
+            &self.fragments,
+            &self.element_scroll,
+            &|id| alpha_of(ScrollTarget::Element(id)),
+        );
+        // The document bar: the viewport is the container, the page the content.
+        let alpha = alpha_of(ScrollTarget::Document).clamp(0.0, 1.0);
+        if alpha <= 0.0 {
+            return;
+        }
+        let (rx, ry) =
+            document_scroll_range(dom, &self.styles, &self.fragments, self.viewport.size);
+        let (sx, sy) = self.viewport.scroll;
+        let (vw, vh) = (self.width, self.height);
+        let color = paint_list_api::ColorF {
+            a: crate::paint_emit::SCROLLBAR_COLOR.a * alpha,
+            ..crate::paint_emit::SCROLLBAR_COLOR
+        };
+        let w = crate::paint_emit::SCROLLBAR_WIDTH;
+        if ry > 0.5 {
+            let content_h = vh + ry;
+            let thumb_h = (vh * (vh / content_h)).max(24.0);
+            let thumb_y = (sy / ry) * (vh - thumb_h);
+            plist.push_fill(vw - w, thumb_y, w, thumb_h, color);
+        }
+        if rx > 0.5 {
+            let content_w = vw + rx;
+            let thumb_w = (vw * (vw / content_w)).max(24.0);
+            let thumb_x = (sx / rx) * (vw - thumb_w);
+            plist.push_fill(thumb_x, vh - w, thumb_w, w, color);
+        }
     }
 
     /// [`emit_paint_list`](Self::emit_paint_list) plus a chisel
@@ -5717,6 +5795,65 @@ mod tests {
             (layout.viewport_scroll().1 - 40.0).abs() < 0.5,
             "the document scrolled 40px: {:?}",
             layout.viewport_scroll(),
+        );
+    }
+
+    /// The host-facing scrollbar seam: `scroll_at_target` names what consumed
+    /// the wheel, and `append_scrollbars` draws a thumb per scrollable target —
+    /// including the horizontal axis and the document bar — gated by the host's
+    /// per-target alpha (an auto-hide fade at 0 emits nothing).
+    #[test]
+    fn append_scrollbars_draws_element_both_axes_and_document_thumbs() {
+        const SHEET: &[&str] = &[
+            "html,body,div{display:block;margin:0}",
+            ".pane{overflow:auto;width:100px;height:100px}",
+            ".wide{width:900px;height:900px}",
+            ".tall{height:2000px}",
+        ];
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let h = dom.create_element(html("html"));
+        dom.append_child(root, h);
+        let body = dom.create_element(html("body"));
+        dom.append_child(h, body);
+        let pane = dom.create_element(html("div"));
+        dom.set_attribute(pane, attr("class"), "pane");
+        dom.append_child(body, pane);
+        let wide = dom.create_element(html("div"));
+        dom.set_attribute(wide, attr("class"), "wide");
+        dom.append_child(pane, wide);
+        let tail = dom.create_element(html("div"));
+        dom.set_attribute(tail, attr("class"), "tall");
+        dom.append_child(body, tail);
+
+        let mut layout = IncrementalLayout::new(&dom, SHEET, W, H);
+        // Scroll the pane diagonally (both axes), then the document below it.
+        assert_eq!(
+            layout.scroll_at_target(&dom, 50.0, 50.0, 30.0, 30.0),
+            Some(ScrollTarget::Element(pane)),
+            "the pane consumes the wheel and is named",
+        );
+        assert_eq!(
+            layout.scroll_at_target(&dom, 50.0, 500.0, 0.0, 40.0),
+            Some(ScrollTarget::Document),
+            "below the pane the document consumes the wheel",
+        );
+
+        use paint_list_api::PaintList as _;
+        let count_thumbs = |alpha_of: &dyn Fn(ScrollTarget<_>) -> f32| -> usize {
+            let mut plist =
+                layout.emit_paint_list(&dom, &ScrollOffsets::default(), DeviceIntSize::new(800, 600));
+            let before = plist.commands().len();
+            layout.append_scrollbars(&dom, &mut plist, alpha_of);
+            plist.commands().len() - before
+        };
+        // Element pane: vertical + horizontal thumbs; document: vertical thumb.
+        assert_eq!(count_thumbs(&|_| 1.0), 3, "two pane thumbs + one document thumb");
+        // The fade seam: a target at alpha 0 emits nothing.
+        assert_eq!(
+            count_thumbs(&|t| if t == ScrollTarget::Document { 1.0 } else { 0.0 }),
+            1,
+            "faded-out pane emits no thumbs; the document bar remains",
         );
     }
 

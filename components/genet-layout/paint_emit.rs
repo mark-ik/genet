@@ -226,31 +226,67 @@ pub fn push_scrollbars<D>(
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    push_scrollbars_faded(plist, dom, fragments, scroll_offsets, &|_| 1.0);
+}
+
+/// [`push_scrollbars`] with a per-container opacity, for hosts with auto-hiding
+/// overlay bars: the host's fade tracker maps each container to `0.0..=1.0`
+/// (its activity fade) and bars at `0` are skipped entirely. Draws **both**
+/// axes: a vertical thumb on the right edge for y-scrollable containers, a
+/// horizontal thumb on the bottom edge for x-scrollable ones (a fretboard-style
+/// sideways pane was invisible to the vertical-only formula).
+pub fn push_scrollbars_faded<D>(
+    plist: &mut GenetPaintList,
+    dom: &D,
+    fragments: &FragmentPlane<D::NodeId>,
+    scroll_offsets: &ScrollOffsets<D::NodeId>,
+    alpha_of: &dyn Fn(D::NodeId) -> f32,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
     if scroll_offsets.is_empty() {
         return;
     }
     let origins = crate::genet_lane::accumulate_origins(dom, fragments);
-    for (&node, &(_ox, oy)) in scroll_offsets {
+    for (&node, &(ox, oy)) in scroll_offsets {
+        let alpha = alpha_of(node).clamp(0.0, 1.0);
+        if alpha <= 0.0 {
+            continue;
+        }
+        let color = ColorF {
+            a: SCROLLBAR_COLOR.a * alpha,
+            ..SCROLLBAR_COLOR
+        };
         let Some(r) = fragments.rect_of(node) else {
             continue;
         };
-        let inner_h =
-            r.size.height - r.padding.top - r.padding.bottom - r.border.top - r.border.bottom;
-        let content_h = r.content_size.height;
-        let scrollable = content_h - inner_h;
-        if scrollable <= 0.5 {
-            continue;
-        }
         // The container's absolute top-left (taffy locations are parent-relative), so a nested
         // scroller's bar lands on its real right edge, not at `container_width` from the document
         // left.
         let Some(p) = origins.get(&node) else {
             continue;
         };
-        let thumb_h = (r.size.height * (inner_h / content_h)).max(24.0);
-        let thumb_y = p.y + (oy / scrollable) * (r.size.height - thumb_h);
-        let thumb_x = p.x + r.size.width - SCROLLBAR_WIDTH;
-        plist.push_fill(thumb_x, thumb_y, SCROLLBAR_WIDTH, thumb_h, SCROLLBAR_COLOR);
+        let inner_h =
+            r.size.height - r.padding.top - r.padding.bottom - r.border.top - r.border.bottom;
+        let content_h = r.content_size.height;
+        let scrollable_y = content_h - inner_h;
+        if scrollable_y > 0.5 {
+            let thumb_h = (r.size.height * (inner_h / content_h)).max(24.0);
+            let thumb_y = p.y + (oy / scrollable_y) * (r.size.height - thumb_h);
+            let thumb_x = p.x + r.size.width - SCROLLBAR_WIDTH;
+            plist.push_fill(thumb_x, thumb_y, SCROLLBAR_WIDTH, thumb_h, color);
+        }
+        let inner_w =
+            r.size.width - r.padding.left - r.padding.right - r.border.left - r.border.right;
+        let content_w = r.content_size.width;
+        let scrollable_x = content_w - inner_w;
+        if scrollable_x > 0.5 {
+            let thumb_w = (r.size.width * (inner_w / content_w)).max(24.0);
+            let thumb_x = p.x + (ox / scrollable_x) * (r.size.width - thumb_w);
+            let thumb_y = p.y + r.size.height - SCROLLBAR_WIDTH;
+            plist.push_fill(thumb_x, thumb_y, thumb_w, SCROLLBAR_WIDTH, color);
+        }
     }
 }
 
