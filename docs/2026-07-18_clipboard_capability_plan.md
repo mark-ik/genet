@@ -241,3 +241,17 @@ the hand-off UI plan so it is not mistaken for the final layering.
   `custom_formats` test on each machine is the confirmation. The pass-the-mic
   hand-off Hocket exists to enable is what delivered this. Next: the
   genet-clipboard rewire and Hocket audio interchange, both Windows-verifiable.
+- 2026-07-20: **Rewire + audio interchange landed (P3 north star).**
+  genet-clipboard's `SystemClipboard` now writes through the fork's `set_data`,
+  so text, html, image, and custom MIME coexist from one write (`ClipboardItem`
+  gained custom formats; the `Clipboard` trait gained `read_format(mime)`). An
+  on-host test writes all four in one `set_data` and reads each back; pelt
+  unaffected. On top of it, Hocket gained audio interchange: `hocket-engine`
+  encodes the loop mix to WAV bytes in memory and decodes WAV back to a mono
+  layer, and hocket-genet has Copy audio (mix to the clipboard as `audio/wav`
+  plus a text label) and Paste audio (append clipboard audio as a layer on the
+  armed track). The WAV round-trip is unit-tested; the hocket-genet suite is
+  green. Interop note: `audio/wav` as a custom format is app-to-app (Hocket to
+  Hocket, and MIME-aware apps); universal DAW paste wants a platform-native audio
+  format, a later refinement. P3 is done; P4 (Wayland persistence, X11 PRIMARY)
+  and P5 (DOM async Clipboard API) remain.
