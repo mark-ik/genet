@@ -34,6 +34,13 @@ pub const GRAPH_CANVAS_SWATCH_CSS: &str = r#"
     outline: 1px solid currentColor;
     outline-offset: 1px;
 }
+.graph-canvas-swatch-label {
+    font-size: 10px;
+    line-height: 1;
+    white-space: nowrap;
+    opacity: 0.85;
+    pointer-events: none;
+}
 .graph-canvas-swatch-expand {
     background-color: rgba(127, 127, 127, 0.10);
     border: 0;
@@ -91,6 +98,15 @@ pub struct GraphCanvasSwatch<Id, Kind> {
     pub edge_width: f32,
     pub hit_size: f32,
     pub label: String,
+    /// Whether the Expand affordance renders. Defaults on (the original
+    /// behavior); a consumer whose swatch has no "fuller view" to expand into
+    /// switches it off rather than wiring a lying no-op chip.
+    pub show_expand: bool,
+    /// Whether each node's `label` also renders as visible text beside its hit
+    /// target (it is always the accessible name). Defaults off — a dense
+    /// minimap reads better bare; an overview where identity is the point
+    /// (sessions, clusters) switches it on.
+    pub show_labels: bool,
 }
 
 impl<Id, Kind> GraphCanvasSwatch<Id, Kind> {
@@ -110,6 +126,8 @@ impl<Id, Kind> GraphCanvasSwatch<Id, Kind> {
             edge_width: 1.0,
             hit_size: 20.0,
             label: "Related graph".to_string(),
+            show_expand: true,
+            show_labels: false,
         }
     }
 
@@ -123,6 +141,20 @@ impl<Id, Kind> GraphCanvasSwatch<Id, Kind> {
     #[must_use]
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = label.into();
+        self
+    }
+
+    /// Show or hide the Expand affordance (see [`Self::show_expand`]).
+    #[must_use]
+    pub fn with_expand(mut self, on: bool) -> Self {
+        self.show_expand = on;
+        self
+    }
+
+    /// Render each node's label as visible text (see [`Self::show_labels`]).
+    #[must_use]
+    pub fn with_node_labels(mut self, on: bool) -> Self {
+        self.show_labels = on;
         self
     }
 }
@@ -248,6 +280,32 @@ where
 {
     let positions = swatch.projected_positions();
     let hit_size = swatch.hit_size.max(1.0);
+    // Visible node labels (opt-in): plain positioned text beside each node,
+    // aria-hidden (the button already carries the accessible name) and
+    // pointer-transparent (they must not steal the node's clicks).
+    let labels: Vec<_> = if swatch.show_labels {
+        swatch
+            .graph
+            .nodes
+            .iter()
+            .zip(swatch.projected_positions())
+            .map(|(node, (_, (x, y)))| {
+                el::<_, State, AppAction>("span", node.label.clone())
+                    .attr("class", "graph-canvas-swatch-label")
+                    .attr("aria-hidden", "true")
+                    .attr(
+                        "style",
+                        format!(
+                            "position:absolute;left:{}px;top:{}px;",
+                            x + swatch.node_radius + 4.0,
+                            y - 5.0,
+                        ),
+                    )
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let targets: Vec<_> = swatch
         .graph
         .nodes
@@ -314,20 +372,31 @@ where
         .collect();
 
     let expand = on_expand.clone();
-    let expand_button = on_click(
-        el::<_, State, AppAction>("button", "Expand")
-            .attr("class", "graph-canvas-swatch-expand")
-            .attr("type", "button")
-            .attr("aria-label", "Expand graph")
-            .attr("style", "position:absolute;right:5px;top:5px;"),
-        move |state: &mut State, _: PointerClick| expand(state),
-    );
+    let expand_buttons: Vec<_> = if swatch.show_expand {
+        vec![on_click(
+            el::<_, State, AppAction>("button", "Expand")
+                .attr("class", "graph-canvas-swatch-expand")
+                .attr("type", "button")
+                .attr("aria-label", "Expand graph")
+                .attr("style", "position:absolute;right:5px;top:5px;"),
+            move |state: &mut State, _: PointerClick| expand(state),
+        )]
+    } else {
+        Vec::new()
+    };
 
     el(
         "div",
         (
             custom_leaf::<State, AppAction>(swatch.leaf_key, swatch.width, swatch.height)
                 .attr("aria-hidden", "true"),
+            el("div", labels).attr("class", "graph-canvas-swatch-labels").attr(
+                "style",
+                format!(
+                    "position:absolute;left:0;top:0;width:{}px;height:{}px;",
+                    swatch.width, swatch.height
+                ),
+            ),
             el("div", targets)
                 .attr("class", "graph-canvas-swatch-targets")
                 .attr(
@@ -337,7 +406,7 @@ where
                         swatch.width, swatch.height
                     ),
                 ),
-            expand_button,
+            expand_buttons,
         ),
     )
     .attr("class", "graph-canvas-swatch")
