@@ -9,8 +9,10 @@
 //! OS accessibility tree so every Cambium app reaches a screen reader.
 
 pub mod a11y;
+pub mod scroll;
 
 pub use a11y::{A11yHost, SpriggingA11y};
+pub use scroll::{ScrollbarFade, wheel_axes};
 
 use cambium::{Key, KeyEvent, Modifiers, NamedKey};
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey as WinitNamedKey};
