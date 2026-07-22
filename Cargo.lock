@@ -678,7 +678,7 @@ dependencies = [
 
 [[package]]
 name = "cambium"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "genet-scripted-dom",
  "illume",
@@ -691,7 +691,7 @@ dependencies = [
 
 [[package]]
 name = "cambium-nematic"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cambium",
  "errand",
@@ -701,7 +701,7 @@ dependencies = [
 
 [[package]]
 name = "cambium-winit"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "accesskit",
  "cambium",
@@ -4365,7 +4365,7 @@ dependencies = [
 
 [[package]]
 name = "sprigging"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "accesskit",
  "paint_list_api",

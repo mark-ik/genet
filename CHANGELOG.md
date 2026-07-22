@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 - 2026-07-22
 
 - Add `HoverEvent`, `HoverPhase`, `on_hover`, and runner dispatch seams for
   host-computed Enter, Leave, and Move transitions.
@@ -13,6 +13,16 @@
   Cambium Nematic, tests, and examples.
 - Replace stale Serval-era crate documentation with the current Cambium,
   Meristem, Sprigging, and Genet ownership boundary.
+- Add the retained `GraphCanvas` leaf plus Cambium's interactive
+  `graph_canvas_swatch`, including focus, data keys, optional expansion, and
+  visible node labels.
+- Add shared overlay, command-menu, disclosure, summary, detail, sectioned-list,
+  split, tab, segmented-control, and reorderable-list surfaces.
+- Add `caret_text_field` for DOM-painted carets and forest-DOM projections for
+  multiple window roots over one application state.
+- Add Cambium Winit scroll policy and the Genet/AccessKit accessibility host.
+  The source release is versioned here; crates.io publication waits for the
+  standalone `genet-layout` package boundary.
 
 ## 0.2.0 - 2026-07-14
 

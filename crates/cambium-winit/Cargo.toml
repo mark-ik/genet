@@ -1,6 +1,6 @@
 [package]
 name = "cambium-winit"
-version = "0.2.0"
+version = "0.3.0"
 description = "winit input translation for Cambium applications"
 edition.workspace = true
 rust-version.workspace = true
@@ -9,8 +9,8 @@ repository.workspace = true
 publish = true
 
 [dependencies]
-cambium = { version = "0.2.0", path = "../cambium" }
-sprigging = { version = "0.1.0", path = "../sprigging" }
+cambium = { version = "0.3.0", path = "../cambium" }
+sprigging = { version = "0.2.0", path = "../sprigging" }
 winit = "0.30.13"
 # The a11y host (src/a11y.rs) projects a laid-out genet DOM into an AccessKit
 # tree with each Sprigging leaf's own semantics, and drives the platform adapter.

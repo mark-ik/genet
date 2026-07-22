@@ -6,7 +6,7 @@ document runtime remains in `genet-documents`.
 
 ## Current verified set
 
-Verified on 2026-07-14:
+Verified on 2026-07-22:
 
 - `genet-scripted-dom = 0.1.0`
 - `layout-dom-api = 0.1.0`
@@ -23,8 +23,12 @@ Verified on 2026-07-14:
 | `genet-static-dom` | 0.1.0 | crates.io |
 | `genet-scripted-dom` | 0.1.0 | crates.io and sibling path |
 
-The published Cambium stack is `meristem 0.1.0`, `sprigging 0.1.0`,
-`cambium 0.2.0`, `cambium-winit 0.2.0`, and `cambium-nematic 0.2.0`.
+The published Cambium stack is `meristem 0.1.0`, `sprigging 0.2.0`,
+`cambium 0.3.0`, `cambium-winit 0.2.0`, and `cambium-nematic 0.3.0`.
+Cambium Winit's 0.3.0 source is versioned with the workspace, but its new
+accessibility host depends on `genet-layout`, which does not yet have a
+standalone crates.io release. Keep its published line at 0.2.0 until that
+dependency closes rather than shipping a package that cannot resolve.
 Cambium Nematic's release boundary is Cambium plus the protocol AST package,
 without Genet's layout or rendering engine.
 
