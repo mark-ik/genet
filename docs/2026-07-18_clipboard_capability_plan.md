@@ -255,3 +255,25 @@ the hand-off UI plan so it is not mistaken for the final layering.
   Hocket, and MIME-aware apps); universal DAW paste wants a platform-native audio
   format, a later refinement. P3 is done; P4 (Wayland persistence, X11 PRIMARY)
   and P5 (DOM async Clipboard API) remain.
+- 2026-07-22: **P4 investigated over SSH on the Fedora (GNOME Wayland) laptop.**
+  - **X11 custom formats verified on Linux.** The fork's `custom_formats` test
+    passes over SSH through XWayland (with the graphical session's `DISPLAY` +
+    `XAUTHORITY`, pulled from `systemctl --user show-environment`). This
+    re-confirms the hand-off Claude's X11 impl on real hardware.
+  - **Native Wayland gap diagnosed precisely.** arboard checks `WAYLAND_DISPLAY`
+    and tries the wl-clipboard-rs backend first; on this Mutter it fails with
+    "a required Wayland protocol (ext-data-control, or wlr-data-control version 1)
+    is not supported by the compositor", and falls back to X11. Yet the C
+    `wl-clipboard 2.2.1` (`wl-paste`) works on the same compositor, so it is a
+    library gap, not a GNOME limitation. `wl-clipboard-rs 0.9.3` is the latest
+    published version, so there is nothing to bump to; a real native-Wayland fix
+    would mean patching wl-clipboard-rs for the data-control variant Mutter
+    exposes. Low priority, because arboard's XWayland fallback already gives GNOME
+    users a working clipboard (verified). On wlroots compositors (Sway/Hyprland),
+    wl-clipboard-rs 0.9.3 should bind natively.
+  - **Net P4 status:** the clipboard works on this Linux machine (X11/XWayland,
+    custom formats included). Native-Wayland data-control and X11 PRIMARY-selection
+    (middle-click) are refinements; PRIMARY likely rides arboard's existing
+    selection mechanism plus the fork's selection-aware custom methods, untested.
+    Wayland-persistence (surviving window close) is compositor + clipboard-manager
+    behaviour, not arboard code.
