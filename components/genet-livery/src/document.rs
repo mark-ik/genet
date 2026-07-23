@@ -15,9 +15,9 @@ use livery::{
 use paint_list_api::DeviceIntSize;
 
 use crate::{
-    FragmentPlane, InteractionStates, LayoutError, LiveryPaintList, StylePlane, StyleSet,
-    TextSystem, emit_paint_list_with_text_system_scrolled_with_images, hit_test_with_scroll,
-    layout::layout_with_text_system, resolve_styles,
+    FragmentPlane, IncrementalStyle, InteractionStates, LayoutError, LiveryPaintList, RestyleStats,
+    StylePlane, StyleSet, TextSystem, emit_paint_list_with_text_system_scrolled_with_images,
+    hit_test_with_scroll, layout::layout_with_text_system, resolve_styles,
 };
 
 /// What a Livery click resolved to.
@@ -81,6 +81,7 @@ where
     style_set: StyleSet,
     device: Device,
     interactions: InteractionStates<D::NodeId>,
+    style_session: IncrementalStyle<D::NodeId>,
     text: TextSystem,
     generation: u64,
     cached: Option<((u32, u32), LiveryPaintList)>,
@@ -110,6 +111,7 @@ where
             style_set,
             device,
             interactions: InteractionStates::default(),
+            style_session: IncrementalStyle::new(),
             text: TextSystem::new(),
             generation: 0,
             cached: None,
@@ -145,6 +147,11 @@ where
     pub fn invalidate(&mut self) {
         self.cached = None;
         self.layout = None;
+        self.style_session.invalidate();
+    }
+
+    pub fn last_restyle_stats(&self) -> RestyleStats {
+        self.style_session.last_stats()
     }
 
     /// Supply host-resolved image bytes for a non-data URL. The CSS engine
@@ -173,8 +180,14 @@ where
         self.device.viewport_width = width as f32;
         self.device.viewport_height = height as f32;
         self.finish_completed_transitions();
-        let mut styles =
-            resolve_styles(&self.dom, &self.style_set, &self.device, &self.interactions);
+        self.style_session.update(
+            &self.dom,
+            &self.style_set,
+            &self.device,
+            &self.interactions,
+            &[],
+        );
+        let mut styles = self.style_session.styles().clone();
         self.schedule_transitions(&styles);
         self.schedule_keyframe_animation(&styles);
         self.apply_transitions(&mut styles);
@@ -217,6 +230,54 @@ where
         self.scroll
     }
 
+    /// CSSOM `insertRule` on one retained author sheet (harvest H3). The
+    /// next frame restyles, relays out, and repaints.
+    pub fn insert_author_rule(
+        &mut self,
+        sheet: usize,
+        rule: &str,
+        index: usize,
+    ) -> Result<usize, livery::stylesheet::RuleMutationError> {
+        let inserted = self.style_set.insert_author_rule(sheet, rule, index)?;
+        self.cached = None;
+        self.layout = None;
+        Ok(inserted)
+    }
+
+    /// CSSOM `deleteRule` on one retained author sheet (harvest H3).
+    pub fn delete_author_rule(
+        &mut self,
+        sheet: usize,
+        index: usize,
+    ) -> Result<(), livery::stylesheet::RuleMutationError> {
+        self.style_set.delete_author_rule(sheet, index)?;
+        self.cached = None;
+        self.layout = None;
+        Ok(())
+    }
+
+    /// The retained style set, for CSSOM reads (rule counts, object model).
+    pub fn style_set(&self) -> &StyleSet {
+        &self.style_set
+    }
+
+    /// getComputedStyle backing (harvest H3): serialize one longhand or
+    /// custom property of one element from the retained style plane. With
+    /// no retained layout yet, styles resolve on demand at the current
+    /// device. Unknown names and unstyled nodes return None.
+    pub fn computed_style(&self, node: D::NodeId, property: &str) -> Option<String> {
+        let resolved;
+        let plane = match self.layout.as_ref() {
+            Some(layout) => &layout.styles,
+            None => {
+                resolved =
+                    resolve_styles(&self.dom, &self.style_set, &self.device, &self.interactions);
+                &resolved
+            },
+        };
+        plane.computed_style(node, property)
+    }
+
     /// Start a host-driven opacity transition for one retained element. This
     /// is the runtime clock seam. CSS transitions use the same clock when the bounded transition
     /// longhands are present; this explicit method remains useful to hosts
@@ -256,8 +317,7 @@ where
     /// Advance retained animation time. A following frame samples the
     /// interpolated value without re-running layout.
     pub fn pump(&mut self, now_ms: f64) -> bool {
-        if (self.transitions.is_empty() && self.keyframe_animation.is_none())
-            || !now_ms.is_finite()
+        if (self.transitions.is_empty() && self.keyframe_animation.is_none()) || !now_ms.is_finite()
         {
             return false;
         }

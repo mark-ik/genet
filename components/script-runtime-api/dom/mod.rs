@@ -149,7 +149,12 @@ pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(),
     engine.set_function::<PrefixOf>("__prefix", 1)?;
     engine.set_function::<CreateElementNS>("__createElementNS", 2)?;
     engine.set_function::<AttributeNames>("__attributeNames", 1)?;
+    engine.set_function::<InlineStyleValue>("__inlineStyleValue", 2)?;
     engine.set_function::<ComputedStyleValue>("__computedStyleValue", 2)?;
+    engine.set_function::<StyleSheetCount>("__styleSheetCount", 0)?;
+    engine.set_function::<StyleSheetRuleCount>("__styleSheetRuleCount", 1)?;
+    engine.set_function::<InsertRule>("__insertRule", 3)?;
+    engine.set_function::<DeleteRule>("__deleteRule", 2)?;
     engine.set_function::<MatchMedia>("__matchMedia", 1)?;
     engine.set_function::<EvaluateXPath>("__xpathEvaluate", 2)?;
     let html_interfaces = html_interfaces::bootstrap_script();
@@ -195,6 +200,52 @@ pub trait ComputedStyleHandler {
     fn computed_value(&self, node: u64, property: &str) -> Option<String>;
 }
 
+/// Result of asking the selected CSS engine to normalize one inline specified
+/// value. `PassThrough` is essential at this shared boundary: a bounded engine
+/// cannot declare unfamiliar but valid full-web syntax invalid.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum InlineStyleValueResult {
+    PassThrough,
+    Invalid,
+    Canonical(String),
+}
+
+/// The selected CSS engine's specified-value seam for `element.style`.
+pub trait InlineStyleHandler {
+    fn canonicalize(&self, property: &str, value: &str) -> InlineStyleValueResult;
+}
+
+fn host_inline_style<E: ScriptEngine>(
+    cx: &mut E::CallCx<'_>,
+) -> Option<Rc<dyn InlineStyleHandler>> {
+    let data = cx.host_data()?;
+    let cell = data.downcast_ref::<RefCell<HostState>>()?;
+    let handler = cell.borrow().inline_style.clone();
+    handler
+}
+
+/// `__inlineStyleValue(property, value)` -> a line record consumed by the JS
+/// CSSStyleDeclaration: `pass`, `invalid`, or `canonical` plus the value.
+struct InlineStyleValue;
+impl<E: ScriptEngine> NativeFn<E> for InlineStyleValue {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let property_value = cx.arg(0);
+        let property = cx.value_to_string(&property_value)?;
+        let input_value = cx.arg(1);
+        let value = cx.value_to_string(&input_value)?;
+        let result = host_inline_style::<E>(cx)
+            .map_or(InlineStyleValueResult::PassThrough, |handler| {
+                handler.canonicalize(&property, &value)
+            });
+        let record = match result {
+            InlineStyleValueResult::PassThrough => "pass\n".to_string(),
+            InlineStyleValueResult::Invalid => "invalid\n".to_string(),
+            InlineStyleValueResult::Canonical(value) => format!("canonical\n{value}"),
+        };
+        cx.make_string(&record)
+    }
+}
+
 /// Clone the computed-style handler out of host state (so it is not borrowed
 /// while invoked).
 fn host_computed_style<E: ScriptEngine>(
@@ -222,6 +273,103 @@ impl<E: ScriptEngine> NativeFn<E> for ComputedStyleValue {
             Some(v) => cx.make_string(&v),
             None => Ok(cx.make_null()),
         }
+    }
+}
+
+/// A stylesheet mutation failure translated into its CSSOM exception class.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StyleSheetMutationError {
+    IndexSize,
+    Syntax(String),
+}
+
+/// The host's retained author-stylesheet seam. The runtime owns the JS CSSOM
+/// wrappers, while the selected CSS engine owns rule parsing, mutation, and
+/// generation tracking behind this object-safe contract.
+pub trait StyleSheetHandler {
+    fn sheet_count(&self) -> usize;
+    fn rule_count(&self, sheet: usize) -> Option<usize>;
+    fn insert_rule(
+        &self,
+        sheet: usize,
+        rule: &str,
+        index: usize,
+    ) -> Result<usize, StyleSheetMutationError>;
+    fn delete_rule(&self, sheet: usize, index: usize) -> Result<(), StyleSheetMutationError>;
+}
+
+/// Clone the stylesheet handler out of host state before invoking it.
+fn host_stylesheets<E: ScriptEngine>(cx: &mut E::CallCx<'_>) -> Option<Rc<dyn StyleSheetHandler>> {
+    let data = cx.host_data()?;
+    let cell = data.downcast_ref::<RefCell<HostState>>()?;
+    let handler = cell.borrow().stylesheets.clone();
+    handler
+}
+
+fn index_arg<E: ScriptEngine>(cx: &mut E::CallCx<'_>, argument: usize) -> Option<usize> {
+    let value = cx.arg(argument);
+    cx.value_to_string(&value).ok()?.parse().ok()
+}
+
+fn mutation_record(result: Result<usize, StyleSheetMutationError>) -> String {
+    match result {
+        Ok(index) => format!("ok\n{index}"),
+        Err(StyleSheetMutationError::IndexSize) => "index\nrule index out of range".to_string(),
+        Err(StyleSheetMutationError::Syntax(message)) => format!("syntax\n{message}"),
+    }
+}
+
+/// `__styleSheetCount()` -> retained author-sheet count.
+struct StyleSheetCount;
+impl<E: ScriptEngine> NativeFn<E> for StyleSheetCount {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let count = host_stylesheets::<E>(cx).map_or(0, |handler| handler.sheet_count());
+        cx.make_string(&count.to_string())
+    }
+}
+
+/// `__styleSheetRuleCount(sheet)` -> top-level rule count, or `-1` for a stale
+/// sheet wrapper.
+struct StyleSheetRuleCount;
+impl<E: ScriptEngine> NativeFn<E> for StyleSheetRuleCount {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let count = index_arg::<E>(cx, 0)
+            .and_then(|sheet| host_stylesheets::<E>(cx)?.rule_count(sheet))
+            .map_or_else(|| "-1".to_string(), |count| count.to_string());
+        cx.make_string(&count)
+    }
+}
+
+/// `__insertRule(sheet, rule, index)` -> a line record consumed by the JS
+/// wrapper: `ok`, `index`, or `syntax` plus its result/message.
+struct InsertRule;
+impl<E: ScriptEngine> NativeFn<E> for InsertRule {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let sheet = index_arg::<E>(cx, 0);
+        let rule_value = cx.arg(1);
+        let rule = cx.value_to_string(&rule_value)?;
+        let index = index_arg::<E>(cx, 2);
+        let result = match (host_stylesheets::<E>(cx), sheet, index) {
+            (Some(handler), Some(sheet), Some(index)) => handler.insert_rule(sheet, &rule, index),
+            _ => Err(StyleSheetMutationError::IndexSize),
+        };
+        cx.make_string(&mutation_record(result))
+    }
+}
+
+/// `__deleteRule(sheet, index)` -> the same mutation record as insertRule.
+struct DeleteRule;
+impl<E: ScriptEngine> NativeFn<E> for DeleteRule {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let sheet = index_arg::<E>(cx, 0);
+        let index = index_arg::<E>(cx, 1);
+        let result = match (host_stylesheets::<E>(cx), sheet, index) {
+            (Some(handler), Some(sheet), Some(index)) => {
+                handler.delete_rule(sheet, index).map(|()| index)
+            },
+            _ => Err(StyleSheetMutationError::IndexSize),
+        };
+        cx.make_string(&mutation_record(result))
     }
 }
 

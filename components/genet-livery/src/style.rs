@@ -2,22 +2,28 @@ use std::{collections::HashMap, hash::Hash};
 
 use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
 use livery::{
-    ComputedValues,
+    ComputedValues, PropertyId,
     cascade::{
         CascadeLayer, DeclarationError, MatchedCustomDeclaration, MatchedDeclaration, Origin,
         Specificity, cascade_with_custom, parse_declaration_block,
     },
     custom::CustomProperties,
     media::Device,
-    stylesheet::{Keyframes, StyleRule, Stylesheet, StylesheetDiagnostic},
-    values::{FontSize, Length, LengthPercentage, LengthUnit, LineHeight},
+    stylesheet::{Keyframes, RuleMutationError, StyleRule, Stylesheet, StylesheetDiagnostic},
+    values::{
+        BorderStyle, FontSize, Length, LengthPercentage, LengthUnit, LineHeight, Padding, Size,
+    },
 };
 
 use crate::{CAMBIUM_UA_DEFAULTS, InteractionStates, SelectorTree};
 
-/// Parsed UA and author rules for one document class.
+/// Parsed UA and author rules for one document class. The sheets are
+/// retained as CSSOM-shaped objects (harvest H3); the flattened rule and
+/// keyframes views are rebuilt after every mutation.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StyleSet {
+    ua: Stylesheet,
+    authors: Vec<Stylesheet>,
     rules: Vec<StyleRule>,
     keyframes: Vec<Keyframes>,
     diagnostics: Vec<StylesheetDiagnostic>,
@@ -29,21 +35,88 @@ impl StyleSet {
     }
 
     pub fn parse(ua_sheet: &str, author_sheets: &[&str]) -> Self {
-        let mut result = Self::default();
-        let ua = Stylesheet::parse(ua_sheet, Origin::UserAgent);
-        result.diagnostics.extend_from_slice(ua.diagnostics());
-        result.rules.extend(ua.rules().iter().cloned());
-        result.keyframes.extend(ua.keyframes().iter().cloned());
-
-        let mut source_order = 0_u64;
+        let mut result = Self {
+            ua: Stylesheet::parse(ua_sheet, Origin::UserAgent),
+            ..Self::default()
+        };
         for source in author_sheets {
-            let author = Stylesheet::parse_with_offset(source, Origin::Author, source_order);
-            source_order = source_order.saturating_add(author.rules().len() as u64);
-            result.diagnostics.extend_from_slice(author.diagnostics());
-            result.rules.extend(author.rules().iter().cloned());
-            result.keyframes.extend(author.keyframes().iter().cloned());
+            result
+                .authors
+                .push(Stylesheet::parse(source, Origin::Author));
         }
+        result.rebuild();
         result
+    }
+
+    /// Rebuild the flattened cascade views from the retained sheets, with
+    /// author source order running across sheets in document order.
+    fn rebuild(&mut self) {
+        self.rules.clear();
+        self.keyframes.clear();
+        self.diagnostics.clear();
+        self.diagnostics.extend_from_slice(self.ua.diagnostics());
+        self.rules.extend(self.ua.reindexed_rules(0));
+        self.keyframes.extend(self.ua.keyframes().iter().cloned());
+        let mut source_order = 0_u64;
+        for author in &self.authors {
+            self.diagnostics.extend_from_slice(author.diagnostics());
+            self.rules.extend(author.reindexed_rules(source_order));
+            source_order = source_order.saturating_add(author.rules().len() as u64);
+            self.keyframes.extend(author.keyframes().iter().cloned());
+        }
+    }
+
+    /// The retained author sheets, in document order.
+    pub fn author_sheets(&self) -> &[Stylesheet] {
+        &self.authors
+    }
+
+    /// Aggregate monotonic sheet stamp for consumers retaining a style plane.
+    pub fn generation(&self) -> u64 {
+        self.authors
+            .iter()
+            .fold(self.ua.generation(), |generation, sheet| {
+                generation.saturating_add(sheet.generation())
+            })
+    }
+
+    pub(crate) fn has_sibling_dependencies(&self) -> bool {
+        self.rules.iter().any(StyleRule::has_sibling_dependency)
+    }
+
+    pub(crate) fn has_structural_dependencies(&self) -> bool {
+        self.rules.iter().any(StyleRule::has_structural_dependency)
+    }
+
+    /// CSSOM `insertRule` on one author sheet; the cascade views rebuild.
+    pub fn insert_author_rule(
+        &mut self,
+        sheet: usize,
+        rule: &str,
+        index: usize,
+    ) -> Result<usize, RuleMutationError> {
+        let target = self
+            .authors
+            .get_mut(sheet)
+            .ok_or(RuleMutationError::IndexSize)?;
+        let inserted = target.insert_rule(rule, index)?;
+        self.rebuild();
+        Ok(inserted)
+    }
+
+    /// CSSOM `deleteRule` on one author sheet; the cascade views rebuild.
+    pub fn delete_author_rule(
+        &mut self,
+        sheet: usize,
+        index: usize,
+    ) -> Result<(), RuleMutationError> {
+        let target = self
+            .authors
+            .get_mut(sheet)
+            .ok_or(RuleMutationError::IndexSize)?;
+        target.delete_rule(index)?;
+        self.rebuild();
+        Ok(())
     }
 
     pub fn rules(&self) -> &[StyleRule] {
@@ -93,6 +166,56 @@ where
         self.custom.get(&id)
     }
 
+    /// Serialize one computed longhand or custom property from this plane.
+    /// This is shared by retained documents and scripted on-demand reads, so
+    /// both JS and native CSSOM surfaces use the generated H2 value dispatch.
+    pub fn computed_style(&self, id: Id, property: &str) -> Option<String> {
+        self.computed_style_with_used_size(id, property, None)
+    }
+
+    /// Serialize a computed value with an optional retained layout size.
+    ///
+    /// CSSOM exposes used pixel values for width and height. A caller that has
+    /// laid out the current style plane can supply that border-box size; the
+    /// bounded lane uses it only when no padding or border changes the
+    /// relationship between the fragment and the property value.
+    pub fn computed_style_with_used_size(
+        &self,
+        id: Id,
+        property: &str,
+        used_size: Option<(f32, f32)>,
+    ) -> Option<String> {
+        if property.starts_with("--") {
+            return self.custom_properties(id)?.get(property).cloned();
+        }
+        let property = PropertyId::from_css_name(&property.to_ascii_lowercase())?;
+        let values = self.get(id)?;
+        if let Some((width, height)) = used_size
+            && box_is_unadorned(values)
+        {
+            let used = match property {
+                PropertyId::Width => Some(width),
+                PropertyId::Height => Some(height),
+                _ => None,
+            };
+            if let Some(used) = used {
+                return Some(used_px(used));
+            }
+        }
+        if property == PropertyId::Transform {
+            let em = match values.font_size {
+                FontSize::Value(LengthPercentage::Length(Length {
+                    value,
+                    unit: LengthUnit::Px,
+                })) => value,
+                _ => 16.0,
+            };
+            let reference_box = definite_transform_reference_box(values, em);
+            return Some(values.transform.to_computed_css(em, reference_box));
+        }
+        Some(values.get(property).to_css_string())
+    }
+
     pub(crate) fn get_mut(&mut self, id: Id) -> Option<&mut ComputedValues> {
         self.values.get_mut(&id)
     }
@@ -107,6 +230,21 @@ where
 
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
+    }
+
+    pub(crate) fn remove(&mut self, id: Id) {
+        self.values.remove(&id);
+        self.custom.remove(&id);
+        self.inline_diagnostics.remove(&id);
+    }
+
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(Id) -> bool)
+    where
+        Id: Copy,
+    {
+        self.values.retain(|id, _| keep(*id));
+        self.custom.retain(|id, _| keep(*id));
+        self.inline_diagnostics.retain(|id, _| keep(*id));
     }
 }
 
@@ -135,7 +273,7 @@ where
     plane
 }
 
-fn resolve_subtree<D>(
+pub(crate) fn resolve_subtree<D>(
     selector_tree: &SelectorTree<'_, D>,
     style_set: &StyleSet,
     device: &Device,
@@ -143,7 +281,8 @@ fn resolve_subtree<D>(
     parent: Option<&ComputedValues>,
     parent_custom: Option<&CustomProperties>,
     plane: &mut StylePlane<D::NodeId>,
-) where
+) -> usize
+where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
@@ -189,8 +328,9 @@ fn resolve_subtree<D>(
         let (mut computed, custom) =
             cascade_with_custom(parent, parent_custom, matched, matched_custom);
         resolve_font_metrics(&mut computed, parent);
+        let mut resolved = 1;
         for child in selector_tree.dom().dom_children(id) {
-            resolve_subtree(
+            resolved += resolve_subtree(
                 selector_tree,
                 style_set,
                 device,
@@ -202,9 +342,11 @@ fn resolve_subtree<D>(
         }
         plane.values.insert(id, computed);
         plane.custom.insert(id, custom);
+        resolved
     } else {
+        let mut resolved = 0;
         for child in selector_tree.dom().dom_children(id) {
-            resolve_subtree(
+            resolved += resolve_subtree(
                 selector_tree,
                 style_set,
                 device,
@@ -214,6 +356,7 @@ fn resolve_subtree<D>(
                 plane,
             );
         }
+        resolved
     }
 }
 
@@ -231,6 +374,7 @@ fn resolve_font_metrics(computed: &mut ComputedValues, parent: Option<&ComputedV
     }
     .max(0.0);
     computed.font_size = FontSize::Value(LengthPercentage::Length(Length::px(font_size)));
+    computed.transform.resolve_lengths(font_size, 16.0);
 
     if let LineHeight::Value(value) = computed.line_height {
         computed.line_height = LineHeight::Value(LengthPercentage::Length(Length::px(
@@ -248,4 +392,50 @@ fn resolve_length_percentage(value: LengthPercentage, em: f32, percentage_basis:
             percentage_basis * calc.percentage + calc.px + calc.em * em + calc.rem * 16.0
         },
     }
+}
+
+fn definite_transform_reference_box(values: &ComputedValues, em: f32) -> Option<(f32, f32)> {
+    // Without retained layout, this CSSOM path can derive a border box only
+    // for a definite, unadorned box. Paint always receives the actual fragment.
+    if !box_is_unadorned(values) {
+        return None;
+    }
+    Some((
+        definite_size(values.width, em)?,
+        definite_size(values.height, em)?,
+    ))
+}
+
+fn box_is_unadorned(values: &ComputedValues) -> bool {
+    ![
+        values.padding_top,
+        values.padding_right,
+        values.padding_bottom,
+        values.padding_left,
+    ]
+    .into_iter()
+    .any(|padding| padding != Padding::ZERO)
+        && ![
+            values.border_top_style,
+            values.border_right_style,
+            values.border_bottom_style,
+            values.border_left_style,
+        ]
+        .into_iter()
+        .any(|style| style != BorderStyle::None)
+}
+
+fn used_px(value: f32) -> String {
+    if value == 0.0 {
+        "0px".to_string()
+    } else {
+        Length::px(value).to_string()
+    }
+}
+
+fn definite_size(size: Size, em: f32) -> Option<f32> {
+    let Size::Value(value) = size else {
+        return None;
+    };
+    (!value.has_percentage()).then(|| value.to_px(em, 16.0, 0.0))
 }

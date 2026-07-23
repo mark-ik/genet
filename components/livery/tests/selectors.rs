@@ -290,6 +290,25 @@ fn selector_lists_return_the_strongest_matching_specificity() {
 }
 
 #[test]
+fn selector_dependencies_only_widen_structural_restyles() {
+    let plain = SelectorList::parse(".card .label").unwrap();
+    assert!(!plain.has_sibling_dependency());
+    assert!(!plain.has_structural_dependency());
+
+    let sibling = SelectorList::parse(".card + .card").unwrap();
+    assert!(sibling.has_sibling_dependency());
+    assert!(sibling.has_structural_dependency());
+
+    let positional = SelectorList::parse("li:nth-child(2)").unwrap();
+    assert!(!positional.has_sibling_dependency());
+    assert!(positional.has_structural_dependency());
+
+    let attribute_value = SelectorList::parse("[data-key='a+b'] .label").unwrap();
+    assert!(!attribute_value.has_sibling_dependency());
+    assert!(!attribute_value.has_structural_dependency());
+}
+
+#[test]
 fn rules_join_selector_media_and_cascade_ordering() {
     let (primary, plain) = fixture();
     let rules = vec![

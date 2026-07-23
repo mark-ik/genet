@@ -2,9 +2,11 @@
 
 use std::{error::Error, fmt, str::FromStr};
 
+mod calc;
 mod color;
 mod length;
 mod property;
+mod transform_matrix;
 
 pub use color::Color;
 pub use length::{CalcLengthPercentage, Length, LengthPercentage, LengthUnit};
@@ -17,6 +19,7 @@ pub use property::{
     TextDecorationColor, TextDecorationLine, TextWrapMode, TimingFunction, Transform,
     TransformFunction, TransitionProperty, VerticalAlign, Visibility, WhiteSpaceCollapse, ZIndex,
 };
+pub use transform_matrix::Matrix2D;
 
 /// A rejected CSS value from Livery's bounded first-lane grammar.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

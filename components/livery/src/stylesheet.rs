@@ -3,11 +3,11 @@
 use std::{error::Error, fmt};
 
 use crate::ComputedValues;
-use crate::custom::CustomProperties;
 use crate::cascade::{
     CascadeLayer, DeclarationBlock, MatchedCustomDeclaration, MatchedDeclaration, Origin,
     cascade_with_custom, parse_declaration_block,
 };
+use crate::custom::CustomProperties;
 use crate::media::{Device, MediaParseError, MediaQueryList};
 use crate::selector::{Element, SelectorList, SelectorParseError};
 
@@ -19,12 +19,81 @@ pub struct StylesheetDiagnostic {
     pub message: String,
 }
 
+/// One top-level rule in a sheet's CSSOM-shaped object model (harvest H3,
+/// the fork's `stylesheets/` CssRule shape sized to the lane). The
+/// flattened style-rule and keyframes views are derived caches; mutation
+/// goes through [`Stylesheet::insert_rule`] / [`Stylesheet::delete_rule`]
+/// and reindexes them.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CssRule {
+    Style(StyleRule),
+    Media(MediaRule),
+    Keyframes(Keyframes),
+}
+
+/// A top-level `@media` group holding its nested style rules. Each nested
+/// rule also carries the condition itself, so the flattened cascade view
+/// stays self-contained.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MediaRule {
+    condition: String,
+    rules: Vec<StyleRule>,
+}
+
+impl MediaRule {
+    pub fn condition(&self) -> &str {
+        &self.condition
+    }
+
+    pub fn rules(&self) -> &[StyleRule] {
+        &self.rules
+    }
+}
+
+/// Why a CSSOM mutation was rejected.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RuleMutationError {
+    /// The index is past the end (insert) or out of range (delete).
+    IndexSize,
+    /// The rule text did not parse to exactly one supported top-level rule.
+    Syntax(String),
+}
+
+impl fmt::Display for RuleMutationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::IndexSize => formatter.write_str("rule index out of range"),
+            Self::Syntax(message) => write!(formatter, "invalid rule: {message}"),
+        }
+    }
+}
+
+impl Error for RuleMutationError {}
+
 /// A parsed rule sheet for the bounded Livery lane.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Stylesheet {
+    items: Vec<CssRule>,
+    origin: Origin,
+    source_order_offset: u64,
+    generation: u64,
     rules: Vec<StyleRule>,
     keyframes: Vec<Keyframes>,
     diagnostics: Vec<StylesheetDiagnostic>,
+}
+
+impl Default for Stylesheet {
+    fn default() -> Self {
+        Self {
+            items: Vec::new(),
+            origin: Origin::Author,
+            source_order_offset: 0,
+            generation: 0,
+            rules: Vec::new(),
+            keyframes: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
 }
 
 impl Stylesheet {
@@ -38,9 +107,104 @@ impl Stylesheet {
     /// loaded at the same origin.
     pub fn parse_with_offset(input: &str, origin: Origin, source_order: u64) -> Self {
         let clean = without_comments(input);
-        let mut sheet = Self::default();
-        parse_rule_list(&clean, origin, None, source_order, &mut sheet);
+        let mut sheet = Self {
+            origin,
+            source_order_offset: source_order,
+            ..Self::default()
+        };
+        parse_rule_list(&clean, origin, source_order, &mut sheet);
+        sheet.reindex();
         sheet
+    }
+
+    /// The ordered top-level object model.
+    pub fn items(&self) -> &[CssRule] {
+        &self.items
+    }
+
+    /// A monotonic mutation stamp: consumers holding derived state compare
+    /// it to know when to rebuild (the StylesheetSet dirty-tracking shape).
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Insert one parsed top-level rule at `index`, CSSOM `insertRule`
+    /// semantics: later rules shift, the flattened cascade view reindexes,
+    /// and the returned value is the index. Rejects malformed input whole.
+    pub fn insert_rule(&mut self, rule: &str, index: usize) -> Result<usize, RuleMutationError> {
+        if index > self.items.len() {
+            return Err(RuleMutationError::IndexSize);
+        }
+        let clean = without_comments(rule);
+        let mut scratch = Self {
+            origin: self.origin,
+            ..Self::default()
+        };
+        parse_rule_list(&clean, self.origin, 0, &mut scratch);
+        if let Some(diagnostic) = scratch.diagnostics.first() {
+            return Err(RuleMutationError::Syntax(diagnostic.message.clone()));
+        }
+        if scratch.items.len() != 1 {
+            return Err(RuleMutationError::Syntax(
+                "expected exactly one rule".to_owned(),
+            ));
+        }
+        self.items.insert(index, scratch.items.remove(0));
+        self.reindex();
+        Ok(index)
+    }
+
+    /// Remove the top-level rule at `index`, CSSOM `deleteRule` semantics.
+    pub fn delete_rule(&mut self, index: usize) -> Result<(), RuleMutationError> {
+        if index >= self.items.len() {
+            return Err(RuleMutationError::IndexSize);
+        }
+        self.items.remove(index);
+        self.reindex();
+        Ok(())
+    }
+
+    /// Rebuild the flattened caches from the object model, renumbering
+    /// source order exactly as a fresh parse would.
+    fn reindex(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.rules.clear();
+        self.keyframes.clear();
+        for item in &self.items {
+            match item {
+                CssRule::Style(rule) => {
+                    let mut rule = rule.clone();
+                    rule.source_order = self
+                        .source_order_offset
+                        .saturating_add(self.rules.len() as u64);
+                    self.rules.push(rule);
+                },
+                CssRule::Media(media) => {
+                    for rule in &media.rules {
+                        let mut rule = rule.clone();
+                        rule.source_order = self
+                            .source_order_offset
+                            .saturating_add(self.rules.len() as u64);
+                        self.rules.push(rule);
+                    }
+                },
+                CssRule::Keyframes(keyframes) => self.keyframes.push(keyframes.clone()),
+            }
+        }
+    }
+
+    /// The flattened style rules with source order rebased at `offset`, for
+    /// consumers composing several sheets into one cascade list.
+    pub fn reindexed_rules(&self, offset: u64) -> Vec<StyleRule> {
+        self.rules
+            .iter()
+            .enumerate()
+            .map(|(index, rule)| {
+                let mut rule = rule.clone();
+                rule.source_order = offset.saturating_add(index as u64);
+                rule
+            })
+            .collect()
     }
 
     pub fn rules(&self) -> &[StyleRule] {
@@ -153,6 +317,23 @@ impl StyleRule {
 
     pub fn declaration_block(&self) -> &DeclarationBlock {
         &self.declarations
+    }
+
+    /// Whether changing this rule's candidate element can affect a following
+    /// sibling. Used only to widen invalidation scope.
+    pub fn has_sibling_dependency(&self) -> bool {
+        self.selectors.has_sibling_dependency()
+    }
+
+    /// Whether child-list changes can alter this rule's selector match.
+    pub fn has_structural_dependency(&self) -> bool {
+        self.selectors.has_structural_dependency()
+    }
+
+    /// The rule's flattened cascade position, renumbered by the owning
+    /// sheet after every parse or mutation.
+    pub fn source_order(&self) -> u64 {
+        self.source_order
     }
 
     pub fn matched_declarations<E>(&self, element: &E, device: &Device) -> Vec<MatchedDeclaration>
@@ -420,13 +601,21 @@ fn parse_keyframes(name: &str, input: &str, sheet: &mut Stylesheet) -> Option<Ke
     })
 }
 
-fn parse_rule_list(
-    input: &str,
-    origin: Origin,
-    media: Option<&str>,
-    source_order_offset: u64,
-    sheet: &mut Stylesheet,
-) {
+fn media_condition(prelude: &str) -> Option<&str> {
+    prelude
+        .get(..6)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("@media"))
+        .and_then(|_| prelude.get(6..))
+        .filter(|rest| {
+            rest.is_empty() || rest.starts_with(char::is_whitespace) || rest.starts_with('(')
+        })
+        .map(str::trim)
+}
+
+/// Parse a top-level rule list into the sheet's object model. Source order
+/// is provisional here; [`Stylesheet::reindex`] renumbers the flattened
+/// view after every parse or mutation.
+fn parse_rule_list(input: &str, origin: Origin, source_order_offset: u64, sheet: &mut Stylesheet) {
     let mut cursor = 0;
     while cursor < input.len() {
         let Some(non_space) = input[cursor..]
@@ -459,35 +648,22 @@ fn parse_rule_list(
         let body = &input[open + 1..close];
 
         if let Some(name) = keyframes_name(prelude) {
-            if media.is_some() {
-                sheet.diagnostics.push(StylesheetDiagnostic {
-                    prelude: prelude.to_owned(),
-                    message: "keyframes inside media groups are outside the first lane".to_owned(),
-                });
-            } else if let Some(keyframes) = parse_keyframes(name, body, sheet) {
-                sheet.keyframes.push(keyframes);
+            if let Some(keyframes) = parse_keyframes(name, body, sheet) {
+                sheet.items.push(CssRule::Keyframes(keyframes));
             }
-        } else if let Some(condition) = prelude
-            .get(..6)
-            .filter(|prefix| prefix.eq_ignore_ascii_case("@media"))
-            .and_then(|_| prelude.get(6..))
-            .filter(|rest| {
-                rest.is_empty() || rest.starts_with(char::is_whitespace) || rest.starts_with('(')
-            })
-            .map(str::trim)
-        {
-            if media.is_some() {
-                sheet.diagnostics.push(StylesheetDiagnostic {
-                    prelude: prelude.to_owned(),
-                    message: "nested media groups are outside the first lane".to_owned(),
-                });
-            } else if condition.is_empty() {
+        } else if let Some(condition) = media_condition(prelude) {
+            if condition.is_empty() {
                 sheet.diagnostics.push(StylesheetDiagnostic {
                     prelude: prelude.to_owned(),
                     message: "empty media query".to_owned(),
                 });
             } else {
-                parse_rule_list(body, origin, Some(condition), source_order_offset, sheet);
+                let rules =
+                    parse_media_style_rules(body, origin, condition, source_order_offset, sheet);
+                sheet.items.push(CssRule::Media(MediaRule {
+                    condition: condition.to_owned(),
+                    rules,
+                }));
             }
         } else if prelude.starts_with('@') {
             sheet.diagnostics.push(StylesheetDiagnostic {
@@ -495,16 +671,16 @@ fn parse_rule_list(
                 message: "unsupported at-rule".to_owned(),
             });
         } else {
-            let source_order = source_order_offset.saturating_add(sheet.rules.len() as u64);
+            let source_order = source_order_offset.saturating_add(sheet.items.len() as u64);
             match StyleRule::parse(
                 prelude,
                 body,
-                media,
+                None,
                 origin,
                 CascadeLayer::Unlayered,
                 source_order,
             ) {
-                Ok(rule) => sheet.rules.push(rule),
+                Ok(rule) => sheet.items.push(CssRule::Style(rule)),
                 Err(error) => sheet.diagnostics.push(StylesheetDiagnostic {
                     prelude: prelude.to_owned(),
                     message: error.to_string(),
@@ -513,4 +689,83 @@ fn parse_rule_list(
         }
         cursor = close + 1;
     }
+}
+
+/// Parse the style rules nested in one `@media` group. Each nested rule
+/// carries the condition itself, so the flattened cascade view needs no
+/// group context. Nested groups and keyframes stay outside the lane.
+fn parse_media_style_rules(
+    input: &str,
+    origin: Origin,
+    condition: &str,
+    source_order_offset: u64,
+    sheet: &mut Stylesheet,
+) -> Vec<StyleRule> {
+    let mut rules = Vec::new();
+    let mut cursor = 0;
+    while cursor < input.len() {
+        let Some(non_space) = input[cursor..]
+            .char_indices()
+            .find(|(_, ch)| !ch.is_whitespace())
+            .map(|(offset, _)| cursor + offset)
+        else {
+            break;
+        };
+        cursor = non_space;
+
+        let Some(open) = find_open_brace(input, cursor) else {
+            let tail = input[cursor..].trim();
+            if !tail.is_empty() {
+                sheet.diagnostics.push(StylesheetDiagnostic {
+                    prelude: tail.to_owned(),
+                    message: "expected a rule block".to_owned(),
+                });
+            }
+            break;
+        };
+        let prelude = input[cursor..open].trim();
+        let Some(close) = find_close_brace(input, open) else {
+            sheet.diagnostics.push(StylesheetDiagnostic {
+                prelude: prelude.to_owned(),
+                message: "unclosed rule block".to_owned(),
+            });
+            break;
+        };
+        let body = &input[open + 1..close];
+
+        if keyframes_name(prelude).is_some() {
+            sheet.diagnostics.push(StylesheetDiagnostic {
+                prelude: prelude.to_owned(),
+                message: "keyframes inside media groups are outside the first lane".to_owned(),
+            });
+        } else if media_condition(prelude).is_some() {
+            sheet.diagnostics.push(StylesheetDiagnostic {
+                prelude: prelude.to_owned(),
+                message: "nested media groups are outside the first lane".to_owned(),
+            });
+        } else if prelude.starts_with('@') {
+            sheet.diagnostics.push(StylesheetDiagnostic {
+                prelude: prelude.to_owned(),
+                message: "unsupported at-rule".to_owned(),
+            });
+        } else {
+            let source_order = source_order_offset.saturating_add(rules.len() as u64);
+            match StyleRule::parse(
+                prelude,
+                body,
+                Some(condition),
+                origin,
+                CascadeLayer::Unlayered,
+                source_order,
+            ) {
+                Ok(rule) => rules.push(rule),
+                Err(error) => sheet.diagnostics.push(StylesheetDiagnostic {
+                    prelude: prelude.to_owned(),
+                    message: error.to_string(),
+                }),
+            }
+        }
+        cursor = close + 1;
+    }
+    rules
 }

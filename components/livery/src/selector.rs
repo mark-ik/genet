@@ -230,16 +230,41 @@ impl std::error::Error for SelectorParseError {}
 
 /// A parsed selector list. Matching returns the strongest specificity among
 /// the selectors in the list that matched the element.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct SelectorDependencies {
+    sibling: bool,
+    structural: bool,
+}
+
+/// Parsed selectors plus the small dependency summary the neutral invalidator
+/// needs to choose a sound restyle root. This is deliberately conservative:
+/// an uncertain selector expands the scope, never narrows it.
 #[derive(Clone, Debug, PartialEq)]
-pub struct SelectorList(SubstrateSelectorList<LiverySelectorImpl>);
+pub struct SelectorList {
+    selectors: SubstrateSelectorList<LiverySelectorImpl>,
+    dependencies: SelectorDependencies,
+}
 
 impl SelectorList {
-    pub fn parse(input: &str) -> Result<Self, SelectorParseError> {
-        let mut input_buffer = ParserInput::new(input);
+    pub fn parse(source: &str) -> Result<Self, SelectorParseError> {
+        let mut input_buffer = ParserInput::new(source);
         let mut input = CssParser::new(&mut input_buffer);
         SubstrateSelectorList::parse(&LiverySelectorParser, &mut input, ParseRelative::No)
-            .map(Self)
+            .map(|selectors| Self {
+                selectors,
+                dependencies: selector_dependencies(source),
+            })
             .map_err(|error| SelectorParseError(format!("{error:?}")))
+    }
+
+    /// A changed element may alter the match of one of its following siblings.
+    pub fn has_sibling_dependency(&self) -> bool {
+        self.dependencies.sibling
+    }
+
+    /// Child-list changes may alter `:empty`, positional, or sibling matching.
+    pub fn has_structural_dependency(&self) -> bool {
+        self.dependencies.structural
     }
 
     pub fn matching_specificity<E>(&self, element: &E) -> Option<Specificity>
@@ -255,11 +280,63 @@ impl SelectorList {
             NeedsSelectorFlags::No,
             MatchingForInvalidation::No,
         );
-        self.0
+        self.selectors
             .slice()
             .iter()
             .filter(|selector| matches_selector(selector, 0, None, element, &mut context))
             .map(|selector| Specificity(selector.specificity()))
             .max()
+    }
+}
+
+fn selector_dependencies(input: &str) -> SelectorDependencies {
+    let lower = input.to_ascii_lowercase();
+    let structural = [
+        ":empty",
+        ":first-child",
+        ":last-child",
+        ":only-child",
+        ":nth-child",
+        ":nth-last-child",
+        ":first-of-type",
+        ":last-of-type",
+        ":only-of-type",
+        ":nth-of-type",
+        ":nth-last-of-type",
+    ]
+    .iter()
+    .any(|pseudo| lower.contains(pseudo));
+
+    let mut quote = None;
+    let mut escaped = false;
+    let mut brackets = 0_u32;
+    let mut sibling = false;
+    for ch in input.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if let Some(delimiter) = quote {
+            if ch == delimiter {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '[' => brackets = brackets.saturating_add(1),
+            ']' => brackets = brackets.saturating_sub(1),
+            '+' | '~' if brackets == 0 => sibling = true,
+            _ => {},
+        }
+    }
+
+    SelectorDependencies {
+        sibling,
+        structural: structural || sibling,
     }
 }

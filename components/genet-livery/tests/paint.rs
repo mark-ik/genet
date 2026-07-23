@@ -1015,6 +1015,53 @@ fn transform_wraps_opacity_layer_in_coordinate_space() {
 }
 
 #[test]
+fn matrix_and_skew_functions_reach_the_paint_transform() {
+    let list = render(
+        r#"<html><body><div class="skew"></div><div class="matrix"></div></body></html>"#,
+        r#"
+        .skew { transform: skewX(45deg); width: 20px; height: 20px; }
+        .matrix { transform: matrix(1, 2, 3, 4, 5, 6); width: 20px; height: 20px; }
+        "#,
+        1,
+    );
+    let transforms = list
+        .commands()
+        .iter()
+        .filter_map(|command| match command {
+            PaintCmd::PushTransform(spec) => Some(spec.transform),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(transforms.len(), 2);
+    assert!((transforms[0].m11 - 1.0).abs() < 0.0001);
+    assert!((transforms[0].m21 - 1.0).abs() < 0.0001);
+    assert!((transforms[0].m22 - 1.0).abs() < 0.0001);
+    assert!((transforms[1].m11 - 1.0).abs() < 0.0001);
+    assert!((transforms[1].m12 - 2.0).abs() < 0.0001);
+    assert!((transforms[1].m21 - 3.0).abs() < 0.0001);
+    assert!((transforms[1].m22 - 4.0).abs() < 0.0001);
+}
+
+#[test]
+fn percentage_translation_uses_the_fragment_border_box() {
+    let list = render(
+        r#"<html><body><div class="box"></div></body></html>"#,
+        ".box { width: 100px; height: 50px; transform: translate(25%, 50%); }",
+        1,
+    );
+    let spec = list
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::PushTransform(spec) => Some(spec),
+            _ => None,
+        })
+        .expect("percentage transform");
+    assert!((spec.origin.x + spec.transform.m41 - 25.0).abs() < 0.001);
+    assert!((spec.origin.y + spec.transform.m42 - 25.0).abs() < 0.001);
+}
+
+#[test]
 fn overflow_clips_wrap_descendants_and_nest() {
     let list = render(
         r#"<html><body><div class="outer"><div class="inner"><div class="grand"></div></div></div></body></html>"#,

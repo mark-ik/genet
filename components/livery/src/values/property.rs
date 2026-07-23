@@ -1,6 +1,6 @@
 use std::{fmt, str::FromStr};
 
-use super::{Color, Length, LengthPercentage, ParseError, format_number, keyword_value};
+use super::{Color, Length, LengthPercentage, Matrix2D, ParseError, format_number, keyword_value};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum BackgroundImage {
@@ -1827,38 +1827,52 @@ impl Transform {
         matches!(self, Self::None)
     }
 
-    /// Interpolate transform lists when their function shape and units match.
-    /// The broader matrix and `none` normalization rules remain outside this
-    /// bounded transition lane.
+    /// Interpolate matching transform primitives directly, then normalize any
+    /// mismatched suffix (including `none`) through a decomposed 2D matrix.
     pub fn interpolate(&self, other: &Self, progress: f32) -> Self {
         let progress = progress.clamp(0.0, 1.0);
-        let value = match (self, other) {
-            (Self::None, Self::None) => return Self::None,
-            (Self::Functions(from), Self::Functions(to)) if from.len() == to.len() => from
-                .iter()
-                .zip(to)
-                .map(|(from, to)| interpolate_transform_function(*from, *to, progress))
-                .collect::<Option<Vec<_>>>(),
-            _ => None,
-        };
-        value.map_or_else(
-            || {
-                if progress < 0.5 {
-                    self.clone()
-                } else {
-                    other.clone()
-                }
+        if matches!((self, other), (Self::None, Self::None)) {
+            return Self::None;
+        }
+
+        let from = self.functions().unwrap_or(&[]);
+        let to = other.functions().unwrap_or(&[]);
+        let mut functions = Vec::new();
+        let mut prefix = 0;
+        while let (Some(from), Some(to)) = (from.get(prefix), to.get(prefix)) {
+            let Some(value) = interpolate_transform_function(*from, *to, progress) else {
+                break;
+            };
+            functions.push(value);
+            prefix += 1;
+        }
+        if prefix == from.len() && prefix == to.len() {
+            return Self::Functions(functions);
+        }
+
+        let from_matrix = Matrix2D::from_absolute_functions(&from[prefix..], 16.0);
+        let to_matrix = Matrix2D::from_absolute_functions(&to[prefix..], 16.0);
+        match from_matrix
+            .zip(to_matrix)
+            .and_then(|(from, to)| from.interpolate(to, progress))
+        {
+            Some(matrix) => {
+                functions.push(TransformFunction::Matrix(matrix));
+                Self::Functions(functions)
             },
-            Self::Functions,
-        )
+            None if progress < 0.5 => self.clone(),
+            None => other.clone(),
+        }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TransformFunction {
-    Translate(Length, Length),
+    Translate(LengthPercentage, LengthPercentage),
     Scale(f32, f32),
     Rotate(f32),
+    Skew(f32, f32),
+    Matrix(Matrix2D),
 }
 
 fn interpolate_transform_function(
@@ -1872,14 +1886,20 @@ fn interpolate_transform_function(
             TransformFunction::Translate(from_x, from_y),
             TransformFunction::Translate(to_x, to_y),
         ) => TransformFunction::Translate(
-            interpolate_length(from_x, to_x, progress)?,
-            interpolate_length(from_y, to_y, progress)?,
+            from_x.interpolate(to_x, progress),
+            from_y.interpolate(to_y, progress),
         ),
         (TransformFunction::Scale(from_x, from_y), TransformFunction::Scale(to_x, to_y)) => {
             TransformFunction::Scale(scalar(from_x, to_x), scalar(from_y, to_y))
         },
         (TransformFunction::Rotate(from), TransformFunction::Rotate(to)) => {
             TransformFunction::Rotate(scalar(from, to))
+        },
+        (TransformFunction::Skew(from_x, from_y), TransformFunction::Skew(to_x, to_y)) => {
+            TransformFunction::Skew(scalar(from_x, to_x), scalar(from_y, to_y))
+        },
+        (TransformFunction::Matrix(from), TransformFunction::Matrix(to)) => {
+            TransformFunction::Matrix(from.interpolate(to, progress)?)
         },
         _ => return None,
     })
@@ -1933,7 +1953,7 @@ fn parse_transform_function(
     name: &str,
     arguments: &[&str],
 ) -> Result<TransformFunction, ParseError> {
-    let length = |value: &str| value.parse::<Length>();
+    let length_percentage = |value: &str| value.parse::<LengthPercentage>();
     let number = |value: &str| {
         value
             .parse::<f32>()
@@ -1942,10 +1962,22 @@ fn parse_transform_function(
             .ok_or_else(|| ParseError::expected("a finite transform number"))
     };
     match (name, arguments) {
-        ("translate", [x]) => Ok(TransformFunction::Translate(length(x)?, Length::ZERO)),
-        ("translate", [x, y]) => Ok(TransformFunction::Translate(length(x)?, length(y)?)),
-        ("translatex", [x]) => Ok(TransformFunction::Translate(length(x)?, Length::ZERO)),
-        ("translatey", [y]) => Ok(TransformFunction::Translate(Length::ZERO, length(y)?)),
+        ("translate", [x]) => Ok(TransformFunction::Translate(
+            length_percentage(x)?,
+            LengthPercentage::ZERO,
+        )),
+        ("translate", [x, y]) => Ok(TransformFunction::Translate(
+            length_percentage(x)?,
+            length_percentage(y)?,
+        )),
+        ("translatex", [x]) => Ok(TransformFunction::Translate(
+            length_percentage(x)?,
+            LengthPercentage::ZERO,
+        )),
+        ("translatey", [y]) => Ok(TransformFunction::Translate(
+            LengthPercentage::ZERO,
+            length_percentage(y)?,
+        )),
         ("scale", [both]) => {
             let both = number(both)?;
             Ok(TransformFunction::Scale(both, both))
@@ -1954,8 +1986,20 @@ fn parse_transform_function(
         ("scalex", [x]) => Ok(TransformFunction::Scale(number(x)?, 1.0)),
         ("scaley", [y]) => Ok(TransformFunction::Scale(1.0, number(y)?)),
         ("rotate", [angle]) => Ok(TransformFunction::Rotate(parse_angle(angle)?)),
+        ("skew", [x]) => Ok(TransformFunction::Skew(parse_angle(x)?, 0.0)),
+        ("skew", [x, y]) => Ok(TransformFunction::Skew(parse_angle(x)?, parse_angle(y)?)),
+        ("skewx", [x]) => Ok(TransformFunction::Skew(parse_angle(x)?, 0.0)),
+        ("skewy", [y]) => Ok(TransformFunction::Skew(0.0, parse_angle(y)?)),
+        ("matrix", [a, b, c, d, e, f]) => Ok(TransformFunction::Matrix(Matrix2D::new(
+            number(a)?,
+            number(b)?,
+            number(c)?,
+            number(d)?,
+            number(e)?,
+            number(f)?,
+        ))),
         _ => Err(ParseError::expected(
-            "translate, translateX, translateY, scale, scaleX, scaleY, or rotate",
+            "translate, scale, rotate, skew, or matrix",
         )),
     }
 }
@@ -2009,6 +2053,13 @@ impl fmt::Display for TransformFunction {
                 format_number(*y)
             ),
             Self::Rotate(radians) => write!(formatter, "rotate({}rad)", format_number(*radians)),
+            Self::Skew(x, y) => write!(
+                formatter,
+                "skew({}rad, {}rad)",
+                format_number(*x),
+                format_number(*y)
+            ),
+            Self::Matrix(matrix) => matrix.fmt(formatter),
         }
     }
 }

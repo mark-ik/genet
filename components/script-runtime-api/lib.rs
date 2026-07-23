@@ -46,7 +46,10 @@ mod platform;
 mod selector;
 mod webgl;
 
-pub use dom::{ComputedStyleHandler, CookieProvider, MediaQueryHandler};
+pub use dom::{
+    ComputedStyleHandler, CookieProvider, InlineStyleHandler, InlineStyleValueResult,
+    MediaQueryHandler, StyleSheetHandler, StyleSheetMutationError,
+};
 pub use fetch::{FetchHandler, FetchOutcome, FetchRequest};
 pub use harness::TestResult;
 pub use platform::StorageProvider;
@@ -108,6 +111,13 @@ pub struct HostState {
     /// [`Runtime::set_computed_style_handler`]; an `Rc` so the native sink clones
     /// it out before calling (no live `HostState` borrow during the call).
     pub computed_style: Option<std::rc::Rc<dyn ComputedStyleHandler>>,
+    /// The selected CSS engine's specified-value normalizer for
+    /// `element.style`. `None` preserves authored values verbatim.
+    pub inline_style: Option<std::rc::Rc<dyn InlineStyleHandler>>,
+    /// The selected CSS engine's retained author stylesheets. The DOM bootstrap
+    /// exposes these as `document.styleSheets`; mutation stays in the engine
+    /// that parsed the rules. `None` presents an empty list.
+    pub stylesheets: Option<std::rc::Rc<dyn StyleSheetHandler>>,
     /// The host's media-query seam for `window.matchMedia` (e.g. a
     /// `ScriptedDocument` over `IncrementalLayout`). `None` = no layout bound, so
     /// `matchMedia(q).matches` is `false` and `.media` is the raw query. Installed
@@ -272,9 +282,12 @@ impl<E: ScriptEngine> Runtime<E> {
     /// element/text tree under the scripted document root. Call before running
     /// script.
     pub fn load_dom<D: layout_dom_api::LayoutDom>(&mut self, src: &D) {
-        let mut host = self.host.borrow_mut();
-        let root = host.dom.document();
-        dom::clone_into(src, src.document(), &mut host.dom, root);
+        {
+            let mut host = self.host.borrow_mut();
+            let root = host.dom.document();
+            dom::clone_into(src, src.document(), &mut host.dom, root);
+        }
+        let _ = self.engine.eval("globalThis.__refreshNamedProperties()");
     }
 
     /// Drain pending microtasks (Promise reaction jobs) to quiescence — a microtask
@@ -733,6 +746,18 @@ impl<E: ScriptEngine> Runtime<E> {
     /// boundary, mirroring [`set_fetch_handler`](Self::set_fetch_handler).
     pub fn set_computed_style_handler(&mut self, handler: Box<dyn ComputedStyleHandler>) {
         self.host.borrow_mut().computed_style = Some(std::rc::Rc::from(handler));
+    }
+
+    /// Install specified-value parsing and canonical serialization for the
+    /// inline `CSSStyleDeclaration` surface.
+    pub fn set_inline_style_handler(&mut self, handler: Box<dyn InlineStyleHandler>) {
+        self.host.borrow_mut().inline_style = Some(std::rc::Rc::from(handler));
+    }
+
+    /// Install the retained author-stylesheet seam for `document.styleSheets`,
+    /// `CSSStyleSheet.insertRule`, and `CSSStyleSheet.deleteRule`.
+    pub fn set_stylesheet_handler(&mut self, handler: Box<dyn StyleSheetHandler>) {
+        self.host.borrow_mut().stylesheets = Some(std::rc::Rc::from(handler));
     }
 
     /// Install the host's media-query seam for `window.matchMedia` (e.g. a

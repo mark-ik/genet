@@ -133,11 +133,11 @@ impl fmt::Display for Length {
     }
 }
 
-/// A linear first-cut `calc()` expression.
+/// A reduced linear `calc()` length-percentage expression.
 ///
-/// The seed accepts sums and differences of percentages, px, em, and rem.
-/// Multiplication, division, nested functions, and mixed non-linear units enter
-/// with the property ratchet that first needs them.
+/// Parsing and dimensional arithmetic live in the harvested calc module. This
+/// compact result is the form Livery needs for serialization, interpolation,
+/// and later used-value resolution.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CalcLengthPercentage {
     pub percentage: f32,
@@ -147,69 +147,11 @@ pub struct CalcLengthPercentage {
 }
 
 impl CalcLengthPercentage {
-    fn add_term(&mut self, term: LengthPercentage, sign: f32) -> Result<(), ParseError> {
-        match term {
-            LengthPercentage::Zero => {},
-            LengthPercentage::Length(length) => match length.unit {
-                LengthUnit::Px => self.px += sign * length.value,
-                LengthUnit::Em => self.em += sign * length.value,
-                LengthUnit::Rem => self.rem += sign * length.value,
-                LengthUnit::In
-                | LengthUnit::Cm
-                | LengthUnit::Mm
-                | LengthUnit::Q
-                | LengthUnit::Pt
-                | LengthUnit::Pc => {
-                    return Err(ParseError::expected(
-                        "calc() with px, em, rem, and percentage terms",
-                    ));
-                },
-            },
-            LengthPercentage::Percentage(value) => self.percentage += sign * value,
-            LengthPercentage::Calc(_) => {
-                return Err(ParseError::expected("a non-nested calc() expression"));
-            },
-        }
-        Ok(())
-    }
-
-    fn parse_inner(input: &str) -> Result<Self, ParseError> {
-        let mut result = Self::default();
-        let mut sign = 1.0;
-        let mut expecting_term = true;
-        let mut saw_term = false;
-
-        for token in input.split_ascii_whitespace() {
-            match token {
-                "+" if !expecting_term => {
-                    sign = 1.0;
-                    expecting_term = true;
-                },
-                "-" if !expecting_term => {
-                    sign = -1.0;
-                    expecting_term = true;
-                },
-                _ if expecting_term => {
-                    result.add_term(parse_atomic(token)?, sign)?;
-                    sign = 1.0;
-                    expecting_term = false;
-                    saw_term = true;
-                },
-                _ => return Err(ParseError::expected("calc() terms separated by + or -")),
-            }
-        }
-
-        if !saw_term || expecting_term {
-            return Err(ParseError::expected("a complete calc() expression"));
-        }
-        Ok(result)
-    }
-
     fn terms(self) -> [(f32, &'static str); 4] {
         [
             (self.percentage * 100.0, "%"),
-            (self.px, "px"),
             (self.em, "em"),
+            (self.px, "px"),
             (self.rem, "rem"),
         ]
     }
@@ -254,6 +196,46 @@ pub enum LengthPercentage {
 
 impl LengthPercentage {
     pub const ZERO: Self = Self::Zero;
+
+    /// Whether resolving this value needs a percentage basis supplied by the
+    /// consuming property.
+    pub const fn has_percentage(self) -> bool {
+        match self {
+            Self::Percentage(_) => true,
+            Self::Calc(calc) => calc.percentage != 0.0,
+            Self::Zero | Self::Length(_) => false,
+        }
+    }
+
+    /// Resolve absolute and font-relative terms while preserving any
+    /// percentage for the property's later used-value basis.
+    pub fn resolve_font_relative(self, em: f32, rem: f32) -> Self {
+        match self {
+            Self::Zero | Self::Percentage(_) => self,
+            Self::Length(length) => {
+                Self::Length(Length::px(length.unit.to_px(length.value, em, rem)))
+            },
+            Self::Calc(calc) => Self::Calc(CalcLengthPercentage {
+                percentage: calc.percentage,
+                px: calc.px + calc.em * em + calc.rem * rem,
+                em: 0.0,
+                rem: 0.0,
+            }),
+        }
+    }
+
+    /// Resolve the value against the percentage basis defined by its
+    /// consuming property.
+    pub fn to_px(self, em: f32, rem: f32, percentage_basis: f32) -> f32 {
+        match self {
+            Self::Zero => 0.0,
+            Self::Length(length) => length.unit.to_px(length.value, em, rem),
+            Self::Percentage(value) => value * percentage_basis,
+            Self::Calc(calc) => {
+                calc.percentage * percentage_basis + calc.px + calc.em * em + calc.rem * rem
+            },
+        }
+    }
 
     /// Interpolate the bounded scalar forms shared by paint and geometry
     /// properties. Zero adopts the other endpoint's unit; mixed non-zero
@@ -323,8 +305,11 @@ impl FromStr for LengthPercentage {
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         let input = input.trim();
-        if input.len() > 6 && input[..5].eq_ignore_ascii_case("calc(") && input.ends_with(')') {
-            return CalcLengthPercentage::parse_inner(&input[5..input.len() - 1]).map(Self::Calc);
+        if input
+            .get(..5)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("calc("))
+        {
+            return super::calc::parse_length_percentage(input).map(Self::Calc);
         }
         parse_atomic(input)
     }

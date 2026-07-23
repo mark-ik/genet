@@ -175,7 +175,12 @@ where
         sources: HashMap::new(),
         image_sources,
     };
-    let document = state.build_node(dom.document(), None, 16.0)?;
+    let document = state.build_node(
+        dom.document(),
+        None,
+        16.0,
+        (Some(viewport_width), Some(viewport_height)),
+    )?;
     let children = document.into_iter().collect::<Vec<_>>();
     let root = state
         .tree
@@ -551,6 +556,7 @@ where
         id: D::NodeId,
         inherited: Option<&ComputedValues>,
         parent_font_size: f32,
+        containing_size: (Option<f32>, Option<f32>),
     ) -> Result<Option<NodeId>, LayoutError> {
         match self.dom.kind(id) {
             NodeKind::Document | NodeKind::DocumentFragment => {
@@ -558,7 +564,7 @@ where
                     .dom
                     .dom_children(id)
                     .filter_map(|child| {
-                        self.build_node(child, inherited, parent_font_size)
+                        self.build_node(child, inherited, parent_font_size, containing_size)
                             .transpose()
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -582,15 +588,29 @@ where
             NodeKind::Element => {
                 let computed = self.styles.get(id).cloned().unwrap_or_default();
                 let font_size = font_size_px(&computed.font_size, parent_font_size);
+                let child_containing_size =
+                    resolved_child_containing_size(&computed, font_size, containing_size);
                 let children = self
                     .dom
                     .dom_children(id)
                     .filter_map(|child| {
-                        self.build_node(child, Some(&computed), font_size)
+                        self.build_node(child, Some(&computed), font_size, child_containing_size)
                             .transpose()
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 let mut taffy_style = to_taffy_style(&computed, font_size);
+                taffy_style.size.width =
+                    dimension_with_basis(computed.width, font_size, containing_size.0);
+                taffy_style.size.height =
+                    dimension_with_basis(computed.height, font_size, containing_size.1);
+                taffy_style.min_size.width =
+                    dimension_with_basis(computed.min_width, font_size, containing_size.0);
+                taffy_style.min_size.height =
+                    dimension_with_basis(computed.min_height, font_size, containing_size.1);
+                taffy_style.max_size.width =
+                    dimension_with_basis(computed.max_width, font_size, containing_size.0);
+                taffy_style.max_size.height =
+                    dimension_with_basis(computed.max_height, font_size, containing_size.1);
                 apply_replaced_image_size(
                     &mut taffy_style,
                     self.dom,
@@ -1291,6 +1311,52 @@ fn dimension(size: CssSize, em: f32) -> Dimension {
             _ => Dimension::length(absolute_length_percentage(value, em, 16.0, 0.0)),
         },
         _ => Dimension::auto(),
+    }
+}
+
+fn dimension_with_basis(size: CssSize, em: f32, basis: Option<f32>) -> Dimension {
+    match (size, basis) {
+        (CssSize::Value(CssLengthPercentage::Calc(calc)), Some(basis))
+            if calc.percentage != 0.0 =>
+        {
+            Dimension::length(absolute_length_percentage(
+                CssLengthPercentage::Calc(calc),
+                em,
+                16.0,
+                basis,
+            ))
+        },
+        (size, _) => dimension(size, em),
+    }
+}
+
+fn resolved_child_containing_size(
+    computed: &ComputedValues,
+    em: f32,
+    containing_size: (Option<f32>, Option<f32>),
+) -> (Option<f32>, Option<f32>) {
+    let fills_available_width = !matches!(
+        computed.display,
+        CssDisplay::None | CssDisplay::Inline | CssDisplay::InlineBlock
+    );
+    (
+        resolved_explicit_size(computed.width, em, containing_size.0).or(if fills_available_width {
+            containing_size.0
+        } else {
+            None
+        }),
+        resolved_explicit_size(computed.height, em, containing_size.1),
+    )
+}
+
+fn resolved_explicit_size(size: CssSize, em: f32, basis: Option<f32>) -> Option<f32> {
+    let CssSize::Value(value) = size else {
+        return None;
+    };
+    if value.has_percentage() {
+        basis.map(|basis| absolute_length_percentage(value, em, 16.0, basis))
+    } else {
+        Some(absolute_length_percentage(value, em, 16.0, 0.0))
     }
 }
 

@@ -151,11 +151,15 @@ fn load_dom_works<E: ScriptEngine>() {
          console.log(document.documentElement ? document.documentElement.tagName : 'no-root');\
          var m = document.getElementById('main');\
          console.log(m ? m.tagName : 'not-found');\
+         console.log(String(main === m));\
          console.log(String(document.getElementsByTagName('p').length));",
     )
     .expect("query script");
 
-    assert_eq!(rt.host().borrow().console, vec!["BODY", "HTML", "DIV", "1"]);
+    assert_eq!(
+        rt.host().borrow().console,
+        vec!["BODY", "HTML", "DIV", "true", "1"]
+    );
 }
 
 /// Regression probe for the dom/events corpus: a self-closing
@@ -1170,6 +1174,55 @@ fn element_style_inline_cssom_on_nova() {
     element_style_inline_cssom::<script_engine_nova::NovaEngine>();
 }
 
+/// A selected CSS engine can canonicalize supported inline values, reject
+/// values it can prove invalid, and pass unfamiliar syntax through unchanged.
+fn element_style_routes_through_inline_handler<E: ScriptEngine>() {
+    use genet_static_dom::StaticDocument;
+
+    struct Stub;
+    impl crate::InlineStyleHandler for Stub {
+        fn canonicalize(&self, property: &str, value: &str) -> crate::InlineStyleValueResult {
+            if value == "invalid" {
+                crate::InlineStyleValueResult::Invalid
+            } else if property == "color" && value.eq_ignore_ascii_case("red") {
+                crate::InlineStyleValueResult::Canonical("#ff0000".to_string())
+            } else {
+                crate::InlineStyleValueResult::PassThrough
+            }
+        }
+    }
+
+    let mut rt = Runtime::<E>::new().expect("runtime");
+    rt.load_dom(&StaticDocument::parse(
+        "<html><body><div id='d' style='color: red; width: Raw'></div></body></html>",
+    ));
+    rt.set_inline_style_handler(Box::new(Stub));
+    rt.eval(
+        "var s = document.getElementById('d').style;\
+         console.log(s.color + '|' + s.width);\
+         s.color = 'invalid'; s.marginTop = '4PX';\
+         console.log(s.color + '|' + s.marginTop);\
+         s.cssText = 'color: red; height: invalid; width: Raw';\
+         console.log(s.cssText);",
+    )
+    .expect("inline style handler script");
+    assert_eq!(
+        rt.host().borrow().console,
+        vec!["#ff0000|Raw", "#ff0000|4PX", "color: #ff0000; width: Raw;",]
+    );
+}
+
+#[test]
+fn element_style_routes_through_inline_handler_on_boa() {
+    element_style_routes_through_inline_handler::<script_engine_boa::BoaEngine>();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn element_style_routes_through_inline_handler_on_nova() {
+    element_style_routes_through_inline_handler::<script_engine_nova::NovaEngine>();
+}
+
 /// `getComputedStyle(el)` reads through the host `ComputedStyleHandler` seam:
 /// supported longhands resolve (camelCase + getPropertyValue), unsupported
 /// ones yield "", and the declaration is read-only.
@@ -1216,6 +1269,109 @@ fn get_computed_style_reads_handler_on_boa() {
 #[test]
 fn get_computed_style_reads_handler_on_nova() {
     get_computed_style_reads_handler::<script_engine_nova::NovaEngine>();
+}
+
+/// `document.styleSheets` is a stable live list over the host's retained
+/// author sheets, with CSSOM mutation errors surfaced as DOMExceptions.
+fn stylesheet_cssom_routes_to_handler<E: ScriptEngine>() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[derive(Clone)]
+    struct Stub {
+        rules: Rc<RefCell<Vec<Vec<String>>>>,
+    }
+    impl crate::StyleSheetHandler for Stub {
+        fn sheet_count(&self) -> usize {
+            self.rules.borrow().len()
+        }
+
+        fn rule_count(&self, sheet: usize) -> Option<usize> {
+            self.rules.borrow().get(sheet).map(Vec::len)
+        }
+
+        fn insert_rule(
+            &self,
+            sheet: usize,
+            rule: &str,
+            index: usize,
+        ) -> Result<usize, crate::StyleSheetMutationError> {
+            let mut sheets = self.rules.borrow_mut();
+            let rules = sheets
+                .get_mut(sheet)
+                .ok_or(crate::StyleSheetMutationError::IndexSize)?;
+            if index > rules.len() {
+                return Err(crate::StyleSheetMutationError::IndexSize);
+            }
+            if !rule.trim_start().starts_with('.') {
+                return Err(crate::StyleSheetMutationError::Syntax(
+                    "expected a style rule".to_string(),
+                ));
+            }
+            rules.insert(index, rule.to_string());
+            Ok(index)
+        }
+
+        fn delete_rule(
+            &self,
+            sheet: usize,
+            index: usize,
+        ) -> Result<(), crate::StyleSheetMutationError> {
+            let mut sheets = self.rules.borrow_mut();
+            let rules = sheets
+                .get_mut(sheet)
+                .ok_or(crate::StyleSheetMutationError::IndexSize)?;
+            if index >= rules.len() {
+                return Err(crate::StyleSheetMutationError::IndexSize);
+            }
+            rules.remove(index);
+            Ok(())
+        }
+    }
+
+    let rules = Rc::new(RefCell::new(vec![vec![".a { color: red; }".into()]]));
+    let mut rt = Runtime::<E>::new().expect("runtime");
+    rt.set_stylesheet_handler(Box::new(Stub {
+        rules: rules.clone(),
+    }));
+    rt.eval(
+        "var list = document.styleSheets; var sheet = list[0];\
+         console.log(String(list === document.styleSheets) + '|' +\
+           String(list instanceof StyleSheetList) + '|' + String(sheet instanceof CSSStyleSheet));\
+         console.log(list.length + '|' + sheet.cssRules.length + '|' +\
+           String(sheet.cssRules instanceof CSSRuleList));\
+         console.log(String(sheet.insertRule('.b { color: blue; }', 1)) + '|' +\
+           sheet.cssRules.length + '|' + String(sheet === list.item(0)));\
+         try { sheet.insertRule('.c {}', 9); } catch (e) { console.log(e.name); }\
+         try { sheet.insertRule('not a rule', 2); } catch (e) { console.log(e.name); }\
+         console.log(sheet.cssRules.length);\
+         sheet.deleteRule(0); console.log(sheet.cssRules.length);",
+    )
+    .expect("stylesheet CSSOM script");
+    assert_eq!(
+        rt.host().borrow().console,
+        vec![
+            "true|true|true",
+            "1|1|true",
+            "1|2|true",
+            "IndexSizeError",
+            "SyntaxError",
+            "2",
+            "1",
+        ],
+    );
+    assert_eq!(rules.borrow()[0], vec![".b { color: blue; }"]);
+}
+
+#[test]
+fn stylesheet_cssom_routes_to_handler_on_boa() {
+    stylesheet_cssom_routes_to_handler::<script_engine_boa::BoaEngine>();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn stylesheet_cssom_routes_to_handler_on_nova() {
+    stylesheet_cssom_routes_to_handler::<script_engine_nova::NovaEngine>();
 }
 
 /// `document.cookie` reads the host `CookieProvider` (get) and forwards an

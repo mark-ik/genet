@@ -21,4 +21,5 @@ serde.workspace = true
 
 [dev-dependencies]
 base64.workspace = true
+genet-scripted-dom = { path = "../genet-scripted-dom" }
 genet-static-dom = { version = "0.1.0", path = "../genet-static-dom" }

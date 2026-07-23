@@ -13,12 +13,16 @@ use selectors::matching::MatchingContext;
 /// Host-supplied dynamic pseudo-class state for one document.
 pub struct InteractionStates<Id> {
     states: HashMap<Id, HashSet<StatePseudoClass>>,
+    generation: u64,
+    changed: HashMap<Id, u64>,
 }
 
 impl<Id> Default for InteractionStates<Id> {
     fn default() -> Self {
         Self {
             states: HashMap::new(),
+            generation: 0,
+            changed: HashMap::new(),
         }
     }
 }
@@ -27,21 +31,39 @@ impl<Id> InteractionStates<Id>
 where
     Id: Copy + Eq + std::hash::Hash,
 {
-    pub fn set(&mut self, id: Id, state: StatePseudoClass, enabled: bool) {
-        if enabled {
-            self.states.entry(id).or_default().insert(state);
+    pub fn set(&mut self, id: Id, state: StatePseudoClass, enabled: bool) -> bool {
+        let changed = if enabled {
+            self.states.entry(id).or_default().insert(state)
         } else if let Some(states) = self.states.get_mut(&id) {
-            states.remove(&state);
+            let changed = states.remove(&state);
             if states.is_empty() {
                 self.states.remove(&id);
             }
+            changed
+        } else {
+            false
+        };
+        if changed {
+            self.generation = self.generation.saturating_add(1);
+            self.changed.insert(id, self.generation);
         }
+        changed
     }
 
     pub fn matches(&self, id: Id, state: StatePseudoClass) -> bool {
         self.states
             .get(&id)
             .is_some_and(|states| states.contains(&state))
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(crate) fn changed_since(&self, generation: u64) -> impl Iterator<Item = Id> + '_ {
+        self.changed
+            .iter()
+            .filter_map(move |(id, changed)| (*changed > generation).then_some(*id))
     }
 }
 
@@ -54,12 +76,50 @@ pub struct SelectorTree<'a, D: LayoutDom> {
 
 impl<'a, D: LayoutDom> SelectorTree<'a, D> {
     pub fn new(dom: &'a D, states: &'a InteractionStates<D::NodeId>) -> Self {
-        let mut identities = HashMap::new();
-        let mut pending = vec![dom.document()];
+        Self::for_roots(dom, states, &[dom.document()], true)
+    }
+
+    /// Build selector identity storage only for restyle roots, their
+    /// descendants, ancestors, and sibling neighborhoods. Normal selector
+    /// matching cannot escape that closure without `:has`, which this lane does
+    /// not parse.
+    pub(crate) fn for_roots(
+        dom: &'a D,
+        states: &'a InteractionStates<D::NodeId>,
+        roots: &[D::NodeId],
+        include_siblings: bool,
+    ) -> Self {
+        let mut included = HashSet::new();
+        let mut pending = roots.to_vec();
         while let Some(id) = pending.pop() {
-            identities.insert(id, Box::new(dom.opaque_id(id)));
+            if !dom.is_live(id) || !included.insert(id) {
+                continue;
+            }
             pending.extend(dom.dom_children(id));
         }
+        for root in roots {
+            if !dom.is_live(*root) {
+                continue;
+            }
+            let mut ancestor = dom.parent(*root);
+            while let Some(id) = ancestor {
+                included.insert(id);
+                ancestor = dom.parent(id);
+            }
+        }
+        if include_siblings {
+            let neighborhood: Vec<_> = included.iter().copied().collect();
+            for id in neighborhood {
+                if let Some(parent) = dom.parent(id) {
+                    included.extend(dom.dom_children(parent));
+                }
+            }
+        }
+        let identities = included
+            .into_iter()
+            .filter(|id| dom.kind(*id) == NodeKind::Element)
+            .map(|id| (id, Box::new(dom.opaque_id(id))))
+            .collect();
         Self {
             dom,
             identities,
@@ -69,6 +129,10 @@ impl<'a, D: LayoutDom> SelectorTree<'a, D> {
 
     pub fn dom(&self) -> &'a D {
         self.dom
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.identities.len()
     }
 
     pub fn element(&self, id: D::NodeId) -> Option<ElementRef<'_, 'a, D>> {

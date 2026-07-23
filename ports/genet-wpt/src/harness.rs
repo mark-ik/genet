@@ -29,6 +29,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use genet_layout::{Applied, IncrementalLayout, inline_stylesheets};
+use genet_livery::Device;
+use genet_scripted::LiveryCssom;
 use genet_scripted_dom::NodeId as DomNodeId;
 use genet_static_dom::StaticDocument;
 use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace};
@@ -106,6 +108,14 @@ pub enum Engine {
     Nova,
 }
 
+/// Which cascade backs scripted CSSOM and `getComputedStyle` reads.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum StyleRoute {
+    #[default]
+    Stylo,
+    Livery,
+}
+
 impl Engine {
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
@@ -168,7 +178,33 @@ pub fn run_test(
     completion: Option<&dyn CompletionSource>,
     engine: Engine,
 ) -> HarnessOutcome {
-    run_test_with_webgl(
+    run_test_with_style(
+        testharness_js,
+        html,
+        loader,
+        base_url,
+        handler,
+        completion,
+        engine,
+        StyleRoute::Stylo,
+    )
+}
+
+/// Run one test with an explicit scripted style route. The Livery route owns
+/// `document.styleSheets` and `getComputedStyle`; the retained Stylo session
+/// remains the geometry and animation driver until Livery replaces that half.
+#[allow(clippy::too_many_arguments)]
+pub fn run_test_with_style(
+    testharness_js: &str,
+    html: &str,
+    loader: &dyn ScriptSrcLoader,
+    base_url: Option<&str>,
+    handler: Option<Box<dyn FetchHandler>>,
+    completion: Option<&dyn CompletionSource>,
+    engine: Engine,
+    style: StyleRoute,
+) -> HarnessOutcome {
+    run_test_with_webgl_and_style(
         testharness_js,
         html,
         loader,
@@ -177,6 +213,7 @@ pub fn run_test(
         completion,
         None,
         engine,
+        style,
     )
 }
 
@@ -195,6 +232,31 @@ pub fn run_test_with_webgl(
     webgl: Option<WebGlFactory>,
     engine: Engine,
 ) -> HarnessOutcome {
+    run_test_with_webgl_and_style(
+        testharness_js,
+        html,
+        loader,
+        base_url,
+        handler,
+        completion,
+        webgl,
+        engine,
+        StyleRoute::Stylo,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_test_with_webgl_and_style(
+    testharness_js: &str,
+    html: &str,
+    loader: &dyn ScriptSrcLoader,
+    base_url: Option<&str>,
+    handler: Option<Box<dyn FetchHandler>>,
+    completion: Option<&dyn CompletionSource>,
+    webgl: Option<WebGlFactory>,
+    engine: Engine,
+    style: StyleRoute,
+) -> HarnessOutcome {
     let doc = StaticDocument::parse(html);
     let mut scripts = Vec::new();
     collect_scripts(&doc, doc.document(), loader, &mut scripts);
@@ -209,6 +271,7 @@ pub fn run_test_with_webgl(
             handler,
             completion,
             webgl,
+            style,
         ),
         Engine::Nova => run_with::<script_engine_nova::NovaEngine>(
             testharness_js,
@@ -218,6 +281,7 @@ pub fn run_test_with_webgl(
             handler,
             completion,
             webgl,
+            style,
         ),
     }
 }
@@ -248,6 +312,28 @@ impl NovaHarnessTemplate {
         completion: Option<&dyn CompletionSource>,
         webgl: Option<WebGlFactory>,
     ) -> HarnessOutcome {
+        self.run_test_with_webgl_and_style(
+            html,
+            loader,
+            base_url,
+            handler,
+            completion,
+            webgl,
+            StyleRoute::Stylo,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_test_with_webgl_and_style(
+        &mut self,
+        html: &str,
+        loader: &dyn ScriptSrcLoader,
+        base_url: Option<&str>,
+        handler: Option<Box<dyn FetchHandler>>,
+        completion: Option<&dyn CompletionSource>,
+        webgl: Option<WebGlFactory>,
+        style: StyleRoute,
+    ) -> HarnessOutcome {
         let doc = StaticDocument::parse(html);
         let mut scripts = Vec::new();
         collect_scripts(&doc, doc.document(), loader, &mut scripts);
@@ -257,7 +343,7 @@ impl NovaHarnessTemplate {
             Err(e) => return HarnessOutcome::Threw(format!("runtime snapshot clone: {e:?}")),
         };
         prepare_runtime(&mut rt, &doc, base_url, handler, webgl);
-        run_loaded_with(&mut rt, &test_src, completion)
+        run_loaded_with(&mut rt, &test_src, completion, style)
     }
 
     pub fn run_test(
@@ -269,6 +355,18 @@ impl NovaHarnessTemplate {
         completion: Option<&dyn CompletionSource>,
     ) -> HarnessOutcome {
         self.run_test_with_webgl(html, loader, base_url, handler, completion, None)
+    }
+
+    pub fn run_test_with_style(
+        &mut self,
+        html: &str,
+        loader: &dyn ScriptSrcLoader,
+        base_url: Option<&str>,
+        handler: Option<Box<dyn FetchHandler>>,
+        completion: Option<&dyn CompletionSource>,
+        style: StyleRoute,
+    ) -> HarnessOutcome {
+        self.run_test_with_webgl_and_style(html, loader, base_url, handler, completion, None, style)
     }
 }
 
@@ -287,6 +385,7 @@ fn run_with<E: ScriptEngine>(
     handler: Option<Box<dyn FetchHandler>>,
     completion: Option<&dyn CompletionSource>,
     webgl: Option<WebGlFactory>,
+    style: StyleRoute,
 ) -> HarnessOutcome {
     let mut rt = match Runtime::<E>::new() {
         Ok(rt) => rt,
@@ -296,7 +395,7 @@ fn run_with<E: ScriptEngine>(
     if let Err(e) = rt.load_testharness(testharness_js) {
         return HarnessOutcome::Threw(format!("testharness load: {e:?}"));
     }
-    run_loaded_with(&mut rt, test_src, completion)
+    run_loaded_with(&mut rt, test_src, completion, style)
 }
 
 fn prepare_runtime<E: ScriptEngine>(
@@ -359,7 +458,7 @@ impl RenderSession {
     /// Build the session over the runtime's already-loaded DOM (before the test
     /// body runs, so early style reads see the parse-time cascade) and register
     /// the `getComputedStyle` bridge.
-    fn new<E: ScriptEngine>(rt: &mut Runtime<E>) -> Self {
+    fn new<E: ScriptEngine>(rt: &mut Runtime<E>, style: StyleRoute) -> Self {
         let layout = Rc::new(RefCell::new(None));
         let sheets;
         {
@@ -374,9 +473,15 @@ impl RenderSession {
                 &host.dom, &refs, VIEWPORT_W, VIEWPORT_H,
             ));
         }
-        rt.set_computed_style_handler(Box::new(WptComputedStyle {
-            layout: layout.clone(),
-        }));
+        match style {
+            StyleRoute::Stylo => rt.set_computed_style_handler(Box::new(WptComputedStyle {
+                layout: layout.clone(),
+            })),
+            StyleRoute::Livery => {
+                let refs: Vec<&str> = sheets.iter().map(String::as_str).collect();
+                LiveryCssom::install(rt, &refs, Device::screen(VIEWPORT_W, VIEWPORT_H));
+            },
+        }
         // `window.innerWidth`/`innerHeight` must agree with the session's
         // viewport: the wheel/scroll cluster computes its hit point from them
         // (`Math.floor(window.innerWidth / 2)`).
@@ -622,10 +727,11 @@ fn run_loaded_with<E: ScriptEngine>(
     rt: &mut Runtime<E>,
     test_src: &str,
     completion: Option<&dyn CompletionSource>,
+    style: StyleRoute,
 ) -> HarnessOutcome {
     // H7a: every testharness run gets a rendering session. Built before the test
     // body runs so early `getComputedStyle` reads see the parse-time cascade.
-    let render = RenderSession::new(rt);
+    let render = RenderSession::new(rt, style);
     if let Err(e) = rt.begin_loaded_testharness(test_src) {
         return HarnessOutcome::Threw(truncate(&format!("{e:?}"), 200));
     }
@@ -942,6 +1048,39 @@ window.addEventListener("load", function() {
   }
 });
 "#;
+
+    #[test]
+    fn livery_style_route_exposes_cssom_to_testharness() {
+        let html = r#"<!doctype html>
+<style>.card { --accent: #ff0000; color: var(--accent); }</style>
+<div id="card" class="card"></div>
+<script>
+test(function() {
+  var card = document.getElementById('card');
+  var sheet = document.styleSheets[0];
+  assert_true(document.styleSheets.length === 1, 'one author sheet');
+  assert_true(sheet.cssRules.length === 1, 'one initial rule');
+  assert_true(getComputedStyle(card).color === '#ff0000', 'initial color');
+  assert_true(sheet.insertRule('.card { --accent: #0000ff; }', 1) === 1, 'insert index');
+  assert_true(getComputedStyle(card).color === '#0000ff', 'mutated color');
+  assert_true(getComputedStyle(card).getPropertyValue('--accent') === '#0000ff', 'custom value');
+  sheet.deleteRule(1);
+  assert_true(getComputedStyle(card).color === '#ff0000', 'deleted rule');
+}, 'Livery CSSOM composes through the WPT harness');
+</script>"#;
+        let results = unwrap_ran(run_test_with_style(
+            MINI_TESTHARNESS,
+            html,
+            &EmptyLoader,
+            None,
+            None,
+            None,
+            Engine::Boa,
+            StyleRoute::Livery,
+        ));
+        assert_eq!(results.len(), 1, "one subtest: {results:?}");
+        assert!(results[0].passed(), "Livery route should pass: {results:?}");
+    }
 
     /// End to end through the H7a rendering session: the real WPT
     /// `animationevent-types.html` (negative delay, iteration-count 2, animates

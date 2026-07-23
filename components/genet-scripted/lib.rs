@@ -29,8 +29,12 @@ use script_engine_api::ScriptEngine;
 
 mod capture;
 mod document;
+#[cfg(feature = "livery")]
+mod livery;
 
 pub use document::{ScriptedDocument, ScriptedEngine};
+#[cfg(feature = "livery")]
+pub use livery::LiveryCssom;
 
 /// Byte-loading seam supplied by a shell or worker host. Networking and filesystem
 /// policy stay above the scripted document owner.

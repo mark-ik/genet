@@ -522,7 +522,7 @@ Options:
     --write-expectations <f>
                          write current testharness results as JSON expectations
     --engine <name>      testharness JS engine: boa (default) | nova
-    --renderer <name>    reftest producer: stylo (default) | livery
+    --renderer <name>    style/render route: stylo (default) | livery
     --server-base <url>  run testharness against a live `wpt serve` at <url>
                          (server mode; needs --features netfetch)
     --spawn-server       spawn + tear down a `wpt serve` for the run
@@ -1826,15 +1826,16 @@ fn testharness(tests: &[TestCase], args: &Args) {
                 let handler = net::NetFetchHandler::new(ev_tx);
                 let completion = net::ChannelCompletion::new(ev_rx);
                 if let Some(template) = nova_template.as_mut() {
-                    return template.run_test(
+                    return template.run_test_with_style(
                         &html,
                         &loader,
                         Some(&doc_url),
                         Some(Box::new(handler)),
                         Some(&completion),
+                        args.renderer.harness_style(),
                     );
                 }
-                return harness::run_test(
+                return harness::run_test_with_style(
                     &testharness_js,
                     &html,
                     &loader,
@@ -1842,13 +1843,21 @@ fn testharness(tests: &[TestCase], args: &Args) {
                     Some(Box::new(handler)),
                     Some(&completion),
                     args.engine,
+                    args.renderer.harness_style(),
                 );
             }
             let doc_url = test.disk_doc_url();
             if let Some(template) = nova_template.as_mut() {
-                return template.run_test(&html, &disk, Some(&doc_url), None, None);
+                return template.run_test_with_style(
+                    &html,
+                    &disk,
+                    Some(&doc_url),
+                    None,
+                    None,
+                    args.renderer.harness_style(),
+                );
             }
-            harness::run_test(
+            harness::run_test_with_style(
                 &testharness_js,
                 &html,
                 &disk,
@@ -1856,6 +1865,7 @@ fn testharness(tests: &[TestCase], args: &Args) {
                 None,
                 None,
                 args.engine,
+                args.renderer.harness_style(),
             )
         }));
         let name = test.name();
@@ -1927,6 +1937,13 @@ impl ReftestRenderer {
             "stylo" => Some(Self::Stylo),
             "livery" => Some(Self::Livery),
             _ => None,
+        }
+    }
+
+    fn harness_style(self) -> harness::StyleRoute {
+        match self {
+            Self::Stylo => harness::StyleRoute::Stylo,
+            Self::Livery => harness::StyleRoute::Livery,
         }
     }
 }

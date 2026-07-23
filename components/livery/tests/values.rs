@@ -9,6 +9,7 @@ use livery::values::{
     TextDecorationLine, TextWrapMode, TimingFunction, Transform, TransitionProperty, VerticalAlign,
     Visibility, WhiteSpaceCollapse, ZIndex,
 };
+use livery::{canonicalize_specified_longhand, canonicalize_specified_value};
 
 fn assert_round_trip<T>(css: &str)
 where
@@ -19,6 +20,22 @@ where
     let reparsed = T::parse_css(&serialized)
         .unwrap_or_else(|error| panic!("{css} serialized as {serialized}: {error}"));
     assert_eq!(parsed, reparsed, "{css} serialized as {serialized}");
+}
+
+#[test]
+fn specified_border_canonicalizes_nested_calc_width() {
+    assert_eq!(
+        canonicalize_specified_value("border", "calc(calc(10px)) solid pink").as_deref(),
+        Some("calc(10px) solid pink")
+    );
+    assert_eq!(
+        canonicalize_specified_value("border", "solid calc(2 * 5px) pink").as_deref(),
+        Some("solid calc(10px) pink")
+    );
+    assert_eq!(
+        canonicalize_specified_value("border", "calc(10%) solid pink"),
+        None
+    );
 }
 
 #[test]
@@ -33,6 +50,44 @@ fn length_percentage_and_calc_values_round_trip() {
         "calc(33.333332% + 0.1234567px)",
     ] {
         assert_round_trip::<LengthPercentage>(value);
+    }
+}
+
+#[test]
+fn nested_calc_reduces_with_dimensional_arithmetic() {
+    for (source, expected) in [
+        ("calc(20px + calc(80px))", "calc(100px)"),
+        ("calc(calc(100px))", "calc(100px)"),
+        ("calc(calc(2) * calc(50px))", "calc(100px)"),
+        ("calc(calc(150px*2/3))", "calc(100px)"),
+        ("calc(calc(2 * calc(calc(3)) + 4) * 10px)", "calc(100px)"),
+        ("calc(50px + calc(40%))", "calc(40% + 50px)"),
+        ("calc(10px + 1em)", "calc(1em + 10px)"),
+    ] {
+        let parsed = source
+            .parse::<LengthPercentage>()
+            .unwrap_or_else(|error| panic!("{source}: {error}"));
+        assert_eq!(parsed.to_string(), expected, "{source}");
+        assert_eq!(
+            canonicalize_specified_longhand("left", source).as_deref(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn calc_rejects_dimensionally_invalid_or_malformed_math() {
+    for source in [
+        "calc(2 + 10px)",
+        "calc(10px * 2px)",
+        "calc(10px / 0)",
+        "calc(10px + 2)",
+        "calc(100px+20px)",
+    ] {
+        assert!(
+            source.parse::<LengthPercentage>().is_err(),
+            "accepted {source}"
+        );
     }
 }
 
@@ -112,6 +167,7 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<Margin>("0.5rem");
     assert_round_trip::<Opacity>("50%");
     assert_round_trip::<Transform>("translate(12px, 4px) scale(1.5) rotate(30deg)");
+    assert_round_trip::<Transform>("matrix(1, 2, 3, 4, 5, 6)");
     assert_round_trip::<Overflow>("hidden");
     assert_round_trip::<Padding>("0.75rem");
     assert_round_trip::<PointerEvents>("none");
@@ -162,6 +218,48 @@ fn transform_interpolation_preserves_matching_function_shape() {
         from.interpolate(&to, 0.5).to_string(),
         "translate(10px, 2px)"
     );
+}
+
+#[test]
+fn transform_matrices_cover_skew_and_mismatched_list_interpolation() {
+    let skew = "skewX(45deg)".parse::<Transform>().expect("skew");
+    let skew = skew.to_matrix(16.0, (0.0, 0.0)).expect("skew matrix");
+    assert!((skew.a - 1.0).abs() < 0.0001);
+    assert!(skew.b.abs() < 0.0001);
+    assert!((skew.c - 1.0).abs() < 0.0001);
+    assert!((skew.d - 1.0).abs() < 0.0001);
+
+    let from = "translate(20px, 4px)"
+        .parse::<Transform>()
+        .expect("from transform");
+    let to = "scale(2)".parse::<Transform>().expect("to transform");
+    let middle = from
+        .interpolate(&to, 0.5)
+        .to_matrix(16.0, (0.0, 0.0))
+        .expect("interpolated matrix");
+    assert!((middle.a - 1.5).abs() < 0.0001);
+    assert!((middle.d - 1.5).abs() < 0.0001);
+    assert!((middle.e - 10.0).abs() < 0.0001);
+    assert!((middle.f - 2.0).abs() < 0.0001);
+}
+
+#[test]
+fn transform_percentages_resolve_against_the_reference_box() {
+    let transform = "translate(25%, 50%)"
+        .parse::<Transform>()
+        .expect("percentage transform");
+    let matrix = transform
+        .to_matrix(16.0, (100.0, 50.0))
+        .expect("percentage matrix");
+    assert!((matrix.e - 25.0).abs() < 0.0001);
+    assert!((matrix.f - 25.0).abs() < 0.0001);
+
+    let value = "calc(25% + 2em)"
+        .parse::<LengthPercentage>()
+        .expect("mixed calc")
+        .resolve_font_relative(10.0, 16.0);
+    assert_eq!(value.to_string(), "calc(25% + 20px)");
+    assert!((value.to_px(10.0, 16.0, 100.0) - 45.0).abs() < 0.0001);
 }
 
 #[test]

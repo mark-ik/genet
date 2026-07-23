@@ -8,6 +8,7 @@
 
 mod document;
 mod dom;
+mod invalidation;
 mod layout;
 mod paint;
 mod style;
@@ -15,9 +16,12 @@ mod text;
 
 pub use document::{ClickOutcome, LinkTarget, LiveryDocument};
 pub use dom::{ElementRef, InteractionStates, SelectorTree};
+pub use invalidation::{AttributeSnapshot, ElementSnapshot, IncrementalStyle, RestyleStats};
 pub(crate) use layout::hit_test_with_scroll;
 pub use layout::{Fragment, FragmentPlane, LayoutError, hit_test, layout};
 pub use livery::media::Device;
+pub use livery::stylesheet::RuleMutationError;
+pub use livery::{canonicalize_specified_longhand, canonicalize_specified_value};
 pub(crate) use paint::emit_paint_list_with_text_system_scrolled_with_images;
 pub use paint::{LiveryPaintList, emit_paint_list, emit_paint_list_with_text_system};
 pub use style::{StylePlane, StyleSet, resolve_styles};

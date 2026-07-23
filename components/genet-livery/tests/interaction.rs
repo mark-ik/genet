@@ -640,6 +640,79 @@ fn css_transition_transform_uses_the_retained_clock() {
 }
 
 #[test]
+fn css_transition_transform_decomposes_mismatched_function_lists() {
+    let document =
+        StaticDocument::parse(r#"<html><body><div class="card">card</div></body></html>"#);
+    let card = document
+        .first_with_class(document.document(), "card")
+        .unwrap();
+    let styles = StyleSet::cambium(&[r#"
+        .card { display: block; width: 100px; height: 20px;
+                transform: translate(20px, 4px);
+                transition: transform 100ms; }
+        .card:hover { transform: scale(2); }
+    "#]);
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(200.0, 100.0));
+    let matrix = |frame: &genet_livery::LiveryPaintList| {
+        frame.commands().iter().find_map(|command| match command {
+            PaintCmd::PushTransform(spec) => Some(spec.transform),
+            _ => None,
+        })
+    };
+    retained.frame(200, 100).unwrap();
+    retained
+        .interactions_mut()
+        .set(card, livery::selector::StatePseudoClass::Hover, true);
+    retained.frame(200, 100).unwrap();
+
+    retained.pump(50.0);
+    let middle = matrix(&retained.frame(200, 100).unwrap()).expect("middle transform");
+    assert!((middle.m11 - 1.5).abs() < 0.01);
+    assert!((middle.m22 - 1.5).abs() < 0.01);
+
+    retained.pump(100.0);
+    assert!(retained.settled());
+    let final_matrix = matrix(&retained.frame(200, 100).unwrap()).expect("final transform");
+    assert!((final_matrix.m11 - 2.0).abs() < 0.01);
+    assert!((final_matrix.m22 - 2.0).abs() < 0.01);
+}
+
+#[test]
+fn css_transition_transform_resolves_percentage_translation_at_paint() {
+    let document =
+        StaticDocument::parse(r#"<html><body><div class="card">card</div></body></html>"#);
+    let card = document
+        .first_with_class(document.document(), "card")
+        .unwrap();
+    let styles = StyleSet::cambium(&[r#"
+        .card { display: block; width: 100px; height: 20px;
+                transform: translate(0%, 0%);
+                transition: transform 100ms; }
+        .card:hover { transform: translate(50%, 100%); }
+    "#]);
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(200.0, 100.0));
+    let translation = |frame: &genet_livery::LiveryPaintList| {
+        frame.commands().iter().find_map(|command| match command {
+            PaintCmd::PushTransform(spec) => Some((
+                spec.origin.x + spec.transform.m41,
+                spec.origin.y + spec.transform.m42,
+            )),
+            _ => None,
+        })
+    };
+    retained.frame(200, 100).unwrap();
+    retained
+        .interactions_mut()
+        .set(card, livery::selector::StatePseudoClass::Hover, true);
+    retained.frame(200, 100).unwrap();
+
+    retained.pump(50.0);
+    let middle = translation(&retained.frame(200, 100).unwrap()).expect("middle translation");
+    assert!((middle.0 - 25.0).abs() < 0.01);
+    assert!((middle.1 - 10.0).abs() < 0.01);
+}
+
+#[test]
 fn css_transition_background_position_uses_the_retained_clock() {
     use base64::Engine as _;
 

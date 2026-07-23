@@ -5,14 +5,13 @@ use std::{
     hash::Hash,
 };
 
-use euclid::Angle;
 use layout_dom_api::{LayoutDom, NodeKind};
 use livery::{
     ComputedValues,
     values::{
         BackgroundImage, BackgroundRepeat, BorderStyle as CssBorderStyle,
         BoxShadow as CssBoxShadow, Color, Display, FontSize, Length, LengthPercentage, LengthUnit,
-        Overflow as CssOverflow, Position, Radius, TransformFunction, Visibility, ZIndex,
+        Overflow as CssOverflow, Position, Radius, Visibility, ZIndex,
     },
 };
 use paint_list_api::{
@@ -764,21 +763,14 @@ fn transform_spec(style: &ComputedValues, fragment: &Fragment) -> Option<Transfo
     if !establishes_transform_context(style) {
         return None;
     }
-    let functions = style.transform.functions()?;
     let em = used_font_size(style);
-    let mut authored = LayoutTransform::identity();
-    for function in functions {
-        let next = match *function {
-            TransformFunction::Translate(x, y) => {
-                LayoutTransform::translation(transform_length(x, em), transform_length(y, em), 0.0)
-            },
-            TransformFunction::Scale(x, y) => LayoutTransform::scale(x, y, 1.0),
-            TransformFunction::Rotate(radians) => {
-                LayoutTransform::rotation(0.0, 0.0, 1.0, Angle::radians(radians))
-            },
-        };
-        authored = authored.then(&next);
-    }
+    let matrix = style
+        .transform
+        .to_matrix(em, (fragment.width, fragment.height))?;
+    let authored = LayoutTransform::new(
+        matrix.a, matrix.b, 0.0, 0.0, matrix.c, matrix.d, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, matrix.e,
+        matrix.f, 0.0, 1.0,
+    );
 
     let origin = LayoutPoint::new(
         fragment.x + fragment.width / 2.0,
@@ -790,10 +782,6 @@ fn transform_spec(style: &ComputedValues, fragment: &Fragment) -> Option<Transfo
         transform,
         kind: TransformKind::Standard,
     })
-}
-
-fn transform_length(length: Length, em: f32) -> f32 {
-    length.unit.to_px(length.value, em, 16.0)
 }
 
 fn descendant_clip(

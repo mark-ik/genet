@@ -29,12 +29,16 @@ render = ["dep:netrender", "dep:genet-layout", "dep:genet-render"]
 # regardless of this feature -- an unconditional dependency the `#[cfg(feature =
 # "scripted-nova")]` test gate never actually covered).
 scripted-nova = ["dep:script-engine-nova"]
+# Opt-in clean-room CSSOM bridge. The default scripted/fullweb path keeps its
+# incumbent Stylo session; hosts selecting Livery install this adapter.
+livery = ["dep:genet-livery"]
 
 [dependencies]
 genet-scripted-dom = { path = "../genet-scripted-dom" }
 layout-dom-api = { path = "../shared/layout-dom", features = ["capture"] }
 genet-layout = { path = "../genet-layout", optional = true }
 genet-render = { path = "../genet-render", optional = true }
+genet-livery = { path = "../genet-livery", optional = true }
 genet-static-dom = { path = "../genet-static-dom" }
 genet-extract = { path = "../genet-extract" }
 script-runtime-api = { path = "../script-runtime-api" }

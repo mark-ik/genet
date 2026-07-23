@@ -154,6 +154,10 @@ pub struct ScriptedDom {
     /// pins, so a dropped secondary document collects like any other orphan.
     root: NodeId,
     mutations: Vec<DomMutation<NodeId>>,
+    /// Absolute sequence number of the first pending mutation. A second
+    /// observer can pair this base with [`Self::pending_mutations`] to read new
+    /// facts without stealing them from layout and detect a range it missed.
+    mutation_base: u64,
     /// Process-unique document tag (G0 fence). Only present where the fence is
     /// active; elsewhere ids are untagged and this field would be dead weight.
     #[cfg(all(debug_assertions, target_pointer_width = "64"))]
@@ -239,6 +243,7 @@ impl ScriptedDom {
             // carries this document's tag like every other node.
             root: NodeId(0),
             mutations: Vec::new(),
+            mutation_base: 0,
             #[cfg(all(debug_assertions, target_pointer_width = "64"))]
             doc_tag: fence::next_doc_tag(),
         };
@@ -304,6 +309,14 @@ impl ScriptedDom {
     /// document's tag on a fenced build.
     pub fn remint_node_id(&self, raw: u64) -> NodeId {
         self.pack(usize::try_from(raw).expect("captured node id must fit in usize"))
+    }
+
+    /// Non-consuming view of the pending mutation batch. The returned base is
+    /// the absolute sequence number of its first mutation. A retained consumer
+    /// whose cursor is below the base knows another consumer drained facts it
+    /// had not observed and can take a conservative correctness path.
+    pub fn pending_mutations(&self) -> (u64, &[DomMutation<NodeId>]) {
+        (self.mutation_base, &self.mutations)
     }
 
     /// DOM `removeChild`: orphan `child` from its parent but keep it (and its
@@ -847,6 +860,9 @@ impl LayoutDomMut for ScriptedDom {
     }
 
     fn drain_mutations(&mut self, out: &mut Vec<DomMutation<NodeId>>) {
+        self.mutation_base = self
+            .mutation_base
+            .saturating_add(self.mutations.len() as u64);
         out.append(&mut self.mutations);
     }
 }
@@ -890,6 +906,25 @@ mod tests {
         let mut again = Vec::new();
         dom.drain_mutations(&mut again);
         assert!(again.is_empty());
+    }
+
+    #[test]
+    fn pending_mutations_can_be_observed_without_stealing_layouts_batch() {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let child = dom.create_element(qual("div"));
+        dom.append_child(root, child);
+
+        let (base, pending) = dom.pending_mutations();
+        assert_eq!(base, 0);
+        assert_eq!(pending.len(), 1);
+
+        let mut drained = Vec::new();
+        dom.drain_mutations(&mut drained);
+        assert_eq!(drained.len(), 1);
+        let (next_base, pending) = dom.pending_mutations();
+        assert_eq!(next_base, base + 1);
+        assert!(pending.is_empty());
     }
 
     #[test]

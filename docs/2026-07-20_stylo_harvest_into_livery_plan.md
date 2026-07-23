@@ -1,8 +1,10 @@
 # Stylo harvest into Livery: the climb to fullweb
 
 **Date:** 2026-07-20
-**Status:** H0, H1, and H2 landed 2026-07-20; H3+ not started. Census
-grounded against the local fork checkout this session.
+**Status:** H0, H1, and H2 landed 2026-07-20; H3 and H4 landed
+2026-07-22; H5 active (2D matrices, percentage reference boxes, and the first
+nested-calc/CSSOM/used-value slice landed 2026-07-22); H6 available.
+Census grounded against the local fork checkout at H0.
 **Decision record:** Mark, 2026-07-18: "even an mpl-2.0 livery is worth more
 than servo's stylo to me. the proof is genet itself," and "level up livery to
 cover other tiers, up to and including the fullweb, by decomposing and
@@ -129,20 +131,148 @@ matches what genet-layout consumes. Census (verified 2026-07-20):
   (interrupted-transition reversing, per-element multi-transition maps)
   remains open as an H2 follow-on; the current clock keeps its
   one-transition-per-longhand shape.
-- **H3 - rule object model.** Lift the `stylesheets/` CssRule model and
-  StylesheetSet dirty tracking as CSSOM backing. Receipt:
-  insertRule/deleteRule and getComputedStyle serialization exercised
-  through genet-scripted against the Livery style plane on a bounded
-  corpus.
-- **H4 - invalidation.** Lift `invalidation/element/` with element
-  snapshots and restyle hints, plus stylesheet invalidation. This is the
-  scripted-tier keystone and the hardest graft (coupled to Stylist and
-  SelectorMap shapes). Receipt: class/attribute/state mutations restyle a
-  scoped set, with a diagnostic asserting restyle counts so O(document)
-  restyles are loud, not silent.
-- **H5 - value families on demand.** Transforms (matrix decomposition),
-  full calc(), grid template grammar, font machinery, as the WPT ratchet
-  reaches each. Receipt per family: directory-level WPT deltas.
+- **H3 - rule object model: landed 2026-07-22.** Livery's
+  `Stylesheet` now retains a CSSOM-shaped object model (the fork's
+  `stylesheets/` CssRule shape sized to the lane): ordered top-level
+  `CssRule::Style/Media/Keyframes` items, with `MediaRule` holding its
+  nested rules and the flattened cascade/keyframes views derived caches.
+  Mutation is `insert_rule`/`delete_rule` with CSSOM index and error
+  semantics (IndexSize, whole-rule Syntax rejection), a monotonic
+  `generation()` stamp as the StylesheetSet dirty-tracking shape, and
+  reindexing that renumbers flattened source order exactly as a fresh
+  parse would. genet-livery's `StyleSet` retains the UA and author sheets
+  and rebuilds its cascade views on mutation; `LiveryDocument` exposes
+  `insert_author_rule`/`delete_author_rule` (restyle on next frame) and
+  `computed_style(node, property)`, the getComputedStyle backing:
+  longhands serialize through the generated tagged reads, `--names`
+  answer from the element's custom-property map, and styles resolve on
+  demand when no layout is retained. Receipts: livery stylesheet wall 8
+  (object-model identity, insert reindexing, media-group delete, error
+  paths without generation bumps) and the new genet-livery cssom wall 5
+  (computed serialization incl. custom properties, insert/delete
+  restyling the retained document, inserted media rules respecting the
+  device, mutation errors leaving the document intact); full walls 158
+  green, livery clippy `-D warnings` clean. The scripted leg is now
+  registered through an engine-neutral `StyleSheetHandler` in
+  script-runtime-api and genet-scripted's opt-in `LiveryCssom` session.
+  It retains Livery's author sheets beside the runtime's live DOM and
+  backs `document.styleSheets`, `CSSStyleSheet.insertRule/deleteRule`,
+  and `getComputedStyle` (longhands and custom properties) in Boa; the
+  same CSSOM host contract passes on Nova. The WPT runner's existing
+  `--renderer livery` switch now selects this style route for
+  testharness runs as well as reftests. Its retained Stylo session still
+  supplies geometry, hit testing, and animation cadence until Livery
+  replaces that half. Receipts: 181 tests across script-runtime-api and
+  genet-scripted green; a WPT-harness composition test performs a
+  var()-driven insert/read/delete cycle through Boa; and the upstream
+  `css/css-variables` directory is now a runnable baseline: 8 all-pass,
+  46 with failures, 1 errored, 2 no-results, 185 skipped across 242
+  discovered files, 194/506 subtests passing. Remaining CSSOM breadth is
+  live rule wrapper objects, script-created/linked stylesheet discovery,
+  and finer CSSStyleDeclaration parsing/serialization. Those limits do
+  not reopen the retained rule/session bridge.
+- **H4 - invalidation: landed 2026-07-22.** The fork's stable shapes were
+  harvested without copying its 6.8k-line Stylist/SelectorMap-coupled tree.
+  genet-livery's engine-neutral `IncrementalStyle` retains the computed
+  plane, coalesced `ElementSnapshot`s (including the first old attribute
+  value), restyle roots, and a `RestyleStats` receipt. Livery selector lists
+  carry conservative sibling/structural dependency summaries: ordinary
+  attribute and state changes recascade the changed subtree; sibling
+  selectors widen to its parent; child-list mutations widen only when
+  structural selectors require it. Stylesheet generation, device changes,
+  explicit invalidation, and a missed scripted mutation range take the
+  full-document correctness path and report that fact. Scoped selector
+  identity storage includes only roots, descendants, required ancestors,
+  and sibling neighborhoods. `LiveryDocument` now retains this session
+  between frames. genet-scripted observes the mutable DOM's absolute
+  mutation sequence without consuming Stylo's layout batch, so synchronous
+  `getComputedStyle` reads stay scoped; if layout drains unseen facts first,
+  the sequence gap is detected and recovered by a loud full restyle.
+  Receipts: four invalidation tests diff every attached element against a
+  fresh full cascade for class/attribute and state edits, exercise
+  `:last-child` through insertion and removal, assert scoped counts, and
+  make stylesheet-wide work explicit; selector dependency classification
+  is separately guarded; scripted receipts cover both the scoped branch and
+  the missed-range recovery path. Full livery + genet-livery wall: 163
+  green. Full script-runtime-api + genet-scripted wall: 183 green; mutable
+  DOM wall: 29 green; WPT harness wall: 23 passed, 3 intentional ignores.
+  Touched native and scripted crates are clippy-clean under `-D warnings`
+  after narrowly allowing named pre-existing debt. The invalidation win is
+  style recascade only: retained
+  `LiveryDocument` still relays out and repaints a complete frame after a
+  style change, and scripted WPT geometry remains on the retained Stylo
+  session.
+- **H5 - value families on demand: active.** The first transform slice landed
+  2026-07-22. Livery now parses `matrix()`, `skew()`, `skewX()`, and `skewY()`
+  beside its existing translate/scale/rotate list, composes the bounded list
+  through a public 2D affine matrix, and serializes the resolved transform as
+  `matrix(a, b, c, d, e, f)` for CSSOM. The matrix module keeps its MPL header
+  and names the fork's `values/animated/transform.rs` at `b157d92526`; its 2D
+  decomposition/recomposition path handles mismatched transform lists and
+  `none` normalization in retained transitions. Computed translation lengths
+  resolve after font size, and the same matrix crosses into neutral paint.
+  Receipt: the upstream
+  `css/css-transforms/transform-2d-getComputedStyle-001.html` file moved from
+  0/5 to 5/5 on Boa with `--renderer livery`; native unit/integration receipts
+  cover affine round trips, skew and raw-matrix paint, resolved `em`
+  translation, and a live translate-to-scale transition. The full livery +
+  genet-livery wall is 169 green; the scripted/runtime wall remains 183 green,
+  mutable DOM 29 green, and the WPT harness 23 passed/3 intentional ignores;
+  touched native crates are clippy-clean under `-D warnings` with the named
+  pre-existing too-many-arguments allowance. This is deliberately the 2D
+  Level 1 matrix slice; its percentage follow-on is recorded below. 3D and
+  perspective, individual transform properties, and the Web Animations/
+  CSS-global JS surface remain open. Full `calc()`, grid template grammar, and
+  font machinery are the other H5 families. This first harvested source also
+  triggers the planned package-level
+  license flip: `livery` now declares MPL-2.0 while retaining file provenance.
+  Receipt per completed family remains a directory-level WPT delta.
+  The second transform slice landed the same day: translate arguments now use
+  the shared length-percentage value, with font-relative terms resolved at
+  computed-value time and percentages held for the consuming reference box.
+  Neutral paint resolves them against the actual fragment border box; CSSOM can
+  produce the same matrix for a definite unadorned box without pretending it
+  retained layout, and otherwise preserves the authored form. Percentage-to-
+  percentage retained transitions stay percentage-valued until paint. The
+  focal upstream `transform-percent-003.html` reftest moved from a localized 2%
+  pixel mismatch to pass, and all eight applicable static reftests in the
+  numbered `transform-percent-001` through `-010` series pass (009 is SVG
+  testharness; 010 requires scripted reftest mutation). Native receipts cover
+  value resolution, CSSOM, retained interpolation, and paint; the full livery +
+  genet-livery wall is now 173 green, the three scripted Livery bridge tests and
+  WPT CSSOM composition test remain green, and native clippy stays clean under
+  the existing named allowance. Remaining transform work is mixed length/
+  percentage interpolation through calc, calc expressions inside transform
+  functions, transform-origin/transform-box and SVG reference boxes, 3D and
+  perspective, and individual transform properties. Transform calc stays open
+  because the bounded transform-list parser is not nested-function-aware yet.
+  The third H5 slice landed the same day: `values/calc.rs` harvests Stylo's
+  precedence and dimensional-arithmetic shape from
+  `style/values/specified/calc.rs` at `b157d92526`, with its MPL header and
+  provenance note, then reduces the current length-percentage lane to a compact
+  linear form. Nested `calc()` and parentheses, sums, number products, and
+  division by a nonzero number now parse with dimensional rejection and
+  canonical unit ordering. The engine-neutral `InlineStyleHandler` gives
+  `element.style` three explicit outcomes: canonical, invalid, or pass-through.
+  Livery installs it and canonicalizes only successfully parsed implemented
+  longhands plus the bounded border shorthand's math width; unknown properties,
+  other shorthands, `var()` values, and grammar beyond its lane stay authored
+  rather than being discarded as invalid. The contract passes on Boa and Nova.
+  The follow-on closed the same upstream
+  `css/css-values/calc-nesting.html` receipt from 6/8 to 8/8. The engine-neutral
+  DOM bootstrap now publishes non-colliding parse-time element ids as named
+  globals on both engines. Livery's preliminary layout resolves mixed
+  length-percentage `calc()` sizes against a known containing block, and the
+  scripted CSSOM supplies the resulting fragment size when width or height
+  needs a used pixel value for an unadorned box. The border serializer reduces
+  its nested calc width without rewriting the authored style or color token.
+  `calc-serialization.html` remains 0/1 because its first value contains the
+  still-unimplemented `vmin` family. Native Livery's full wall is 176 green;
+  the full script-runtime-api + genet-scripted wall is 187 green. Both touched
+  walls are clippy-clean under `-D warnings` with the named pre-existing
+  allowances. The remaining calc family includes broader units and math
+  functions, general shorthand reconstruction, nested transform arguments,
+  and used-value serialization for adorned boxes and more layout properties.
 - **H6 - media tiers come home.** Re-express the Mark-authored fork media
   tiers on Livery's Device under MIT/Apache. Receipt: media-query WPT
   parity between the Livery and fork routes.

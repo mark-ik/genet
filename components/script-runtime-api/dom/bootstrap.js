@@ -797,8 +797,24 @@
     for (var i = 0; i < map.length; i++) { parts.push(map[i][0] + ': ' + map[i][1] + ';'); }
     return parts.join(' ');
   }
+  function cssCanonicalValue(name, value) {
+    var record = String(__inlineStyleValue(name, value));
+    var split = record.indexOf('\n');
+    var kind = split < 0 ? record : record.slice(0, split);
+    if (kind === 'invalid') return null;
+    if (kind === 'canonical') return record.slice(split + 1);
+    return value;
+  }
+  function cssCanonicalMap(map) {
+    var out = [];
+    for (var i = 0; i < map.length; i++) {
+      var value = cssCanonicalValue(map[i][0], map[i][1]);
+      if (value !== null) out.push([map[i][0], value]);
+    }
+    return out;
+  }
   function makeStyleDecl(el) {
-    function read() { return cssParse(el.getAttribute('style')); }
+    function read() { return cssCanonicalMap(cssParse(el.getAttribute('style'))); }
     function write(map) {
       if (map.length === 0) { el.removeAttribute('style'); } else { el.setAttribute('style', cssSerialize(map)); }
     }
@@ -810,6 +826,8 @@
         value = (value === undefined || value === null) ? '' : String(value);
         var m = read(); var i = idx(m, name);
         if (value === '') { if (i >= 0) { m.splice(i, 1); write(m); } return; }
+        value = cssCanonicalValue(name, value);
+        if (value === null) return;
         if (i >= 0) { m[i][1] = value; } else { m.push([name, value]); }
         write(m);
       },
@@ -825,7 +843,7 @@
     Object.defineProperty(api, 'cssText', {
       configurable: true,
       get: function() { return cssSerialize(read()); },
-      set: function(v) { write(cssParse(v)); },
+      set: function(v) { write(cssCanonicalMap(cssParse(v))); },
     });
     var reserved = { getPropertyValue: 1, setProperty: 1, removeProperty: 1, item: 1, length: 1, cssText: 1 };
     return new Proxy(api, {
@@ -882,6 +900,61 @@
   }
   globalThis.getComputedStyle = function(el) { return makeComputedStyle(el); };
   if (globalThis.window) { globalThis.window.getComputedStyle = globalThis.getComputedStyle; }
+
+  // Retained author stylesheets. The selected CSS engine owns the actual rule
+  // objects; these live wrappers ask it for counts and route CSSOM mutation into
+  // its parser. Script-created <style> discovery is a separate DOM-integration
+  // step; this list covers the sheets registered by the document host.
+  function cssomMutationResult(record) {
+    var text = String(record);
+    var cut = text.indexOf('\n');
+    var kind = cut < 0 ? text : text.slice(0, cut);
+    var detail = cut < 0 ? '' : text.slice(cut + 1);
+    if (kind === 'index') throw new DOMException(detail, 'IndexSizeError');
+    if (kind === 'syntax') throw new DOMException(detail, 'SyntaxError');
+    return Number(detail);
+  }
+  function CSSRuleList(sheetIndex) { this.__sheetIndex = sheetIndex; }
+  Object.defineProperty(CSSRuleList.prototype, 'length', {
+    configurable: true,
+    get: function() { var n = Number(__styleSheetRuleCount(String(this.__sheetIndex))); return n < 0 ? 0 : n; }
+  });
+  CSSRuleList.prototype.item = function() { return null; };
+  function CSSStyleSheet(sheetIndex) {
+    if (!(this instanceof CSSStyleSheet) || sheetIndex === undefined) throw new TypeError('Illegal constructor');
+    this.__sheetIndex = sheetIndex;
+    this.__rules = new CSSRuleList(sheetIndex);
+  }
+  Object.defineProperty(CSSStyleSheet.prototype, 'cssRules', {
+    configurable: true, get: function() { return this.__rules; }
+  });
+  CSSStyleSheet.prototype.insertRule = function(rule, index) {
+    index = index === undefined ? 0 : (Number(index) >>> 0);
+    return cssomMutationResult(__insertRule(String(this.__sheetIndex), String(rule), String(index)));
+  };
+  CSSStyleSheet.prototype.deleteRule = function(index) {
+    index = Number(index) >>> 0;
+    cssomMutationResult(__deleteRule(String(this.__sheetIndex), String(index)));
+  };
+  function StyleSheetList() { this.__cache = []; }
+  Object.defineProperty(StyleSheetList.prototype, 'length', {
+    configurable: true, get: function() { return Number(__styleSheetCount()); }
+  });
+  StyleSheetList.prototype.item = function(index) {
+    index = Number(index) >>> 0;
+    if (index >= this.length) return null;
+    if (!this.__cache[index]) this.__cache[index] = new CSSStyleSheet(index);
+    return this.__cache[index];
+  };
+  var documentStyleSheets = new Proxy(new StyleSheetList(), {
+    get: function(target, prop) {
+      if (typeof prop === 'string' && /^[0-9]+$/.test(prop)) return target.item(Number(prop));
+      return target[prop];
+    }
+  });
+  globalThis.CSSRuleList = CSSRuleList;
+  globalThis.CSSStyleSheet = CSSStyleSheet;
+  globalThis.StyleSheetList = StyleSheetList;
 
   // querySelector / querySelectorAll, shared by Element and Document (scope is the
   // receiver). querySelectorAll returns an array (NodeList-approximate).
@@ -1214,6 +1287,9 @@
   // Document : Node, with the construction/lookup methods.
   function Document() {}
   Document.prototype = Object.create(Node.prototype);
+  Object.defineProperty(Document.prototype, 'styleSheets', {
+    configurable: true, get: function() { return documentStyleSheets; }
+  });
   // document.cookie reads/writes the host's cookie store (the session jar). The get
   // returns the document's script-visible cookies ("n1=v1; n2=v2"); the set records
   // one Set-Cookie-style assignment. No store -> "" / no-op.
@@ -2019,6 +2095,34 @@
   document.nodeType = 9;
   wrappers.set(docRef, document);
   globalThis.document = document;
+
+  // Refresh the parse-time named-element properties after the host clones a
+  // source document into this live tree. The getter keeps later replacement
+  // of an element with the same id observable without pinning its wrapper.
+  // HTML's complete WindowNamedProperties rules are broader; this retained
+  // lane intentionally covers non-colliding element ids.
+  var installedNamedProperties = [];
+  globalThis.__refreshNamedProperties = function() {
+    for (var oldIndex = 0; oldIndex < installedNamedProperties.length; oldIndex++) {
+      delete globalThis[installedNamedProperties[oldIndex]];
+    }
+    installedNamedProperties = [];
+    var elements = document.querySelectorAll('*');
+    for (var index = 0; index < elements.length; index++) {
+      var name = elements[index].getAttribute('id');
+      if (!name || Object.prototype.hasOwnProperty.call(globalThis, name)) {
+        continue;
+      }
+      (function(namedId) {
+        Object.defineProperty(globalThis, namedId, {
+          configurable: true,
+          enumerable: true,
+          get: function() { return document.getElementById(namedId); }
+        });
+      })(name);
+      installedNamedProperties.push(name);
+    }
+  };
 
   // Host-facing synthetic-event entry (the input -> event bridge). `wrapNode` is
   // IIFE-local, so a host eval can't reach it directly; this exposes a minimal

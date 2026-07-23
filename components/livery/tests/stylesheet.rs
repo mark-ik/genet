@@ -80,3 +80,90 @@ fn stylesheet_parser_retains_opacity_keyframes() {
     );
     assert_eq!(keyframes.frames()[0].declarations().declarations.len(), 1);
 }
+
+#[test]
+fn object_model_retains_top_level_rule_identity() {
+    let sheet = Stylesheet::parse(
+        r#"
+        main { color: #202733; }
+        @media (min-width: 700px) { .wide { width: 42rem; } .wider { width: 44rem; } }
+        @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+        footer { display: block; }
+        "#,
+        Origin::Author,
+    );
+
+    use livery::stylesheet::CssRule;
+    assert_eq!(sheet.items().len(), 4);
+    assert!(matches!(sheet.items()[0], CssRule::Style(_)));
+    let CssRule::Media(media) = &sheet.items()[1] else {
+        panic!("expected a media rule");
+    };
+    assert_eq!(media.condition(), "(min-width: 700px)");
+    assert_eq!(media.rules().len(), 2);
+    assert!(matches!(sheet.items()[2], CssRule::Keyframes(_)));
+    // Flattened cascade view: three top-level + two nested style rules.
+    assert_eq!(sheet.rules().len(), 4);
+    assert_eq!(sheet.keyframes().len(), 1);
+}
+
+#[test]
+fn insert_rule_reindexes_the_cascade_view() {
+    let mut sheet = Stylesheet::parse("main { color: #111111; }", Origin::Author);
+    let generation = sheet.generation();
+
+    let index = sheet
+        .insert_rule("main { color: #222222; }", 1)
+        .expect("insert at end");
+    assert_eq!(index, 1);
+    assert!(sheet.generation() > generation);
+    assert_eq!(sheet.rules().len(), 2);
+
+    // Inserting ahead of an existing rule shifts source order: the original
+    // rule now cascades later and wins the tie.
+    sheet
+        .insert_rule("main { color: #333333; }", 0)
+        .expect("insert at front");
+    let orders: Vec<u64> = (0..sheet.rules().len() as u64).collect();
+    let actual: Vec<u64> = sheet
+        .rules()
+        .iter()
+        .map(|rule| rule.source_order())
+        .collect();
+    assert_eq!(actual, orders);
+}
+
+#[test]
+fn delete_rule_removes_a_media_group_whole() {
+    let mut sheet = Stylesheet::parse(
+        "main { color: #111111; } @media (min-width: 1px) { .a { width: 1px; } .b { width: 2px; } }",
+        Origin::Author,
+    );
+    assert_eq!(sheet.rules().len(), 3);
+    sheet.delete_rule(1).expect("delete the media group");
+    assert_eq!(sheet.items().len(), 1);
+    assert_eq!(sheet.rules().len(), 1);
+}
+
+#[test]
+fn rule_mutation_rejects_bad_input_without_a_generation_bump() {
+    use livery::stylesheet::RuleMutationError;
+
+    let mut sheet = Stylesheet::parse("main { color: #111111; }", Origin::Author);
+    let generation = sheet.generation();
+    assert_eq!(
+        sheet.insert_rule("main { color: #222222; }", 5),
+        Err(RuleMutationError::IndexSize)
+    );
+    assert!(matches!(
+        sheet.insert_rule("a { color: red; } b { color: blue; }", 0),
+        Err(RuleMutationError::Syntax(_))
+    ));
+    assert!(matches!(
+        sheet.insert_rule(":not( { color: red; }", 0),
+        Err(RuleMutationError::Syntax(_))
+    ));
+    assert_eq!(sheet.delete_rule(9), Err(RuleMutationError::IndexSize));
+    assert_eq!(sheet.generation(), generation);
+    assert_eq!(sheet.rules().len(), 1);
+}
