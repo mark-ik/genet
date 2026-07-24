@@ -281,6 +281,23 @@ pub trait Automatable {
 
     /// Deliver a synthetic pointer release.
     fn release(&mut self, x: f32, y: f32);
+
+    /// Whether the app still has work in flight the next step should not race:
+    /// a fetch outstanding, a document session not yet quiescent, an actor
+    /// round-trip pending. Drives the `wait` verb, which holds the scenario
+    /// until this reads `Some(false)` instead of guessing a frame count.
+    ///
+    /// `None` (the default) means **this app does not report quiescence**, not
+    /// "it is idle". The driver says so in the log and falls back to burning
+    /// the full cap, so an app that has not implemented this gets the old
+    /// frame-counting behavior loudly rather than a `wait` that returns
+    /// instantly and races whatever it was supposed to wait for.
+    ///
+    /// Report conservatively: it is better to stay busy one frame too long than
+    /// to declare quiet while a fetch is still landing.
+    fn busy(&mut self) -> Option<bool> {
+        None
+    }
 }
 
 /// Provided methods every [`Automatable`] gets — the shared driving verbs built

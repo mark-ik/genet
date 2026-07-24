@@ -36,7 +36,7 @@ spartan-protocol = { workspace = true }
 nex-protocol = { workspace = true }
 # Misfin send delegates to the misfin crate's client, on the same ring
 # provider this crate builds rustls with (no C toolchain).
-misfin = { version = "0.0.3", default-features = false, features = ["client", "ring"] }
+misfin = { version = "0.0.4", default-features = false, features = ["client", "ring"] }
 tokio = { version = "1", default-features = false, features = ["net", "io-util", "time"] }
 # TLS for gemini: rustls 0.23 on the ring provider, with a trust-on-first-use
 # verifier (capsules are conventionally self-signed). aws-lc-rs is left off so the

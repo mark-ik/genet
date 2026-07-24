@@ -13,7 +13,14 @@
 //! Two things the generic loop cannot do are the app's: taking a screenshot, and
 //! any verb specific to the app's own state (`assert pane roster`). Those go
 //! behind [`Driveable`]. Everything else — `act`, `click` by selector, `settle`,
-//! `assert text` / `event` / `snap`, `log`, `capture` — is shared.
+//! `wait`, `assert text` / `event` / `snap`, `log`, `capture` — is shared.
+//!
+//! `settle N` pumps exactly N frames; `wait [cap]` holds until the app itself
+//! reports quiet ([`crate::Automatable::busy`]) and only uses the cap as a
+//! hang-stop. Prefer `wait`: a frame count is a guess about someone else's
+//! network, and it is wrong in both directions (flaky when short, slow when
+//! long). An app that does not implement `busy` still gets the old behavior,
+//! and the log says so rather than letting `wait` race what it should await.
 //!
 //! A `click` miss attributes itself into the event stream as
 //! `interaction-missed <selector>`, so a scenario that drives a miss can assert
@@ -32,12 +39,20 @@ pub enum Cmp {
     Contains,
 }
 
+/// How many frames a bare `wait` will hold before giving up and proceeding.
+/// Generously above any real fetch (the receipts it replaces guessed 30-50), so
+/// the cap is a hang-stop rather than a timing knob to tune.
+pub const DEFAULT_WAIT_CAP: u32 = 600;
+
 /// One parsed step. Unrecognized verbs become [`Step::App`] for the host.
 #[derive(Clone, Debug, PartialEq)]
 enum Step {
     Act(String),
     Click(Selector),
     Settle(u32),
+    /// Hold until the app reports quiet ([`Automatable::busy`]), capped at this
+    /// many frames so a receipt can never hang.
+    Wait(u32),
     Log(String),
     Capture(String),
     AssertText(String),
@@ -86,6 +101,8 @@ pub struct Scenario {
     steps: Vec<Step>,
     idx: usize,
     settle: u32,
+    /// An active `wait`: frames of cap remaining, and frames spent so far.
+    wait: Option<(u32, u32)>,
     failed: bool,
     log: Vec<String>,
     /// The app's semantic events, accumulated across frames (drained each tick);
@@ -112,6 +129,7 @@ impl Scenario {
             steps,
             idx: 0,
             settle: 0,
+            wait: None,
             failed: false,
             log: Vec::new(),
             events: Vec::new(),
@@ -127,6 +145,46 @@ impl Scenario {
         if self.settle > 0 {
             self.settle -= 1;
             return Progress::Running;
+        }
+        // An active `wait` holds the loop until the app reports quiet. Each
+        // outcome is logged, because how long real work actually took is the
+        // diagnostic a guessed `settle N` never gave anyone.
+        if let Some((left, spent)) = self.wait {
+            match app.busy() {
+                // Quiet: proceed, and say how long it took.
+                Some(false) => {
+                    self.wait = None;
+                    self.log.push(format!("waited {spent} frames"));
+                }
+                // Still working, and cap remaining: hold.
+                Some(true) if left > 0 => {
+                    self.wait = Some((left - 1, spent + 1));
+                    return Progress::Running;
+                }
+                // Still working at the cap. Proceed (the next step's own
+                // assertion gives a better message than a generic timeout
+                // would), but make the timeout loud AND matchable: it goes in
+                // the log and the event stream, like an interaction miss.
+                Some(true) => {
+                    self.wait = None;
+                    self.log.push(format!("wait: still busy after {spent} frames"));
+                    self.events.push(format!("wait-timeout {spent}"));
+                }
+                // The app does not report quiescence. Burn the cap rather than
+                // return instantly: `wait` degrades to the frame counting it
+                // replaces, and says so once instead of silently racing.
+                None => {
+                    if spent == 0 {
+                        self.log
+                            .push("wait: app reports no quiescence; using the cap".to_string());
+                    }
+                    if left > 0 {
+                        self.wait = Some((left - 1, spent + 1));
+                        return Progress::Running;
+                    }
+                    self.wait = None;
+                }
+            }
         }
         let Some(step) = self.steps.get(self.idx).cloned() else {
             return Progress::Done;
@@ -165,6 +223,8 @@ impl Scenario {
                 }
             }
             Step::Settle(n) => self.settle = n,
+            // Arm the wait; `tick` runs it down against the app's own report.
+            Step::Wait(cap) => self.wait = Some((cap, 0)),
             Step::Log(text) => self.log.push(text),
             Step::Capture(name) => {
                 if app.capture(&name) {
@@ -251,6 +311,7 @@ fn parse_step(line: &str) -> Result<Step, String> {
     match verb {
         "act" => Ok(Step::Act(rest.to_string())),
         "settle" => Ok(Step::Settle(rest.trim().parse().unwrap_or(1))),
+        "wait" => Ok(Step::Wait(rest.trim().parse().unwrap_or(DEFAULT_WAIT_CAP))),
         "log" => Ok(Step::Log(rest.to_string())),
         "capture" => Ok(Step::Capture(rest.trim().to_string())),
         "click" => Ok(Step::Click(parse_selector(rest)?)),
@@ -339,6 +400,9 @@ mod tests {
         acted: Vec<String>,
         captured: Vec<String>,
         pressed: Vec<(f32, f32)>,
+        /// How many more polls report busy. `None` = this app does not report
+        /// quiescence at all (the default trait behavior).
+        busy_for: Option<u32>,
     }
 
     impl MockApp {
@@ -360,7 +424,14 @@ mod tests {
                 acted: Vec::new(),
                 captured: Vec::new(),
                 pressed: Vec::new(),
+                busy_for: None,
             }
+        }
+
+        /// This mock reports quiescence, and is busy for `frames` more polls.
+        fn busy_for(mut self, frames: u32) -> Self {
+            self.busy_for = Some(frames);
+            self
         }
     }
 
@@ -390,6 +461,11 @@ mod tests {
         }
         fn moved(&mut self, _x: f32, _y: f32) {}
         fn release(&mut self, _x: f32, _y: f32) {}
+        fn busy(&mut self) -> Option<bool> {
+            let left = self.busy_for?;
+            self.busy_for = Some(left.saturating_sub(1));
+            Some(left > 0)
+        }
     }
 
     impl Driveable for MockApp {
@@ -430,6 +506,59 @@ mod tests {
         assert_eq!(app.captured, ["01_shot"]);
         // The click resolved and pressed the tab's centre (0..80, 0..24).
         assert_eq!(app.pressed, [(40.0, 12.0)]);
+    }
+
+    /// `wait` holds exactly as long as the app says it is working, then
+    /// proceeds — and reports how long that was, which is the diagnostic a
+    /// guessed `settle N` never gave anyone.
+    #[test]
+    fn wait_holds_until_the_app_reports_quiet() {
+        let mut app = MockApp::new().busy_for(3);
+        let out = run("wait 100\nlog done", &mut app);
+        assert!(out.ok, "log: {:?}", out.log);
+        assert!(
+            out.log.iter().any(|l| l == "waited 3 frames"),
+            "the wait reports its real cost: {:?}",
+            out.log
+        );
+    }
+
+    /// The cap is a hang-stop, and reaching it is loud AND matchable: the run
+    /// proceeds (the next step's own assert says more than a generic timeout
+    /// would) but the timeout lands in the event stream like an interaction
+    /// miss, so a receipt can assert the timeout path itself.
+    #[test]
+    fn wait_gives_up_at_the_cap_loudly() {
+        let mut app = MockApp::new().busy_for(9_999);
+        let out = run("wait 5\nassert event wait-timeout", &mut app);
+        assert!(out.ok, "the timeout is assertable: {:?}", out.log);
+        assert!(
+            out.log.iter().any(|l| l.contains("still busy after 5")),
+            "and it says so in the log: {:?}",
+            out.log
+        );
+    }
+
+    /// An app that does not implement `busy` must NOT get an instant `wait`
+    /// that races whatever it was meant to await. It burns the cap (the frame
+    /// counting `wait` replaces) and says why, once.
+    #[test]
+    fn wait_without_a_quiescence_report_burns_the_cap_and_says_so() {
+        let mut app = MockApp::new(); // busy_for: None — reports nothing
+        let mut sc = Scenario::parse("wait 4\nlog done").expect("parse");
+        let mut ticks = 0;
+        while sc.tick(&mut app) != Progress::Done && ticks < 100 {
+            ticks += 1;
+        }
+        let out = sc.finish();
+        assert!(out.ok, "log: {:?}", out.log);
+        assert!(
+            out.log.iter().any(|l| l.contains("no quiescence")),
+            "the fallback is stated, not silent: {:?}",
+            out.log
+        );
+        // It really waited: the 4-frame cap, not a single frame.
+        assert!(ticks >= 4, "burned the cap rather than returning instantly: {ticks}");
     }
 
     #[test]
