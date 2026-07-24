@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 //! The tile-tree contract (V5): the presentation-grade arrangement vocabulary the
-//! pelt surface renders and the host drives.
+//! Genet tile surface renders and the host drives.
 //!
 //! A [`TileTree`] is a tree of **splits** (a row/column of children, each with a
 //! fractional share) and **tab-stacks** (a set of tiles, one active). The surface lib
@@ -71,7 +71,7 @@ pub struct Tile {
     pub content: ContentSource,
     /// An optional tab tint the host owns. `None` (the default) leaves the tab to the
     /// surface's tab styling; `Some` colors *this* tab so it can carry a host meaning of
-    /// its own — mere tints each tab to match its graph node's state + selection, so a
+    /// its own. Mere tints each tab to match its graph node's state + selection, so a
     /// tab reads as its node. The surface renders it inline (overriding the tab CSS).
     pub accent: Option<TabAccent>,
 }

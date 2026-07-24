@@ -6,7 +6,7 @@
 
 use std::env;
 
-use pelt_core::{DeferredShellEngine, EngineProfile, ShellEngine};
+use genet_host_api::{DeferredShellEngine, EngineProfile, ShellEngine};
 
 use crate::VERSION;
 
@@ -222,7 +222,7 @@ pub(crate) fn main() {
     }
 
     // `pelt --engine static|viewer <url>`: the genet-native on-screen document
-    // viewer (the orrery-host present shape over the pelt-core / pelt-desktop
+    // viewer (the orrery-host present shape over the genet-host-api / pelt-desktop
     // contracts). Static and Viewer are the script-free document profiles.
     if matches!(
         engine_profile,

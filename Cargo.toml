@@ -41,6 +41,7 @@ members = [
     # The content lanes as session engines (2026-07-10 session-engines plan):
     # static/scripted/smolweb retained documents, promoted out of pelt.
     "components/genet-documents",
+    "components/genet-host-api",
     "components/genet-winit-host",
     "components/genet-render",
     "components/shared/layout-dom",
@@ -71,8 +72,7 @@ members = [
     # consumers, and it must stay genet-side to keep mere's dependency direction
     # one-way.
     "components/netfetcher",
-    "ports/pelt-core",
-    "ports/pelt-desktop",
+    "ports/pelt/desktop",
     "ports/pelt",
     "ports/genet-wpt",
     "tests/unit/*",
@@ -244,8 +244,8 @@ knot-editor-host = { version = "=0.1.0", path = "components/inker/knot-editor-ho
 scrying-engine = { version = "=0.2.0", path = "components/inker/engines/scrying-engine" }
 graft-engine = { version = "=0.2.0", path = "components/inker/engines/graft-engine" }
 weld-engine = { version = "=0.2.0", path = "components/inker/engines/weld-engine" }
-pelt-core = { version = "=0.1.0", path = "ports/pelt-core" }
-pelt-desktop = { version = "=0.2.0", path = "ports/pelt-desktop" }
+genet-host-api = { version = "=0.1.0", path = "components/genet-host-api" }
+pelt-desktop = { version = "=0.2.0", path = "ports/pelt/desktop" }
 netrender = { git = "https://github.com/mark-ik/netrender.git", branch = "main", version = "0.1.0" }
 netrender_device = { git = "https://github.com/mark-ik/netrender.git", branch = "main", version = "0.1.0" }
 # (No xilem git deps remain. The Masonry-era `xilem` / `masonry` /

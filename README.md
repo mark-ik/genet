@@ -43,9 +43,10 @@ servoshell).
 
 ```
 components/   engine crates (layout, rendering, DOM providers, script engines, shared traits),
-              plus two families adopted 2026-07-23: cambium/ (the reactive UI toolkit) and
-              netfetcher/ (the Fetch network engine)
-ports/        runnable hosts and the WPT runner (pelt, pelt-core, pelt-desktop, genet-wpt)
+               plus two families adopted 2026-07-23: cambium/ (the reactive UI toolkit) and
+               netfetcher/ (the Fetch network engine)
+ports/        runnable hosts and runners (pelt, with its desktop support nested inside;
+              genet-wpt)
 examples/     standalone smoke binaries (netrender_smoke)
 docs/         dated design docs and plans (current state lives here)
 support/      vendored patches (taffy, gpu-allocator, ipc-channel) and profile-gate scripts
@@ -72,6 +73,9 @@ resources/    bundled runtime resources (UA assets, fonts, prefs)
 - `genet-winit-host` — shared genet-on-winit plumbing: a wgpu surface +
   netrender renderer (boot / resize / rasterize / acquire) and winit-to-genet
   input mapping. Consumed by pelt and by sibling hosts.
+- `genet-host-api` — the light host-facing contract: engine profiles,
+  capabilities, resource fetching, and tile composition. Pelt, Mere, and
+  Merecat consume it without making the products depend on one another.
 - `script-engine-api` — engine-neutral scripting backend contract (names
   capabilities only; engine-native types stay inside each backend).
 - `script-engine-nova` / `script-engine-boa` / `script-engine-piccolo` —
@@ -89,11 +93,8 @@ resources/    bundled runtime resources (UA assets, fonts, prefs)
 ### Ports (runnable)
 
 - `pelt` — the reference browser / validation viewer. Default workspace member;
-  plain `cargo build` / `cargo run` target it.
-- `pelt-core` — host-shell core contracts (chrome, platform integration,
-  protocol UI, automation routing, kept distinct from the hosted engine).
-- `pelt-desktop` — desktop host contracts (winit windows, input translation,
-  native dialogs, present backends).
+  plain `cargo build` / `cargo run` target it. Its private desktop support crate
+  is nested at `ports/pelt/desktop`.
 - `genet-wpt` — genet-native web-platform-tests runner over a selectable
   subset of `tests/wpt`. Phase 1 is a crash-smoke (load each test through
   `genet_static_dom::parse` + `genet_layout::render`, no GPU, no JS).

@@ -88,7 +88,7 @@ fn install_tofu() {
 
 #[cfg(all(test, feature = "netfetch"))]
 mod tests {
-    use pelt_core::ResourceFetcher;
+    use genet_host_api::ResourceFetcher;
 
     use crate::document::LocalFetcher;
 
@@ -139,7 +139,7 @@ mod tests {
 
 #[cfg(all(test, feature = "smolweb"))]
 mod smolweb_tests {
-    use pelt_core::ResourceFetcher;
+    use genet_host_api::ResourceFetcher;
 
     use crate::document::LocalFetcher;
 

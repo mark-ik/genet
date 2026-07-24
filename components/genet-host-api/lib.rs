@@ -2,11 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Host-shell core contracts for Pelt.
+//! Product-neutral host contracts for Genet.
 //!
-//! Pelt is the shell layer that keeps browser chrome, platform integration,
-//! protocol UI, and automation routing distinct from whichever engine profile
-//! is hosted underneath it.
+//! Hosts keep browser chrome, platform integration, protocol UI, and automation
+//! routing distinct from whichever Genet engine profile they embed. Pelt is the
+//! reference host, while Mere and Merecat consume the same tile vocabulary.
 
 use std::fmt;
 use std::str::FromStr;
@@ -97,7 +97,7 @@ impl DeferredShellEngine {
 
     pub fn unavailable_message(&self) -> String {
         format!(
-            "pelt --engine {} is reserved for a future Genet validation path",
+            "engine profile {} is reserved for a future Genet validation path",
             self.profile
         )
     }

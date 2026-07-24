@@ -13,10 +13,10 @@ use document_canvas::{
     ColorVocabulary, DocumentStyleSheet, InteractionKind, LaidOutDocument, Viewport,
     layout_document, netrender_backend::scene_from_packet,
 };
+use genet_host_api::ResourceFetcher;
 use genet_layout::ScrollKey;
 use inker::{Engine, EngineDocument, EngineInput};
 use netrender::Scene;
-use pelt_core::ResourceFetcher;
 
 /// How an engine-native smolweb document is colored.
 #[derive(Clone, Debug, PartialEq, Eq)]

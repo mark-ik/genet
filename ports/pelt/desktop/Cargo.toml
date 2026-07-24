@@ -132,7 +132,7 @@ linux-present = [
 netrender = { workspace = true, optional = true }
 image = { workspace = true, optional = true }
 paint = { workspace = true, optional = true }
-pelt-core = { workspace = true }
+genet-host-api = { workspace = true }
 genet-documents = { workspace = true, optional = true }
 pollster = { version = "0.4", optional = true }
 raw-window-handle = { workspace = true, optional = true }
@@ -142,13 +142,13 @@ winit = { workspace = true }
 
 # V1 viewer (behind the `viewer` feature): the genet render-driver + present
 # core, the static-document parser, and genet-layout's convenience entries.
-genet-render = { path = "../../components/genet-render", optional = true }
-genet-static-dom = { path = "../../components/genet-static-dom", optional = true }
-genet-layout = { path = "../../components/genet-layout", optional = true }
+genet-render = { path = "../../../components/genet-render", optional = true }
+genet-static-dom = { path = "../../../components/genet-static-dom", optional = true }
+genet-layout = { path = "../../../components/genet-layout", optional = true }
 # The render-free extraction lane: extract a PageExtract from the live post-JS DOM
 # (the headless-scripted-DOM scrape path for SPAs). Depends only on layout-dom-api.
-genet-extract = { path = "../../components/genet-extract", optional = true }
-genet-winit-host = { path = "../../components/genet-winit-host", optional = true }
+genet-extract = { path = "../../../components/genet-extract", optional = true }
+genet-winit-host = { path = "../../../components/genet-winit-host", optional = true }
 # Sprigging widget leaves (png-reftest feature): the first-pixels smoke renders
 # Knob/Meter/GraphGlyph leaves through the session leaf path to an offscreen PNG.
 sprigging = { version = "0.1.0", optional = true }
@@ -175,14 +175,14 @@ url = { workspace = true, optional = true }
 # live mutable DOM, and the JS engines. `script-engine-api` supplies the
 # `ScriptEngine` trait bound the engine-generic `ScriptedDocument<E>` is written
 # against; Boa is the default backend, Nova the gated one (`scripted-nova`).
-script-runtime-api = { path = "../../components/script-runtime-api", optional = true }
-script-engine-api = { path = "../../components/script-engine-api", optional = true }
-genet-scripted-dom = { path = "../../components/genet-scripted-dom", optional = true }
-genet-scripted = { path = "../../components/genet-scripted", optional = true }
-script-engine-boa = { path = "../../components/script-engine-boa", optional = true }
-script-engine-nova = { path = "../../components/script-engine-nova", optional = true }
+script-runtime-api = { path = "../../../components/script-runtime-api", optional = true }
+script-engine-api = { path = "../../../components/script-engine-api", optional = true }
+genet-scripted-dom = { path = "../../../components/genet-scripted-dom", optional = true }
+genet-scripted = { path = "../../../components/genet-scripted", optional = true }
+script-engine-boa = { path = "../../../components/script-engine-boa", optional = true }
+script-engine-nova = { path = "../../../components/script-engine-nova", optional = true }
 # The `LayoutDom` trait (for the inline-`<script>` DOM walk) + QualName parts.
-layout-dom-api = { path = "../../components/shared/layout-dom", optional = true }
+layout-dom-api = { path = "../../../components/shared/layout-dom", optional = true }
 # External-script post-fetch processing (scripted feature): `encoding_rs` decodes the
 # fetched bytes per the `<script charset>` (default UTF-8); `sha2` + `base64` verify a
 # `<script integrity>` Subresource-Integrity hash before the script is allowed to run.
@@ -194,7 +194,7 @@ base64 = { workspace = true, optional = true }
 cambium = { version = "0.2.0", optional = true }
 # OS clipboard access for the omnibar's Ctrl/Cmd+V paste (chrome feature). Reads only;
 # a failed open (e.g. a headless host) degrades to a no-op paste.
-genet-clipboard = { path = "../../components/genet-clipboard", optional = true }
+genet-clipboard = { path = "../../../components/genet-clipboard", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Windows-only types (HWND) used by the `windows-present` feature's

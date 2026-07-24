@@ -29,7 +29,7 @@ default = ["viewer-netrender"]
 # The Masonry-era Xilem viewer (pelt-viewer) was retired 2026-06-12 — its
 # CPU-readback render path predated direct present; pelt-live is the
 # on-screen genet window until a genet-native viewer mode is built on the
-# pelt-core/pelt-desktop contracts. (The egui chrome crate was retired
+# genet-host-api/pelt-desktop contracts. (The egui chrome crate was retired
 # 2026-05-20 before it.)
 viewer-engine = ["dep:pelt-desktop"]
 viewer-netrender = ["viewer-engine", "pelt-desktop/netrender"]
@@ -75,6 +75,6 @@ macos-present = ["viewer-engine", "pelt-desktop/macos-present"]
 linux-present = ["viewer-engine", "pelt-desktop/linux-present"]
 [dependencies]
 cfg-if = { workspace = true }
-pelt-core = { workspace = true }
+genet-host-api = { workspace = true }
 pelt-desktop = { workspace = true, optional = true }
 windows-sys = { workspace = true, features = ["Win32_Graphics_Gdi", "Win32_System_Console"] }

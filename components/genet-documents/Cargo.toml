@@ -31,9 +31,8 @@ scripted-nova = ["scripted", "dep:script-engine-nova"]
 [dependencies]
 # The engine contracts this component implements (SessionEngine<Scene>).
 inker = { workspace = true }
-# The host-shell fetch seam (pelt-core is a light contracts crate; the dep
-# direction is by weight — promoting it to components/shared is a noted wart).
-pelt-core = { workspace = true }
+# The product-neutral host fetch seam.
+genet-host-api = { workspace = true }
 netrender = { workspace = true }
 genet-layout = { path = "../genet-layout" }
 genet-render = { path = "../genet-render" }

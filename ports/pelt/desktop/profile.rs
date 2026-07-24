@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use pelt_core::EngineProfile;
+use genet_host_api::EngineProfile;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WindowingMode {

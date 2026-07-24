@@ -12,6 +12,7 @@
 
 use std::any::Any;
 
+use genet_host_api::ResourceFetcher;
 use genet_layout::ScrollKey;
 use inker::session_engine::{
     DocumentSession, SessionClick, SessionEngine, SessionError, SessionLink, SessionScrollKey,
@@ -20,7 +21,6 @@ use inker::session_engine::{
 #[cfg(feature = "livery")]
 use layout_dom_api::LayoutDom;
 use netrender::Scene;
-use pelt_core::ResourceFetcher;
 
 use crate::document::{ClickOutcome, LoadedDocument};
 

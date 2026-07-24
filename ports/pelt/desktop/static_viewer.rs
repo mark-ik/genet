@@ -13,7 +13,7 @@
 //! default-action helper into the document's viewport.
 
 use crate::{DesktopHostProfile, WindowingMode};
-use pelt_core::EngineProfile;
+use genet_host_api::EngineProfile;
 
 /// Configuration for one static-viewer run.
 pub struct StaticViewerConfig {

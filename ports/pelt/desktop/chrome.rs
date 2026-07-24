@@ -65,7 +65,7 @@ pub enum ChromeIntent {
     FocusOmnibar,
     /// Zoom the content by a step.
     Zoom(f32),
-    /// Open a settings page (a namespaced [`SettingsRef`](pelt_core::tile::SettingsRef)).
+    /// Open a settings page (a namespaced [`SettingsRef`](genet_host_api::tile::SettingsRef)).
     OpenSettings(String),
     /// A mod-defined intent (name, payload) — the extensibility escape hatch.
     Custom(String, String),

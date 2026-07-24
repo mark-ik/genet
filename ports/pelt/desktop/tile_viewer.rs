@@ -10,7 +10,9 @@
 //! routing) lives in the host-agnostic shell, so the same brain drives the window here
 //! and a headless test/driver elsewhere.
 
-use pelt_core::tile::{ContentSource, DocumentRef, SplitAxis, Tile, TileBranch, TileId, TileTree};
+use genet_host_api::tile::{
+    ContentSource, DocumentRef, SplitAxis, Tile, TileBranch, TileId, TileTree,
+};
 
 use crate::{StaticViewerOutcome, WindowingMode};
 
@@ -71,11 +73,11 @@ mod windowed {
     use std::sync::Arc;
 
     use accesskit::{Action, NodeId as AccessNodeId};
+    use genet_host_api::tile::TileTree;
     use genet_scripted_dom::NodeId;
     use genet_winit_host::{AccessKitBridge, BridgeStatus, SurfaceHost, wheel_delta_from_winit};
     use netrender::external_texture::ExternalTexturePlacement;
     use netrender::{ColorLoad, NetrenderOptions};
-    use pelt_core::tile::TileTree;
     use winit::application::ApplicationHandler;
     use winit::dpi::PhysicalSize;
     use winit::event::{ElementState, MouseButton, WindowEvent};

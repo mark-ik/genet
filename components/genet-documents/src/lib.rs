@@ -43,8 +43,8 @@ pub use engines::{ScriptedDocumentSession, ScriptedSessionEngine};
 #[cfg(feature = "smolweb")]
 pub use engines::{SmolwebDocumentSession, SmolwebSessionEngine};
 pub use engines::{StaticSessionEngine, session_click_from_outcome};
+pub use genet_host_api::ResourceFetcher;
 pub use href::resolve_href;
-pub use pelt_core::ResourceFetcher;
 
 /// Structural display defaults the lanes layer over genet's UA cascade, so a
 /// plain HTML document lays out as a stack of blocks rather than one inline
@@ -64,6 +64,6 @@ pub(crate) const STRUCTURAL_SHEET: &[&str] = &[
 #[cfg(feature = "scripted")]
 impl genet_scripted::ResourceFetcher for document::LocalFetcher {
     fn fetch(&self, url: &str) -> Option<Vec<u8>> {
-        pelt_core::ResourceFetcher::fetch(self, url)
+        genet_host_api::ResourceFetcher::fetch(self, url)
     }
 }

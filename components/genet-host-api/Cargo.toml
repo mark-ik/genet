@@ -1,5 +1,5 @@
 [package]
-name = "pelt-core"
+name = "genet-host-api"
 version = "0.1.0"
 repository = "https://github.com/mark-ik/genet"
 publish = true
@@ -7,10 +7,10 @@ authors.workspace = true
 license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Host-shell core contracts for pelt, the genet reference shell: engine profiles, shell-engine capabilities, the ResourceFetcher seam, and tile contracts."
+description = "Product-neutral host contracts for Genet: engine profiles, capabilities, resource fetching, and tile composition."
 
 [lib]
-name = "pelt_core"
+name = "genet_host_api"
 path = "lib.rs"
 bench = false
 

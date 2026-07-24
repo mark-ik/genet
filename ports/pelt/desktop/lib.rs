@@ -6,7 +6,7 @@
 //!
 //! This crate is the destination for winit windows, input translation, native
 //! dialogs, filesystem integration, and platform event-loop glue. It stays
-//! above `pelt-core` and below the UI chrome crate.
+//! above `genet-host-api` and below the UI chrome crate.
 
 mod profile;
 mod static_viewer;
@@ -111,7 +111,7 @@ pub use smoke_windows::{
 };
 pub use static_viewer::{StaticViewerConfig, StaticViewerOutcome, run_static_viewer};
 // `ScriptResourceFetcher` is `genet_scripted::ResourceFetcher` (the external-script
-// byte seam `ScriptedDocument::from_body` takes), distinct from `pelt_core::
+// byte seam `ScriptedDocument::from_body` takes), distinct from `genet_host_api::
 // ResourceFetcher` (the shell-level fetch contract); re-exported so a host can impl
 // it without a direct `genet-scripted` dep.
 #[cfg(feature = "scripted")]

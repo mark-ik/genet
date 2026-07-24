@@ -15,9 +15,9 @@
 
 use accesskit::{NodeId as AccessNodeId, TreeUpdate};
 use cambium::{PointerClick, Propagation};
+use genet_host_api::tile::{DropTarget, Edge, TileEvent, TileId, TilePath, TileTree};
 use genet_render::ContentReport;
 use genet_scripted_dom::NodeId;
-use pelt_core::tile::{DropTarget, Edge, TileEvent, TileId, TilePath, TileTree};
 
 use crate::tile_surface::{GhostLayer, TileFrame, TileSurface};
 
@@ -439,7 +439,7 @@ fn nearest_edge(p: (f32, f32), r: Rect) -> Edge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pelt_core::tile::{ContentSource, DocumentRef, SplitAxis, Tile, TileBranch};
+    use genet_host_api::tile::{ContentSource, DocumentRef, SplitAxis, Tile, TileBranch};
 
     fn doc_tile(id: u64, html: &str) -> Tile {
         Tile {
@@ -591,7 +591,7 @@ mod tests {
             Tile {
                 id: TileId(id),
                 title: format!("ext{id}"),
-                content: ContentSource::ExternalTexture(pelt_core::tile::TextureKey(id)),
+                content: ContentSource::ExternalTexture(genet_host_api::tile::TextureKey(id)),
                 accent: None,
             }
         }

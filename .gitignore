@@ -24,6 +24,7 @@ Cargo.lock
 /.vs
 /android-toolchains
 /target
+/target-*/
 # Generated wasm-bindgen browser worker artifacts. Source lives in
 # components/genet-scripted-worker and support/build-scripted-workers.ps1.
 /dist/scripted-workers/
