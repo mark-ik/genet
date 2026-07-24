@@ -60,6 +60,26 @@ nothing is deleted until F5/F6, after the receipts exist.
   (13). These are ordinary H5 slices; F0 is the tracking bundle. Receipt:
   census reads 126/126 consumed implemented; each family lands with its WPT
   directory delta pinned as a `--renderer livery` baseline.
+
+  **First slice, per the F3 ledger: the color subsystem.** It is the single
+  biggest lever in the ledger (~1,230 subtests across css-color, CSS2
+  colors-007, and the `getComputedStyle-resolved-colors` tail) and it is
+  cleanly bounded. Livery today parses **only `rgb()`/`rgba()`** plus hex,
+  named, `transparent`, `currentcolor`, `CanvasText`. Absent: `hsl()`,
+  `hwb()`, `lab()`/`lch()`, `oklab()`/`oklch()`, `color()`, `color-mix()`,
+  relative color syntax, `contrast-color()`, `color-layers()`.
+  cssparser 0.37 does **not** supply this: its `color.rs` is 352 lines of
+  primitives (`parse_hash_color`, `parse_named_color`,
+  `PredefinedColorSpace`, alpha serialization) and the function grammar is
+  the consumer's job, which is why the fork implements its own. Quarry
+  sizing at the fork checkout: `style/color/` (color_function 569,
+  convert 936, component 189, gamut + raytrace ~261, mix) plus
+  `values/specified/color.rs` 1262 and the generics/computed/animated trio
+  (~554) — roughly 3.5-4k lines, the same order as the `calc.rs` lift H5
+  already did, and harvestable under the same fork-and-own rules with
+  provenance headers. Colour conversion and gamut mapping are exactly the
+  "stable and spec-hardened" material the harvest plan says to lift rather
+  than reinvent.
 - **F1 - animation and transition machinery.** The harvest plan's named H2
   follow-on: the fork's transition state machine (interrupted-transition
   reversing, per-element multi-transition maps) plus animation-* behavior,
