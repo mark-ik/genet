@@ -1,0 +1,18 @@
+[package]
+name = "cambium-nematic"
+version = "0.3.0"
+description = "Cambium-native views and themes for Nematic smolweb content"
+edition.workspace = true
+rust-version.workspace = true
+license = "MPL-2.0"
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+cambium = { version = "0.3.0", path = "../cambium" }
+errand = "0.1.3"
+
+[dev-dependencies]
+layout_dom_api = { package = "layout-dom-api", git = "https://github.com/mark-ik/genet.git", branch = "main" }
+genet-scripted-dom = { git = "https://github.com/mark-ik/genet.git", branch = "main" }

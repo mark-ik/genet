@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: >-
+          cargo clippy
+          -p cambium -p cambium-winit -p cambium-nematic -p sprigging
+          --all-features --all-targets --locked --
+          -D warnings -A clippy::type-complexity
+      - run: cargo test --workspace --all-features --all-targets --locked
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo package -p meristem --locked
+      - run: cargo package -p sprigging --locked
+      - run: cargo package -p cambium --all-features --locked
+      - run: cargo package -p cambium-winit --locked
+      - run: cargo package -p cambium-nematic --locked
