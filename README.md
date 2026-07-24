@@ -42,7 +42,9 @@ servoshell).
 ## Repository layout
 
 ```
-components/   engine crates (layout, rendering, DOM providers, script engines, shared traits)
+components/   engine crates (layout, rendering, DOM providers, script engines, shared traits),
+              plus two families adopted 2026-07-23: cambium/ (the reactive UI toolkit) and
+              netfetcher/ (the Fetch network engine)
 ports/        runnable hosts and the WPT runner (pelt, pelt-core, pelt-desktop, genet-wpt)
 examples/     standalone smoke binaries (netrender_smoke)
 docs/         dated design docs and plans (current state lives here)
@@ -192,10 +194,30 @@ engine-rendered form controls) and the scripted-tier consumer wiring.
   `boa_engine` / `boa_gc` (mark-ik/boa, `genet` branch), each carrying additive
   reflector-liveness patches. The Stylo crates track the servo/stylo v0.18.0
   release tag by git rev.
-- genet is consumed as the engine/host layer by Mark's `mere` workspace and its
-  Merecat browser host (currently represented by the transitional `meerkat`
-  checkout). The dependency direction is one-way:
-  those consume genet, genet does not depend on them.
+- **smolweb** (`github.com/mark-ik/smolweb`) — the small-web wire layer.
+  `components/errand` (the client integration) and `components/nematic` (the
+  document engine) live here and consume `misfin`, `spartan-protocol`,
+  `nex-protocol`, and `guppy-protocol` from crates.io. The protocol crates
+  moved there on 2026-07-23; their names belong to those protocols'
+  communities rather than to this engine.
+- genet is consumed as the engine/host layer by the `mere` platform workspace
+  and by all four products (`merecat`, `isometry`, `woodshed`, `hocket`). The
+  dependency direction is one-way: those consume genet, genet does not depend
+  on them.
+
+The 2026-07-23 repo consolidation moved two families **into** this repo, on the
+rule that a separate repository needs coherent identity apart from genet, mere,
+and the products:
+
+- `components/cambium/{cambium,cambium-nematic,cambium-winit,meristem,sprigging}`
+  — the reactive UI toolkit. Absorbing it retired three `[patch.crates-io]`
+  entries it carried only because path patches do not transit to git consumers.
+- `components/netfetcher` — the Fetch network engine, which had to be
+  genet-side to keep mere's dependency direction one-way.
+
+Both keep their published names, versions, and licenses (`meristem` Apache-2.0,
+`sprigging` MIT/Apache, the rest MPL-2.0), so they spell out their package
+metadata rather than inheriting this workspace's Servo-shaped defaults.
 
 ## License
 

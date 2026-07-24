@@ -19,7 +19,7 @@ http(s) to netfetcher and smolweb schemes to errand.
 - Version: `0.0.0` (`publish = false`)
 - Edition: 2024
 - License: MPL-2.0 (lineage from Servo's `net`)
-- Repository: <https://github.com/mark-ik/netfetcher>
+- Repository: <https://github.com/mark-ik/genet>
 
 ## What it is for
 
