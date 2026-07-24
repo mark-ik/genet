@@ -705,15 +705,17 @@ impl fmt::Display for CalcLengthPercentage {
     }
 }
 
-pub(crate) const MAX_MATH_LEAVES: usize = 16;
-pub(crate) const MAX_MATH_TOKENS: usize = 32;
+pub(crate) const MAX_MATH_LEAVES: usize = 8;
+pub(crate) const MAX_MATH_TOKENS: usize = 24;
 const MATH_LEAF_BITS: usize = 6;
 const MATH_ANGLE: u8 = 58;
 const MATH_ROUNDING_STRATEGY: u8 = 59;
 const MATH_NUMBER: u8 = 60;
 const MATH_PERCENTAGE: u8 = 61;
 const MATH_NONE: u8 = 62;
-const MATH_TOKEN_BITS: usize = 6;
+const MATH_TOKEN_BITS: usize = 5;
+const MATH_LEAF_LEN_SHIFT: usize = 16;
+const MATH_TOKEN_LEN_SHIFT: usize = 24;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -820,60 +822,60 @@ impl MathToken {
     const fn code(self) -> u8 {
         match self {
             Self::Operand(index) => index,
-            Self::Operation(MathOperation::Add) => 16,
-            Self::Operation(MathOperation::Subtract) => 17,
-            Self::Operation(MathOperation::Multiply) => 18,
-            Self::Operation(MathOperation::Divide) => 19,
-            Self::Operation(MathOperation::Min) => 20,
-            Self::Operation(MathOperation::Max) => 21,
-            Self::Operation(MathOperation::Clamp) => 22,
-            Self::Operation(MathOperation::Round) => 23,
-            Self::Operation(MathOperation::Mod) => 24,
-            Self::Operation(MathOperation::Rem) => 25,
-            Self::Operation(MathOperation::Sin) => 26,
-            Self::Operation(MathOperation::Cos) => 27,
-            Self::Operation(MathOperation::Tan) => 28,
-            Self::Operation(MathOperation::Asin) => 29,
-            Self::Operation(MathOperation::Acos) => 30,
-            Self::Operation(MathOperation::Atan) => 31,
-            Self::Operation(MathOperation::Atan2) => 32,
-            Self::Operation(MathOperation::Pow) => 33,
-            Self::Operation(MathOperation::Sqrt) => 34,
-            Self::Operation(MathOperation::Hypot) => 35,
-            Self::Operation(MathOperation::Ln) => 36,
-            Self::Operation(MathOperation::Log) => 37,
-            Self::Operation(MathOperation::Exp) => 38,
-            Self::Operation(MathOperation::Abs) => 39,
+            Self::Operation(MathOperation::Add) => 8,
+            Self::Operation(MathOperation::Subtract) => 9,
+            Self::Operation(MathOperation::Multiply) => 10,
+            Self::Operation(MathOperation::Divide) => 11,
+            Self::Operation(MathOperation::Min) => 12,
+            Self::Operation(MathOperation::Max) => 13,
+            Self::Operation(MathOperation::Clamp) => 14,
+            Self::Operation(MathOperation::Round) => 15,
+            Self::Operation(MathOperation::Mod) => 16,
+            Self::Operation(MathOperation::Rem) => 17,
+            Self::Operation(MathOperation::Sin) => 18,
+            Self::Operation(MathOperation::Cos) => 19,
+            Self::Operation(MathOperation::Tan) => 20,
+            Self::Operation(MathOperation::Asin) => 21,
+            Self::Operation(MathOperation::Acos) => 22,
+            Self::Operation(MathOperation::Atan) => 23,
+            Self::Operation(MathOperation::Atan2) => 24,
+            Self::Operation(MathOperation::Pow) => 25,
+            Self::Operation(MathOperation::Sqrt) => 26,
+            Self::Operation(MathOperation::Hypot) => 27,
+            Self::Operation(MathOperation::Ln) => 28,
+            Self::Operation(MathOperation::Log) => 29,
+            Self::Operation(MathOperation::Exp) => 30,
+            Self::Operation(MathOperation::Abs) => 31,
         }
     }
 
     const fn from_code(code: u8) -> Self {
         match code {
-            0..=15 => Self::Operand(code),
-            16 => Self::Operation(MathOperation::Add),
-            17 => Self::Operation(MathOperation::Subtract),
-            18 => Self::Operation(MathOperation::Multiply),
-            19 => Self::Operation(MathOperation::Divide),
-            20 => Self::Operation(MathOperation::Min),
-            21 => Self::Operation(MathOperation::Max),
-            22 => Self::Operation(MathOperation::Clamp),
-            23 => Self::Operation(MathOperation::Round),
-            24 => Self::Operation(MathOperation::Mod),
-            25 => Self::Operation(MathOperation::Rem),
-            26 => Self::Operation(MathOperation::Sin),
-            27 => Self::Operation(MathOperation::Cos),
-            28 => Self::Operation(MathOperation::Tan),
-            29 => Self::Operation(MathOperation::Asin),
-            30 => Self::Operation(MathOperation::Acos),
-            31 => Self::Operation(MathOperation::Atan),
-            32 => Self::Operation(MathOperation::Atan2),
-            33 => Self::Operation(MathOperation::Pow),
-            34 => Self::Operation(MathOperation::Sqrt),
-            35 => Self::Operation(MathOperation::Hypot),
-            36 => Self::Operation(MathOperation::Ln),
-            37 => Self::Operation(MathOperation::Log),
-            38 => Self::Operation(MathOperation::Exp),
-            39 => Self::Operation(MathOperation::Abs),
+            0..=7 => Self::Operand(code),
+            8 => Self::Operation(MathOperation::Add),
+            9 => Self::Operation(MathOperation::Subtract),
+            10 => Self::Operation(MathOperation::Multiply),
+            11 => Self::Operation(MathOperation::Divide),
+            12 => Self::Operation(MathOperation::Min),
+            13 => Self::Operation(MathOperation::Max),
+            14 => Self::Operation(MathOperation::Clamp),
+            15 => Self::Operation(MathOperation::Round),
+            16 => Self::Operation(MathOperation::Mod),
+            17 => Self::Operation(MathOperation::Rem),
+            18 => Self::Operation(MathOperation::Sin),
+            19 => Self::Operation(MathOperation::Cos),
+            20 => Self::Operation(MathOperation::Tan),
+            21 => Self::Operation(MathOperation::Asin),
+            22 => Self::Operation(MathOperation::Acos),
+            23 => Self::Operation(MathOperation::Atan),
+            24 => Self::Operation(MathOperation::Atan2),
+            25 => Self::Operation(MathOperation::Pow),
+            26 => Self::Operation(MathOperation::Sqrt),
+            27 => Self::Operation(MathOperation::Hypot),
+            28 => Self::Operation(MathOperation::Ln),
+            29 => Self::Operation(MathOperation::Log),
+            30 => Self::Operation(MathOperation::Exp),
+            31 => Self::Operation(MathOperation::Abs),
             _ => panic!("invalid math token"),
         }
     }
@@ -910,11 +912,9 @@ enum EvaluatedMath {
 /// container, and percentage bases are all available.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MathLengthPercentage {
-    leaf_meta: [u32; 3],
+    leaf_meta: [u32; 2],
     leaf_values: [f32; MAX_MATH_LEAVES],
-    program: [u32; 6],
-    leaf_len: u8,
-    token_len: u8,
+    program: [u32; 4],
 }
 
 impl MathLengthPercentage {
@@ -925,15 +925,13 @@ impl MathLengthPercentage {
             || tokens.len() > MAX_MATH_TOKENS
         {
             return Err(ParseError::expected(
-                "a math expression with at most sixteen leaves and thirty-two tokens",
+                "a math expression with at most eight leaves and twenty-four tokens",
             ));
         }
         let mut stored = Self {
-            leaf_meta: [0; 3],
+            leaf_meta: [0; 2],
             leaf_values: [0.0; MAX_MATH_LEAVES],
-            program: [0; 6],
-            leaf_len: leaves.len() as u8,
-            token_len: tokens.len() as u8,
+            program: [0; 4],
         };
         for (index, operand) in leaves.iter().copied().enumerate() {
             stored.set_operand(index, operand);
@@ -941,6 +939,8 @@ impl MathLengthPercentage {
         for (index, token) in tokens.iter().copied().enumerate() {
             stored.set_token(index, token);
         }
+        stored.leaf_meta[1] |= (leaves.len() as u32) << MATH_LEAF_LEN_SHIFT;
+        stored.leaf_meta[1] |= (tokens.len() as u32) << MATH_TOKEN_LEN_SHIFT;
         Ok(stored)
     }
 
@@ -988,7 +988,7 @@ impl MathLengthPercentage {
     }
 
     fn tokens(self) -> impl Iterator<Item = MathToken> {
-        (0..usize::from(self.token_len)).map(move |index| self.token(index))
+        (0..self.token_len()).map(move |index| self.token(index))
     }
 
     fn token(self, index: usize) -> MathToken {
@@ -1009,21 +1009,29 @@ impl MathLengthPercentage {
     }
 
     fn has_percentage(self) -> bool {
-        (0..usize::from(self.leaf_len)).any(|index| self.operand(index).has_percentage())
+        (0..self.leaf_len()).any(|index| self.operand(index).has_percentage())
     }
 
     pub(super) fn resolve_font_relative(mut self, em: f32, rem: f32) -> Self {
-        for index in 0..usize::from(self.leaf_len) {
+        for index in 0..self.leaf_len() {
             self.set_operand(index, self.operand(index).resolve_font_relative(em, rem));
         }
         self
     }
 
     pub(super) fn resolve_relative(mut self, environment: RelativeLengthEnvironment) -> Self {
-        for index in 0..usize::from(self.leaf_len) {
+        for index in 0..self.leaf_len() {
             self.set_operand(index, self.operand(index).resolve_relative(environment));
         }
         self
+    }
+
+    fn leaf_len(self) -> usize {
+        ((self.leaf_meta[1] >> MATH_LEAF_LEN_SHIFT) & u32::from(u8::MAX)) as usize
+    }
+
+    fn token_len(self) -> usize {
+        ((self.leaf_meta[1] >> MATH_TOKEN_LEN_SHIFT) & u32::from(u8::MAX)) as usize
     }
 
     pub(super) fn resolved_px(self) -> Option<f32> {

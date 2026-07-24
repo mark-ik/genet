@@ -571,6 +571,10 @@ fn number_and_angle_math_feed_individual_transform_properties() {
         ("hypot(3, 4)", 5.0),
         ("log(8, 2)", 3.0),
         ("exp(0)", 1.0),
+        (
+            "calc(log((3 + 1) / 2, 2) / log(e) + exp(0 * 1) * 2 * log(e))",
+            3.0,
+        ),
     ] {
         let scale = source.parse::<Scale>().expect(source);
         assert!((scale.factor().expect("scale factor") - expected).abs() < 0.001);
@@ -618,7 +622,7 @@ fn calc_serialization_orders_viewport_terms_canonically() {
     );
     assert!(
         "calc(1cqb + 1cqh + 1cqi + 1cqmax + 1cqmin + 1cqw + 1dvb + 1dvh + \
-         1dvi + 1dvmax + 1dvmin + 1dvw + 1lvb + 1lvh + 1lvi + 1lvmax + 1lvmin)"
+         1dvi)"
             .parse::<LengthPercentage>()
             .is_err()
     );

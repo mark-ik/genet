@@ -5,7 +5,8 @@
 2026-07-22; H5 active (2D matrices, percentage reference boxes,
 nested-calc/CSSOM used values, the full viewport-unit family, writing-mode
 mapping, recursive comparison math, size containers, and scoped iframe style
-worlds landed 2026-07-22 through 2026-07-23); H6 available.
+worlds, advanced CSS math, bounded individual transforms, and physical-margin
+used values landed 2026-07-22 through 2026-07-23); H6 available.
 Census grounded against the local fork checkout at H0.
 **Decision record:** Mark, 2026-07-18: "even an mpl-2.0 livery is worth more
 than servo's stylo to me. the proof is genet itself," and "level up livery to
@@ -334,13 +335,43 @@ matches what genet-layout consumes. Census (verified 2026-07-20):
   stylo_taffy touched surfaces are clippy-clean under `-D warnings` with only
   the named pre-existing allowances.
 
-  The remaining value boundary is stepped, trigonometric, and exponential
-  math; style and scroll-state container queries; nested media/container
-  grouping and fuller query grammar; cycle diagnostics and
-  `contain-intrinsic-size`; general shorthand reconstruction; nested transform
-  arguments; and used-value serialization for adorned boxes and more layout
-  properties. Iframe navigation, origin policy, and independent event loops
-  remain browsing-context work beyond the initial child-document surface.
+  The seventh H5 slice landed 2026-07-23. The compact postfix math lane now
+  covers stepped `round()` strategies, `mod()`, and `rem()`; trigonometric and
+  inverse-trigonometric functions; `pow()`, `sqrt()`, `hypot()`, `log()`, and
+  `exp()`; the `pi` and `e` constants; and canonical angle units. Dimensional
+  checking remains explicit, repeated operands share one of eight compact leaf
+  slots, and environmental lengths remain deferred until their font, viewport,
+  container, or percentage bases exist. Generated `rotate` and bounded uniform
+  `scale` longhands feed both CSSOM and neutral paint, while constant math also
+  reaches `z-index`. The DOM's `element.style = text` assignment now forwards
+  to `cssText`. Livery's used-value context resolves width, height, and the four
+  physical margins, including percentage-bearing margin math against the
+  measured containing block.
+
+  Receipts: native Livery + genet-livery is 192 green;
+  script-runtime-api + genet-scripted is 194 green. The five upstream
+  Boa/Livery computed-value files now pass 262/380 subtests:
+  `round-mod-rem-computed.html` 147/243,
+  `hypot-pow-sqrt-computed.html` 40/47,
+  `sin-cos-tan-computed.html` 20/26,
+  `acos-asin-atan-atan2-computed.html` 38/45, and
+  `exp-log-compute.html` 17/19. All 118 remaining misses belong to named
+  unimplemented families: 14 tree-counting cases, 16 time-value cases, 10
+  `ex`/`ch` font-metric cases, and 78 special `NaN`/infinity cases. The four
+  touched crates are clippy-clean under `-D warnings` with only the named
+  pre-existing allowances.
+
+  The next H5 slice is tree-counting math: carry `sibling-index()` and
+  `sibling-count()` through cascade with an element-tree context and close the
+  14 shared misses across the advanced-math files. After that remain time-domain
+  math, real `ex`/`ch` font metrics, special numeric values, nonuniform and 3D
+  individual transforms, and context-dependent mixed-unit ratios; style and
+  scroll-state container queries; nested media/container grouping and fuller
+  query grammar; cycle diagnostics and `contain-intrinsic-size`; general
+  shorthand reconstruction; nested transform arguments; and used-value
+  serialization for adorned boxes and more layout properties. Iframe
+  navigation, origin policy, and independent event loops remain browsing-context
+  work beyond the initial child-document surface.
 - **H6 - media tiers come home.** Re-express the Mark-authored fork media
   tiers on Livery's Device under MIT/Apache. Receipt: media-query WPT
   parity between the Livery and fork routes.

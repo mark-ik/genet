@@ -354,8 +354,13 @@ impl MathBuilder {
             MathOperand::RoundingStrategy(_) => MathDimension::Strategy,
             MathOperand::None => MathDimension::None,
         };
-        let index = u8::try_from(self.leaves.len()).map_err(|_| ())?;
-        self.leaves.push(operand);
+        let index = if let Some(index) = self.leaves.iter().position(|value| *value == operand) {
+            u8::try_from(index).map_err(|_| ())?
+        } else {
+            let index = u8::try_from(self.leaves.len()).map_err(|_| ())?;
+            self.leaves.push(operand);
+            index
+        };
         self.tokens.push(MathToken::Operand(index));
         Ok(dimension)
     }
