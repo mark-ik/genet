@@ -30,13 +30,10 @@ members = [
     "components/inker/engines/graft-engine",
     "components/inker/engines/weld-engine",
     "components/nematic",
-    # The smolweb wire layer, adopted 2026-07-10 (same plan): transport + parse,
-    # with its spec-faithful protocol crates as members keeping their own
-    # published identities.
+    # The smolweb client integration, adopted 2026-07-10 (same plan): transport +
+    # parse. Its spec-faithful protocol crates moved to the smolweb workspace on
+    # 2026-07-23 and are consumed from crates.io.
     "components/errand",
-    "components/errand/protocols/nex-protocol",
-    "components/errand/protocols/spartan-protocol",
-    "components/errand/protocols/guppy-protocol",
     # The text/editing column's portable pair, adopted 2026-07-10 (same plan):
     # illume (lexer/highlighter spans) + tinct (OKLCH palette derivation).
     "components/illume",
@@ -231,9 +228,14 @@ parley = { version = "0.10.0", default-features = true }
 # errand (the smolweb wire layer) + its protocol members adopted the same day,
 # all published crates keeping their identities.
 errand = { version = "=0.1.3", path = "components/errand" }
-nex-protocol = { version = "=0.1.1", path = "components/errand/protocols/nex-protocol" }
-spartan-protocol = { version = "=0.1.1", path = "components/errand/protocols/spartan-protocol" }
-guppy-protocol = { version = "=0.1.1", path = "components/errand/protocols/guppy-protocol" }
+# The three spec crates moved to the smolweb workspace on 2026-07-23 (the repo
+# consolidation plan in mere's design docs): their names belong to the protocols'
+# communities, not to the engine that speaks them. genet keeps errand (the client
+# integration) and nematic (the document engine) and consumes the wire layer from
+# crates.io, exactly as it already does for misfin.
+nex-protocol = { version = "=0.1.1" }
+spartan-protocol = { version = "=0.1.1" }
+guppy-protocol = { version = "=0.1.1" }
 inker = { version = "=0.1.0", path = "components/inker" }
 genet-documents = { version = "=0.1.0", path = "components/genet-documents" }
 nematic = { version = "=0.1.0", path = "components/nematic" }
