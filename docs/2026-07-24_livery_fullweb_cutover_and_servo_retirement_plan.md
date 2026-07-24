@@ -45,8 +45,10 @@ own linebox, paint) to fullweb fidelity and flips the default to it.
 is lifting that subsystem from genet-layout into the lane under the harvest
 plan's fork-and-own rules, never re-seaming Stylo back in.
 
-D0 is Mark's ruling to confirm; everything through F3 is unaffected by which
-way it goes.
+**CONFIRMED by Mark, 2026-07-24**: "i'm ok with lane... big blast radius, big
+impact. proceed." The apprehension is the right instinct and the sequencing
+answers it: F3's ledger measures the radius before F4 flips anything, and
+nothing is deleted until F5/F6, after the receipts exist.
 
 ## Stages, each with a receipt
 
