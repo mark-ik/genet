@@ -3,7 +3,7 @@
 # the pinned bases and the local semantic patch ledger.
 [package]
 name = "meristem"
-version = "0.1.0"
+version = "0.1.1"
 description = "The reactive diff and message core of the Cambium GUI toolkit"
 edition.workspace = true
 rust-version = "1.92"

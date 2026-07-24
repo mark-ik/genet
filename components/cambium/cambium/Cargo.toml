@@ -1,6 +1,6 @@
 [package]
 name = "cambium"
-version = "0.3.0"
+version = "0.3.1"
 description = "A Meristem backend and application toolkit for Genet"
 edition.workspace = true
 rust-version = "1.92"

@@ -1,6 +1,6 @@
 [package]
 name = "cambium-nematic"
-version = "0.3.0"
+version = "0.3.1"
 description = "Cambium-native views and themes for Nematic smolweb content"
 edition.workspace = true
 rust-version = "1.92"
