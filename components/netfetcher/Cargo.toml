@@ -1,0 +1,68 @@
+[package]
+name = "netfetcher"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+repository = "https://github.com/mark-ik/netfetcher"
+readme = "README.md"
+description = "Portable WHATWG-Fetch network engine for the Mere ecosystem — Servo's net, de-IPC'd, plus an HTTP/3 lane. Mere owns networking; consumers receive bytes."
+publish = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+url = "2.5"
+bytes = "1"
+
+# Host-neutral diagnostics facade: emit spans/events here; the consuming app
+# (meerkat) installs the subscriber. The library never depends on the app.
+tracing = "0.1"
+
+# Transport: hyper 1.x (h1/h2) + the hyper-util legacy client (connection pool).
+hyper = { version = "1", features = ["client", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }
+http = "1"
+http-body-util = "0.1"
+
+# TLS: rustls 0.23 via hyper-rustls; ring provider + webpki-roots trust anchors
+# (routed through hyper-rustls's own feature so we don't pin webpki-roots's major).
+hyper-rustls = { version = "0.27", default-features = false, features = ["webpki-roots", "http1", "http2", "ring", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# Subresource Integrity: SHA-2 digests (ring is already in the tree via rustls)
+# + base64 of the expected hashes.
+ring = "0.17"
+base64 = "0.22"
+
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "time", "macros"] }
+
+# Streaming bodies + on-the-fly Content-Encoding decode.
+futures-util = "0.3"
+tokio-util = { version = "0.7", features = ["io"] }
+async-compression = { version = "0.4", features = ["tokio", "gzip", "zlib", "brotli", "zstd"] }
+
+# Cookies (RFC 6265bis) + HTTP-date parsing for the cache (RFC 9111).
+cookie = "0.18"
+time = "0.3"
+httpdate = "1"
+
+# Public Suffix List (embedded) for accurate registrable-domain / SameSite tests
+# at eTLD edges (e.g. *.github.io), replacing the last-two-labels approximation.
+psl = "2"
+
+# HTTP/3 (increment 4): QUIC (quinn) + h3. Native-only (UDP sockets); a wasm build
+# excludes this module. h3 is pre-1.0 (0.0.x) — API churn expected.
+quinn = "0.11"
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+webpki-roots = "1"
+
+# WebSocket (increment 5): native-only (tokio + rustls for wss://).
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+
+[dev-dependencies]
+mockito = "1"
+# Used only to build gzip fixtures in tests; decode itself is async-compression.
+flate2 = "1"
+# Self-signed cert for the in-process h3 test server.
+rcgen = "0.14"

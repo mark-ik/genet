@@ -1,0 +1,3 @@
+/target
+# sem (Ataraxy-Labs) per-repo semantic cache
+.sem/
