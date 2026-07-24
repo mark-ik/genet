@@ -705,17 +705,15 @@ impl fmt::Display for CalcLengthPercentage {
     }
 }
 
-pub(crate) const MAX_MATH_LEAVES: usize = 8;
+pub(crate) const MAX_MATH_LEAVES: usize = 16;
 pub(crate) const MAX_MATH_TOKENS: usize = 32;
 const MATH_LEAF_BITS: usize = 6;
-const MATH_LEAF_MASK: u64 = (1 << MATH_LEAF_BITS) - 1;
 const MATH_ANGLE: u8 = 58;
 const MATH_ROUNDING_STRATEGY: u8 = 59;
 const MATH_NUMBER: u8 = 60;
 const MATH_PERCENTAGE: u8 = 61;
 const MATH_NONE: u8 = 62;
 const MATH_TOKEN_BITS: usize = 5;
-const MATH_TOKEN_MASK: u64 = (1 << MATH_TOKEN_BITS) - 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -912,7 +910,7 @@ enum EvaluatedMath {
 /// container, and percentage bases are all available.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MathLengthPercentage {
-    leaf_meta: [u32; 2],
+    leaf_meta: [u32; 3],
     leaf_values: [f32; MAX_MATH_LEAVES],
     program: [u32; 5],
     leaf_len: u8,
@@ -927,11 +925,11 @@ impl MathLengthPercentage {
             || tokens.len() > MAX_MATH_TOKENS
         {
             return Err(ParseError::expected(
-                "a math expression with at most eight leaves and thirty-two tokens",
+                "a math expression with at most sixteen leaves and thirty-two tokens",
             ));
         }
         let mut stored = Self {
-            leaf_meta: [0; 2],
+            leaf_meta: [0; 3],
             leaf_values: [0.0; MAX_MATH_LEAVES],
             program: [0; 5],
             leaf_len: leaves.len() as u8,
@@ -947,7 +945,7 @@ impl MathLengthPercentage {
     }
 
     fn operand(self, index: usize) -> MathOperand {
-        let code = ((join_u64(self.leaf_meta) >> (index * MATH_LEAF_BITS)) & MATH_LEAF_MASK) as u8;
+        let code = packed_value(&self.leaf_meta, index * MATH_LEAF_BITS, MATH_LEAF_BITS);
         match code {
             MATH_NUMBER => MathOperand::Number(self.leaf_values[index]),
             MATH_PERCENTAGE => MathOperand::Percentage(self.leaf_values[index]),
@@ -980,11 +978,12 @@ impl MathLengthPercentage {
             },
             MathOperand::None => (MATH_NONE, 0.0),
         };
-        let shift = index * MATH_LEAF_BITS;
-        let mut meta = join_u64(self.leaf_meta);
-        meta &= !(MATH_LEAF_MASK << shift);
-        meta |= u64::from(code) << shift;
-        self.leaf_meta = split_u64(meta);
+        set_packed_value(
+            &mut self.leaf_meta,
+            index * MATH_LEAF_BITS,
+            MATH_LEAF_BITS,
+            code,
+        );
         self.leaf_values[index] = value;
     }
 
@@ -993,28 +992,20 @@ impl MathLengthPercentage {
     }
 
     fn token(self, index: usize) -> MathToken {
-        let bit = index * MATH_TOKEN_BITS;
-        let word = bit / u32::BITS as usize;
-        let shift = bit % u32::BITS as usize;
-        let low = u64::from(self.program[word]);
-        let high = self
-            .program
-            .get(word + 1)
-            .copied()
-            .map(u64::from)
-            .unwrap_or(0);
-        MathToken::from_code((((low | (high << u32::BITS)) >> shift) & MATH_TOKEN_MASK) as u8)
+        MathToken::from_code(packed_value(
+            &self.program,
+            index * MATH_TOKEN_BITS,
+            MATH_TOKEN_BITS,
+        ))
     }
 
     fn set_token(&mut self, index: usize, token: MathToken) {
-        let bit = index * MATH_TOKEN_BITS;
-        let word = bit / u32::BITS as usize;
-        let shift = bit % u32::BITS as usize;
-        let encoded = u64::from(token.code()) << shift;
-        self.program[word] |= encoded as u32;
-        if shift + MATH_TOKEN_BITS > u32::BITS as usize {
-            self.program[word + 1] |= (encoded >> u32::BITS) as u32;
-        }
+        set_packed_value(
+            &mut self.program,
+            index * MATH_TOKEN_BITS,
+            MATH_TOKEN_BITS,
+            token.code(),
+        );
     }
 
     fn has_percentage(self) -> bool {
@@ -1349,12 +1340,33 @@ const RELATIVE_AND_ABSOLUTE_UNITS: [LengthUnit; 39] = [
     LengthUnit::Cqmax,
 ];
 
-const fn join_u64(value: [u32; 2]) -> u64 {
-    value[0] as u64 | ((value[1] as u64) << 32)
+fn packed_value(words: &[u32], bit: usize, width: usize) -> u8 {
+    let word = bit / u32::BITS as usize;
+    let shift = bit % u32::BITS as usize;
+    let low = u64::from(words[word]);
+    let high = words
+        .get(word + 1)
+        .copied()
+        .map(u64::from)
+        .unwrap_or(0);
+    (((low | (high << u32::BITS)) >> shift) & ((1_u64 << width) - 1)) as u8
 }
 
-const fn split_u64(value: u64) -> [u32; 2] {
-    [value as u32, (value >> 32) as u32]
+fn set_packed_value(words: &mut [u32], bit: usize, width: usize, value: u8) {
+    let word = bit / u32::BITS as usize;
+    let shift = bit % u32::BITS as usize;
+    let high = words
+        .get(word + 1)
+        .copied()
+        .map(u64::from)
+        .unwrap_or(0);
+    let pair = u64::from(words[word]) | (high << u32::BITS);
+    let mask = ((1_u64 << width) - 1) << shift;
+    let updated = (pair & !mask) | (u64::from(value) << shift);
+    words[word] = updated as u32;
+    if shift + width > u32::BITS as usize {
+        words[word + 1] = (updated >> u32::BITS) as u32;
+    }
 }
 
 impl fmt::Display for MathLengthPercentage {

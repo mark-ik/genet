@@ -614,7 +614,8 @@ fn calc_serialization_orders_viewport_terms_canonically() {
         eight_relative
     );
     assert!(
-        "calc(1cqb + 1cqh + 1cqi + 1cqmax + 1cqmin + 1cqw + 1dvb + 1dvh + 1dvi)"
+        "calc(1cqb + 1cqh + 1cqi + 1cqmax + 1cqmin + 1cqw + 1dvb + 1dvh + \
+         1dvi + 1dvmax + 1dvmin + 1dvw + 1lvb + 1lvh + 1lvi + 1lvmax + 1lvmin)"
             .parse::<LengthPercentage>()
             .is_err()
     );
