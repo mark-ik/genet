@@ -97,6 +97,37 @@ pub enum ContainerAxisSize {
     Size(f32),
 }
 
+/// An element's ordinal position among its element siblings, and how many
+/// element siblings the group holds. Both are one-based and stay `Deferred`
+/// outside an element context, which keeps a tree-counting leaf unresolved
+/// rather than folding it to a wrong number.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TreeCounts {
+    Deferred,
+    Counts { index: u32, count: u32 },
+}
+
+impl TreeCounts {
+    /// Both counts are one-based, as CSS tree-counting functions define them.
+    pub const fn new(index: u32, count: u32) -> Self {
+        Self::Counts { index, count }
+    }
+
+    const fn index(self) -> Option<f32> {
+        match self {
+            Self::Deferred => None,
+            Self::Counts { index, .. } => Some(index as f32),
+        }
+    }
+
+    const fn count(self) -> Option<f32> {
+        match self {
+            Self::Deferred => None,
+            Self::Counts { count, .. } => Some(count as f32),
+        }
+    }
+}
+
 /// All environment inputs needed to resolve relative lengths.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RelativeLengthEnvironment {
@@ -106,6 +137,7 @@ pub struct RelativeLengthEnvironment {
     pub container_inline: ContainerAxisSize,
     pub container_block: ContainerAxisSize,
     pub vertical_writing: bool,
+    pub tree_counts: TreeCounts,
 }
 
 impl RelativeLengthEnvironment {
@@ -119,6 +151,7 @@ impl RelativeLengthEnvironment {
             container_inline: ContainerAxisSize::Deferred,
             container_block: ContainerAxisSize::Deferred,
             vertical_writing: false,
+            tree_counts: TreeCounts::Deferred,
         }
     }
 
@@ -131,6 +164,7 @@ impl RelativeLengthEnvironment {
             container_inline: ContainerAxisSize::Fallback,
             container_block: ContainerAxisSize::Fallback,
             vertical_writing: false,
+            tree_counts: TreeCounts::Deferred,
         }
     }
 
@@ -152,6 +186,7 @@ impl RelativeLengthEnvironment {
             container_block: block_size
                 .map_or(ContainerAxisSize::Fallback, ContainerAxisSize::Size),
             vertical_writing: false,
+            tree_counts: TreeCounts::Deferred,
         }
     }
 
@@ -175,11 +210,19 @@ impl RelativeLengthEnvironment {
             container_inline: axis(inline),
             container_block: axis(block),
             vertical_writing,
+            tree_counts: TreeCounts::Deferred,
         }
     }
 
     pub const fn with_vertical_writing(mut self, vertical_writing: bool) -> Self {
         self.vertical_writing = vertical_writing;
+        self
+    }
+
+    /// Supply the element's position in its sibling group, which resolves
+    /// `sibling-index()` and `sibling-count()`.
+    pub const fn with_tree_counts(mut self, tree_counts: TreeCounts) -> Self {
+        self.tree_counts = tree_counts;
         self
     }
 
@@ -708,6 +751,11 @@ impl fmt::Display for CalcLengthPercentage {
 pub(crate) const MAX_MATH_LEAVES: usize = 8;
 pub(crate) const MAX_MATH_TOKENS: usize = 24;
 const MATH_LEAF_BITS: usize = 6;
+// Leaf codes 0..=38 are `LengthUnit as u8`, decoded through
+// `RELATIVE_AND_ABSOLUTE_UNITS`. Everything from 55 up is a sentinel operand.
+const MATH_TIME: u8 = 55;
+const MATH_SIBLING_INDEX: u8 = 56;
+const MATH_SIBLING_COUNT: u8 = 57;
 const MATH_ANGLE: u8 = 58;
 const MATH_ROUNDING_STRATEGY: u8 = 59;
 const MATH_NUMBER: u8 = 60;
@@ -745,7 +793,15 @@ pub(crate) enum MathOperand {
     /// Canonical radians. Angle units participate only inside a retained
     /// length-producing expression in the current property lane.
     Angle(f32),
+    /// Canonical milliseconds. Time is constant-foldable, so it never defers.
+    Time(f32),
     RoundingStrategy(RoundingStrategy),
+    /// `sibling-index()`. The value comes from the element's position in its
+    /// tree, so the leaf carries no payload and stays deferred until cascade
+    /// supplies an element context.
+    SiblingIndex,
+    /// `sibling-count()`.
+    SiblingCount,
     None,
 }
 
@@ -766,6 +822,14 @@ impl MathOperand {
     fn resolve_relative(self, environment: RelativeLengthEnvironment) -> Self {
         match self {
             Self::Length(length) => Self::Length(length.resolve_relative(environment)),
+            Self::SiblingIndex => environment
+                .tree_counts
+                .index()
+                .map_or(self, Self::Number),
+            Self::SiblingCount => environment
+                .tree_counts
+                .count()
+                .map_or(self, Self::Number),
             _ => self,
         }
     }
@@ -778,7 +842,10 @@ impl fmt::Display for MathOperand {
             Self::Length(length) => length.fmt(formatter),
             Self::Percentage(value) => write!(formatter, "{}%", format_number(value * 100.0)),
             Self::Angle(value) => write!(formatter, "{}rad", format_number(*value)),
+            Self::Time(value) => write!(formatter, "{}ms", format_number(*value)),
             Self::RoundingStrategy(strategy) => strategy.fmt(formatter),
+            Self::SiblingIndex => formatter.write_str("sibling-index()"),
+            Self::SiblingCount => formatter.write_str("sibling-count()"),
             Self::None => formatter.write_str("none"),
         }
     }
@@ -959,6 +1026,9 @@ impl MathLengthPercentage {
                     _ => panic!("invalid rounding strategy"),
                 })
             },
+            MATH_TIME => MathOperand::Time(self.leaf_values[index]),
+            MATH_SIBLING_INDEX => MathOperand::SiblingIndex,
+            MATH_SIBLING_COUNT => MathOperand::SiblingCount,
             MATH_NONE => MathOperand::None,
             unit => MathOperand::Length(Length {
                 value: self.leaf_values[index],
@@ -973,9 +1043,12 @@ impl MathLengthPercentage {
             MathOperand::Length(length) => (length.unit as u8, length.value),
             MathOperand::Percentage(value) => (MATH_PERCENTAGE, value),
             MathOperand::Angle(value) => (MATH_ANGLE, value),
+            MathOperand::Time(value) => (MATH_TIME, value),
             MathOperand::RoundingStrategy(strategy) => {
                 (MATH_ROUNDING_STRATEGY, strategy as u8 as f32)
             },
+            MathOperand::SiblingIndex => (MATH_SIBLING_INDEX, 0.0),
+            MathOperand::SiblingCount => (MATH_SIBLING_COUNT, 0.0),
             MathOperand::None => (MATH_NONE, 0.0),
         };
         set_packed_value(
@@ -1041,10 +1114,15 @@ impl MathLengthPercentage {
                 value,
                 unit: LengthUnit::Px,
             }) => Some(EvaluatedMath::Value(value)),
-            MathOperand::Angle(value) => Some(EvaluatedMath::Value(value)),
+            MathOperand::Angle(value) | MathOperand::Time(value) => {
+                Some(EvaluatedMath::Value(value))
+            },
             MathOperand::RoundingStrategy(strategy) => Some(EvaluatedMath::Strategy(strategy)),
             MathOperand::None => Some(EvaluatedMath::None),
-            MathOperand::Length(_) | MathOperand::Percentage(_) => None,
+            MathOperand::Length(_)
+            | MathOperand::Percentage(_)
+            | MathOperand::SiblingIndex
+            | MathOperand::SiblingCount => None,
         })
     }
 
@@ -1061,10 +1139,15 @@ impl MathLengthPercentage {
                     0.0,
                 )))
             },
-            MathOperand::Angle(value) => Some(EvaluatedMath::Value(value)),
+            MathOperand::Angle(value) | MathOperand::Time(value) => {
+                Some(EvaluatedMath::Value(value))
+            },
             MathOperand::RoundingStrategy(strategy) => Some(EvaluatedMath::Strategy(strategy)),
             MathOperand::None => Some(EvaluatedMath::None),
-            MathOperand::Length(_) | MathOperand::Percentage(_) => None,
+            MathOperand::Length(_)
+            | MathOperand::Percentage(_)
+            | MathOperand::SiblingIndex
+            | MathOperand::SiblingCount => None,
         })
     }
 
@@ -1077,9 +1160,14 @@ impl MathLengthPercentage {
                 rem,
             ))),
             MathOperand::Percentage(value) => Some(EvaluatedMath::Value(value * percentage_basis)),
-            MathOperand::Angle(value) => Some(EvaluatedMath::Value(value)),
+            MathOperand::Angle(value) | MathOperand::Time(value) => {
+                Some(EvaluatedMath::Value(value))
+            },
             MathOperand::RoundingStrategy(strategy) => Some(EvaluatedMath::Strategy(strategy)),
             MathOperand::None => Some(EvaluatedMath::None),
+            // An unresolved tree count reaching a px consumer means cascade
+            // never supplied an element context; fall through to the panic.
+            MathOperand::SiblingIndex | MathOperand::SiblingCount => None,
         })
         .unwrap_or_else(|| {
             panic!(
@@ -1099,6 +1187,14 @@ impl MathLengthPercentage {
         for token in self.tokens() {
             match token {
                 MathToken::Operand(index) => {
+                    // Today's parser cannot build a program deeper than the
+                    // stack (3 tokens per nesting level, 24-token cap), but
+                    // that invariant lives in a different file; growing
+                    // MAX_MATH_TOKENS must degrade to None, not index out of
+                    // bounds.
+                    if len == stack.len() {
+                        return None;
+                    }
                     stack[len] = resolve(self.operand(usize::from(index)))?;
                     len += 1;
                 },

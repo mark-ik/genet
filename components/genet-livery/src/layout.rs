@@ -1270,7 +1270,9 @@ fn collect_hit_candidates<D>(
     {
         let level = match style.z_index {
             livery::values::ZIndex::Integer(level) => level,
-            livery::values::ZIndex::Auto => 0,
+            // A z-index still deferred at hit-test time never got an element
+            // context; treat it as auto rather than guessing a stacking level.
+            livery::values::ZIndex::Auto | livery::values::ZIndex::Deferred(_) => 0,
         };
         state.candidates.push(HitCandidate {
             id,

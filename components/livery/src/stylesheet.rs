@@ -464,6 +464,15 @@ pub struct StyleRule {
     origin: Origin,
     layer: CascadeLayer,
     source_order: u64,
+    tree_counting: bool,
+}
+
+/// Whether any declared value calls a tree-counting function. Their results
+/// change for every sibling when a child list changes, and a selector-text
+/// scan cannot see them, so this is read off the declaration source.
+fn declares_tree_counting(declarations: &str) -> bool {
+    let lowered = declarations.to_ascii_lowercase();
+    lowered.contains("sibling-index(") || lowered.contains("sibling-count(")
 }
 
 impl StyleRule {
@@ -478,6 +487,7 @@ impl StyleRule {
         Ok(Self {
             selectors: SelectorList::parse(selectors).map_err(StyleRuleError::Selector)?,
             declarations: parse_declaration_block(declarations),
+            tree_counting: declares_tree_counting(declarations),
             media: media
                 .map(str::parse)
                 .transpose()
@@ -499,9 +509,11 @@ impl StyleRule {
         self.selectors.has_sibling_dependency()
     }
 
-    /// Whether child-list changes can alter this rule's selector match.
+    /// Whether child-list changes can alter this rule's result — either
+    /// through a structural selector, or through a tree-counting function in
+    /// a declared value.
     pub fn has_structural_dependency(&self) -> bool {
-        self.selectors.has_structural_dependency()
+        self.selectors.has_structural_dependency() || self.tree_counting
     }
 
     pub fn has_container_query(&self) -> bool {

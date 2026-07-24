@@ -886,6 +886,7 @@ fn emit_inline_group<'a, D>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_inline_descendant_decorations<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,

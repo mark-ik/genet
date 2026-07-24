@@ -1,6 +1,9 @@
 use std::{fmt, str::FromStr};
 
-use super::{Color, Length, LengthPercentage, Matrix2D, ParseError, format_number, keyword_value};
+use super::{
+    Color, Length, LengthPercentage, MathLengthPercentage, Matrix2D, ParseError,
+    RelativeLengthEnvironment, format_number, keyword_value,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum BackgroundImage {
@@ -225,23 +228,37 @@ impl FromStr for Duration {
     type Err = ParseError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        let input = input.trim().to_ascii_lowercase();
-        let (number, multiplier) = if let Some(value) = input.strip_suffix("ms") {
-            (value, 1.0)
-        } else if let Some(value) = input.strip_suffix('s') {
-            (value, 1_000.0)
-        } else if input == "0" {
-            ("0", 1.0)
+        let trimmed = input.trim();
+        let lowered = trimmed.to_ascii_lowercase();
+        let atomic = if let Some(value) = lowered.strip_suffix("ms") {
+            Some((value, 1.0))
+        } else if let Some(value) = lowered.strip_suffix('s') {
+            Some((value, 1_000.0))
+        } else if lowered == "0" {
+            Some(("0", 1.0))
         } else {
-            return Err(ParseError::expected("a non-negative CSS duration"));
+            None
         };
-        let value = number
-            .trim()
-            .parse::<f32>()
-            .ok()
-            .filter(|value| value.is_finite() && *value >= 0.0)
+        let value = atomic
+            .and_then(|(number, multiplier)| {
+                number
+                    .trim()
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|value| value.is_finite() && *value >= 0.0)
+                    .map(|value| value * multiplier)
+            })
+            // A `calc()`/comparison time expression (e.g. `round(10s, 6s)`)
+            // folds to milliseconds through the shared math lane. The bound is
+            // non-negative, matching the animation/transition duration lane; a
+            // negative computed delay stays out of scope.
+            .or_else(|| {
+                super::calc::parse_time(trimmed)
+                    .ok()
+                    .filter(|value| *value >= 0.0)
+            })
             .ok_or_else(|| ParseError::expected("a non-negative CSS duration"))?;
-        Ok(Self(value * multiplier))
+        Ok(Self(value))
     }
 }
 
@@ -1771,13 +1788,26 @@ impl fmt::Display for Opacity {
 pub enum Rotate {
     None,
     Angle(f32),
+    /// An angle expression whose bases are not all constant, retained until
+    /// cascade supplies the element's tree context.
+    Deferred(MathLengthPercentage),
 }
 
 impl Rotate {
     pub const fn radians(self) -> Option<f32> {
         match self {
-            Self::None => None,
+            Self::None | Self::Deferred(_) => None,
             Self::Angle(value) => Some(value),
+        }
+    }
+
+    pub(super) fn resolve_math(self, environment: RelativeLengthEnvironment) -> Self {
+        match self {
+            Self::Deferred(math) => {
+                let resolved = math.resolve_relative(environment);
+                resolved.resolved_px().map_or(Self::Deferred(resolved), Self::Angle)
+            },
+            value => value,
         }
     }
 }
@@ -1793,6 +1823,11 @@ impl FromStr for Rotate {
         parse_angle(input)
             .or_else(|_| super::calc::parse_angle(input))
             .map(Self::Angle)
+            .or_else(|error| {
+                super::calc::parse_angle_math(input)
+                    .map(Self::Deferred)
+                    .map_err(|_| error)
+            })
     }
 }
 
@@ -1801,6 +1836,7 @@ impl fmt::Display for Rotate {
         match self {
             Self::None => formatter.write_str("none"),
             Self::Angle(value) => write!(formatter, "{}rad", format_number(*value)),
+            Self::Deferred(math) => math.fmt(formatter),
         }
     }
 }
@@ -1810,13 +1846,27 @@ impl fmt::Display for Rotate {
 pub enum Scale {
     None,
     Uniform(f32),
+    /// The [`Rotate::Deferred`] twin for number-valued expressions.
+    Deferred(MathLengthPercentage),
 }
 
 impl Scale {
     pub const fn factor(self) -> Option<f32> {
         match self {
-            Self::None => None,
+            Self::None | Self::Deferred(_) => None,
             Self::Uniform(value) => Some(value),
+        }
+    }
+
+    pub(super) fn resolve_math(self, environment: RelativeLengthEnvironment) -> Self {
+        match self {
+            Self::Deferred(math) => {
+                let resolved = math.resolve_relative(environment);
+                resolved
+                    .resolved_px()
+                    .map_or(Self::Deferred(resolved), Self::Uniform)
+            },
+            value => value,
         }
     }
 }
@@ -1836,8 +1886,13 @@ impl FromStr for Scale {
             .or_else(|| input.parse::<f32>().ok())
             .filter(|value| value.is_finite())
             .map(Ok)
-            .unwrap_or_else(|| super::calc::parse_number(input))?;
-        Ok(Self::Uniform(value))
+            .unwrap_or_else(|| super::calc::parse_number(input));
+        match value {
+            Ok(value) => Ok(Self::Uniform(value)),
+            Err(error) => super::calc::parse_number_math(input)
+                .map(Self::Deferred)
+                .map_err(|_| error),
+        }
     }
 }
 
@@ -1846,6 +1901,7 @@ impl fmt::Display for Scale {
         match self {
             Self::None => formatter.write_str("none"),
             Self::Uniform(value) => formatter.write_str(&format_number(*value)),
+            Self::Deferred(math) => math.fmt(formatter),
         }
     }
 }
@@ -2353,10 +2409,35 @@ impl fmt::Display for TextDecorationLine {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+// `Eq` is unavailable now that a z-index can retain a float-bearing math
+// program; nothing in the tree needs more than `PartialEq`.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ZIndex {
     Auto,
     Integer(i32),
+    /// The [`Rotate::Deferred`] twin for integer-valued expressions.
+    Deferred(MathLengthPercentage),
+}
+
+/// Round a resolved number to the integer a `<integer>` property stores.
+fn rounded_integer(value: f32) -> Option<i32> {
+    let rounded = (value + 0.5).floor();
+    (rounded >= i32::MIN as f32 && rounded <= i32::MAX as f32).then_some(rounded as i32)
+}
+
+impl ZIndex {
+    pub(super) fn resolve_math(self, environment: RelativeLengthEnvironment) -> Self {
+        match self {
+            Self::Deferred(math) => {
+                let resolved = math.resolve_relative(environment);
+                resolved
+                    .resolved_px()
+                    .and_then(rounded_integer)
+                    .map_or(Self::Deferred(resolved), Self::Integer)
+            },
+            value => value,
+        }
+    }
 }
 
 impl FromStr for ZIndex {
@@ -2364,26 +2445,23 @@ impl FromStr for ZIndex {
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         if input.trim().eq_ignore_ascii_case("auto") {
-            Ok(Self::Auto)
-        } else {
-            let integer = input
-                .trim()
-                .parse::<i32>()
-                .ok()
-                .or_else(|| {
-                    input
-                        .contains('(')
-                        .then(|| super::calc::parse_number(input).ok())
-                        .flatten()
-                        .and_then(|value| {
-                            let rounded = (value + 0.5).floor();
-                            (rounded >= i32::MIN as f32 && rounded <= i32::MAX as f32)
-                                .then_some(rounded as i32)
-                        })
-                })
-                .ok_or_else(|| ParseError::expected("auto or an integer"))?;
-            Ok(Self::Integer(integer))
+            return Ok(Self::Auto);
         }
+        if let Some(integer) = input.trim().parse::<i32>().ok().or_else(|| {
+            input
+                .contains('(')
+                .then(|| super::calc::parse_number(input).ok())
+                .flatten()
+                .and_then(rounded_integer)
+        }) {
+            return Ok(Self::Integer(integer));
+        }
+        input
+            .contains('(')
+            .then(|| super::calc::parse_number_math(input).ok())
+            .flatten()
+            .map(Self::Deferred)
+            .ok_or_else(|| ParseError::expected("auto or an integer"))
     }
 }
 
@@ -2392,6 +2470,7 @@ impl fmt::Display for ZIndex {
         match self {
             Self::Auto => formatter.write_str("auto"),
             Self::Integer(value) => value.fmt(formatter),
+            Self::Deferred(math) => math.fmt(formatter),
         }
     }
 }

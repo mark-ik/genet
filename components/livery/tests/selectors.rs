@@ -309,6 +309,40 @@ fn selector_dependencies_only_widen_structural_restyles() {
 }
 
 #[test]
+fn tree_counting_values_widen_structural_restyles_without_a_structural_selector() {
+    let rule = |declarations: &str| {
+        StyleRule::parse(
+            ".card",
+            declarations,
+            None,
+            Origin::Author,
+            CascadeLayer::Unlayered,
+            0,
+        )
+        .expect("valid rule")
+    };
+
+    let plain = rule("z-index: 3;");
+    assert!(!plain.has_structural_dependency());
+
+    // The selector is not structural, but the value's result changes for
+    // every sibling when the child list does.
+    for declarations in [
+        "z-index: calc(sibling-index());",
+        "left: calc(10px * SIBLING-COUNT());",
+        "--depth: calc(sibling-index());",
+    ] {
+        assert!(
+            rule(declarations).has_structural_dependency(),
+            "{declarations}"
+        );
+    }
+
+    // The name only counts as a function call.
+    assert!(!rule("z-index: 3; /* sibling-index */").has_structural_dependency());
+}
+
+#[test]
 fn rules_join_selector_media_and_cascade_ordering() {
     let (primary, plain) = fixture();
     let rules = vec![

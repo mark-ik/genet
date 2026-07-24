@@ -6,9 +6,10 @@ use livery::values::{
     BorderStyle, BorderWidth, BoxShadow, BoxSizing, Color, CssValue, Display, Duration,
     FlexDirection, FlexFactor, FlexWrap, Float, FontFamily, FontSize, FontStyle, FontWeight, Gap,
     Inset, LengthPercentage, LengthUnit, LineHeight, ListStyleType, Margin, Opacity, Order,
-    Overflow, Padding, PointerEvents, Position, Radius, RelativeLengthEnvironment, Rotate, Scale,
-    Size, Spacing, TextAlign, TextDecorationLine, TextWrapMode, TimingFunction, Transform,
-    TransitionProperty, VerticalAlign, Visibility, WhiteSpaceCollapse, ZIndex,
+    Overflow, Padding, PointerEvents, Position, Radius, RelativeLengthEnvironment, ResolveViewport,
+    Rotate, Scale, Size, Spacing, TextAlign, TextDecorationLine, TextWrapMode, TimingFunction,
+    Transform, TransitionProperty, TreeCounts, VerticalAlign, Visibility, WhiteSpaceCollapse,
+    ZIndex,
 };
 use livery::{canonicalize_specified_longhand, canonicalize_specified_value};
 
@@ -505,6 +506,100 @@ fn comparison_math_resolves_after_its_environmental_bases_are_known() {
 }
 
 #[test]
+fn tree_counting_math_defers_until_an_element_context_supplies_the_counts() {
+    let deferred = RelativeLengthEnvironment::uniform_viewport(800.0, 600.0);
+    let fourth_of_five = deferred.with_tree_counts(TreeCounts::new(4, 5));
+
+    // The functions take no arguments, and an argument is a parse error.
+    for source in [
+        "calc(1px * sibling-index(1))",
+        "calc(1px * sibling-index(100px))",
+        "calc(1px * sibling-count(1))",
+        "calc(1px * sibling-count(100px))",
+    ] {
+        assert!(source.parse::<LengthPercentage>().is_err(), "{source}");
+    }
+
+    // Whitespace inside the empty argument list normalizes away.
+    for source in ["calc(1px * sibling-index())", "calc(1px * sibling-index( ))"] {
+        let value = source.parse::<LengthPercentage>().expect(source);
+        assert_eq!(value.to_string(), "calc(1px * sibling-index())");
+        assert_eq!(
+            value.resolve_relative(fourth_of_five).to_string(),
+            "4px",
+            "{source}"
+        );
+        // Without an element context the leaf stays authored rather than
+        // folding to a wrong number.
+        assert_eq!(
+            value.resolve_relative(deferred).to_string(),
+            "calc(1px * sibling-index())"
+        );
+    }
+
+    assert_eq!(
+        "calc(1px * sibling-count())"
+            .parse::<LengthPercentage>()
+            .expect("sibling-count")
+            .resolve_relative(fourth_of_five)
+            .to_string(),
+        "5px"
+    );
+
+    // The three bounded scalar families retain the program the same way.
+    assert!(matches!(
+        "sibling-index()".parse::<ZIndex>(),
+        Ok(ZIndex::Deferred(_))
+    ));
+    for (source, expected) in [
+        ("sibling-index()", 4),
+        ("sqrt(sibling-index())", 2),
+        ("sqrt(pow(sibling-index(), 2))", 4),
+        ("calc(sibling-count() - sibling-index())", 1),
+    ] {
+        let resolved = source
+            .parse::<ZIndex>()
+            .expect(source)
+            .resolve_relative_lengths(fourth_of_five);
+        assert_eq!(resolved, ZIndex::Integer(expected), "{source}");
+    }
+
+    let scale = "calc(cos(pi * sibling-count()))"
+        .parse::<Scale>()
+        .expect("deferred scale")
+        .resolve_relative_lengths(fourth_of_five);
+    let Scale::Uniform(factor) = scale else {
+        panic!("expected a resolved scale, got {scale:?}");
+    };
+    assert!((factor - -1.0).abs() < 0.001, "{factor}");
+
+    let rotate = "calc(180deg * sibling-index())"
+        .parse::<Rotate>()
+        .expect("deferred rotate")
+        .resolve_relative_lengths(fourth_of_five);
+    let Rotate::Angle(radians) = rotate else {
+        panic!("expected a resolved rotation, got {rotate:?}");
+    };
+    assert!(
+        (radians - 4.0 * std::f32::consts::PI).abs() < 0.001,
+        "{radians}"
+    );
+
+    // A deferred scalar reports no usable value to paint until it resolves.
+    assert_eq!(
+        "sibling-index()".parse::<Scale>().expect("scale").factor(),
+        None
+    );
+    assert_eq!(
+        "calc(1deg * sibling-index())"
+            .parse::<Rotate>()
+            .expect("rotate")
+            .radians(),
+        None
+    );
+}
+
+#[test]
 fn stepped_math_preserves_dimensions_and_sign_rules() {
     for (source, expected) in [
         ("round(10px, 6px)", 12.0),
@@ -524,6 +619,41 @@ fn stepped_math_preserves_dimensions_and_sign_rules() {
         .parse::<LengthPercentage>()
         .expect("percentage step");
     assert!((mixed.to_px(16.0, 16.0, 225.0) - 3.0).abs() < 0.001);
+}
+
+#[test]
+fn time_math_folds_seconds_and_milliseconds_to_a_canonical_duration() {
+    // The math lane canonicalizes to milliseconds, so a mixed-unit expression
+    // and its literal reduce to the same stored value.
+    for (source, expected_ms) in [
+        ("round(10s, 6s)", 12_000.0),
+        ("round(10ms, 6ms)", 12.0),
+        ("round(10s, 6000ms)", 12_000.0),
+        ("round(10000ms, 6s)", 12_000.0),
+        ("mod(10s, 6s)", 4_000.0),
+        ("rem(10ms, 6ms)", 4.0),
+        ("hypot(1s)", 1_000.0),
+        ("calc(2s + 500ms)", 2_500.0),
+        ("calc(3s / 2)", 1_500.0),
+    ] {
+        let value = source
+            .parse::<Duration>()
+            .unwrap_or_else(|error| panic!("{source}: {error}"));
+        assert!(
+            (value.milliseconds() - expected_ms).abs() < 0.001,
+            "{source} -> {} ms, expected {expected_ms}",
+            value.milliseconds()
+        );
+    }
+
+    // Atomic durations keep their existing fast path.
+    assert_eq!("100ms".parse::<Duration>().unwrap().milliseconds(), 100.0);
+    assert_eq!("2s".parse::<Duration>().unwrap().milliseconds(), 2_000.0);
+
+    // A dimensionally invalid or negative-folded time is rejected.
+    assert!("round(10px, 6px)".parse::<Duration>().is_err());
+    assert!("calc(2s * 3s)".parse::<Duration>().is_err());
+    assert!("calc(0s - 5s)".parse::<Duration>().is_err());
 }
 
 #[test]

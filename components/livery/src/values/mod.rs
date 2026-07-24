@@ -11,7 +11,7 @@ mod transform_matrix;
 pub use color::Color;
 pub use length::{
     CalcLengthPercentage, ContainerAxisSize, Length, LengthPercentage, LengthUnit,
-    MathLengthPercentage, RelativeLengthEnvironment,
+    MathLengthPercentage, RelativeLengthEnvironment, TreeCounts,
 };
 pub use property::{
     Alignment, AnimationName, AspectRatio, BackgroundImage, BackgroundPosition, BackgroundRepeat,
@@ -111,8 +111,6 @@ unchanged_viewport_resolution!(
     Overflow,
     PointerEvents,
     Position,
-    Rotate,
-    Scale,
     TextAlign,
     TextDecorationLine,
     TextWrapMode,
@@ -121,8 +119,27 @@ unchanged_viewport_resolution!(
     Visibility,
     WhiteSpaceCollapse,
     WritingMode,
-    ZIndex,
 );
+
+// The three bounded scalar families carry no lengths, but they can retain a
+// math program whose tree-counting leaves resolve from the same environment.
+impl ResolveViewport for Rotate {
+    fn resolve_relative_lengths(&self, environment: RelativeLengthEnvironment) -> Self {
+        self.resolve_math(environment)
+    }
+}
+
+impl ResolveViewport for Scale {
+    fn resolve_relative_lengths(&self, environment: RelativeLengthEnvironment) -> Self {
+        self.resolve_math(environment)
+    }
+}
+
+impl ResolveViewport for ZIndex {
+    fn resolve_relative_lengths(&self, environment: RelativeLengthEnvironment) -> Self {
+        self.resolve_math(environment)
+    }
+}
 
 impl ResolveViewport for GridTemplate {
     fn resolve_relative_lengths(&self, environment: RelativeLengthEnvironment) -> Self {

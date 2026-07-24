@@ -10,7 +10,7 @@ use std::{collections::HashMap, hash::Hash};
 use layout_dom_api::{DomMutation, LayoutDom, NodeKind, QualName};
 use livery::{ComputedValues, custom::CustomProperties, media::Device};
 
-use crate::style::resolve_subtree;
+use crate::style::{resolve_subtree, tree_counts_of};
 use crate::{InteractionStates, SelectorTree, StylePlane, StyleSet, resolve_styles};
 
 /// One pre-mutation attribute value retained for invalidation diagnostics.
@@ -221,6 +221,7 @@ where
                 root,
                 parent.as_ref(),
                 parent_custom.as_ref(),
+                tree_counts_of(dom, root),
                 &mut self.plane,
             );
         }

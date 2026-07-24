@@ -335,6 +335,7 @@ enum MathDimension {
     Number,
     Length,
     Angle,
+    Time,
     Strategy,
     None,
 }
@@ -351,7 +352,9 @@ impl MathBuilder {
             MathOperand::Number(_) => MathDimension::Number,
             MathOperand::Length(_) | MathOperand::Percentage(_) => MathDimension::Length,
             MathOperand::Angle(_) => MathDimension::Angle,
+            MathOperand::Time(_) => MathDimension::Time,
             MathOperand::RoundingStrategy(_) => MathDimension::Strategy,
+            MathOperand::SiblingIndex | MathOperand::SiblingCount => MathDimension::Number,
             MathOperand::None => MathDimension::None,
         };
         let index = if let Some(index) = self.leaves.iter().position(|value| *value == operand) {
@@ -384,6 +387,16 @@ fn angle_radians(value: f32, unit: &str) -> Option<f32> {
     }
 }
 
+fn time_milliseconds(value: f32, unit: &str) -> Option<f32> {
+    if unit.eq_ignore_ascii_case("ms") {
+        Some(value)
+    } else if unit.eq_ignore_ascii_case("s") {
+        Some(value * 1_000.0)
+    } else {
+        None
+    }
+}
+
 #[derive(Clone, Copy)]
 enum GeneralFunction {
     Calc,
@@ -405,6 +418,8 @@ enum GeneralFunction {
     Hypot,
     Log,
     Exp,
+    SiblingIndex,
+    SiblingCount,
 }
 
 fn general_function(name: &str) -> Option<GeneralFunction> {
@@ -428,6 +443,8 @@ fn general_function(name: &str) -> Option<GeneralFunction> {
         ("hypot", GeneralFunction::Hypot),
         ("log", GeneralFunction::Log),
         ("exp", GeneralFunction::Exp),
+        ("sibling-index", GeneralFunction::SiblingIndex),
+        ("sibling-count", GeneralFunction::SiblingCount),
     ]
     .into_iter()
     .find_map(|(candidate, function)| name.eq_ignore_ascii_case(candidate).then_some(function))
@@ -452,6 +469,10 @@ fn parse_general_one<'i, 't>(
             } else if let Some(radians) = angle_radians(value, unit) {
                 builder
                     .operand(MathOperand::Angle(radians))
+                    .map_err(|()| parse_error(input))
+            } else if let Some(milliseconds) = time_milliseconds(value, unit) {
+                builder
+                    .operand(MathOperand::Time(milliseconds))
                     .map_err(|()| parse_error(input))
             } else {
                 Err(parse_error(input))
@@ -508,6 +529,12 @@ fn parse_general_one<'i, 't>(
                 GeneralFunction::Hypot => parse_hypot_arguments(nested, builder),
                 GeneralFunction::Log => parse_log_arguments(nested, builder),
                 GeneralFunction::Exp => parse_number_unary(nested, builder, MathOperation::Exp),
+                GeneralFunction::SiblingIndex => {
+                    parse_tree_count(nested, builder, MathOperand::SiblingIndex)
+                },
+                GeneralFunction::SiblingCount => {
+                    parse_tree_count(nested, builder, MathOperand::SiblingCount)
+                },
             })
         },
         token => Err(location.new_unexpected_token_error(token.clone())),
@@ -556,6 +583,12 @@ fn parse_general_product<'i, 't>(
                 MathDimension::Angle
             },
             (MathOperation::Divide, MathDimension::Angle, MathDimension::Angle) => {
+                MathDimension::Number
+            },
+            (MathOperation::Divide, MathDimension::Time, MathDimension::Number) => {
+                MathDimension::Time
+            },
+            (MathOperation::Divide, MathDimension::Time, MathDimension::Time) => {
                 MathDimension::Number
             },
             _ => return Err(parse_error(input)),
@@ -757,6 +790,18 @@ fn parse_number_unary<'i, 't>(
     Ok(MathDimension::Number)
 }
 
+/// The tree-counting functions take no arguments, so anything inside the
+/// parentheses is a parse error. `sibling-index( )` is still valid: cssparser
+/// skips whitespace before reporting exhaustion.
+fn parse_tree_count<'i, 't>(
+    input: &mut Parser<'i, 't>,
+    builder: &mut MathBuilder,
+    operand: MathOperand,
+) -> Result<MathDimension, cssparser::ParseError<'i, ()>> {
+    input.expect_exhausted()?;
+    builder.operand(operand).map_err(|()| parse_error(input))
+}
+
 fn parse_pow_arguments<'i, 't>(
     input: &mut Parser<'i, 't>,
     builder: &mut MathBuilder,
@@ -829,6 +874,24 @@ pub(super) fn parse_number(source: &str) -> Result<f32, ParseError> {
 pub(super) fn parse_angle(source: &str) -> Result<f32, ParseError> {
     resolve_constant_math(parse_math_dimension(source, MathDimension::Angle)?)
         .ok_or_else(|| ParseError::expected("a finite bounded CSS angle expression"))
+}
+
+/// Milliseconds from a bounded `<time>` math expression. Time never defers, so
+/// the result is always a finite constant.
+pub(super) fn parse_time(source: &str) -> Result<f32, ParseError> {
+    resolve_constant_math(parse_math_dimension(source, MathDimension::Time)?)
+        .ok_or_else(|| ParseError::expected("a finite bounded CSS time expression"))
+}
+
+/// Retain a number-valued expression whose bases are not all constant, which
+/// is how a scalar property carries `sibling-index()` to computed-value time.
+pub(super) fn parse_number_math(source: &str) -> Result<MathLengthPercentage, ParseError> {
+    parse_math_dimension(source, MathDimension::Number)
+}
+
+/// The angle-valued twin of [`parse_number_math`].
+pub(super) fn parse_angle_math(source: &str) -> Result<MathLengthPercentage, ParseError> {
+    parse_math_dimension(source, MathDimension::Angle)
 }
 
 fn resolve_constant_math(value: MathLengthPercentage) -> Option<f32> {

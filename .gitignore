@@ -35,6 +35,7 @@ Cargo.lock
 # tests/wpt/.../the-form-element/resources/target (a real test dir, not
 # build output).
 /components/script-engine-boa/target
+/components/livery/tools/import-stylo-db/target
 /probes/*/target
 /tests/wpt/reftests-report/report.html
 /python/_virtualenv*

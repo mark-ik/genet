@@ -300,6 +300,7 @@ impl TextSystem {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn flush_group<D>(
         &mut self,
         frame: &mut TextFrame<D::NodeId>,

@@ -15,7 +15,7 @@ use livery::{
     },
     values::{
         BorderStyle, FontSize, Length, LengthPercentage, LengthUnit, LineHeight, Margin, Padding,
-        Size,
+        Size, TreeCounts,
     },
 };
 
@@ -328,6 +328,7 @@ where
         dom.document(),
         None,
         None,
+        TreeCounts::Deferred,
         &mut plane,
     );
     plane
@@ -353,12 +354,14 @@ where
         dom.document(),
         None,
         None,
+        TreeCounts::Deferred,
         &mut plane,
         Some(containers),
     );
     plane
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_subtree<D>(
     selector_tree: &SelectorTree<'_, D>,
     style_set: &StyleSet,
@@ -366,6 +369,7 @@ pub(crate) fn resolve_subtree<D>(
     id: D::NodeId,
     parent: Option<&ComputedValues>,
     parent_custom: Option<&CustomProperties>,
+    tree_counts: TreeCounts,
     plane: &mut StylePlane<D::NodeId>,
 ) -> usize
 where
@@ -379,9 +383,55 @@ where
         id,
         parent,
         parent_custom,
+        tree_counts,
         plane,
         None,
     )
+}
+
+/// The one-based position of every element child of `id`, in tree order, and
+/// the size of that sibling group. Non-element children keep the deferred
+/// counts: they never carry a style of their own, and they must not shift the
+/// ordinals of the elements around them.
+fn child_tree_counts<D>(dom: &D, id: D::NodeId) -> Vec<(D::NodeId, TreeCounts)>
+where
+    D: LayoutDom,
+    D::NodeId: Copy,
+{
+    let children: Vec<D::NodeId> = dom.dom_children(id).collect();
+    let count = children
+        .iter()
+        .filter(|child| dom.kind(**child) == NodeKind::Element)
+        .count() as u32;
+    let mut index = 0;
+    children
+        .into_iter()
+        .map(|child| {
+            if dom.kind(child) == NodeKind::Element {
+                index += 1;
+                (child, TreeCounts::new(index, count))
+            } else {
+                (child, TreeCounts::Deferred)
+            }
+        })
+        .collect()
+}
+
+/// The counts for one element, recovered from its parent. An incremental
+/// restyle enters mid-tree, so a restyle root has to look its own ordinal up
+/// rather than inherit it from the walk.
+pub(crate) fn tree_counts_of<D>(dom: &D, id: D::NodeId) -> TreeCounts
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq,
+{
+    dom.parent(id)
+        .and_then(|parent| {
+            child_tree_counts(dom, parent)
+                .into_iter()
+                .find_map(|(child, counts)| (child == id).then_some(counts))
+        })
+        .unwrap_or(TreeCounts::Deferred)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -392,6 +442,7 @@ fn resolve_subtree_with_containers<D>(
     id: D::NodeId,
     parent: Option<&ComputedValues>,
     parent_custom: Option<&CustomProperties>,
+    tree_counts: TreeCounts,
     plane: &mut StylePlane<D::NodeId>,
     containers: Option<&HashMap<D::NodeId, Vec<ContainerSnapshot>>>,
 ) -> usize
@@ -445,10 +496,10 @@ where
 
         let (mut computed, custom) =
             cascade_with_custom(parent, parent_custom, matched, matched_custom);
-        resolve_viewport_units(&mut computed, device);
+        resolve_viewport_units(&mut computed, device, tree_counts);
         resolve_font_metrics(&mut computed, parent);
         let mut resolved = 1;
-        for child in selector_tree.dom().dom_children(id) {
+        for (child, child_counts) in child_tree_counts(selector_tree.dom(), id) {
             resolved += resolve_subtree_with_containers(
                 selector_tree,
                 style_set,
@@ -456,6 +507,7 @@ where
                 child,
                 Some(&computed),
                 Some(&custom),
+                child_counts,
                 plane,
                 containers,
             );
@@ -465,7 +517,7 @@ where
         resolved
     } else {
         let mut resolved = 0;
-        for child in selector_tree.dom().dom_children(id) {
+        for (child, child_counts) in child_tree_counts(selector_tree.dom(), id) {
             resolved += resolve_subtree_with_containers(
                 selector_tree,
                 style_set,
@@ -473,6 +525,7 @@ where
                 child,
                 parent,
                 parent_custom,
+                child_counts,
                 plane,
                 containers,
             );
@@ -481,9 +534,10 @@ where
     }
 }
 
-fn resolve_viewport_units(computed: &mut ComputedValues, device: &Device) {
+fn resolve_viewport_units(computed: &mut ComputedValues, device: &Device, tree_counts: TreeCounts) {
     let environment = livery::values::RelativeLengthEnvironment::viewport(device.viewport_sizes)
-        .with_vertical_writing(computed.writing_mode.is_vertical());
+        .with_vertical_writing(computed.writing_mode.is_vertical())
+        .with_tree_counts(tree_counts);
     resolve_relative_lengths(computed, environment);
 }
 
