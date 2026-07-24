@@ -625,6 +625,10 @@ pub fn to_taffy_style(style: &stylo::ComputedValues) -> taffy::Style<Atom> {
             height: self::max_size_dimension(&pos.max_height),
         },
         aspect_ratio: self::aspect_ratio(pos.aspect_ratio),
+        size_containment: taffy::Size {
+            width: false,
+            height: false,
+        },
 
         inset: taffy::Rect {
             left: self::inset(&pos.left),

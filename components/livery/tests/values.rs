@@ -1,13 +1,14 @@
 use std::fmt::Debug;
 
+use livery::media::{ViewportSize, ViewportSizes};
 use livery::values::{
     Alignment, AnimationName, AspectRatio, BackgroundImage, BackgroundPosition, BackgroundRepeat,
     BorderStyle, BorderWidth, BoxShadow, BoxSizing, Color, CssValue, Display, Duration,
     FlexDirection, FlexFactor, FlexWrap, Float, FontFamily, FontSize, FontStyle, FontWeight, Gap,
     Inset, LengthPercentage, LengthUnit, LineHeight, ListStyleType, Margin, Opacity, Order,
-    Overflow, Padding, PointerEvents, Position, Radius, Size, Spacing, TextAlign,
-    TextDecorationLine, TextWrapMode, TimingFunction, Transform, TransitionProperty, VerticalAlign,
-    Visibility, WhiteSpaceCollapse, ZIndex,
+    Overflow, Padding, PointerEvents, Position, Radius, RelativeLengthEnvironment, Rotate, Scale,
+    Size, Spacing, TextAlign, TextDecorationLine, TextWrapMode, TimingFunction, Transform,
+    TransitionProperty, VerticalAlign, Visibility, WhiteSpaceCollapse, ZIndex,
 };
 use livery::{canonicalize_specified_longhand, canonicalize_specified_value};
 
@@ -174,6 +175,8 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<Position>("absolute");
     assert_round_trip::<Order>("-1");
     assert_round_trip::<Radius>("12px");
+    assert_round_trip::<Rotate>("30deg");
+    assert_round_trip::<Scale>("1.5");
     assert_round_trip::<Spacing>("0.1em");
     assert_round_trip::<TextAlign>("center");
     assert_round_trip::<BorderStyle>("solid");
@@ -316,6 +319,304 @@ fn box_shadow_interpolation_preserves_matching_shape() {
     assert_eq!(
         from.interpolate(&to, 0.5).to_string(),
         "10px 2px 5px 0 #800080"
+    );
+}
+
+#[test]
+fn viewport_units_serialize_and_resolve_from_the_device_size() {
+    for (source, expected) in [
+        ("10vw", 80.0),
+        ("10vh", 60.0),
+        ("10vmin", 60.0),
+        ("10vmax", 80.0),
+    ] {
+        let value = source.parse::<LengthPercentage>().expect(source);
+        assert_eq!(value.to_string(), source);
+        let resolved = value.resolve_viewport(800.0, 600.0);
+        assert!((resolved.to_px(16.0, 16.0, 0.0) - expected).abs() < 0.001);
+    }
+
+    let mixed = "calc(10% + 10px + 1vmin)"
+        .parse::<LengthPercentage>()
+        .expect("mixed viewport calc")
+        .resolve_viewport(800.0, 600.0);
+    assert_eq!(mixed.to_string(), "calc(10% + 16px)");
+    assert!((mixed.to_px(16.0, 16.0, 200.0) - 36.0).abs() < 0.001);
+}
+
+#[test]
+fn viewport_tiers_and_logical_axes_resolve_from_distinct_device_metrics() {
+    let viewport = ViewportSizes {
+        small: ViewportSize::new(300.0, 200.0),
+        large: ViewportSize::new(600.0, 400.0),
+        dynamic: ViewportSize::new(450.0, 250.0),
+    };
+    let environment = RelativeLengthEnvironment::viewport(viewport);
+    for (source, expected) in [
+        ("1vw", 6.0),
+        ("1vh", 4.0),
+        ("1vi", 6.0),
+        ("1vb", 4.0),
+        ("1vmin", 4.0),
+        ("1vmax", 6.0),
+        ("1svw", 3.0),
+        ("1svh", 2.0),
+        ("1svi", 3.0),
+        ("1svb", 2.0),
+        ("1svmin", 2.0),
+        ("1svmax", 3.0),
+        ("1lvw", 6.0),
+        ("1lvh", 4.0),
+        ("1lvi", 6.0),
+        ("1lvb", 4.0),
+        ("1lvmin", 4.0),
+        ("1lvmax", 6.0),
+        ("1dvw", 4.5),
+        ("1dvh", 2.5),
+        ("1dvi", 4.5),
+        ("1dvb", 2.5),
+        ("1dvmin", 2.5),
+        ("1dvmax", 4.5),
+    ] {
+        let resolved = source
+            .parse::<LengthPercentage>()
+            .expect(source)
+            .resolve_relative(environment);
+        assert!((resolved.to_px(16.0, 16.0, 0.0) - expected).abs() < 0.001);
+    }
+
+    let calc = "calc(1svw + 1lvh + 1dvi)"
+        .parse::<LengthPercentage>()
+        .expect("tiered viewport calc")
+        .resolve_relative(environment);
+    assert_eq!(calc.to_string(), "calc(11.5px)");
+
+    let vertical = environment.with_vertical_writing(true);
+    for (source, expected) in [
+        ("1vi", 4.0),
+        ("1vb", 6.0),
+        ("1svi", 2.0),
+        ("1svb", 3.0),
+        ("1dvi", 2.5),
+        ("1dvb", 4.5),
+    ] {
+        let resolved = source
+            .parse::<LengthPercentage>()
+            .expect(source)
+            .resolve_relative(vertical);
+        assert!((resolved.to_px(16.0, 16.0, 0.0) - expected).abs() < 0.001);
+    }
+}
+
+#[test]
+fn container_units_resolve_each_axis_or_fall_back_to_the_small_viewport() {
+    let viewport = ViewportSizes {
+        small: ViewportSize::new(200.0, 80.0),
+        large: ViewportSize::new(400.0, 160.0),
+        dynamic: ViewportSize::new(300.0, 120.0),
+    };
+    let contained = RelativeLengthEnvironment::containers(viewport, Some(300.0), Some(400.0));
+    for (source, expected) in [
+        ("10cqw", 30.0),
+        ("10cqi", 30.0),
+        ("10cqh", 40.0),
+        ("10cqb", 40.0),
+        ("10cqmin", 30.0),
+        ("10cqmax", 40.0),
+    ] {
+        let resolved = source
+            .parse::<LengthPercentage>()
+            .expect(source)
+            .resolve_relative(contained);
+        assert!((resolved.to_px(16.0, 16.0, 0.0) - expected).abs() < 0.001);
+    }
+
+    let fallback = "calc(10cqi + 10cqb)"
+        .parse::<LengthPercentage>()
+        .expect("container fallback calc")
+        .resolve_relative(RelativeLengthEnvironment::container_fallback(viewport));
+    assert_eq!(fallback.to_string(), "calc(28px)");
+
+    let vertical = RelativeLengthEnvironment::container_axes(
+        viewport,
+        Some(500.0),
+        Some(300.0),
+        Some(300.0),
+        Some(500.0),
+        true,
+    );
+    for (source, expected) in [
+        ("10cqw", 50.0),
+        ("10cqh", 30.0),
+        ("10cqi", 30.0),
+        ("10cqb", 50.0),
+    ] {
+        let resolved = source
+            .parse::<LengthPercentage>()
+            .expect(source)
+            .resolve_relative(vertical);
+        assert!((resolved.to_px(16.0, 16.0, 0.0) - expected).abs() < 0.001);
+    }
+}
+
+#[test]
+fn comparison_math_resolves_after_its_environmental_bases_are_known() {
+    let viewport = ViewportSizes {
+        small: ViewportSize::new(300.0, 200.0),
+        large: ViewportSize::new(600.0, 400.0),
+        dynamic: ViewportSize::new(450.0, 250.0),
+    };
+    let environment = RelativeLengthEnvironment::containers(viewport, Some(300.0), Some(400.0));
+    for (source, expected) in [
+        ("min(1lvw, 1lvh)", 4.0),
+        ("max(1svw, 1svh)", 3.0),
+        ("max(10cqi, 10cqb)", 40.0),
+        ("clamp(10px, 35px, 30px)", 30.0),
+        ("clamp(10px /* lower */, 35px, 30px)", 30.0),
+        ("clamp(30px, 100px, 20px)", 30.0),
+    ] {
+        let resolved = source
+            .parse::<LengthPercentage>()
+            .expect(source)
+            .resolve_relative(environment)
+            .resolve_font_relative(16.0, 16.0);
+        assert_eq!(resolved.to_string(), format!("{expected}px"));
+        assert!((resolved.to_px(16.0, 16.0, 0.0) - expected).abs() < 0.001);
+    }
+
+    let percentage = "clamp(10px, 50%, 80px)"
+        .parse::<LengthPercentage>()
+        .expect("comparison with a percentage")
+        .resolve_relative(environment)
+        .resolve_font_relative(16.0, 16.0);
+    assert!((percentage.to_px(16.0, 16.0, 100.0) - 50.0).abs() < 0.001);
+
+    for (source, expected) in [
+        ("min(1px, max(2px, 3px))", 1.0),
+        ("calc(0px + clamp(10px, 20px, 30px))", 20.0),
+        ("calc(0px - clamp(10px, 20px, 30px))", -20.0),
+        ("clamp(none, 30px, 33px)", 30.0),
+        ("clamp(30px, 33px, none)", 33.0),
+        ("clamp(1600px / 1em * 1px, 1em / 1rem * 1px, none)", 80.0),
+    ] {
+        let value = source.parse::<LengthPercentage>().expect(source);
+        assert!((value.to_px(20.0, 16.0, 0.0) - expected).abs() < 0.001);
+    }
+}
+
+#[test]
+fn stepped_math_preserves_dimensions_and_sign_rules() {
+    for (source, expected) in [
+        ("round(10px, 6px)", 12.0),
+        ("round(up, 101px, 10px)", 110.0),
+        ("round(down, 106px, 10px)", 100.0),
+        ("round(to-zero, -105px, 10px)", -100.0),
+        ("mod(-18px, 5px)", 2.0),
+        ("mod(18px, -5px)", -2.0),
+        ("rem(-18px, 5px)", -3.0),
+        ("rem(18px, -5px)", 3.0),
+    ] {
+        let value = source.parse::<LengthPercentage>().expect(source);
+        assert!((value.to_px(16.0, 16.0, 0.0) - expected).abs() < 0.001);
+    }
+
+    let mixed = "mod(18px, 100% / 15)"
+        .parse::<LengthPercentage>()
+        .expect("percentage step");
+    assert!((mixed.to_px(16.0, 16.0, 225.0) - 3.0).abs() < 0.001);
+}
+
+#[test]
+fn trigonometric_math_accepts_numbers_and_canonical_angles() {
+    for (source, expected) in [
+        ("calc(100px * sin(30deg + 1.0471976rad))", 100.0),
+        ("calc(20px * cos(0))", 20.0),
+        ("calc(10px * tan(0.125turn))", 10.0),
+        ("calc(10px * sin(asin(1)))", 10.0),
+        ("calc(10px * cos(acos(1)))", 10.0),
+        ("calc(10px * tan(atan(1)))", 10.0),
+        ("calc(10px * sin(atan2(1px, -1px)))", std::f32::consts::FRAC_1_SQRT_2 * 10.0),
+    ] {
+        let value = source.parse::<LengthPercentage>().expect(source);
+        assert!((value.to_px(16.0, 16.0, 0.0) - expected).abs() < 0.01);
+    }
+}
+
+#[test]
+fn exponential_math_composes_inside_length_expressions() {
+    for (source, expected) in [
+        ("calc(100px * pow(2, pow(2, 2)))", 1600.0),
+        ("calc(100px * sqrt(100))", 1000.0),
+        ("hypot(3px, 4px)", 5.0),
+        ("calc(100px * hypot(3, 4))", 500.0),
+        ("calc(10px * exp(log(2)))", 20.0),
+        ("calc(10px * log(8, 2))", 30.0),
+    ] {
+        let value = source.parse::<LengthPercentage>().expect(source);
+        assert!((value.to_px(16.0, 16.0, 0.0) - expected).abs() < 0.01);
+    }
+}
+
+#[test]
+fn number_and_angle_math_feed_individual_transform_properties() {
+    for (source, expected) in [
+        ("sin(30deg)", 0.5),
+        ("cos(0)", 1.0),
+        ("tan(45deg)", 1.0),
+        ("pow(2, 3)", 8.0),
+        ("sqrt(81)", 9.0),
+        ("hypot(3, 4)", 5.0),
+        ("log(8, 2)", 3.0),
+        ("exp(0)", 1.0),
+    ] {
+        let scale = source.parse::<Scale>().expect(source);
+        assert!((scale.factor().expect("scale factor") - expected).abs() < 0.001);
+    }
+
+    for (source, expected) in [
+        ("asin(1)", std::f32::consts::FRAC_PI_2),
+        ("acos(0)", std::f32::consts::FRAC_PI_2),
+        ("atan(1)", std::f32::consts::FRAC_PI_4),
+        ("atan2(1, -1)", 3.0 * std::f32::consts::FRAC_PI_4),
+    ] {
+        let rotate = source.parse::<Rotate>().expect(source);
+        assert!((rotate.radians().expect("rotation") - expected).abs() < 0.001);
+    }
+
+    assert_eq!("pow(2, 3)".parse::<ZIndex>(), Ok(ZIndex::Integer(8)));
+}
+
+#[test]
+fn calc_serialization_orders_viewport_terms_canonically() {
+    for (source, expected) in [
+        ("calc(10px + 1vmin + 10%)", "calc(10% + 10px + 1vmin)"),
+        ("calc(10px + 1vmin)", "calc(10px + 1vmin)"),
+        ("calc(10px + 1em)", "calc(1em + 10px)"),
+        ("calc(1vmin - 10px)", "calc(-10px + 1vmin)"),
+        ("calc(-10px + 1em)", "calc(1em - 10px)"),
+        ("calc(-10px)", "calc(-10px)"),
+    ] {
+        assert_eq!(
+            source
+                .parse::<LengthPercentage>()
+                .expect(source)
+                .to_string(),
+            expected
+        );
+    }
+
+    let eight_relative = "calc(1cqb + 1cqh + 1cqi + 1cqmax + 1cqmin + 1cqw + 1dvb + 1dvh)";
+    assert_eq!(
+        eight_relative
+            .parse::<LengthPercentage>()
+            .expect("eight distinct relative terms")
+            .to_string(),
+        eight_relative
+    );
+    assert!(
+        "calc(1cqb + 1cqh + 1cqi + 1cqmax + 1cqmin + 1cqw + 1dvb + 1dvh + 1dvi)"
+            .parse::<LengthPercentage>()
+            .is_err()
     );
 }
 

@@ -61,6 +61,12 @@ url = "https://www.w3.org/TR/css-flexbox-1/"
 [sources.css_grid_1]
 url = "https://www.w3.org/TR/css-grid-1/"
 
+[sources.css_conditional_5]
+url = "https://www.w3.org/TR/css-contain-3/"
+
+[sources.css_writing_modes_4]
+url = "https://www.w3.org/TR/css-writing-modes-4/"
+
 [shorthands.margin]
 longhands = ["margin-top", "margin-right", "margin-bottom", "margin-left"]
 grammar = "<length-percentage> | auto, one to four values"
@@ -437,6 +443,36 @@ grammar = "<color>"
 seed_values = ["rgb()", "hex"]
 animation = "by-computed-value"
 source = "css_color_4"
+
+[[property]]
+name = "container-name"
+value_type = "container-name"
+inherited = false
+initial = "none"
+grammar = "none | <custom-ident>+"
+seed_values = ["none", "sidebar"]
+animation = "discrete"
+source = "css_conditional_5"
+
+[[property]]
+name = "container-type"
+value_type = "container-type"
+inherited = false
+initial = "normal"
+grammar = "normal | size | inline-size"
+seed_values = ["normal", "size", "inline-size"]
+animation = "discrete"
+source = "css_conditional_5"
+
+[[property]]
+name = "writing-mode"
+value_type = "writing-mode"
+inherited = true
+initial = "horizontal-tb"
+grammar = "horizontal-tb | vertical-rl | vertical-lr | sideways-rl | sideways-lr"
+seed_values = ["horizontal-tb", "vertical-rl", "vertical-lr"]
+animation = "discrete"
+source = "css_writing_modes_4"
 
 [[property]]
 name = "display"
@@ -917,6 +953,26 @@ grammar = "auto | <length-percentage>"
 seed_values = ["auto", "px", "percentage"]
 animation = "by-computed-value"
 source = "css_position_3"
+
+[[property]]
+name = "rotate"
+value_type = "rotate"
+inherited = false
+initial = "none"
+grammar = "none | <angle>"
+seed_values = ["none", "deg", "calc()"]
+animation = "by-computed-value"
+source = "css_transforms_1"
+
+[[property]]
+name = "scale"
+value_type = "scale"
+inherited = false
+initial = "none"
+grammar = "none | <number-percentage>"
+seed_values = ["none", "number", "percentage", "calc()"]
+animation = "by-computed-value"
+source = "css_transforms_1"
 
 [[property]]
 name = "text-decoration-line"
@@ -1429,20 +1485,6 @@ animation = "none"
 spec = "https://drafts.csswg.org/css-contain/#contain-property"
 
 [[unimplemented]]
-name = "container-name"
-group = "box"
-inherited = false
-animation = "none"
-spec = "https://drafts.csswg.org/css-contain-3/#container-name"
-
-[[unimplemented]]
-name = "container-type"
-group = "box"
-inherited = false
-animation = "none"
-spec = "https://drafts.csswg.org/css-contain-3/#container-type"
-
-[[unimplemented]]
 name = "isolation"
 group = "box"
 inherited = false
@@ -1485,20 +1527,6 @@ group = "box"
 inherited = false
 animation = "by-computed-value"
 spec = "https://drafts.csswg.org/css-transforms-2/#perspective-origin-property"
-
-[[unimplemented]]
-name = "rotate"
-group = "box"
-inherited = false
-animation = "by-computed-value"
-spec = "https://drafts.csswg.org/css-transforms-2/#individual-transforms"
-
-[[unimplemented]]
-name = "scale"
-group = "box"
-inherited = false
-animation = "by-computed-value"
-spec = "https://drafts.csswg.org/css-transforms-2/#individual-transforms"
 
 [[unimplemented]]
 name = "transform-origin"
@@ -1714,13 +1742,6 @@ group = "inherited_box"
 inherited = true
 animation = "discrete"
 spec = "https://drafts.csswg.org/css-images/#propdef-image-rendering"
-
-[[unimplemented]]
-name = "writing-mode"
-group = "inherited_box"
-inherited = true
-animation = "none"
-spec = "https://drafts.csswg.org/css-writing-modes/#propdef-writing-mode"
 
 # group: inherited_table
 [[unimplemented]]

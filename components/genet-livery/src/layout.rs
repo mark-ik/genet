@@ -3,14 +3,17 @@ use std::{collections::HashMap, error::Error, fmt, hash::Hash};
 use layout_dom_api::{LayoutDom, NodeKind};
 use livery::{
     ComputedValues,
+    media::{Device, ViewportSizes},
+    stylesheet::ContainerSnapshot,
     values::{
         Alignment as CssAlignment, AspectRatio, BorderStyle, BorderWidth,
-        BoxSizing as CssBoxSizing, Display as CssDisplay, FlexDirection as CssFlexDirection,
-        FlexWrap as CssFlexWrap, Float as CssFloat, FontSize, Gap as CssGap,
-        GridAutoFlow as CssGridAutoFlow, GridPlacement as CssGridPlacement,
+        BoxSizing as CssBoxSizing, ContainerType, Display as CssDisplay,
+        FlexDirection as CssFlexDirection, FlexWrap as CssFlexWrap, Float as CssFloat, FontSize,
+        Gap as CssGap, GridAutoFlow as CssGridAutoFlow, GridPlacement as CssGridPlacement,
         GridTemplate as CssGridTemplate, GridTrack as CssGridTrack, Inset, Length,
         LengthPercentage as CssLengthPercentage, LineHeight, Margin, Overflow as CssOverflow,
-        Position as CssPosition, Size as CssSize, VerticalAlign, WhiteSpaceCollapse,
+        Position as CssPosition, RelativeLengthEnvironment, Size as CssSize, VerticalAlign,
+        WhiteSpaceCollapse,
     },
 };
 use taffy::{
@@ -29,7 +32,9 @@ use taffy::{
 
 type ImageSources = HashMap<String, Vec<u8>>;
 
-use crate::{StylePlane, TextSystem};
+use crate::{
+    InteractionStates, StylePlane, StyleSet, TextSystem, style::resolve_styles_with_containers,
+};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Fragment {
@@ -114,6 +119,16 @@ struct InlineBuildState<'a, D: LayoutDom> {
     image_sources: &'a ImageSources,
 }
 
+type ResolvedLayout<Id> = (StylePlane<Id>, FragmentPlane<Id>);
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ContainerBases {
+    width: Option<f32>,
+    height: Option<f32>,
+    inline: Option<f32>,
+    block: Option<f32>,
+}
+
 /// Lay out a Livery style plane through a standalone Taffy tree.
 ///
 /// This stateless entry point uses deterministic text estimates. Retained
@@ -130,7 +145,55 @@ where
     D::NodeId: Copy + Eq + Hash,
 {
     let image_sources = ImageSources::new();
-    layout_impl(dom, styles, viewport_width, viewport_height, &image_sources)
+    let viewport = ViewportSizes::uniform(viewport_width, viewport_height);
+    let resolved =
+        resolve_container_relative_styles_with_images(dom, styles, viewport, &image_sources)?;
+    layout_impl(
+        dom,
+        &resolved,
+        viewport_width,
+        viewport_height,
+        &image_sources,
+    )
+}
+
+/// Produce the layout bases needed by resolved-value CSSOM reads without
+/// letting the queried element's own margin expression participate in the
+/// measurement. This matters for percentage-bearing margin math: its basis is
+/// the containing block, which must be known before the expression can be
+/// evaluated.
+pub fn used_value_context<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    viewport_width: f32,
+    viewport_height: f32,
+    node: D::NodeId,
+) -> Result<Option<crate::UsedValueContext>, LayoutError>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut measuring = styles.clone();
+    if let Some(style) = measuring.get_mut(node) {
+        let zero = Margin::Value(CssLengthPercentage::ZERO);
+        style.margin_top = zero;
+        style.margin_right = zero;
+        style.margin_bottom = zero;
+        style.margin_left = zero;
+    }
+    let fragments = layout(dom, &measuring, viewport_width, viewport_height)?;
+    let Some(fragment) = fragments.get(node) else {
+        return Ok(None);
+    };
+    let containing_inline_size = dom.parent(node).and_then(|parent| {
+        let style = measuring.get(parent)?;
+        let fragment = fragments.get(parent)?;
+        Some(content_box_size(style, fragment).0)
+    });
+    Ok(Some(crate::UsedValueContext {
+        border_box: (fragment.width, fragment.height),
+        containing_inline_size,
+    }))
 }
 
 pub(crate) fn layout_with_text_system<D>(
@@ -138,22 +201,316 @@ pub(crate) fn layout_with_text_system<D>(
     styles: &StylePlane<D::NodeId>,
     viewport_width: f32,
     viewport_height: f32,
+    viewport: ViewportSizes,
     text: &mut TextSystem,
     image_sources: &ImageSources,
-) -> Result<FragmentPlane<D::NodeId>, LayoutError>
+) -> Result<ResolvedLayout<D::NodeId>, LayoutError>
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    let preliminary = layout_impl(dom, styles, viewport_width, viewport_height, image_sources)?;
-    layout_inline_groups(
+    let styles =
+        resolve_container_relative_styles_with_images(dom, styles, viewport, image_sources)?;
+    let preliminary = layout_impl(dom, &styles, viewport_width, viewport_height, image_sources)?;
+    let fragments = layout_inline_groups(
         dom,
-        styles,
+        &styles,
         viewport_width,
         viewport_height,
         text,
         &preliminary,
         image_sources,
+    )?;
+    Ok((styles, fragments))
+}
+
+/// Resolve deferred container-relative units from the nearest eligible
+/// ancestor content boxes. A fallback pass supplies small-viewport values so
+/// Taffy can establish those boxes without consuming unresolved units.
+pub fn resolve_container_relative_styles<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    viewport: ViewportSizes,
+) -> Result<StylePlane<D::NodeId>, LayoutError>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    resolve_container_relative_styles_with_images(dom, styles, viewport, &ImageSources::new())
+}
+
+/// Iterate size-query cascade and container-unit resolution until the style
+/// plane stabilizes. The pass is bounded so cyclic queries cannot hang a
+/// frame; the final bounded state is laid out normally.
+pub fn resolve_container_query_styles<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    style_set: &StyleSet,
+    device: &Device,
+    interactions: &InteractionStates<D::NodeId>,
+) -> Result<StylePlane<D::NodeId>, LayoutError>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    resolve_container_query_styles_with_images(
+        dom,
+        styles,
+        style_set,
+        device,
+        interactions,
+        &ImageSources::new(),
+    )
+}
+
+pub(crate) fn resolve_container_query_styles_with_images<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    style_set: &StyleSet,
+    device: &Device,
+    interactions: &InteractionStates<D::NodeId>,
+    image_sources: &ImageSources,
+) -> Result<StylePlane<D::NodeId>, LayoutError>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    if !style_set.has_container_queries() {
+        return resolve_container_relative_styles_with_images(
+            dom,
+            styles,
+            device.viewport_sizes,
+            image_sources,
+        );
+    }
+    let mut current = styles.clone();
+    for _ in 0..8 {
+        let resolved = resolve_container_relative_styles_with_images(
+            dom,
+            &current,
+            device.viewport_sizes,
+            image_sources,
+        )?;
+        let fragments = layout_impl(
+            dom,
+            &resolved,
+            device.viewport_width,
+            device.viewport_height,
+            image_sources,
+        )?;
+        let containers = container_snapshots(dom, &resolved, &fragments);
+        let next =
+            resolve_styles_with_containers(dom, style_set, device, interactions, &containers);
+        if next == current {
+            return Ok(resolved);
+        }
+        current = next;
+    }
+    resolve_container_relative_styles_with_images(
+        dom,
+        &current,
+        device.viewport_sizes,
+        image_sources,
+    )
+}
+
+fn container_snapshots<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+) -> HashMap<D::NodeId, Vec<ContainerSnapshot>>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut snapshots = HashMap::new();
+    collect_container_snapshots(dom, dom.document(), styles, fragments, &[], &mut snapshots);
+    snapshots
+}
+
+fn collect_container_snapshots<D>(
+    dom: &D,
+    id: D::NodeId,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    ancestors: &[ContainerSnapshot],
+    snapshots: &mut HashMap<D::NodeId, Vec<ContainerSnapshot>>,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut descendants = ancestors.to_vec();
+    if dom.kind(id) == NodeKind::Element {
+        snapshots.insert(id, ancestors.to_vec());
+        if let (Some(style), Some(fragment)) = (styles.get(id), fragments.get(id))
+            && style.container_type != ContainerType::Normal
+        {
+            let (width, height) = content_box_size(style, fragment);
+            let (inline_size, block_size) = if style.writing_mode.is_vertical() {
+                (height, width)
+            } else {
+                (width, height)
+            };
+            descendants.insert(
+                0,
+                ContainerSnapshot {
+                    names: style.container_name.names().to_vec(),
+                    container_type: style.container_type,
+                    writing_mode: style.writing_mode,
+                    width,
+                    height,
+                    inline_size,
+                    block_size,
+                },
+            );
+        }
+    }
+    for child in dom.dom_children(id) {
+        collect_container_snapshots(dom, child, styles, fragments, &descendants, snapshots);
+    }
+}
+
+fn resolve_container_relative_styles_with_images<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    viewport: ViewportSizes,
+    image_sources: &ImageSources,
+) -> Result<StylePlane<D::NodeId>, LayoutError>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut fallback = styles.clone();
+    resolve_relative_subtree(
+        dom,
+        dom.document(),
+        &mut fallback,
+        RelativeLengthEnvironment::container_fallback(viewport),
+    );
+    if fallback == *styles {
+        return Ok(styles.clone());
+    }
+    let fragments = layout_impl(
+        dom,
+        &fallback,
+        viewport.dynamic.width,
+        viewport.dynamic.height,
+        image_sources,
+    )?;
+
+    let mut resolved = styles.clone();
+    resolve_container_subtree(
+        dom,
+        dom.document(),
+        &mut resolved,
+        &fragments,
+        viewport,
+        ContainerBases::default(),
+    );
+    Ok(resolved)
+}
+
+fn resolve_relative_subtree<D>(
+    dom: &D,
+    id: D::NodeId,
+    styles: &mut StylePlane<D::NodeId>,
+    environment: RelativeLengthEnvironment,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let environment = environment.with_vertical_writing(
+        styles
+            .get(id)
+            .is_some_and(|style| style.writing_mode.is_vertical()),
+    );
+    styles.resolve_relative_lengths(id, environment);
+    for child in dom.dom_children(id) {
+        resolve_relative_subtree(dom, child, styles, environment);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_container_subtree<D>(
+    dom: &D,
+    id: D::NodeId,
+    styles: &mut StylePlane<D::NodeId>,
+    fragments: &FragmentPlane<D::NodeId>,
+    viewport: ViewportSizes,
+    bases: ContainerBases,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let vertical_writing = styles
+        .get(id)
+        .is_some_and(|style| style.writing_mode.is_vertical());
+    styles.resolve_relative_lengths(
+        id,
+        RelativeLengthEnvironment::container_axes(
+            viewport,
+            bases.width,
+            bases.height,
+            bases.inline,
+            bases.block,
+            vertical_writing,
+        ),
+    );
+
+    let mut next = bases;
+    if let (Some(style), Some(fragment)) = (styles.get(id), fragments.get(id)) {
+        let (width, height) = content_box_size(style, fragment);
+        let vertical = style.writing_mode.is_vertical();
+        let (inline_size, block_size) = if vertical {
+            (height, width)
+        } else {
+            (width, height)
+        };
+        match style.container_type {
+            ContainerType::Normal => {},
+            ContainerType::InlineSize => {
+                next.inline = Some(inline_size);
+                if vertical {
+                    next.height = Some(height);
+                } else {
+                    next.width = Some(width);
+                }
+            },
+            ContainerType::Size => {
+                next.width = Some(width);
+                next.height = Some(height);
+                next.inline = Some(inline_size);
+                next.block = Some(block_size);
+            },
+        }
+    }
+
+    for child in dom.dom_children(id) {
+        resolve_container_subtree(dom, child, styles, fragments, viewport, next);
+    }
+}
+
+/// Return a fragment's physical content-box size after its computed padding
+/// and borders are removed.
+pub fn content_box_size(style: &ComputedValues, fragment: &Fragment) -> (f32, f32) {
+    let em = match style.font_size {
+        FontSize::Value(CssLengthPercentage::Length(Length {
+            value,
+            unit: livery::values::LengthUnit::Px,
+        })) => value,
+        _ => 16.0,
+    };
+    let padding_left = length_percentage_px(style.padding_left.0, em, fragment.width);
+    let padding_right = length_percentage_px(style.padding_right.0, em, fragment.width);
+    let padding_top = length_percentage_px(style.padding_top.0, em, fragment.width);
+    let padding_bottom = length_percentage_px(style.padding_bottom.0, em, fragment.width);
+    let border_left = border_width_px(style.border_left_style, style.border_left_width, em);
+    let border_right = border_width_px(style.border_right_style, style.border_right_width, em);
+    let border_top = border_width_px(style.border_top_style, style.border_top_width, em);
+    let border_bottom = border_width_px(style.border_bottom_style, style.border_bottom_width, em);
+    (
+        (fragment.width - padding_left - padding_right - border_left - border_right).max(0.0),
+        (fragment.height - padding_top - padding_bottom - border_top - border_bottom).max(0.0),
     )
 }
 
@@ -588,8 +945,19 @@ where
             NodeKind::Element => {
                 let computed = self.styles.get(id).cloned().unwrap_or_default();
                 let font_size = font_size_px(&computed.font_size, parent_font_size);
-                let child_containing_size =
+                let mut child_containing_size =
                     resolved_child_containing_size(&computed, font_size, containing_size);
+                if self
+                    .dom
+                    .parent(id)
+                    .is_some_and(|parent| self.dom.kind(parent) == NodeKind::Document)
+                {
+                    // The root element's containing block is the initial
+                    // containing block. Preserve its definite block size for
+                    // percentage-height descendants even when the root's own
+                    // height is auto.
+                    child_containing_size.1 = child_containing_size.1.or(containing_size.1);
+                }
                 let children = self
                     .dom
                     .dom_children(id)
@@ -1152,6 +1520,24 @@ fn to_taffy_style(computed: &ComputedValues, font_size: f32) -> Style {
             AspectRatio::Auto => None,
             AspectRatio::Ratio(value) => Some(value),
         },
+        size_containment: match computed.container_type {
+            ContainerType::Normal => Size {
+                width: false,
+                height: false,
+            },
+            ContainerType::InlineSize if computed.writing_mode.is_vertical() => Size {
+                width: false,
+                height: true,
+            },
+            ContainerType::InlineSize => Size {
+                width: true,
+                height: false,
+            },
+            ContainerType::Size => Size {
+                width: true,
+                height: true,
+            },
+        },
         flex_direction,
         flex_wrap: match computed.flex_wrap {
             CssFlexWrap::NoWrap => FlexWrap::NoWrap,
@@ -1235,7 +1621,7 @@ fn grid_placement(value: CssGridPlacement) -> GridPlacement {
     }
 }
 
-fn grid_template(value: &CssGridTemplate, _em: f32) -> Vec<GridTemplateComponent<String>> {
+fn grid_template(value: &CssGridTemplate, em: f32) -> Vec<GridTemplateComponent<String>> {
     match value {
         CssGridTemplate::None => Vec::new(),
         CssGridTemplate::Tracks(tracks) => tracks
@@ -1244,7 +1630,7 @@ fn grid_template(value: &CssGridTemplate, _em: f32) -> Vec<GridTemplateComponent
                 CssGridTrack::Auto => auto(),
                 CssGridTrack::MinContent => min_content(),
                 CssGridTrack::MaxContent => max_content(),
-                CssGridTrack::Px(value) => length(*value),
+                CssGridTrack::Length(value) => length(value.unit.to_px(value.value, em, 16.0)),
                 CssGridTrack::Percent(value) => percent(*value),
                 CssGridTrack::Fr(value) => fr(*value),
             })
@@ -1340,11 +1726,13 @@ fn resolved_child_containing_size(
         CssDisplay::None | CssDisplay::Inline | CssDisplay::InlineBlock
     );
     (
-        resolved_explicit_size(computed.width, em, containing_size.0).or(if fills_available_width {
-            containing_size.0
-        } else {
-            None
-        }),
+        resolved_explicit_size(computed.width, em, containing_size.0).or(
+            if fills_available_width {
+                containing_size.0
+            } else {
+                None
+            },
+        ),
         resolved_explicit_size(computed.height, em, containing_size.1),
     )
 }
@@ -1404,6 +1792,9 @@ fn absolute_length_percentage(
         CssLengthPercentage::Percentage(value) => percentage_basis * value,
         CssLengthPercentage::Calc(calc) => {
             percentage_basis * calc.percentage + calc.px + calc.em * em + calc.rem * rem
+        },
+        CssLengthPercentage::Math(math) => {
+            CssLengthPercentage::Math(math).to_px(em, rem, percentage_basis)
         },
     }
 }

@@ -797,6 +797,107 @@ keyword_value! {
 }
 
 keyword_value! {
+    /// Axes exposed as query-container size bases.
+    pub enum ContainerType {
+        Normal => "normal",
+        Size => "size",
+        InlineSize => "inline-size",
+    }
+}
+
+/// Names by which descendant `@container` rules can select this query
+/// container.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ContainerName {
+    None,
+    Names(Vec<String>),
+}
+
+impl ContainerName {
+    pub fn contains(&self, name: &str) -> bool {
+        match self {
+            Self::None => false,
+            Self::Names(names) => names.iter().any(|candidate| candidate == name),
+        }
+    }
+
+    pub fn names(&self) -> &[String] {
+        match self {
+            Self::None => &[],
+            Self::Names(names) => names,
+        }
+    }
+}
+
+impl FromStr for ContainerName {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let input = input.trim();
+        if input.eq_ignore_ascii_case("none") {
+            return Ok(Self::None);
+        }
+        let names = input
+            .split_ascii_whitespace()
+            .map(|name| {
+                let lower = name.to_ascii_lowercase();
+                let reserved = [
+                    "none",
+                    "default",
+                    "initial",
+                    "inherit",
+                    "unset",
+                    "revert",
+                    "revert-layer",
+                    "and",
+                    "or",
+                    "not",
+                ];
+                let valid = !reserved.contains(&lower.as_str())
+                    && name.chars().next().is_some_and(|character| {
+                        character.is_ascii_alphabetic() || character == '_'
+                    })
+                    && name.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || "-_".contains(character)
+                    });
+                valid
+                    .then(|| name.to_owned())
+                    .ok_or_else(|| ParseError::expected("none or one or more custom identifiers"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        (!names.is_empty())
+            .then_some(Self::Names(names))
+            .ok_or_else(|| ParseError::expected("none or one or more custom identifiers"))
+    }
+}
+
+impl fmt::Display for ContainerName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => formatter.write_str("none"),
+            Self::Names(names) => formatter.write_str(&names.join(" ")),
+        }
+    }
+}
+
+keyword_value! {
+    /// Block-flow direction used to map logical viewport and container axes.
+    pub enum WritingMode {
+        HorizontalTb => "horizontal-tb",
+        VerticalRl => "vertical-rl",
+        VerticalLr => "vertical-lr",
+        SidewaysRl => "sideways-rl",
+        SidewaysLr => "sideways-lr",
+    }
+}
+
+impl WritingMode {
+    pub const fn is_vertical(self) -> bool {
+        !matches!(self, Self::HorizontalTb)
+    }
+}
+
+keyword_value! {
     /// Whether a box participates in hit testing and event dispatch.
     pub enum PointerEvents {
         Auto => "auto",
@@ -1222,7 +1323,7 @@ pub enum GridTrack {
     Auto,
     MinContent,
     MaxContent,
-    Px(f32),
+    Length(Length),
     Percent(f32),
     Fr(f32),
 }
@@ -1254,11 +1355,10 @@ impl FromStr for GridTemplate {
             } else if let Some(value) = component.strip_suffix('%') {
                 GridTrack::Percent(parse_non_negative(value)? / 100.0)
             } else {
-                GridTrack::Px(
+                GridTrack::Length(
                     component
                         .parse::<Length>()
-                        .map_err(|_| ParseError::expected("grid track sizes"))?
-                        .value,
+                        .map_err(|_| ParseError::expected("grid track sizes"))?,
                 )
             };
             tracks.push(track);
@@ -1294,7 +1394,7 @@ impl fmt::Display for GridTrack {
             Self::Auto => formatter.write_str("auto"),
             Self::MinContent => formatter.write_str("min-content"),
             Self::MaxContent => formatter.write_str("max-content"),
-            Self::Px(value) => write!(formatter, "{}px", format_number(*value)),
+            Self::Length(value) => value.fmt(formatter),
             Self::Percent(value) => write!(formatter, "{}%", format_number(*value * 100.0)),
             Self::Fr(value) => write!(formatter, "{}fr", format_number(*value)),
         }
@@ -1451,6 +1551,7 @@ impl FromStr for Radius {
             LengthPercentage::Length(length) => length.value < 0.0,
             LengthPercentage::Percentage(value) => value < 0.0,
             LengthPercentage::Calc(calc) => calc.px < 0.0 || calc.em < 0.0 || calc.rem < 0.0,
+            LengthPercentage::Math(_) => false,
         };
         if negative {
             return Err(ParseError::expected("a non-negative border radius"));
@@ -1483,6 +1584,7 @@ impl FromStr for Gap {
             LengthPercentage::Length(length) => length.value < 0.0,
             LengthPercentage::Percentage(value) => value < 0.0,
             LengthPercentage::Calc(calc) => calc.px < 0.0 || calc.em < 0.0 || calc.rem < 0.0,
+            LengthPercentage::Math(_) => false,
         };
         if negative {
             return Err(ParseError::expected("a non-negative gap"));
@@ -1562,7 +1664,7 @@ impl fmt::Display for Order {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Spacing {
     Normal,
-    Length(Length),
+    Length(LengthPercentage),
 }
 
 impl FromStr for Spacing {
@@ -1573,7 +1675,7 @@ impl FromStr for Spacing {
             Ok(Self::Normal)
         } else {
             input
-                .parse::<Length>()
+                .parse::<LengthPercentage>()
                 .map(Self::Length)
                 .map_err(|_| ParseError::expected("normal or a length"))
         }
@@ -1661,6 +1763,90 @@ impl FromStr for Opacity {
 impl fmt::Display for Opacity {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&format_number(self.0))
+    }
+}
+
+/// The bounded 2D individual `rotate` property.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Rotate {
+    None,
+    Angle(f32),
+}
+
+impl Rotate {
+    pub const fn radians(self) -> Option<f32> {
+        match self {
+            Self::None => None,
+            Self::Angle(value) => Some(value),
+        }
+    }
+}
+
+impl FromStr for Rotate {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let input = input.trim();
+        if input.eq_ignore_ascii_case("none") {
+            return Ok(Self::None);
+        }
+        parse_angle(input)
+            .or_else(|_| super::calc::parse_angle(input))
+            .map(Self::Angle)
+    }
+}
+
+impl fmt::Display for Rotate {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => formatter.write_str("none"),
+            Self::Angle(value) => write!(formatter, "{}rad", format_number(*value)),
+        }
+    }
+}
+
+/// The bounded uniform individual `scale` property.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Scale {
+    None,
+    Uniform(f32),
+}
+
+impl Scale {
+    pub const fn factor(self) -> Option<f32> {
+        match self {
+            Self::None => None,
+            Self::Uniform(value) => Some(value),
+        }
+    }
+}
+
+impl FromStr for Scale {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let input = input.trim();
+        if input.eq_ignore_ascii_case("none") {
+            return Ok(Self::None);
+        }
+        let value = input
+            .strip_suffix('%')
+            .and_then(|value| value.trim().parse::<f32>().ok())
+            .map(|value| value / 100.0)
+            .or_else(|| input.parse::<f32>().ok())
+            .filter(|value| value.is_finite())
+            .map(Ok)
+            .unwrap_or_else(|| super::calc::parse_number(input))?;
+        Ok(Self::Uniform(value))
+    }
+}
+
+impl fmt::Display for Scale {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => formatter.write_str("none"),
+            Self::Uniform(value) => formatter.write_str(&format_number(*value)),
+        }
     }
 }
 
@@ -2008,6 +2194,8 @@ fn parse_angle(input: &str) -> Result<f32, ParseError> {
     let lower = input.trim().to_ascii_lowercase();
     let (number, factor) = if let Some(value) = lower.strip_suffix("deg") {
         (value, std::f32::consts::PI / 180.0)
+    } else if let Some(value) = lower.strip_suffix("grad") {
+        (value, std::f32::consts::PI / 200.0)
     } else if let Some(value) = lower.strip_suffix("rad") {
         (value, 1.0)
     } else if let Some(value) = lower.strip_suffix("turn") {
@@ -2081,6 +2269,7 @@ impl FromStr for Padding {
             LengthPercentage::Length(length) => length.value < 0.0,
             LengthPercentage::Percentage(value) => value < 0.0,
             LengthPercentage::Calc(_) => false,
+            LengthPercentage::Math(_) => false,
         };
         if negative {
             return Err(ParseError::expected("a non-negative padding"));
@@ -2177,11 +2366,19 @@ impl FromStr for ZIndex {
         if input.trim().eq_ignore_ascii_case("auto") {
             Ok(Self::Auto)
         } else {
-            input
+            let integer = input
                 .trim()
                 .parse::<i32>()
-                .map(Self::Integer)
-                .map_err(|_| ParseError::expected("auto or an integer"))
+                .ok()
+                .or_else(|| {
+                    input.contains('(').then(|| super::calc::parse_number(input).ok()).flatten().and_then(|value| {
+                        let rounded = (value + 0.5).floor();
+                        (rounded >= i32::MIN as f32 && rounded <= i32::MAX as f32)
+                            .then_some(rounded as i32)
+                    })
+                })
+                .ok_or_else(|| ParseError::expected("auto or an integer"))?;
+            Ok(Self::Integer(integer))
         }
     }
 }

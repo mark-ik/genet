@@ -135,6 +135,8 @@
   var upgradedCustomElements = new WeakMap();
   var connectedCustomElements = new WeakMap();
   var ownerDocuments = new WeakMap();
+  var iframeDocuments = new WeakMap();
+  var iframeWindows = new WeakMap();
   var htmlElementConstructionStack = [];
   var customElementReactionQueue = [];
   var customElementReactionScheduled = false;
@@ -710,6 +712,21 @@
     customElementAttributeChanged(this, name, oldValue, newValue);
   };
   Element.prototype.getAttribute = function(name) { return __getAttribute(this.__ref, String(name)); };
+  Object.defineProperty(Element.prototype, 'innerHTML', {
+    configurable: true,
+    get: function() { return String(__getInnerHtml(this.__ref)); },
+    set: function(value) {
+      var oldChildren = this.childNodes;
+      for (var i = 0; i < oldChildren.length; i++) disconnectCustomElementTree(oldChildren[i]);
+      __setInnerHtml(this.__ref, String(value));
+      var newChildren = this.childNodes;
+      for (var j = 0; j < newChildren.length; j++) {
+        upgradeCustomElementTree(newChildren[j]);
+        if (this.isConnected) connectCustomElementTree(newChildren[j]);
+      }
+      __refreshNamedProperties();
+    }
+  });
   // scrollIntoView: record this element as the host's pending scroll-into-view
   // target (the host resolves it to a viewport scroll after the run). Options
   // (alignToTop / { block, inline, behavior }) are ignored for now: block-start.
@@ -870,6 +887,9 @@
   Object.defineProperty(Element.prototype, 'style', {
     configurable: true,
     get: function() { return makeStyleDecl(this); },
+    // CSSOM's [PutForwards=cssText]: assigning a string to `element.style`
+    // replaces the declaration block rather than the declaration object.
+    set: function(value) { makeStyleDecl(this).cssText = String(value); },
   });
 
   // window.getComputedStyle(el): a read-only CSSStyleDeclaration whose property
@@ -877,9 +897,14 @@
   // calls the host's ComputedStyleHandler over its layout). No handler / unstyled
   // / unsupported property -> "". Enumeration (length / item / iteration over all
   // computed longhands) is not supported in this first cut.
-  function makeComputedStyle(el) {
+  function makeComputedStyle(el, context) {
     var ref = el ? el.__ref : 0;
-    function val(name) { var v = __computedStyleValue(ref, name); return v === null ? '' : v; }
+    function val(name) {
+      var v = context
+        ? __computedStyleValueInContext(context.__ref, ref, name)
+        : __computedStyleValue(ref, name);
+      return v === null ? '' : v;
+    }
     var api = {
       getPropertyValue: function(name) { return val(String(name).toLowerCase()); },
       setProperty: function() {},          // read-only
@@ -896,10 +921,31 @@
         return val(cssKebab(prop));
       },
       set: function() { return true; }, // read-only: ignore writes
+      has: function(target, prop) {
+        if (typeof prop === 'string' && reserved[prop]) { return true; }
+        return typeof prop === 'string' && !/^[0-9]+$/.test(prop) && val(cssKebab(prop)) !== '';
+      },
     });
   }
   globalThis.getComputedStyle = function(el) { return makeComputedStyle(el); };
   if (globalThis.window) { globalThis.window.getComputedStyle = globalThis.getComputedStyle; }
+
+  // The selected style engine classifies two-argument CSS.supports queries.
+  // A one-string declaration is split at its first colon; condition grammar is
+  // a later surface.
+  var cssApi = globalThis.CSS || {};
+  cssApi.supports = function(property, value) {
+    if (arguments.length < 2) {
+      var declaration = String(property);
+      var colon = declaration.indexOf(':');
+      if (colon < 1) return false;
+      value = declaration.slice(colon + 1).trim();
+      property = declaration.slice(0, colon).trim();
+    }
+    return String(__supportsStyleValue(String(property).toLowerCase(), String(value))) === 'true';
+  };
+  globalThis.CSS = cssApi;
+  if (globalThis.window) { globalThis.window.CSS = cssApi; }
 
   // Retained author stylesheets. The selected CSS engine owns the actual rule
   // objects; these live wrappers ask it for counts and route CSSOM mutation into
@@ -1579,6 +1625,44 @@
   }
 
   function installHtmlInterfaceMembers(name, proto) {
+    if (name === 'HTMLIFrameElement') {
+      Object.defineProperty(proto, 'contentDocument', {
+        configurable: true,
+        get: function() {
+          var child = iframeDocuments.get(this);
+          if (!child) {
+            child = document.implementation.createHTMLDocument('');
+            iframeDocuments.set(this, child);
+          }
+          return child;
+        }
+      });
+      Object.defineProperty(proto, 'contentWindow', {
+        configurable: true,
+        get: function() {
+          var childWindow = iframeWindows.get(this);
+          if (!childWindow) {
+            var frame = this;
+            childWindow = Object.create(globalThis.EventTarget && globalThis.EventTarget.prototype || Object.prototype);
+            childWindow.document = frame.contentDocument;
+            childWindow.getComputedStyle = function(el) { return makeComputedStyle(el, frame); };
+            Object.defineProperty(childWindow, 'innerWidth', {
+              configurable: true,
+              get: function() { return parseFloat(makeComputedStyle(frame).width) || 300; }
+            });
+            Object.defineProperty(childWindow, 'innerHeight', {
+              configurable: true,
+              get: function() { return parseFloat(makeComputedStyle(frame).height) || 150; }
+            });
+            childWindow.window = childWindow;
+            childWindow.self = childWindow;
+            iframeWindows.set(frame, childWindow);
+          }
+          return childWindow;
+        }
+      });
+      return;
+    }
     if (name !== 'HTMLCanvasElement') return;
     proto.getContext = function(contextType) {
       var t = String(contextType || '');

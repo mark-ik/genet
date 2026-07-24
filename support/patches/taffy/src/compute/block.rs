@@ -385,6 +385,7 @@ fn compute_inner(
     let raw_border = style.border();
     let raw_margin = style.margin();
     let aspect_ratio = style.aspect_ratio();
+    let size_containment = style.size_containment();
     let padding = raw_padding.resolve_or_zero(parent_size.width, |val, basis| tree.calc(val, basis));
     let border = raw_border.resolve_or_zero(parent_size.width, |val, basis| tree.calc(val, basis));
     let direction = style.direction();
@@ -435,10 +436,14 @@ fn compute_inner(
     // while probing intrinsic sizes, so measure passes stay content-based. Only a
     // newly-filled axis is adopted (and clamped); an incoming known size is left
     // as the parent resolved it (re-clamping would undo padding/border overrides).
-    let known_dimensions = {
+    let mut known_dimensions = {
         let derived = known_dimensions.maybe_apply_aspect_ratio(aspect_ratio).maybe_clamp(min_size, max_size);
         Size { width: known_dimensions.width.or(derived.width), height: known_dimensions.height.or(derived.height) }
     };
+    if size_containment.height && known_dimensions.height.is_none() {
+        known_dimensions.height =
+            Some(padding_border_size.height.maybe_clamp(min_size.height, max_size.height));
+    }
     let container_content_box_size = known_dimensions.maybe_sub(content_box_inset.sum_axes());
 
     let overflow = style.overflow();
@@ -447,11 +452,15 @@ fn compute_inner(
     // Determine margin collapsing behaviour
     let own_margins_collapse_with_children = Line {
         start: vertical_margins_are_collapsible.start
+            && !size_containment.width
+            && !size_containment.height
             && !is_scroll_container
             && style.position() == Position::Relative
             && padding.top == 0.0
             && border.top == 0.0,
         end: vertical_margins_are_collapsible.end
+            && !size_containment.width
+            && !size_containment.height
             && !is_scroll_container
             && style.position() == Position::Relative
             && padding.bottom == 0.0
@@ -460,6 +469,8 @@ fn compute_inner(
     };
     let has_styles_preventing_being_collapsed_through = !style.is_block()
         || block_ctx.is_bfc_root()
+        || size_containment.width
+        || size_containment.height
         || is_scroll_container
         || style.position() == Position::Absolute
         || padding.top > 0.0
@@ -479,8 +490,12 @@ fn compute_inner(
     // 2. Compute container width
     let container_outer_width = known_dimensions.width.unwrap_or_else(|| {
         let available_width = available_space.width.maybe_sub(content_box_inset.horizontal_axis_sum());
-        let intrinsic_width = determine_content_based_container_width(tree, &items, available_width)
-            + content_box_inset.horizontal_axis_sum();
+        let intrinsic_width = if size_containment.width {
+            content_box_inset.horizontal_axis_sum()
+        } else {
+            determine_content_based_container_width(tree, &items, available_width)
+                + content_box_inset.horizontal_axis_sum()
+        };
         intrinsic_width.maybe_clamp(min_size.width, max_size.width).maybe_max(Some(padding_border_size.width))
     });
 

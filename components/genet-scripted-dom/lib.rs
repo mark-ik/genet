@@ -845,10 +845,12 @@ impl LayoutDomMut for ScriptedDom {
             self.node_mut(child).parent = None;
             self.drop_subtree(child);
         }
-        // Parse via the static parser (a LayoutDom) and copy the <body> children in.
-        // (Simplification: uses `parse_document` + the body subtree rather than true
-        // context-aware fragment parsing; fine for the common element-fragment case.)
-        let fragment = StaticDocument::parse(html);
+        // Parse via the static parser (a LayoutDom) and copy the explicitly
+        // wrapped <body> children in. The wrapper keeps metadata elements such
+        // as <style> in the fragment body; parsing a bare string as a complete
+        // document would move leading metadata into the synthesized <head>.
+        let source = format!("<!doctype html><html><body>{html}</body></html>");
+        let fragment = StaticDocument::parse(&source);
         if let Some(body) = Self::fragment_body(&fragment) {
             let body_children: Vec<StaticNodeId> = fragment.dom_children(body).collect();
             for child in body_children {

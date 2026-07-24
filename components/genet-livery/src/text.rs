@@ -1426,7 +1426,7 @@ fn vertical_align_shift(
 fn spacing_px(spacing: Spacing) -> Option<f32> {
     match spacing {
         Spacing::Normal => None,
-        Spacing::Length(length) => Some(length.unit.to_px(length.value, 16.0, 16.0)),
+        Spacing::Length(length) => Some(length.to_px(16.0, 16.0, 0.0)),
     }
 }
 

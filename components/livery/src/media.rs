@@ -125,12 +125,49 @@ impl AnyPointerCapabilities {
     };
 }
 
+/// One physical viewport size used by viewport-relative length resolution.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewportSize {
+    pub width: f32,
+    pub height: f32,
+}
+
+impl ViewportSize {
+    pub const fn new(width: f32, height: f32) -> Self {
+        Self { width, height }
+    }
+}
+
+/// The small, large, and dynamic viewport sizes supplied by the host.
+///
+/// Desktop hosts normally use one size for all three. Hosts with retractable
+/// browser chrome can supply distinct sizes without changing Livery's value
+/// model.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewportSizes {
+    pub small: ViewportSize,
+    pub large: ViewportSize,
+    pub dynamic: ViewportSize,
+}
+
+impl ViewportSizes {
+    pub const fn uniform(width: f32, height: f32) -> Self {
+        let size = ViewportSize::new(width, height);
+        Self {
+            small: size,
+            large: size,
+            dynamic: size,
+        }
+    }
+}
+
 /// Host-owned media state. Updating one field never resets the others.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Device {
     pub media_type: MediaType,
     pub viewport_width: f32,
     pub viewport_height: f32,
+    pub viewport_sizes: ViewportSizes,
     pub color_scheme: ColorScheme,
     pub reduced_motion: ReducedMotion,
     pub contrast: ContrastPreference,
@@ -151,6 +188,7 @@ impl Device {
             media_type: MediaType::Screen,
             viewport_width,
             viewport_height,
+            viewport_sizes: ViewportSizes::uniform(viewport_width, viewport_height),
             color_scheme: ColorScheme::Light,
             reduced_motion: ReducedMotion::NoPreference,
             contrast: ContrastPreference::NoPreference,
@@ -164,6 +202,21 @@ impl Device {
             primary_pointer: PointerCapabilities::MOUSE,
             any_pointer: AnyPointerCapabilities::MOUSE,
         }
+    }
+
+    /// Update the layout viewport and make all viewport-unit families share
+    /// that size. This is the normal desktop resize path.
+    pub fn set_viewport_size(&mut self, width: f32, height: f32) {
+        self.viewport_width = width;
+        self.viewport_height = height;
+        self.viewport_sizes = ViewportSizes::uniform(width, height);
+    }
+
+    /// Supply distinct small, large, and dynamic viewport sizes.
+    pub fn set_viewport_sizes(&mut self, sizes: ViewportSizes) {
+        self.viewport_width = sizes.dynamic.width;
+        self.viewport_height = sizes.dynamic.height;
+        self.viewport_sizes = sizes;
     }
 }
 

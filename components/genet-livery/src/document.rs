@@ -17,7 +17,12 @@ use paint_list_api::DeviceIntSize;
 use crate::{
     FragmentPlane, IncrementalStyle, InteractionStates, LayoutError, LiveryPaintList, RestyleStats,
     StylePlane, StyleSet, TextSystem, emit_paint_list_with_text_system_scrolled_with_images,
-    hit_test_with_scroll, layout::layout_with_text_system, resolve_styles,
+    hit_test_with_scroll,
+    layout::{
+        layout_with_text_system, resolve_container_query_styles,
+        resolve_container_query_styles_with_images,
+    },
+    resolve_styles,
 };
 
 /// What a Livery click resolved to.
@@ -177,8 +182,7 @@ where
         }
 
         self.viewport = (width, height);
-        self.device.viewport_width = width as f32;
-        self.device.viewport_height = height as f32;
+        self.device.set_viewport_size(width as f32, height as f32);
         self.finish_completed_transitions();
         self.style_session.update(
             &self.dom,
@@ -187,16 +191,24 @@ where
             &self.interactions,
             &[],
         );
-        let mut styles = self.style_session.styles().clone();
+        let mut styles = resolve_container_query_styles_with_images(
+            &self.dom,
+            self.style_session.styles(),
+            &self.style_set,
+            &self.device,
+            &self.interactions,
+            &self.image_sources,
+        )?;
         self.schedule_transitions(&styles);
         self.schedule_keyframe_animation(&styles);
         self.apply_transitions(&mut styles);
         self.apply_keyframe_animation(&mut styles);
-        let fragments = layout_with_text_system(
+        let (styles, fragments) = layout_with_text_system(
             &self.dom,
             &styles,
             width as f32,
             height as f32,
+            self.device.viewport_sizes,
             &mut self.text,
             &self.image_sources,
         )?;
@@ -267,12 +279,21 @@ where
     /// device. Unknown names and unstyled nodes return None.
     pub fn computed_style(&self, node: D::NodeId, property: &str) -> Option<String> {
         let resolved;
+        let container_resolved;
         let plane = match self.layout.as_ref() {
             Some(layout) => &layout.styles,
             None => {
                 resolved =
                     resolve_styles(&self.dom, &self.style_set, &self.device, &self.interactions);
-                &resolved
+                container_resolved = resolve_container_query_styles(
+                    &self.dom,
+                    &resolved,
+                    &self.style_set,
+                    &self.device,
+                    &self.interactions,
+                )
+                .ok();
+                container_resolved.as_ref().unwrap_or(&resolved)
             },
         };
         plane.computed_style(node, property)

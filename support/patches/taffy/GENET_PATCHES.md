@@ -14,8 +14,8 @@ It exists because taffy's float / BFC / table layout is still incomplete in
 places, and genet pushes on exactly those paths as CSS conformance climbs.
 This fork is the home for the layout fixes we accumulate, each upstreamed at our
 own pace so the divergence from upstream stays small — see `UPSTREAM_PR.md`
-for the drafted PRs (all three patches below are PR-able; none has landed
-upstream yet).
+for the drafted PRs (the first three patches below are PR-able; none has
+landed upstream yet). The fourth is the Livery size-containment seam.
 
 ## How to keep it in sync
 
@@ -109,3 +109,36 @@ Consumed in genet-layout: `box_tree.rs`'s `CssStyle` flex-item wrapper overrides
 same wrap-and-override pattern it already uses for grid placement; no
 `stylo_taffy` patch needed). Verified by `flex_order_reorders_items` and
 `flex_order_is_stable_and_handles_negative`.
+
+### 0004 — physical-axis size containment
+
+**Files:** `src/style/mod.rs`, `src/compute/block.rs`,
+`src/compute/flexbox.rs`, `src/compute/grid/mod.rs`
+**Upstream status:** genet-only. The API shape should be reviewed against
+taffy's current containment direction before upstreaming.
+
+CSS size queries require the query container's size to be independent of the
+descendants whose styles the query can change. Taffy had no style input for
+excluding child content from intrinsic sizing, so `container-type: size` could
+oscillate on a size it created itself and `inline-size` could feed the queried
+axis from its descendants.
+
+This adds `CoreStyle::size_containment() -> Size<bool>` and the matching
+`Style::size_containment` field. Each boolean names a physical axis whose
+intrinsic content contribution is zero:
+
+- block layout substitutes the content-box inset for contained intrinsic width,
+  gives a contained auto height a zero-content definite size, and prevents
+  child margin collapse through the containment boundary;
+- flex and grid inject the padding-and-border floor only when a contained axis
+  has no incoming or authored definite size, so ordinary stretched axes remain
+  stretched while shrink-to-fit axes ignore child content;
+- grid keeps that contained outer size through final track sizing instead of
+  replacing it with the intrinsic track sum.
+
+Livery maps `container-type: size` to both physical axes and
+`container-type: inline-size` to width or height according to `writing-mode`.
+The `stylo_taffy` full-style literal initializes the additive field to false,
+preserving the incumbent Stylo route until it opts into the seam. Native
+receipts cover block, flex, grid, horizontal inline-size, and vertical
+inline-size containers.

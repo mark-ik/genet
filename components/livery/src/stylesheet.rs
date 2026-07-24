@@ -10,6 +10,7 @@ use crate::cascade::{
 use crate::custom::CustomProperties;
 use crate::media::{Device, MediaParseError, MediaQueryList};
 use crate::selector::{Element, SelectorList, SelectorParseError};
+use crate::values::{ContainerType, LengthPercentage, RelativeLengthEnvironment, WritingMode};
 
 /// A recoverable stylesheet parse diagnostic. Invalid rules are dropped while
 /// later rules continue parsing, matching CSS's rule-level recovery model.
@@ -28,6 +29,7 @@ pub struct StylesheetDiagnostic {
 pub enum CssRule {
     Style(StyleRule),
     Media(MediaRule),
+    Container(ContainerRule),
     Keyframes(Keyframes),
 }
 
@@ -47,6 +49,167 @@ impl MediaRule {
 
     pub fn rules(&self) -> &[StyleRule] {
         &self.rules
+    }
+}
+
+/// A top-level `@container` group with a parsed boolean size query and nested
+/// style rules.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContainerRule {
+    query: ContainerQuery,
+    rules: Vec<StyleRule>,
+}
+
+impl ContainerRule {
+    pub fn query(&self) -> &ContainerQuery {
+        &self.query
+    }
+
+    pub fn rules(&self) -> &[StyleRule] {
+        &self.rules
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ContainerAxis {
+    Width,
+    Height,
+    Inline,
+    Block,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ContainerComparison {
+    Less,
+    LessEqual,
+    Equal,
+    GreaterEqual,
+    Greater,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct ContainerFeature {
+    axis: ContainerAxis,
+    comparison: ContainerComparison,
+    value: LengthPercentage,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum ContainerCondition {
+    Feature(ContainerFeature),
+    Not(Box<ContainerCondition>),
+    And(Vec<ContainerCondition>),
+    Or(Vec<ContainerCondition>),
+}
+
+/// Parsed name and boolean size condition for one `@container` group.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContainerQuery {
+    name: Option<String>,
+    condition: ContainerCondition,
+}
+
+impl ContainerQuery {
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub fn matches(&self, containers: &[ContainerSnapshot], device: &Device) -> bool {
+        let required = required_container_axes(&self.condition);
+        let Some(container) = containers.iter().find(|container| {
+            self.name
+                .as_ref()
+                .is_none_or(|name| container.names.iter().any(|candidate| candidate == name))
+                && container.supports(required)
+        }) else {
+            return false;
+        };
+        self.condition.matches(container, device)
+    }
+}
+
+/// One laid-out query-container ancestor, ordered nearest first for a
+/// descendant rule match.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContainerSnapshot {
+    pub names: Vec<String>,
+    pub container_type: ContainerType,
+    pub writing_mode: WritingMode,
+    pub width: f32,
+    pub height: f32,
+    pub inline_size: f32,
+    pub block_size: f32,
+}
+
+impl ContainerSnapshot {
+    fn supports(&self, axes: u8) -> bool {
+        if self.container_type == ContainerType::Size {
+            return true;
+        }
+        if self.container_type != ContainerType::InlineSize {
+            return false;
+        }
+        let inline_physical = if self.writing_mode.is_vertical() {
+            axis_bit(ContainerAxis::Height)
+        } else {
+            axis_bit(ContainerAxis::Width)
+        };
+        let supported = axis_bit(ContainerAxis::Inline) | inline_physical;
+        axes & !supported == 0
+    }
+}
+
+const fn axis_bit(axis: ContainerAxis) -> u8 {
+    1 << axis as u8
+}
+
+fn required_container_axes(condition: &ContainerCondition) -> u8 {
+    match condition {
+        ContainerCondition::Feature(feature) => axis_bit(feature.axis),
+        ContainerCondition::Not(condition) => required_container_axes(condition),
+        ContainerCondition::And(conditions) | ContainerCondition::Or(conditions) => {
+            conditions.iter().fold(0, |axes, condition| {
+                axes | required_container_axes(condition)
+            })
+        },
+    }
+}
+
+impl ContainerCondition {
+    fn matches(&self, container: &ContainerSnapshot, device: &Device) -> bool {
+        match self {
+            Self::Feature(feature) => feature.matches(container, device),
+            Self::Not(condition) => !condition.matches(container, device),
+            Self::And(conditions) => conditions
+                .iter()
+                .all(|condition| condition.matches(container, device)),
+            Self::Or(conditions) => conditions
+                .iter()
+                .any(|condition| condition.matches(container, device)),
+        }
+    }
+}
+
+impl ContainerFeature {
+    fn matches(&self, container: &ContainerSnapshot, device: &Device) -> bool {
+        let actual = match self.axis {
+            ContainerAxis::Width => container.width,
+            ContainerAxis::Height => container.height,
+            ContainerAxis::Inline => container.inline_size,
+            ContainerAxis::Block => container.block_size,
+        };
+        let expected = self
+            .value
+            .resolve_relative(RelativeLengthEnvironment::viewport(device.viewport_sizes))
+            .resolve_font_relative(16.0, 16.0)
+            .to_px(16.0, 16.0, 0.0);
+        match self.comparison {
+            ContainerComparison::Less => actual < expected,
+            ContainerComparison::LessEqual => actual <= expected,
+            ContainerComparison::Equal => (actual - expected).abs() < 0.001,
+            ContainerComparison::GreaterEqual => actual >= expected,
+            ContainerComparison::Greater => actual > expected,
+        }
     }
 }
 
@@ -188,6 +351,15 @@ impl Stylesheet {
                         self.rules.push(rule);
                     }
                 },
+                CssRule::Container(container) => {
+                    for rule in &container.rules {
+                        let mut rule = rule.clone();
+                        rule.source_order = self
+                            .source_order_offset
+                            .saturating_add(self.rules.len() as u64);
+                        self.rules.push(rule);
+                    }
+                },
                 CssRule::Keyframes(keyframes) => self.keyframes.push(keyframes.clone()),
             }
         }
@@ -288,6 +460,7 @@ pub struct StyleRule {
     selectors: SelectorList,
     declarations: DeclarationBlock,
     media: Option<MediaQueryList>,
+    container: Option<ContainerQuery>,
     origin: Origin,
     layer: CascadeLayer,
     source_order: u64,
@@ -309,6 +482,7 @@ impl StyleRule {
                 .map(str::parse)
                 .transpose()
                 .map_err(StyleRuleError::Media)?,
+            container: None,
             origin,
             layer,
             source_order,
@@ -330,6 +504,10 @@ impl StyleRule {
         self.selectors.has_structural_dependency()
     }
 
+    pub fn has_container_query(&self) -> bool {
+        self.container.is_some()
+    }
+
     /// The rule's flattened cascade position, renumbered by the owning
     /// sheet after every parse or mutation.
     pub fn source_order(&self) -> u64 {
@@ -340,10 +518,26 @@ impl StyleRule {
     where
         E: Element<Impl = crate::selector::LiverySelectorImpl>,
     {
+        self.matched_declarations_with_containers(element, device, &[])
+    }
+
+    pub fn matched_declarations_with_containers<E>(
+        &self,
+        element: &E,
+        device: &Device,
+        containers: &[ContainerSnapshot],
+    ) -> Vec<MatchedDeclaration>
+    where
+        E: Element<Impl = crate::selector::LiverySelectorImpl>,
+    {
         if self
             .media
             .as_ref()
             .is_some_and(|condition| !condition.matches(device))
+            || self
+                .container
+                .as_ref()
+                .is_some_and(|query| !query.matches(containers, device))
         {
             return Vec::new();
         }
@@ -377,10 +571,26 @@ impl StyleRule {
     where
         E: Element<Impl = crate::selector::LiverySelectorImpl>,
     {
+        self.matched_custom_declarations_with_containers(element, device, &[])
+    }
+
+    pub fn matched_custom_declarations_with_containers<E>(
+        &self,
+        element: &E,
+        device: &Device,
+        containers: &[ContainerSnapshot],
+    ) -> Vec<MatchedCustomDeclaration>
+    where
+        E: Element<Impl = crate::selector::LiverySelectorImpl>,
+    {
         if self
             .media
             .as_ref()
             .is_some_and(|condition| !condition.matches(device))
+            || self
+                .container
+                .as_ref()
+                .is_some_and(|query| !query.matches(containers, device))
         {
             return Vec::new();
         }
@@ -612,6 +822,255 @@ fn media_condition(prelude: &str) -> Option<&str> {
         .map(str::trim)
 }
 
+fn container_prelude(prelude: &str) -> Option<&str> {
+    prelude
+        .get(..10)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("@container"))
+        .and_then(|_| prelude.get(10..))
+        .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        .map(str::trim)
+}
+
+fn parse_container_query(source: &str) -> Result<ContainerQuery, String> {
+    let source = source.trim();
+    if source.is_empty() {
+        return Err("empty container query".to_owned());
+    }
+    let (name, condition) = if source.starts_with('(')
+        || source
+            .get(..3)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("not"))
+    {
+        (None, source)
+    } else {
+        let Some(split) = source.find(char::is_whitespace) else {
+            return Err("container query needs a condition".to_owned());
+        };
+        let name = source[..split].trim();
+        let parsed = name
+            .parse::<crate::values::ContainerName>()
+            .map_err(|error| error.to_string())?;
+        if !matches!(parsed, crate::values::ContainerName::Names(ref names) if names.len() == 1) {
+            return Err("container query name must be one custom identifier".to_owned());
+        }
+        (Some(name.to_owned()), source[split..].trim())
+    };
+    Ok(ContainerQuery {
+        name,
+        condition: parse_container_condition(condition)?,
+    })
+}
+
+fn parse_container_condition(source: &str) -> Result<ContainerCondition, String> {
+    let source = source.trim();
+    let parts = split_top_level_keyword(source, "or");
+    if parts.len() > 1 {
+        return parts
+            .into_iter()
+            .map(parse_container_condition)
+            .collect::<Result<Vec<_>, _>>()
+            .map(ContainerCondition::Or);
+    }
+    let parts = split_top_level_keyword(source, "and");
+    if parts.len() > 1 {
+        return parts
+            .into_iter()
+            .map(parse_container_condition)
+            .collect::<Result<Vec<_>, _>>()
+            .map(ContainerCondition::And);
+    }
+    if source
+        .get(..3)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("not"))
+        && source[3..].chars().next().is_some_and(char::is_whitespace)
+    {
+        return Ok(ContainerCondition::Not(Box::new(
+            parse_container_condition(source[3..].trim())?,
+        )));
+    }
+    let source = strip_outer_parentheses(source).unwrap_or(source);
+    let nested_or = split_top_level_keyword(source, "or");
+    let nested_and = split_top_level_keyword(source, "and");
+    if nested_or.len() > 1 || nested_and.len() > 1 {
+        return parse_container_condition(source);
+    }
+    parse_container_feature(source)
+}
+
+fn split_top_level_keyword<'a>(source: &'a str, keyword: &str) -> Vec<&'a str> {
+    let mut depth = 0_i32;
+    let mut start = 0;
+    let mut parts = Vec::new();
+    let bytes = source.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            _ => {},
+        }
+        if depth == 0
+            && index > 0
+            && bytes[index - 1].is_ascii_whitespace()
+            && source[index..]
+                .get(..keyword.len())
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(keyword))
+            && bytes
+                .get(index + keyword.len())
+                .is_some_and(u8::is_ascii_whitespace)
+        {
+            parts.push(source[start..index].trim());
+            index += keyword.len();
+            start = index;
+            continue;
+        }
+        index += 1;
+    }
+    if parts.is_empty() {
+        vec![source]
+    } else {
+        parts.push(source[start..].trim());
+        parts
+    }
+}
+
+fn strip_outer_parentheses(source: &str) -> Option<&str> {
+    if !source.starts_with('(') || !source.ends_with(')') {
+        return None;
+    }
+    let mut depth = 0_i32;
+    for (index, character) in source.char_indices() {
+        match character {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 && index + 1 != source.len() {
+                    return None;
+                }
+            },
+            _ => {},
+        }
+        if depth < 0 {
+            return None;
+        }
+    }
+    (depth == 0).then(|| source[1..source.len() - 1].trim())
+}
+
+fn parse_container_feature(source: &str) -> Result<ContainerCondition, String> {
+    let source = source.trim();
+    let tokens = source.split_ascii_whitespace().collect::<Vec<_>>();
+    if tokens.len() == 5 {
+        let first_value = parse_query_length(tokens[0])?;
+        let first_comparison = parse_comparison_token(tokens[1])?;
+        let axis = parse_container_axis(tokens[2])?;
+        let second_comparison = parse_comparison_token(tokens[3])?;
+        let second_value = parse_query_length(tokens[4])?;
+        return Ok(ContainerCondition::And(vec![
+            ContainerCondition::Feature(ContainerFeature {
+                axis,
+                comparison: invert_comparison(first_comparison),
+                value: first_value,
+            }),
+            ContainerCondition::Feature(ContainerFeature {
+                axis,
+                comparison: second_comparison,
+                value: second_value,
+            }),
+        ]));
+    }
+    if let Some((name, value)) = source.split_once(':') {
+        let name = name.trim().to_ascii_lowercase();
+        let (comparison, axis_name) = if let Some(axis) = name.strip_prefix("min-") {
+            (ContainerComparison::GreaterEqual, axis)
+        } else if let Some(axis) = name.strip_prefix("max-") {
+            (ContainerComparison::LessEqual, axis)
+        } else {
+            (ContainerComparison::Equal, name.as_str())
+        };
+        return Ok(ContainerCondition::Feature(ContainerFeature {
+            axis: parse_container_axis(axis_name)?,
+            comparison,
+            value: parse_query_length(value)?,
+        }));
+    }
+    for token in [">=", "<=", ">", "<", "="] {
+        if let Some((left, right)) = split_top_level_operator(source, token) {
+            let comparison = parse_comparison_token(token)?;
+            if let Ok(axis) = parse_container_axis(left.trim()) {
+                return Ok(ContainerCondition::Feature(ContainerFeature {
+                    axis,
+                    comparison,
+                    value: parse_query_length(right)?,
+                }));
+            }
+            return Ok(ContainerCondition::Feature(ContainerFeature {
+                axis: parse_container_axis(right.trim())?,
+                comparison: invert_comparison(comparison),
+                value: parse_query_length(left)?,
+            }));
+        }
+    }
+    Err("unsupported container size feature".to_owned())
+}
+
+fn split_top_level_operator<'a>(source: &'a str, operator: &str) -> Option<(&'a str, &'a str)> {
+    let mut depth = 0_i32;
+    for (index, character) in source.char_indices() {
+        match character {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            _ if depth == 0 && source[index..].starts_with(operator) => {
+                return Some((&source[..index], &source[index + operator.len()..]));
+            },
+            _ => {},
+        }
+    }
+    None
+}
+
+fn parse_container_axis(source: &str) -> Result<ContainerAxis, String> {
+    match source.trim().to_ascii_lowercase().as_str() {
+        "width" => Ok(ContainerAxis::Width),
+        "height" => Ok(ContainerAxis::Height),
+        "inline-size" => Ok(ContainerAxis::Inline),
+        "block-size" => Ok(ContainerAxis::Block),
+        _ => Err("unsupported container axis".to_owned()),
+    }
+}
+
+fn parse_comparison_token(source: &str) -> Result<ContainerComparison, String> {
+    match source.trim() {
+        "<" => Ok(ContainerComparison::Less),
+        "<=" => Ok(ContainerComparison::LessEqual),
+        "=" => Ok(ContainerComparison::Equal),
+        ">=" => Ok(ContainerComparison::GreaterEqual),
+        ">" => Ok(ContainerComparison::Greater),
+        _ => Err("invalid container comparison".to_owned()),
+    }
+}
+
+const fn invert_comparison(comparison: ContainerComparison) -> ContainerComparison {
+    match comparison {
+        ContainerComparison::Less => ContainerComparison::Greater,
+        ContainerComparison::LessEqual => ContainerComparison::GreaterEqual,
+        ContainerComparison::Equal => ContainerComparison::Equal,
+        ContainerComparison::GreaterEqual => ContainerComparison::LessEqual,
+        ContainerComparison::Greater => ContainerComparison::Less,
+    }
+}
+
+fn parse_query_length(source: &str) -> Result<LengthPercentage, String> {
+    let value = source
+        .trim()
+        .parse::<LengthPercentage>()
+        .map_err(|error| error.to_string())?;
+    if value.has_percentage() {
+        return Err("container query size cannot be a percentage".to_owned());
+    }
+    Ok(value)
+}
+
 /// Parse a top-level rule list into the sheet's object model. Source order
 /// is provisional here; [`Stylesheet::reindex`] renumbers the flattened
 /// view after every parse or mutation.
@@ -664,6 +1123,25 @@ fn parse_rule_list(input: &str, origin: Origin, source_order_offset: u64, sheet:
                     condition: condition.to_owned(),
                     rules,
                 }));
+            }
+        } else if let Some(condition) = container_prelude(prelude) {
+            match parse_container_query(condition) {
+                Ok(query) => {
+                    let rules = parse_container_style_rules(
+                        body,
+                        origin,
+                        &query,
+                        source_order_offset,
+                        sheet,
+                    );
+                    sheet
+                        .items
+                        .push(CssRule::Container(ContainerRule { query, rules }));
+                },
+                Err(message) => sheet.diagnostics.push(StylesheetDiagnostic {
+                    prelude: prelude.to_owned(),
+                    message,
+                }),
             }
         } else if prelude.starts_with('@') {
             sheet.diagnostics.push(StylesheetDiagnostic {
@@ -759,6 +1237,70 @@ fn parse_media_style_rules(
                 source_order,
             ) {
                 Ok(rule) => rules.push(rule),
+                Err(error) => sheet.diagnostics.push(StylesheetDiagnostic {
+                    prelude: prelude.to_owned(),
+                    message: error.to_string(),
+                }),
+            }
+        }
+        cursor = close + 1;
+    }
+    rules
+}
+
+fn parse_container_style_rules(
+    input: &str,
+    origin: Origin,
+    query: &ContainerQuery,
+    source_order_offset: u64,
+    sheet: &mut Stylesheet,
+) -> Vec<StyleRule> {
+    let mut rules = Vec::new();
+    let mut cursor = 0;
+    while cursor < input.len() {
+        let Some(non_space) = input[cursor..]
+            .char_indices()
+            .find(|(_, character)| !character.is_whitespace())
+            .map(|(offset, _)| cursor + offset)
+        else {
+            break;
+        };
+        cursor = non_space;
+        let Some(open) = find_open_brace(input, cursor) else {
+            sheet.diagnostics.push(StylesheetDiagnostic {
+                prelude: input[cursor..].trim().to_owned(),
+                message: "expected a rule block".to_owned(),
+            });
+            break;
+        };
+        let prelude = input[cursor..open].trim();
+        let Some(close) = find_close_brace(input, open) else {
+            sheet.diagnostics.push(StylesheetDiagnostic {
+                prelude: prelude.to_owned(),
+                message: "unclosed rule block".to_owned(),
+            });
+            break;
+        };
+        let body = &input[open + 1..close];
+        if prelude.starts_with('@') {
+            sheet.diagnostics.push(StylesheetDiagnostic {
+                prelude: prelude.to_owned(),
+                message: "nested at-rules inside container groups are outside this lane".to_owned(),
+            });
+        } else {
+            let source_order = source_order_offset.saturating_add(rules.len() as u64);
+            match StyleRule::parse(
+                prelude,
+                body,
+                None,
+                origin,
+                CascadeLayer::Unlayered,
+                source_order,
+            ) {
+                Ok(mut rule) => {
+                    rule.container = Some(query.clone());
+                    rules.push(rule);
+                },
                 Err(error) => sheet.diagnostics.push(StylesheetDiagnostic {
                     prelude: prelude.to_owned(),
                     message: error.to_string(),

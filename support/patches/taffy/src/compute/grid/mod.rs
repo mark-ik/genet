@@ -57,6 +57,7 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
     let border = style.border().resolve_or_zero(parent_size.width, |val, basis| tree.calc(val, basis));
     let padding_border = padding + border;
     let padding_border_size = padding_border.sum_axes();
+    let size_containment = style.size_containment();
     let box_sizing_adjustment =
         if style.box_sizing() == BoxSizing::ContentBox { padding_border_size } else { Size::ZERO };
 
@@ -107,8 +108,13 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
     let grid_auto_columns = style.grid_auto_columns();
     let grid_auto_rows = style.grid_auto_rows();
 
-    let constrained_available_space = known_dimensions
-        .or(preferred_size)
+    let containment_size = Size {
+        width: size_containment.width.then_some(padding_border_size.width),
+        height: size_containment.height.then_some(padding_border_size.height),
+    };
+    let resolved_outer_size = known_dimensions.or(preferred_size).or(containment_size);
+
+    let constrained_available_space = resolved_outer_size
         .map(|size| size.map(AvailableSpace::Definite))
         .unwrap_or(available_space)
         .maybe_clamp(min_size, max_size)
@@ -124,7 +130,7 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
     };
 
     let outer_node_size =
-        known_dimensions.or(preferred_size).maybe_clamp(min_size, max_size).maybe_max(padding_border_size);
+        resolved_outer_size.maybe_clamp(min_size, max_size).maybe_max(padding_border_size);
     let mut inner_node_size = Size {
         width: outer_node_size.width.map(|space| space - content_box_inset.horizontal_axis_sum()),
         height: outer_node_size.height.map(|space| space - content_box_inset.vertical_axis_sum()),
@@ -332,7 +338,7 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
     debug_log!(dbg: rows.iter().map(|track| track.base_size).collect::<Vec<_>>());
 
     // 6. Compute container size
-    let resolved_style_size = known_dimensions.or(preferred_size);
+    let resolved_style_size = resolved_outer_size;
     let mut container_border_box = Size {
         width: resolved_style_size
             .get(AbstractAxis::Inline)

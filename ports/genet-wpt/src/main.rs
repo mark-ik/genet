@@ -1871,10 +1871,15 @@ fn testharness(tests: &[TestCase], args: &Args) {
         let name = test.name();
 
         match result {
-            Err(_) => {
+            Err(payload) => {
                 errored += 1;
                 actuals.push(ActualRecord::with_reason(test, "error", "panic"));
-                println!("ERROR panic   {name}");
+                let message = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("non-string panic");
+                println!("ERROR panic   {name}  ({message})");
             },
             Ok(harness::HarnessOutcome::Threw(msg)) => {
                 errored += 1;

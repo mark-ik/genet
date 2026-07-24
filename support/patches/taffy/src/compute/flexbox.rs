@@ -182,6 +182,7 @@ pub fn compute_flexbox_layout(
     let padding = style.padding().resolve_or_zero(parent_size.width, |val, basis| tree.calc(val, basis));
     let border = style.border().resolve_or_zero(parent_size.width, |val, basis| tree.calc(val, basis));
     let padding_border_sum = padding.sum_axes() + border.sum_axes();
+    let size_containment = style.size_containment();
     let box_sizing_adjustment =
         if style.box_sizing() == BoxSizing::ContentBox { padding_border_sum } else { Size::ZERO };
 
@@ -213,8 +214,17 @@ pub fn compute_flexbox_layout(
     });
 
     // The size of the container should be floored by the padding and border
-    let styled_based_known_dimensions =
-        known_dimensions.or(min_max_definite_size.or(clamped_style_size).maybe_max(padding_border_sum));
+    let containment_size = Size {
+        width: size_containment.width.then_some(padding_border_sum.width),
+        height: size_containment.height.then_some(padding_border_sum.height),
+    };
+    let styled_based_known_dimensions = known_dimensions.or(
+        min_max_definite_size
+            .or(clamped_style_size)
+            .or(containment_size)
+            .maybe_clamp(min_size, max_size)
+            .maybe_max(padding_border_sum),
+    );
 
     // Short-circuit layout if the container's size is fully determined by the container's size and the run mode
     // is ComputeSize (and thus the container's size is all that we're interested in)

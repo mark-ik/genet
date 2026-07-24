@@ -1,7 +1,9 @@
 use livery::{
     PropertyValue,
     cascade::{DeclaredValue, Origin, parse_declaration_block},
-    stylesheet::Stylesheet,
+    media::Device,
+    stylesheet::{ContainerSnapshot, CssRule, Stylesheet},
+    values::{ContainerType, WritingMode},
 };
 
 #[test]
@@ -93,7 +95,6 @@ fn object_model_retains_top_level_rule_identity() {
         Origin::Author,
     );
 
-    use livery::stylesheet::CssRule;
     assert_eq!(sheet.items().len(), 4);
     assert!(matches!(sheet.items()[0], CssRule::Style(_)));
     let CssRule::Media(media) = &sheet.items()[1] else {
@@ -105,6 +106,44 @@ fn object_model_retains_top_level_rule_identity() {
     // Flattened cascade view: three top-level + two nested style rules.
     assert_eq!(sheet.rules().len(), 4);
     assert_eq!(sheet.keyframes().len(), 1);
+}
+
+#[test]
+fn container_rules_retain_boolean_size_queries_and_names() {
+    let sheet = Stylesheet::parse(
+        "@container sidebar (width >= 300px) and (100px < height < 500px) { \
+           .card { color: green; } \
+         }",
+        Origin::Author,
+    );
+    assert!(sheet.diagnostics().is_empty(), "{:?}", sheet.diagnostics());
+    let CssRule::Container(container) = &sheet.items()[0] else {
+        panic!("expected container rule");
+    };
+    assert_eq!(container.query().name(), Some("sidebar"));
+    assert_eq!(container.rules().len(), 1);
+    assert_eq!(sheet.rules().len(), 1);
+
+    let snapshot = ContainerSnapshot {
+        names: vec!["sidebar".to_owned()],
+        container_type: ContainerType::Size,
+        writing_mode: WritingMode::HorizontalTb,
+        width: 320.0,
+        height: 240.0,
+        inline_size: 320.0,
+        block_size: 240.0,
+    };
+    assert!(container.query().matches(
+        std::slice::from_ref(&snapshot),
+        &Device::screen(800.0, 600.0)
+    ));
+    assert!(!container.query().matches(
+        &[ContainerSnapshot {
+            width: 280.0,
+            ..snapshot
+        }],
+        &Device::screen(800.0, 600.0)
+    ));
 }
 
 #[test]

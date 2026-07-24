@@ -9,13 +9,25 @@ use livery::{
     },
     custom::CustomProperties,
     media::Device,
-    stylesheet::{Keyframes, RuleMutationError, StyleRule, Stylesheet, StylesheetDiagnostic},
+    stylesheet::{
+        ContainerSnapshot, Keyframes, RuleMutationError, StyleRule, Stylesheet,
+        StylesheetDiagnostic,
+    },
     values::{
-        BorderStyle, FontSize, Length, LengthPercentage, LengthUnit, LineHeight, Padding, Size,
+        BorderStyle, FontSize, Length, LengthPercentage, LengthUnit, LineHeight, Margin, Padding,
+        Size,
     },
 };
 
 use crate::{CAMBIUM_UA_DEFAULTS, InteractionStates, SelectorTree};
+
+/// Layout facts needed to serialize properties whose CSSOM result is a used
+/// value rather than only a computed value.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UsedValueContext {
+    pub border_box: (f32, f32),
+    pub containing_inline_size: Option<f32>,
+}
 
 /// Parsed UA and author rules for one document class. The sheets are
 /// retained as CSSOM-shaped objects (harvest H3); the flattened rule and
@@ -88,6 +100,10 @@ impl StyleSet {
         self.rules.iter().any(StyleRule::has_structural_dependency)
     }
 
+    pub(crate) fn has_container_queries(&self) -> bool {
+        self.rules.iter().any(StyleRule::has_container_query)
+    }
+
     /// CSSOM `insertRule` on one author sheet; the cascade views rebuild.
     pub fn insert_author_rule(
         &mut self,
@@ -143,6 +159,17 @@ pub struct StylePlane<Id> {
     inline_diagnostics: HashMap<Id, Vec<DeclarationError>>,
 }
 
+impl<Id> PartialEq for StylePlane<Id>
+where
+    Id: Eq + Hash,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.values == other.values
+            && self.custom == other.custom
+            && self.inline_diagnostics == other.inline_diagnostics
+    }
+}
+
 impl<Id> Default for StylePlane<Id> {
     fn default() -> Self {
         Self {
@@ -185,21 +212,44 @@ where
         property: &str,
         used_size: Option<(f32, f32)>,
     ) -> Option<String> {
+        self.computed_style_with_used_values(
+            id,
+            property,
+            used_size.map(|border_box| UsedValueContext {
+                border_box,
+                containing_inline_size: None,
+            }),
+        )
+    }
+
+    /// Serialize a computed value with the layout bases needed by CSSOM used
+    /// values. The current bounded surface covers box size and physical
+    /// margins; other adorned-box properties remain explicit follow-ons.
+    pub fn computed_style_with_used_values(
+        &self,
+        id: Id,
+        property: &str,
+        used: Option<UsedValueContext>,
+    ) -> Option<String> {
         if property.starts_with("--") {
             return self.custom_properties(id)?.get(property).cloned();
         }
         let property = PropertyId::from_css_name(&property.to_ascii_lowercase())?;
         let values = self.get(id)?;
-        if let Some((width, height)) = used_size
+        if let Some(used) = used
             && box_is_unadorned(values)
         {
-            let used = match property {
-                PropertyId::Width => Some(width),
-                PropertyId::Height => Some(height),
+            let value = match property {
+                PropertyId::Width => Some(used.border_box.0),
+                PropertyId::Height => Some(used.border_box.1),
+                PropertyId::MarginTop => used_margin(values.margin_top, values, used),
+                PropertyId::MarginRight => used_margin(values.margin_right, values, used),
+                PropertyId::MarginBottom => used_margin(values.margin_bottom, values, used),
+                PropertyId::MarginLeft => used_margin(values.margin_left, values, used),
                 _ => None,
             };
-            if let Some(used) = used {
-                return Some(used_px(used));
+            if let Some(value) = value {
+                return Some(used_px(value));
             }
         }
         if property == PropertyId::Transform {
@@ -218,6 +268,16 @@ where
 
     pub(crate) fn get_mut(&mut self, id: Id) -> Option<&mut ComputedValues> {
         self.values.get_mut(&id)
+    }
+
+    pub(crate) fn resolve_relative_lengths(
+        &mut self,
+        id: Id,
+        environment: livery::values::RelativeLengthEnvironment,
+    ) {
+        if let Some(computed) = self.values.get_mut(&id) {
+            resolve_relative_lengths(computed, environment);
+        }
     }
 
     pub fn inline_diagnostics(&self, id: Id) -> &[DeclarationError] {
@@ -273,6 +333,32 @@ where
     plane
 }
 
+pub(crate) fn resolve_styles_with_containers<D>(
+    dom: &D,
+    style_set: &StyleSet,
+    device: &Device,
+    states: &InteractionStates<D::NodeId>,
+    containers: &HashMap<D::NodeId, Vec<ContainerSnapshot>>,
+) -> StylePlane<D::NodeId>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let selector_tree = SelectorTree::new(dom, states);
+    let mut plane = StylePlane::default();
+    resolve_subtree_with_containers(
+        &selector_tree,
+        style_set,
+        device,
+        dom.document(),
+        None,
+        None,
+        &mut plane,
+        Some(containers),
+    );
+    plane
+}
+
 pub(crate) fn resolve_subtree<D>(
     selector_tree: &SelectorTree<'_, D>,
     style_set: &StyleSet,
@@ -286,13 +372,45 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    resolve_subtree_with_containers(
+        selector_tree,
+        style_set,
+        device,
+        id,
+        parent,
+        parent_custom,
+        plane,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_subtree_with_containers<D>(
+    selector_tree: &SelectorTree<'_, D>,
+    style_set: &StyleSet,
+    device: &Device,
+    id: D::NodeId,
+    parent: Option<&ComputedValues>,
+    parent_custom: Option<&CustomProperties>,
+    plane: &mut StylePlane<D::NodeId>,
+    containers: Option<&HashMap<D::NodeId, Vec<ContainerSnapshot>>>,
+) -> usize
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
     if selector_tree.dom().kind(id) == NodeKind::Element {
         let element = selector_tree.element(id).expect("element kind has adapter");
+        let candidates = containers
+            .and_then(|containers| containers.get(&id))
+            .map_or(&[][..], Vec::as_slice);
         let mut matched = Vec::new();
         let mut matched_custom = Vec::new();
         for rule in &style_set.rules {
-            matched.extend(rule.matched_declarations(&element, device));
-            matched_custom.extend(rule.matched_custom_declarations(&element, device));
+            matched.extend(rule.matched_declarations_with_containers(&element, device, candidates));
+            matched_custom.extend(
+                rule.matched_custom_declarations_with_containers(&element, device, candidates),
+            );
         }
 
         if let Some(inline) =
@@ -327,10 +445,11 @@ where
 
         let (mut computed, custom) =
             cascade_with_custom(parent, parent_custom, matched, matched_custom);
+        resolve_viewport_units(&mut computed, device);
         resolve_font_metrics(&mut computed, parent);
         let mut resolved = 1;
         for child in selector_tree.dom().dom_children(id) {
-            resolved += resolve_subtree(
+            resolved += resolve_subtree_with_containers(
                 selector_tree,
                 style_set,
                 device,
@@ -338,6 +457,7 @@ where
                 Some(&computed),
                 Some(&custom),
                 plane,
+                containers,
             );
         }
         plane.values.insert(id, computed);
@@ -346,7 +466,7 @@ where
     } else {
         let mut resolved = 0;
         for child in selector_tree.dom().dom_children(id) {
-            resolved += resolve_subtree(
+            resolved += resolve_subtree_with_containers(
                 selector_tree,
                 style_set,
                 device,
@@ -354,9 +474,28 @@ where
                 parent,
                 parent_custom,
                 plane,
+                containers,
             );
         }
         resolved
+    }
+}
+
+fn resolve_viewport_units(computed: &mut ComputedValues, device: &Device) {
+    let environment = livery::values::RelativeLengthEnvironment::viewport(device.viewport_sizes)
+        .with_vertical_writing(computed.writing_mode.is_vertical());
+    resolve_relative_lengths(computed, environment);
+}
+
+fn resolve_relative_lengths(
+    computed: &mut ComputedValues,
+    environment: livery::values::RelativeLengthEnvironment,
+) {
+    for &property in PropertyId::ALL {
+        let value = computed.get(property).resolve_relative_lengths(environment);
+        computed
+            .set(property, value)
+            .expect("generated property read and write types agree");
     }
 }
 
@@ -381,6 +520,12 @@ fn resolve_font_metrics(computed: &mut ComputedValues, parent: Option<&ComputedV
             resolve_length_percentage(value, font_size, font_size).max(0.0),
         )));
     }
+    for spacing in [&mut computed.letter_spacing, &mut computed.word_spacing] {
+        if let livery::values::Spacing::Length(value) = *spacing {
+            *spacing =
+                livery::values::Spacing::Length(value.resolve_font_relative(font_size, 16.0));
+        }
+    }
 }
 
 fn resolve_length_percentage(value: LengthPercentage, em: f32, percentage_basis: f32) -> f32 {
@@ -390,6 +535,9 @@ fn resolve_length_percentage(value: LengthPercentage, em: f32, percentage_basis:
         LengthPercentage::Percentage(value) => percentage_basis * value,
         LengthPercentage::Calc(calc) => {
             percentage_basis * calc.percentage + calc.px + calc.em * em + calc.rem * 16.0
+        },
+        LengthPercentage::Math(math) => {
+            LengthPercentage::Math(math).to_px(em, 16.0, percentage_basis)
         },
     }
 }
@@ -426,11 +574,35 @@ fn box_is_unadorned(values: &ComputedValues) -> bool {
 }
 
 fn used_px(value: f32) -> String {
+    let value = (value * 10_000.0).round() / 10_000.0;
     if value == 0.0 {
         "0px".to_string()
     } else {
         Length::px(value).to_string()
     }
+}
+
+fn used_margin(
+    margin: Margin,
+    values: &ComputedValues,
+    context: UsedValueContext,
+) -> Option<f32> {
+    let Margin::Value(value) = margin else {
+        return None;
+    };
+    let basis = if value.has_percentage() {
+        context.containing_inline_size?
+    } else {
+        0.0
+    };
+    let em = match values.font_size {
+        FontSize::Value(LengthPercentage::Length(Length {
+            value,
+            unit: LengthUnit::Px,
+        })) => value,
+        _ => 16.0,
+    };
+    Some(value.to_px(em, 16.0, basis))
 }
 
 fn definite_size(size: Size, em: f32) -> Option<f32> {

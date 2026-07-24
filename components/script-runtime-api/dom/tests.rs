@@ -1132,6 +1132,58 @@ fn dom_implementation_works<E: ScriptEngine>() {
     );
 }
 
+/// An iframe owns a stable initial child document/window pair. Fragment
+/// replacement and queries stay scoped to that document, while hosts that do
+/// not specialize nested style contexts inherit the ordinary computed-style
+/// handler behavior.
+fn iframe_initial_document_works<E: ScriptEngine>() {
+    use genet_static_dom::StaticDocument;
+
+    struct Stub;
+    impl crate::ComputedStyleHandler for Stub {
+        fn computed_value(&self, _node: u64, property: &str) -> Option<String> {
+            (property == "color").then(|| "rgb(1, 2, 3)".to_string())
+        }
+    }
+
+    let mut rt = Runtime::<E>::new().expect("runtime");
+    rt.load_dom(&StaticDocument::parse(
+        "<html><body><iframe id='frame'></iframe></body></html>",
+    ));
+    rt.set_computed_style_handler(Box::new(Stub));
+    rt.eval(
+        "var child = frame.contentDocument; var win = frame.contentWindow;\
+         child.body.innerHTML = '<style>div { color: red; }</style><div id=\"inside\">ok</div>';\
+         console.log(String(child === frame.contentDocument) + '|' +\
+           String(win === frame.contentWindow) + '|' + String(win.document === child));\
+         console.log(child.body.innerHTML);\
+         console.log(child.querySelector('#inside').textContent + '|' +\
+           String(document.querySelector('#inside')) + '|' +\
+           win.getComputedStyle(child.querySelector('#inside')).color);",
+    )
+    .expect("iframe initial-document script");
+
+    assert_eq!(
+        rt.host().borrow().console,
+        vec![
+            "true|true|true",
+            "<style>div { color: red; }</style><div id=\"inside\">ok</div>",
+            "ok|null|rgb(1, 2, 3)",
+        ],
+    );
+}
+
+#[test]
+fn iframe_initial_document_on_boa() {
+    iframe_initial_document_works::<script_engine_boa::BoaEngine>();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn iframe_initial_document_on_nova() {
+    iframe_initial_document_works::<script_engine_nova::NovaEngine>();
+}
+
 /// `element.style` is a CSSStyleDeclaration over the inline `style` attribute:
 /// getPropertyValue / camelCase get + set / setProperty / removeProperty /
 /// length / item / cssText / `in`, all writing back to the attribute.
@@ -1149,7 +1201,9 @@ fn element_style_inline_cssom<E: ScriptEngine>() {
          console.log(document.getElementById('d').getAttribute('style'));\
          console.log(s.removeProperty('font-size') + ',' + ('color' in s) + ',' + ('display' in s));\
          s.cssText = 'padding: 1px; color: green';\
-         console.log(s.cssText + ',' + s.color);",
+         console.log(s.cssText + ',' + s.color);\
+         document.getElementById('d').style = 'width: 7px';\
+         console.log(document.getElementById('d').style.cssText);",
     )
     .expect("style script");
     assert_eq!(
@@ -1160,6 +1214,7 @@ fn element_style_inline_cssom<E: ScriptEngine>() {
             "color: blue; font-size: 12px; margin-top: 4px; font-weight: bold;",
             "12px,true,false", // removeProperty returns old; 'color' in / 'display' in
             "padding: 1px; color: green;,green", // cssText set + read; .color
+            "width: 7px;", // [PutForwards=cssText] assignment
         ],
     );
 }
@@ -1203,12 +1258,21 @@ fn element_style_routes_through_inline_handler<E: ScriptEngine>() {
          s.color = 'invalid'; s.marginTop = '4PX';\
          console.log(s.color + '|' + s.marginTop);\
          s.cssText = 'color: red; height: invalid; width: Raw';\
-         console.log(s.cssText);",
+         console.log(s.cssText);\
+         console.log(String(CSS.supports('color', 'red')) + '|' +\
+           String(CSS.supports('color: invalid')) + '|' +\
+           String(CSS.supports('width', 'Raw')) + '|' +\
+           String(CSS.supports('--token', 'anything')));",
     )
     .expect("inline style handler script");
     assert_eq!(
         rt.host().borrow().console,
-        vec!["#ff0000|Raw", "#ff0000|4PX", "color: #ff0000; width: Raw;",]
+        vec![
+            "#ff0000|Raw",
+            "#ff0000|4PX",
+            "color: #ff0000; width: Raw;",
+            "true|false|false|true",
+        ]
     );
 }
 
@@ -1248,6 +1312,7 @@ fn get_computed_style_reads_handler<E: ScriptEngine>() {
         "var cs = getComputedStyle(document.getElementById('d'));\
          console.log(cs.color + ',' + cs.fontSize + ',' + cs.getPropertyValue('display'));\
          console.log(cs.getPropertyValue('margin-top') + '|' + cs.marginTop + '|' + cs.bogus);\
+         console.log(String('color' in cs) + '|' + String('margin-top' in cs));\
          cs.color = 'red'; console.log(cs.color);",
     )
     .expect("computed-style script");
@@ -1256,6 +1321,7 @@ fn get_computed_style_reads_handler<E: ScriptEngine>() {
         vec![
             "rgb(0, 0, 0),16px,block", // color, fontSize (camelCase), getPropertyValue
             "||",                      // unsupported longhands -> ""
+            "true|false",              // membership follows supported values
             "rgb(0, 0, 0)",            // read-only: the set was ignored
         ],
     );

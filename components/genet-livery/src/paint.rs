@@ -11,7 +11,7 @@ use livery::{
     values::{
         BackgroundImage, BackgroundRepeat, BorderStyle as CssBorderStyle,
         BoxShadow as CssBoxShadow, Color, Display, FontSize, Length, LengthPercentage, LengthUnit,
-        Overflow as CssOverflow, Position, Radius, Visibility, ZIndex,
+        Matrix2D, Overflow as CssOverflow, Position, Radius, Visibility, ZIndex,
     },
 };
 use paint_list_api::{
@@ -745,7 +745,10 @@ where
 }
 
 fn establishes_transform_context(style: &ComputedValues) -> bool {
-    style.display != Display::Inline && !style.transform.is_none()
+    style.display != Display::Inline
+        && (!style.transform.is_none()
+            || style.rotate.radians().is_some()
+            || style.scale.factor().is_some())
 }
 
 fn scroll_spec(offset: (f32, f32)) -> Option<TransformSpec> {
@@ -764,9 +767,20 @@ fn transform_spec(style: &ComputedValues, fragment: &Fragment) -> Option<Transfo
         return None;
     }
     let em = used_font_size(style);
-    let matrix = style
+    let mut matrix = Matrix2D::IDENTITY;
+    if let Some(angle) = style.rotate.radians() {
+        let (sin, cos) = angle.sin_cos();
+        matrix = matrix.multiply(Matrix2D::new(cos, sin, -sin, cos, 0.0, 0.0));
+    }
+    if let Some(factor) = style.scale.factor() {
+        matrix = matrix.multiply(Matrix2D::new(factor, 0.0, 0.0, factor, 0.0, 0.0));
+    }
+    if let Some(transform) = style
         .transform
-        .to_matrix(em, (fragment.width, fragment.height))?;
+        .to_matrix(em, (fragment.width, fragment.height))
+    {
+        matrix = matrix.multiply(transform);
+    }
     let authored = LayoutTransform::new(
         matrix.a, matrix.b, 0.0, 0.0, matrix.c, matrix.d, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, matrix.e,
         matrix.f, 0.0, 1.0,
@@ -1213,6 +1227,7 @@ fn resolve_length_percentage(value: LengthPercentage, basis: f32, em: f32) -> f3
         LengthPercentage::Calc(calc) => {
             calc.percentage * basis + calc.px + calc.em * em + calc.rem * 16.0
         },
+        LengthPercentage::Math(math) => LengthPercentage::Math(math).to_px(em, 16.0, basis),
     }
 }
 

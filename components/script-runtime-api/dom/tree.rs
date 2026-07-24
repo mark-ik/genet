@@ -110,6 +110,37 @@ impl<E: ScriptEngine> NativeFn<E> for SetTextContent {
     }
 }
 
+/// `__getInnerHtml(node)` serializes the node's child fragment.
+pub(crate) struct GetInnerHtml;
+impl<E: ScriptEngine> NativeFn<E> for GetInnerHtml {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let node = cx.arg(0);
+        let Some(id) = cx.reflector_data(&node) else {
+            return cx.make_string("");
+        };
+        let html = with_dom::<E, _>(cx, |dom| dom.inner_html(NodeId::from_raw(id as usize)))
+            .unwrap_or_default();
+        cx.make_string(&html)
+    }
+}
+
+/// `__setInnerHtml(node, html)` parses and replaces the node's child fragment.
+pub(crate) struct SetInnerHtml;
+impl<E: ScriptEngine> NativeFn<E> for SetInnerHtml {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let node = cx.arg(0);
+        let Some(id) = cx.reflector_data(&node) else {
+            return Ok(cx.undefined());
+        };
+        let html_value = cx.arg(1);
+        let html = cx.value_to_string(&html_value)?;
+        with_dom::<E, _>(cx, |dom| {
+            dom.set_inner_html(NodeId::from_raw(id as usize), &html)
+        });
+        Ok(cx.undefined())
+    }
+}
+
 /// `__getElementById(scope, id)` → a reflector for the match under `scope`, or
 /// `undefined`.
 pub(crate) struct GetElementById;

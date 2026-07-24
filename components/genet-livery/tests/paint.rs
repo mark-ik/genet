@@ -996,6 +996,28 @@ fn transform_creates_an_atomic_level_zero_coordinate_space() {
 }
 
 #[test]
+fn individual_rotate_and_scale_reach_the_paint_transform() {
+    let list = render(
+        r#"<html><body><div class="box"></div></body></html>"#,
+        ".box { rotate: 90deg; scale: 2; width: 20px; height: 20px; }",
+        1,
+    );
+    let transform = list
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::PushTransform(spec) => Some(spec.transform),
+            _ => None,
+        })
+        .expect("individual transforms open a coordinate space");
+
+    assert!(transform.m11.abs() < 0.0001);
+    assert!((transform.m12 - 2.0).abs() < 0.0001);
+    assert!((transform.m21 + 2.0).abs() < 0.0001);
+    assert!(transform.m22.abs() < 0.0001);
+}
+
+#[test]
 fn transform_wraps_opacity_layer_in_coordinate_space() {
     let list = render(
         r#"<html><body><div class="box"></div></body></html>"#,

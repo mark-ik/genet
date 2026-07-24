@@ -111,6 +111,8 @@ pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(),
     engine.set_function::<AppendChild>("__appendChild", 2)?;
     engine.set_function::<SetAttribute>("__setAttribute", 3)?;
     engine.set_function::<SetTextContent>("__setTextContent", 2)?;
+    engine.set_function::<GetInnerHtml>("__getInnerHtml", 1)?;
+    engine.set_function::<SetInnerHtml>("__setInnerHtml", 2)?;
     engine.set_function::<GetElementById>("__getElementById", 2)?;
     engine.set_function::<GetAttribute>("__getAttribute", 2)?;
     engine.set_function::<TagName>("__tagName", 1)?;
@@ -150,7 +152,9 @@ pub(crate) fn install_dom_surface<E: ScriptEngine>(engine: &mut E) -> Result<(),
     engine.set_function::<CreateElementNS>("__createElementNS", 2)?;
     engine.set_function::<AttributeNames>("__attributeNames", 1)?;
     engine.set_function::<InlineStyleValue>("__inlineStyleValue", 2)?;
+    engine.set_function::<SupportsStyleValue>("__supportsStyleValue", 2)?;
     engine.set_function::<ComputedStyleValue>("__computedStyleValue", 2)?;
+    engine.set_function::<ComputedStyleValueInContext>("__computedStyleValueInContext", 3)?;
     engine.set_function::<StyleSheetCount>("__styleSheetCount", 0)?;
     engine.set_function::<StyleSheetRuleCount>("__styleSheetRuleCount", 1)?;
     engine.set_function::<InsertRule>("__insertRule", 3)?;
@@ -198,6 +202,19 @@ fn with_dom<E: ScriptEngine, R>(
 /// Install with [`Runtime::set_computed_style_handler`](crate::Runtime::set_computed_style_handler).
 pub trait ComputedStyleHandler {
     fn computed_value(&self, node: u64, property: &str) -> Option<String>;
+
+    /// Resolve a value inside a nested browsing context. `context` identifies
+    /// the embedding element whose laid-out content box establishes the child
+    /// viewport. Handlers without nested-document support retain the ordinary
+    /// behavior.
+    fn computed_value_in_context(
+        &self,
+        _context: u64,
+        node: u64,
+        property: &str,
+    ) -> Option<String> {
+        self.computed_value(node, property)
+    }
 }
 
 /// Result of asking the selected CSS engine to normalize one inline specified
@@ -246,6 +263,27 @@ impl<E: ScriptEngine> NativeFn<E> for InlineStyleValue {
     }
 }
 
+/// `__supportsStyleValue(property, value)` -> a textual boolean. Native call
+/// contexts expose strings but not a boolean constructor, so the bootstrap
+/// performs the final conversion.
+struct SupportsStyleValue;
+impl<E: ScriptEngine> NativeFn<E> for SupportsStyleValue {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let property_value = cx.arg(0);
+        let property = cx.value_to_string(&property_value)?;
+        let input_value = cx.arg(1);
+        let value = cx.value_to_string(&input_value)?;
+        let supported = property.starts_with("--")
+            || host_inline_style::<E>(cx).is_some_and(|handler| {
+                matches!(
+                    handler.canonicalize(&property, &value),
+                    InlineStyleValueResult::Canonical(_)
+                )
+            });
+        cx.make_string(if supported { "true" } else { "false" })
+    }
+}
+
 /// Clone the computed-style handler out of host state (so it is not borrowed
 /// while invoked).
 fn host_computed_style<E: ScriptEngine>(
@@ -271,6 +309,30 @@ impl<E: ScriptEngine> NativeFn<E> for ComputedStyleValue {
         let value = host_computed_style::<E>(cx).and_then(|h| h.computed_value(node, &property));
         match value {
             Some(v) => cx.make_string(&v),
+            None => Ok(cx.make_null()),
+        }
+    }
+}
+
+/// `__computedStyleValueInContext(contextRef, nodeRef, property)` is the
+/// nested-browsing-context counterpart of [`ComputedStyleValue`].
+struct ComputedStyleValueInContext;
+impl<E: ScriptEngine> NativeFn<E> for ComputedStyleValueInContext {
+    fn call(cx: &mut E::CallCx<'_>) -> Result<E::Value, E::Error> {
+        let context_value = cx.arg(0);
+        let node_value = cx.arg(1);
+        let (Some(context), Some(node)) = (
+            cx.reflector_data(&context_value),
+            cx.reflector_data(&node_value),
+        ) else {
+            return Ok(cx.make_null());
+        };
+        let property_value = cx.arg(2);
+        let property = cx.value_to_string(&property_value)?;
+        let value = host_computed_style::<E>(cx)
+            .and_then(|handler| handler.computed_value_in_context(context, node, &property));
+        match value {
+            Some(value) => cx.make_string(&value),
             None => Ok(cx.make_null()),
         }
     }

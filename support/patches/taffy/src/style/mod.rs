@@ -157,6 +157,12 @@ pub trait CoreStyle {
     fn aspect_ratio(&self) -> Option<f32> {
         Style::<Self::CustomIdent>::DEFAULT.aspect_ratio
     }
+    /// Whether child content is excluded from intrinsic sizing in each
+    /// physical axis.
+    #[inline(always)]
+    fn size_containment(&self) -> Size<bool> {
+        Style::<Self::CustomIdent>::DEFAULT.size_containment
+    }
 
     // Spacing Properties
     /// How large should the margin be on each side?
@@ -481,6 +487,9 @@ pub struct Style<S: CheapCloneStr = DefaultCheapStr> {
     ///
     /// The ratio is calculated as width divided by height.
     pub aspect_ratio: Option<f32>,
+    /// Whether child content is excluded from intrinsic sizing in each
+    /// physical axis.
+    pub size_containment: Size<bool>,
 
     // Spacing Properties
     /// How large should the margin be on each side?
@@ -611,6 +620,7 @@ impl<S: CheapCloneStr> Style<S> {
         min_size: Size::auto(),
         max_size: Size::auto(),
         aspect_ratio: None,
+        size_containment: Size { width: false, height: false },
         #[cfg(any(feature = "flexbox", feature = "grid"))]
         gap: Size::zero(),
         // Alignment
@@ -732,6 +742,10 @@ impl<S: CheapCloneStr> CoreStyle for Style<S> {
         self.aspect_ratio
     }
     #[inline(always)]
+    fn size_containment(&self) -> Size<bool> {
+        self.size_containment
+    }
+    #[inline(always)]
     fn margin(&self) -> Rect<LengthPercentageAuto> {
         self.margin
     }
@@ -799,6 +813,10 @@ impl<T: CoreStyle> CoreStyle for &'_ T {
     #[inline(always)]
     fn aspect_ratio(&self) -> Option<f32> {
         (*self).aspect_ratio()
+    }
+    #[inline(always)]
+    fn size_containment(&self) -> Size<bool> {
+        (*self).size_containment()
     }
     #[inline(always)]
     fn margin(&self) -> Rect<LengthPercentageAuto> {

@@ -1,4 +1,4 @@
-use genet_livery::{InteractionStates, StyleSet, layout, resolve_styles};
+use genet_livery::{InteractionStates, LiveryDocument, StyleSet, layout, resolve_styles};
 use genet_static_dom::StaticDocument;
 use layout_dom_api::LayoutDom;
 use livery::{
@@ -119,6 +119,292 @@ fn inherited_relative_font_sizes_are_computed_once() {
 
     assert_eq!(plane.get(main).unwrap().font_size, expected);
     assert_eq!(plane.get(span).unwrap().font_size, expected);
+}
+
+#[test]
+fn viewport_units_resolve_from_the_current_device_before_layout() {
+    let document =
+        StaticDocument::parse(r#"<html><body><div class="viewport-box"></div></body></html>"#);
+    let styles = StyleSet::cambium(
+        &[".viewport-box { width: calc(10px + 10vmin); height: 10vh; \
+                         font-size: 2vmin; transform: translate(10vw, 10vh); \
+                         display: grid; grid-template-columns: 10vmin 10vw; }"],
+    );
+    let box_node = document
+        .first_with_class(document.document(), "viewport-box")
+        .unwrap();
+    let plane = resolve_styles(
+        &document,
+        &styles,
+        &Device::screen(800.0, 600.0),
+        &InteractionStates::default(),
+    );
+    let fragments = layout(&document, &plane, 800.0, 600.0).unwrap();
+
+    assert_eq!(
+        plane.computed_style(box_node, "width").as_deref(),
+        Some("calc(70px)")
+    );
+    assert_eq!(
+        plane.computed_style(box_node, "font-size").as_deref(),
+        Some("12px")
+    );
+    assert_eq!(
+        plane.computed_style(box_node, "transform").as_deref(),
+        Some("matrix(1, 0, 0, 1, 80, 60)")
+    );
+    assert_eq!(
+        plane
+            .computed_style(box_node, "grid-template-columns")
+            .as_deref(),
+        Some("60px 80px")
+    );
+    assert_eq!(
+        (
+            fragments.get(box_node).unwrap().width,
+            fragments.get(box_node).unwrap().height,
+        ),
+        (70.0, 60.0)
+    );
+
+    let narrower = resolve_styles(
+        &document,
+        &styles,
+        &Device::screen(400.0, 100.0),
+        &InteractionStates::default(),
+    );
+    assert_eq!(
+        narrower.computed_style(box_node, "width").as_deref(),
+        Some("calc(20px)")
+    );
+}
+
+#[test]
+fn container_units_select_axes_independently_and_use_content_box_sizes() {
+    let document = StaticDocument::parse(
+        r#"<html><body>
+          <div class="inline outer">
+            <div class="size outer">
+              <div class="inline inner"><div class="nested-target"></div></div>
+            </div>
+          </div>
+          <div class="inline fallback"><div class="fallback-target"></div></div>
+          <div class="size bordered"><div class="bordered-target"></div></div>
+        </body></html>"#,
+    );
+    let nested = document
+        .first_with_class(document.document(), "nested-target")
+        .unwrap();
+    let fallback = document
+        .first_with_class(document.document(), "fallback-target")
+        .unwrap();
+    let bordered = document
+        .first_with_class(document.document(), "bordered-target")
+        .unwrap();
+    let styles = StyleSet::cambium(&[".inline { container-type: inline-size; } \
+         .size { container-type: size; } \
+         .inline.outer { width: 500px; } \
+         .size.outer { height: 400px; } \
+         .inline.inner { width: 300px; } \
+         .nested-target { width: 10cqi; height: 10cqb; margin-left: 10cqmin; \
+                          padding-left: max(10cqi, 10cqb); } \
+         .fallback { width: 70px; height: 30px; } \
+         .fallback-target { left: 10cqw; top: 10cqh; \
+                            margin-left: 10cqmax; margin-right: 10cqmin; } \
+         .bordered { width: 100px; height: 50px; box-sizing: border-box; \
+                     border: 10px solid green; padding: 10px; } \
+         .bordered-target { width: 10cqi; height: 10cqb; }"]);
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(200.0, 80.0));
+
+    assert_eq!(
+        retained.computed_style(nested, "width").as_deref(),
+        Some("30px")
+    );
+    assert_eq!(
+        retained.computed_style(nested, "height").as_deref(),
+        Some("40px")
+    );
+    assert_eq!(
+        retained.computed_style(nested, "margin-left").as_deref(),
+        Some("30px")
+    );
+    assert_eq!(
+        retained.computed_style(nested, "padding-left").as_deref(),
+        Some("40px")
+    );
+    assert_eq!(
+        retained.computed_style(fallback, "left").as_deref(),
+        Some("7px")
+    );
+    assert_eq!(
+        retained.computed_style(fallback, "top").as_deref(),
+        Some("8px")
+    );
+    assert_eq!(
+        retained.computed_style(fallback, "margin-left").as_deref(),
+        Some("8px")
+    );
+    assert_eq!(
+        retained.computed_style(fallback, "margin-right").as_deref(),
+        Some("7px")
+    );
+    assert_eq!(
+        retained.computed_style(bordered, "width").as_deref(),
+        Some("6px")
+    );
+    assert_eq!(
+        retained.computed_style(bordered, "height").as_deref(),
+        Some("1px")
+    );
+
+    retained
+        .frame(200, 80)
+        .expect("retained container-unit frame");
+    assert_eq!(
+        retained.computed_style(nested, "width").as_deref(),
+        Some("30px")
+    );
+}
+
+#[test]
+fn logical_units_follow_vertical_writing_and_container_axes() {
+    let document = StaticDocument::parse(
+        r#"<html><body>
+          <div class="size"><div class="inline"><div class="target"></div></div></div>
+          <div class="viewport-target"></div>
+        </body></html>"#,
+    );
+    let target = document
+        .first_with_class(document.document(), "target")
+        .unwrap();
+    let viewport_target = document
+        .first_with_class(document.document(), "viewport-target")
+        .unwrap();
+    let styles = StyleSet::cambium(
+        &[".size { writing-mode: vertical-rl; container-type: size; \
+                 width: 400px; height: 500px; } \
+         .inline { container-type: inline-size; height: 300px; } \
+         .target { width: 10cqi; height: 10cqb; \
+                   margin-left: 10cqw; margin-right: 10cqh; } \
+         .viewport-target { writing-mode: vertical-lr; width: 10vi; height: 10vb; }"],
+    );
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(600.0, 400.0));
+
+    for (node, property, expected) in [
+        (target, "width", "30px"),
+        (target, "height", "40px"),
+        (target, "margin-left", "40px"),
+        (target, "margin-right", "30px"),
+        (viewport_target, "width", "40px"),
+        (viewport_target, "height", "60px"),
+    ] {
+        assert_eq!(
+            retained.computed_style(node, property).as_deref(),
+            Some(expected),
+            "{property}"
+        );
+    }
+
+    retained.frame(600, 400).expect("vertical logical frame");
+    assert_eq!(
+        retained.computed_style(target, "width").as_deref(),
+        Some("30px")
+    );
+}
+
+#[test]
+fn named_container_queries_recascade_from_laid_out_sizes() {
+    let document = StaticDocument::parse(
+        r#"<html><body>
+          <div class="panel wide"><div class="wide-card card"></div></div>
+          <div class="panel narrow"><div class="narrow-card card"></div></div>
+        </body></html>"#,
+    );
+    let wide = document
+        .first_with_class(document.document(), "wide-card")
+        .unwrap();
+    let narrow = document
+        .first_with_class(document.document(), "narrow-card")
+        .unwrap();
+    let styles = StyleSet::cambium(&[".panel { container-type: size; container-name: sidebar; \
+                  height: 200px; } \
+         .wide { width: 320px; } .narrow { width: 200px; } \
+         .card { color: red; width: 10px; } \
+         @container sidebar (width >= 300px) and (height < 250px) { \
+           .card { color: green; width: 42px; } \
+         }"]);
+    assert!(
+        styles.diagnostics().is_empty(),
+        "{:?}",
+        styles.diagnostics()
+    );
+    let retained = LiveryDocument::new(document, styles, Device::screen(800.0, 600.0));
+
+    assert_eq!(
+        retained.computed_style(wide, "color").as_deref(),
+        Some("#008000")
+    );
+    assert_eq!(
+        retained.computed_style(wide, "width").as_deref(),
+        Some("42px")
+    );
+    assert_eq!(
+        retained.computed_style(narrow, "color").as_deref(),
+        Some("#ff0000")
+    );
+    assert_eq!(
+        retained.computed_style(narrow, "width").as_deref(),
+        Some("10px")
+    );
+}
+
+#[test]
+fn container_type_applies_physical_size_containment() {
+    let document = StaticDocument::parse(
+        r#"<html><body>
+          <div class="size block"><div class="child"></div></div>
+          <div class="inline horizontal"><div class="child"></div></div>
+          <div class="inline vertical"><div class="child"></div></div>
+          <div class="size flex"><div class="child"></div></div>
+          <div class="size grid"><div class="child"></div></div>
+        </body></html>"#,
+    );
+    let styles = StyleSet::cambium(&[".child { width: 80px; height: 40px; } \
+         .size { container-type: size; width: 100px; } \
+         .block { padding: 5px; border: 2px solid green; } \
+         .inline { container-type: inline-size; width: 100px; } \
+         .vertical { writing-mode: vertical-rl; } \
+         .flex { display: flex; } \
+         .grid { display: grid; }"]);
+    let plane = resolve_styles(
+        &document,
+        &styles,
+        &Device::screen(400.0, 300.0),
+        &InteractionStates::default(),
+    );
+    let fragments = layout(&document, &plane, 400.0, 300.0).unwrap();
+
+    let block = document
+        .first_with_class(document.document(), "block")
+        .unwrap();
+    let horizontal = document
+        .first_with_class(document.document(), "horizontal")
+        .unwrap();
+    let vertical = document
+        .first_with_class(document.document(), "vertical")
+        .unwrap();
+    let flex = document
+        .first_with_class(document.document(), "flex")
+        .unwrap();
+    let grid = document
+        .first_with_class(document.document(), "grid")
+        .unwrap();
+
+    assert_eq!(fragments.get(block).unwrap().height, 14.0);
+    assert_eq!(fragments.get(horizontal).unwrap().height, 40.0);
+    assert_eq!(fragments.get(vertical).unwrap().height, 0.0);
+    assert_eq!(fragments.get(flex).unwrap().height, 0.0);
+    assert_eq!(fragments.get(grid).unwrap().height, 0.0);
 }
 
 #[test]

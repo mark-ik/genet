@@ -2,8 +2,10 @@
 
 **Date:** 2026-07-20
 **Status:** H0, H1, and H2 landed 2026-07-20; H3 and H4 landed
-2026-07-22; H5 active (2D matrices, percentage reference boxes, and the first
-nested-calc/CSSOM/used-value slice landed 2026-07-22); H6 available.
+2026-07-22; H5 active (2D matrices, percentage reference boxes,
+nested-calc/CSSOM used values, the full viewport-unit family, writing-mode
+mapping, recursive comparison math, size containers, and scoped iframe style
+worlds landed 2026-07-22 through 2026-07-23); H6 available.
 Census grounded against the local fork checkout at H0.
 **Decision record:** Mark, 2026-07-18: "even an mpl-2.0 livery is worth more
 than servo's stylo to me. the proof is genet itself," and "level up livery to
@@ -266,13 +268,79 @@ matches what genet-layout consumes. Census (verified 2026-07-20):
   scripted CSSOM supplies the resulting fragment size when width or height
   needs a used pixel value for an unadorned box. The border serializer reduces
   its nested calc width without rewriting the authored style or color token.
-  `calc-serialization.html` remains 0/1 because its first value contains the
-  still-unimplemented `vmin` family. Native Livery's full wall is 176 green;
-  the full script-runtime-api + genet-scripted wall is 187 green. Both touched
+  The fourth H5 slice landed 2026-07-23: `vw`, `vh`, `vmin`, and `vmax` now
+  remain independent terms through specified calc algebra and canonical
+  serialization, then resolve from Livery's current `Device` at the
+  specified-to-computed boundary before font metrics, layout, transitions, or
+  paint consume them. Generated `PropertyValue` dispatch requires every value
+  family to state whether and how it resolves viewport units; an unresolved
+  viewport length reaching a downstream px-only consumer fails loudly. A
+  retained device resize recascades the style plane and recomputes the units.
+  The upstream `css/css-values/calc-serialization.html` receipt moved from 0/1
+  to 1/1 while `calc-nesting.html` remains 8/8. Native tests cover all four
+  unit bases, canonical term order, computed font, transform, and grid-track
+  values, layout geometry, and device changes. Native Livery's full wall is 179
+  green; the full script-runtime-api + genet-scripted wall is 188 green. Both touched
   walls are clippy-clean under `-D warnings` with the named pre-existing
-  allowances. The remaining calc family includes broader units and math
-  functions, general shorthand reconstruction, nested transform arguments,
-  and used-value serialization for adorned boxes and more layout properties.
+  allowances. The fifth H5 slice landed 2026-07-23. Livery now parses and
+  canonically retains all 24 physical and logical viewport units: the default,
+  small, large, and dynamic `vw`/`vh`/`vi`/`vb`/`vmin`/`vmax` families.
+  `Device` carries distinct small, large, and dynamic metrics, and scripted
+  device changes invalidate the computed result without collapsing those
+  tiers. The six `cq*` units remain deferred through cascade. A preliminary
+  layout then selects the nearest `container-type: inline-size` or `size`
+  ancestor independently for each axis, resolves against its content box, and
+  uses the small viewport for any axis without an eligible container. The
+  final style plane retained by layout and exposed through `getComputedStyle`
+  contains the resolved result. Direct atomic `min()`, `max()`, and `clamp()`
+  arguments share that deferred environment and percentage-basis path; this
+  bounded representation accepts up to eight comparison arguments and eight
+  distinct environment-relative terms in one linear `calc()`. Native and Boa
+  receipts cover distinct viewport tiers, logical axes under the current
+  horizontal writing mode, independent nested container axes, content-box
+  sizing, fallback, comparison ordering, comments, percentages, mutation, and
+  retained/on-demand computed style. Native Livery's full wall is 183 green;
+  the full script-runtime-api + genet-scripted wall is 189 green. Both touched
+  walls are clippy-clean under `-D warnings` with the named pre-existing
+  allowances. The upstream `calc-serialization.html` and `calc-nesting.html`
+  receipts remain 1/1 and 8/8. The broader
+  `viewport-units-compute.html` fixture is still blocked before value reads by
+  its iframe `contentWindow`/`contentDocument` dependency, and
+  `clamp-length-computed.html` is blocked by computed
+  `CSSStyleDeclaration` property-membership support before it reaches the
+  clamp assertions.
+
+  The sixth H5 slice landed 2026-07-23. Generated inherited `writing-mode`
+  values now select physical and logical viewport/container axes for each
+  element. The bounded math representation is a compact postfix evaluator
+  rather than one atomic comparison node: nested `calc()`/`min()`/`max()`/
+  `clamp()`, arithmetic operands, length division, and `none` clamp bounds
+  resolve through the same delayed environment. `container-name` and retained
+  `@container` objects cover named width/height/inline-size/block-size
+  comparisons, colon and chained ranges, and `and`/`or`/`not`; layout recascades
+  size queries to stability with an eight-pass cycle bound. The vendored Taffy
+  seam excludes contained child content from intrinsic physical axes for
+  block, flex, and grid, with vertical inline-size containment mapped to
+  height. Script now supplies computed-style membership, `CSS.supports`,
+  `innerHTML`, and initial same-origin iframe documents whose child Livery
+  cascade uses the embedding frame's content-box viewport. CSSOM insertion and
+  deletion of named container rules is live.
+
+  Receipts: native Livery is 187 green; script-runtime-api + genet-scripted is
+  193 green. The upstream Boa/Livery files pass
+  `calc-serialization.html` 1/1, `calc-nesting.html` 8/8,
+  `clamp-length-computed.html` 24/24, and
+  `viewport-units-compute.html` 34/34. Native, scripted, Taffy, and
+  stylo_taffy touched surfaces are clippy-clean under `-D warnings` with only
+  the named pre-existing allowances.
+
+  The remaining value boundary is stepped, trigonometric, and exponential
+  math; style and scroll-state container queries; nested media/container
+  grouping and fuller query grammar; cycle diagnostics and
+  `contain-intrinsic-size`; general shorthand reconstruction; nested transform
+  arguments; and used-value serialization for adorned boxes and more layout
+  properties. Iframe navigation, origin policy, and independent event loops
+  remain browsing-context work beyond the initial child-document surface.
 - **H6 - media tiers come home.** Re-express the Mark-authored fork media
   tiers on Livery's Device under MIT/Apache. Receipt: media-query WPT
   parity between the Livery and fork routes.

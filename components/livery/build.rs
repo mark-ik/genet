@@ -119,6 +119,8 @@ fn value_type_path(value_type: &str) -> &'static str {
         "border-width" => "crate::values::BorderWidth",
         "box-shadow" => "crate::values::BoxShadow",
         "box-sizing" => "crate::values::BoxSizing",
+        "container-name" => "crate::values::ContainerName",
+        "container-type" => "crate::values::ContainerType",
         "color" => "crate::values::Color",
         "display" => "crate::values::Display",
         "duration" => "crate::values::Duration",
@@ -145,6 +147,8 @@ fn value_type_path(value_type: &str) -> &'static str {
         "pointer-events" => "crate::values::PointerEvents",
         "position" => "crate::values::Position",
         "radius" => "crate::values::Radius",
+        "rotate" => "crate::values::Rotate",
+        "scale" => "crate::values::Scale",
         "size" => "crate::values::Size",
         "spacing" => "crate::values::Spacing",
         "text-align" => "crate::values::TextAlign",
@@ -156,6 +160,7 @@ fn value_type_path(value_type: &str) -> &'static str {
         "visibility" => "crate::values::Visibility",
         "vertical-align" => "crate::values::VerticalAlign",
         "white-space-collapse" => "crate::values::WhiteSpaceCollapse",
+        "writing-mode" => "crate::values::WritingMode",
         "z-index" => "crate::values::ZIndex",
         _ => panic!("unsupported value_type {value_type}"),
     }
@@ -167,6 +172,7 @@ fn value_type_is_copy(value_type: &str) -> bool {
         "animation-name"
             | "background-image"
             | "box-shadow"
+            | "container-name"
             | "font-family"
             | "grid-template"
             | "transform"
@@ -187,6 +193,8 @@ fn initial_expression(property: &Property) -> &'static str {
         ("border-width", "medium") => "crate::values::BorderWidth::Medium",
         ("box-shadow", "none") => "crate::values::BoxShadow::None",
         ("box-sizing", "content-box") => "crate::values::BoxSizing::ContentBox",
+        ("container-name", "none") => "crate::values::ContainerName::None",
+        ("container-type", "normal") => "crate::values::ContainerType::Normal",
         ("color", "transparent") => "crate::values::Color::Transparent",
         ("color", "currentcolor") => "crate::values::Color::CurrentColor",
         ("color", "CanvasText") => "crate::values::Color::CanvasText",
@@ -216,6 +224,8 @@ fn initial_expression(property: &Property) -> &'static str {
         ("pointer-events", "auto") => "crate::values::PointerEvents::Auto",
         ("position", "static") => "crate::values::Position::Static",
         ("radius", "0") => "crate::values::Radius::ZERO",
+        ("rotate", "none") => "crate::values::Rotate::None",
+        ("scale", "none") => "crate::values::Scale::None",
         ("size", "auto") => "crate::values::Size::Auto",
         ("size", "none") => "crate::values::Size::None",
         ("spacing", "normal") => "crate::values::Spacing::Normal",
@@ -228,6 +238,7 @@ fn initial_expression(property: &Property) -> &'static str {
         ("visibility", "visible") => "crate::values::Visibility::Visible",
         ("vertical-align", "baseline") => "crate::values::VerticalAlign::Baseline",
         ("white-space-collapse", "collapse") => "crate::values::WhiteSpaceCollapse::Collapse",
+        ("writing-mode", "horizontal-tb") => "crate::values::WritingMode::HorizontalTb",
         ("z-index", "auto") => "crate::values::ZIndex::Auto",
         _ => panic!(
             "unsupported initial value {} for {} ({})",
@@ -514,6 +525,24 @@ fn generate(db: &Database) -> String {
         out.push_str(&format!(
             "            Self::{}(value) => value.to_string(),\n",
             rust_name(value_type)
+        ));
+    }
+    out.push_str(
+        "        }\n    }\n\n    /// Resolve viewport-relative lengths at the specified-to-computed boundary.\n    pub fn resolve_viewport(&self, viewport_width: f32, viewport_height: f32) -> Self {\n        match self {\n",
+    );
+    for value_type in &value_types {
+        let variant = rust_name(value_type);
+        out.push_str(&format!(
+            "            Self::{variant}(value) => Self::{variant}(crate::values::ResolveViewport::resolve_viewport(value, viewport_width, viewport_height)),\n"
+        ));
+    }
+    out.push_str(
+        "        }\n    }\n\n    /// Resolve viewport and deferred container-relative lengths from an explicit environment.\n    pub fn resolve_relative_lengths(&self, environment: crate::values::RelativeLengthEnvironment) -> Self {\n        match self {\n",
+    );
+    for value_type in &value_types {
+        let variant = rust_name(value_type);
+        out.push_str(&format!(
+            "            Self::{variant}(value) => Self::{variant}(crate::values::ResolveViewport::resolve_relative_lengths(value, environment)),\n"
         ));
     }
     out.push_str("        }\n    }\n}\n\n");
