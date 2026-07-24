@@ -1,14 +1,27 @@
 {
   "command": "testharness",
   "engine": "boa",
+  "renderer": "stylo",
   "tests": {
-    "dom/abort/AbortSignal.any.html": "pass",
+    "dom/abort/AbortSignal.any.html": {
+      "status": "pass",
+      "subtests_passed": 2,
+      "subtests_total": 2
+    },
     "dom/abort/abort-signal-any-crash.html": {
       "reason": "non-testharness",
       "status": "skip"
     },
-    "dom/abort/abort-signal-any.any.html": "fail",
-    "dom/abort/abort-signal-timeout.html": "fail",
+    "dom/abort/abort-signal-any.any.html": {
+      "status": "fail",
+      "subtests_passed": 9,
+      "subtests_total": 14
+    },
+    "dom/abort/abort-signal-timeout.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
     "dom/abort/crashtests/any-on-abort.html": {
       "reason": "non-testharness",
       "status": "skip"
@@ -17,9 +30,21 @@
       "reason": "non-testharness",
       "status": "skip"
     },
-    "dom/abort/event.any.html": "fail",
-    "dom/abort/reason-constructor.html": "fail",
-    "dom/abort/timeout.any.html": "pass"
+    "dom/abort/event.any.html": {
+      "status": "fail",
+      "subtests_passed": 15,
+      "subtests_total": 16
+    },
+    "dom/abort/reason-constructor.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/abort/timeout.any.html": {
+      "status": "pass",
+      "subtests_passed": 3,
+      "subtests_total": 3
+    }
   },
   "version": 1
 }

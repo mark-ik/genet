@@ -6,7 +6,10 @@
 nested-calc/CSSOM used values, the full viewport-unit family, writing-mode
 mapping, recursive comparison math, size containers, and scoped iframe style
 worlds, advanced CSS math, bounded individual transforms, and physical-margin
-used values landed 2026-07-22 through 2026-07-23); H6 available.
+used values landed 2026-07-22 through 2026-07-23; tree-counting math
+(`sibling-index()`/`sibling-count()`) with the first pinned `--renderer livery`
+WPT baseline, and time-domain math with `transition-delay` promoted, landed
+2026-07-24); H6 available.
 Census grounded against the local fork checkout at H0.
 **Decision record:** Mark, 2026-07-18: "even an mpl-2.0 livery is worth more
 than servo's stylo to me. the proof is genet itself," and "level up livery to
@@ -361,17 +364,130 @@ matches what genet-layout consumes. Census (verified 2026-07-20):
   touched crates are clippy-clean under `-D warnings` with only the named
   pre-existing allowances.
 
-  The next H5 slice is tree-counting math: carry `sibling-index()` and
-  `sibling-count()` through cascade with an element-tree context and close the
-  14 shared misses across the advanced-math files. After that remain time-domain
-  math, real `ex`/`ch` font metrics, special numeric values, nonuniform and 3D
-  individual transforms, and context-dependent mixed-unit ratios; style and
-  scroll-state container queries; nested media/container grouping and fuller
-  query grammar; cycle diagnostics and `contain-intrinsic-size`; general
-  shorthand reconstruction; nested transform arguments; and used-value
-  serialization for adorned boxes and more layout properties. Iframe
-  navigation, origin policy, and independent event loops remain browsing-context
-  work beyond the initial child-document surface.
+  The eighth H5 slice landed 2026-07-24: tree-counting math. `sibling-index()`
+  and `sibling-count()` parse as new zero-argument math leaves (leaf codes 56
+  and 57, taken from the free sentinel space; the token program is unchanged, so
+  the bounded representation did not grow) and stay deferred until cascade
+  supplies the element's position. The element context rides the existing
+  `RelativeLengthEnvironment` as a `TreeCounts` field, not a new cascade
+  parameter: `resolve_subtree` threads one-based per-child counts computed once
+  per parent (non-element children keep the deferred counts and do not shift the
+  ordinals), and an incremental restyle root recovers its own ordinal from its
+  parent. Because 13 of the 14 target misses land on `z-index`, `scale`, and
+  `rotate` -- which constant-folded at parse time -- each of those three grew a
+  `Deferred(MathLengthPercentage)` variant that retains the program to
+  computed-value time and resolves through `ResolveViewport`; `ZIndex` dropped
+  its `Eq` derive to hold the float-bearing form. A tree-counting function in a
+  declared value is a structural dependency the selector-text scanner cannot
+  see, so `StyleRule` now reads it off the declaration source and widens
+  child-list-mutation invalidation to the parent, exactly as a structural
+  selector does. Receipts: the five upstream computed-value files move 262/380
+  -> 276/380 (`hypot-pow-sqrt-computed.html` 40->43/47,
+  `sin-cos-tan-computed.html` 20->26/26,
+  `acos-asin-atan-atan2-computed.html` 38->41/45, `exp-log-compute.html`
+  17->19/19; `round-mod-rem-computed.html` unchanged at 147/243, its misses being
+  time and NaN), closing all 14 named tree-counting misses, and
+  `css/css-values/tree-counting/calc-sibling-function-parsing.html` moves
+  0/10 -> 10/10. That directory is now pinned as the first `--renderer livery`
+  WPT baseline (`css_values_tree_counting_livery_boa.json`, wired into
+  `check-testharness-baselines.ps1` with a renderer field so it distinguishes
+  from a Stylo baseline), so the corpus moves visibly as the deeper
+  tree-counting files (keyframe re-resolution, shadow DOM, layout geometry,
+  registered properties) land. Native Livery + genet-livery is 198 green (a
+  value-layer tree-counting corpus, a selector-classification guard, and a new
+  four-test `tree_counting.rs` document receipt over resolution,
+  non-element interleaving, the root's self-count, and incremental
+  child-list recount); script-runtime-api + genet-scripted stays 194 green (the
+  Boa advanced-math receipts double as the scripted-lane proof, resolving the
+  deferred leaf through `LiveryCssom`/getComputedStyle). Touched Livery code is
+  clippy-clean under `-D warnings`; two named pre-existing
+  too-many-arguments allowances were added in genet-livery's untouched
+  paint/text emitters.
+
+  The ninth H5 slice landed 2026-07-24: time-domain math. `s` and `ms` join the
+  math lane as a `Time` `MathDimension` and a `MathOperand::Time(f32)` carrying
+  canonical milliseconds (leaf code 55, again from the free sentinel space, so
+  the bounded representation still did not grow), with `time_milliseconds`
+  beside `angle_radians`, dividing rows for time-by-number and time-by-time, and
+  a `parse_time` entry point. Time never defers, so it needs no environment
+  plumbing. Two consumer-side changes were required and neither was visible from
+  the math lane alone. `Duration::from_str` returned early when its `s`/`ms`
+  suffix strip failed, which put the calc fallback out of reach; the suffix path
+  is now an `Option` the fallback follows. And the WPT time helper resolves
+  `{type:'time'}` onto `transition-delay`, which was an `[[unimplemented]]`
+  entry, so it is promoted to a real longhand over the existing `Duration`
+  family (95 implemented longhands, 162 unimplemented). That reuse keeps the
+  non-negative duration bound, so a negative `transition-delay` stays
+  unsupported and is named here rather than silently accepted.
+
+  Receipts: the five upstream computed-value files move 276/380 -> 292/380
+  (`round-mod-rem-computed.html` 147->159/243, `hypot-pow-sqrt-computed.html`
+  43->45/47, `acos-asin-atan-atan2-computed.html` 41->43/45). The plan's
+  original count of 16 time misses is confirmed against the literal
+  `type:'time'` grep of 14: the other two are `atan2(1s, -1s)` and
+  `atan2(1ms, -1ms)`, which take time arguments but assert an angle, so they
+  close on the same change. Native Livery + genet-livery is 199 green (a
+  value-layer corpus over mixed-unit folding, canonical milliseconds, and
+  dimensional and negative rejection); script-runtime-api + genet-scripted stays
+  194. All five advanced-math files are now pinned as `--renderer livery`
+  baselines beside the tree-counting directory, and the pins are exact: the
+  runner's expectation format grew `subtests_passed`/`subtests_total` per file
+  (written by `--write-expectations`, enforced by `--expectations`), so losing
+  one subtest inside a still-failing file is now unexpected -- and gaining one
+  is too, so a progression re-pins rather than silently outrunning its
+  baseline. Each file also records the `renderer` it was written under, and
+  the runner refuses to check a baseline against a run with a different
+  `--renderer`, so a Livery pin can never vouch for a Stylo run. Files written
+  before these fields exist pin status only and stay readable.
+
+  The next H5 slice is real `ex`/`ch` font metrics. After that remain special
+  numeric values (`NaN`/infinity, the 78-miss family needing per-property range
+  clamping), nonuniform and 3D individual transforms,
+  and context-dependent mixed-unit ratios; style and scroll-state container
+  queries; nested media/container grouping and fuller query grammar; cycle
+  diagnostics and `contain-intrinsic-size`; general shorthand reconstruction;
+  nested transform arguments; and used-value serialization for adorned boxes and
+  more layout properties. Iframe navigation, origin policy, and independent event
+  loops remain browsing-context work beyond the initial child-document surface.
+
+  A ratchet note surfaced here and applies to every prior receipt: no
+  `--renderer livery` WPT baseline existed before this slice -- all earlier
+  Livery subtest counts were read off the runner's stdout once and recorded in
+  prose, never pinned, so a regression in the 262/380 was invisible to CI. The
+  tree-counting baseline is the first pin; the five advanced-math files were
+  pinned with the time slice. `check-testharness-baselines.ps1` carries a
+  renderer field so a Livery baseline is distinguishable from a Stylo one, which
+  the expectation file itself does not record.
+
+  The drifted `dom`/`dom-nodes` baselines were regenerated 2026-07-24, and the
+  drift was worth reading before rubber-stamping. Of 34 unexpected results in
+  `dom`, 28 were progressions or lateral moves, but six were real regressions
+  (`fail` -> `error`) hidden by the stale pin. Root cause: the engine-neutral DOM
+  bootstrap publishes parse-time element ids as named globals, and it installed
+  them as getter-only accessors. testharness's `expose()` assigns
+  (`global[name] = fn`), which against a getter-only accessor fails silently, so
+  a document containing `id="test"` shadowed testharness's own `test()` and
+  every call threw "not a callable function". HTML puts named properties on
+  Window's prototype chain precisely so an own property shadows them; the
+  accessor now carries a setter that replaces itself with a data property,
+  restoring that order. This was not a harvest bug, but it was suppressing
+  harvest receipts too: `calc-sibling-function.html` uses `id="test"`, so the
+  tree-counting corpus moved 14/76 -> 16/82 on the same fix. The full
+  testharness baseline check is green at `unexpected=0` across all thirteen
+  pinned subsets.
+
+  A second harness-side bug fell out of the same day's genet-wpt wall: the
+  Nova harness template snapshot-clones a runtime whose JS heap was
+  bootstrapped against the donor host, and `snapshot_clone` swaps in a fresh
+  Rust host without telling the heap -- so the retained `document` wrapper
+  still held the donor document's root reflector. genet-scripted-dom's
+  debug-build NodeId fence caught it the moment the named-globals refresh made
+  `load_dom` touch the DOM ("NodeId from a different document"); on unfenced
+  release builds the stale root resolved to the right node only because the
+  root's untagged index is the same in every arena. The bootstrap now exposes
+  `__rebindDocument()` (a no-op unless the host was swapped, since reflectors
+  are canonical per host) and both `snapshot_clone` and `load_dom` call it.
+  genet-wpt's wall is back to green with the template-reuse receipt passing.
 - **H6 - media tiers come home.** Re-express the Mark-authored fork media
   tiers on Livery's Device under MIT/Apache. Receipt: media-query WPT
   parity between the Livery and fork routes.

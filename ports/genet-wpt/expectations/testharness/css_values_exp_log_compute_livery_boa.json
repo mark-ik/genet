@@ -1,0 +1,13 @@
+{
+  "command": "testharness",
+  "engine": "boa",
+  "renderer": "livery",
+  "tests": {
+    "css/css-values/exp-log-compute.html": {
+      "status": "pass",
+      "subtests_passed": 19,
+      "subtests_total": 19
+    }
+  },
+  "version": 1
+}

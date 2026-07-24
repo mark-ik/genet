@@ -1,0 +1,13 @@
+{
+  "command": "testharness",
+  "engine": "boa",
+  "renderer": "livery",
+  "tests": {
+    "css/css-values/hypot-pow-sqrt-computed.html": {
+      "status": "fail",
+      "subtests_passed": 45,
+      "subtests_total": 47
+    }
+  },
+  "version": 1
+}

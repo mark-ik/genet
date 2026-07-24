@@ -65,15 +65,48 @@ $baselines = @(
         Subset = "css/css-animations"
         Engine = "boa"
         Expectations = "ports/genet-wpt/expectations/testharness/css_animations_boa.json"
+    },
+    @{
+        # The Livery style route (harvest plan, H5 tree-counting). Only the
+        # parsing file passes fully today; the rest need keyframe re-resolution,
+        # shadow DOM, layout geometry, and registered properties, so this is
+        # pinned to move visibly as those slices land. Baselines record their
+        # renderer and the runner refuses a mismatched --renderer, so a Livery
+        # baseline cannot silently vouch for a Stylo run.
+        Subset = "css/css-values/tree-counting"
+        Engine = "boa"
+        Renderer = "livery"
+        Expectations = "ports/genet-wpt/expectations/testharness/css_values_tree_counting_livery_boa.json"
     }
 )
 
+# The Livery advanced-math computed-value files (harvest plan, H5). Baselines
+# pin exact subtest counts (subtests_passed/subtests_total per file), so a
+# regression inside a still-failing file is unexpected, and a progression is
+# too -- re-pin with --write-expectations so the baseline ratchets upward.
+# Every math slice (ex/ch, NaN) reruns and updates these.
+$liveryMathFiles = @(
+    "round-mod-rem-computed", "hypot-pow-sqrt-computed", "sin-cos-tan-computed",
+    "acos-asin-atan-atan2-computed", "exp-log-compute"
+)
+foreach ($file in $liveryMathFiles) {
+    $baselines += @{
+        Subset       = "css/css-values/$file.html"
+        Engine       = "boa"
+        Renderer     = "livery"
+        Expectations = "ports/genet-wpt/expectations/testharness/css_values_$($file -replace '-','_')_livery_boa.json"
+    }
+}
+
 foreach ($baseline in $baselines) {
     $expectations = Join-Path $repo $baseline.Expectations
-    Write-Output "Checking WPT testharness baseline: $($baseline.Subset) [$($baseline.Engine)]"
-    & $runner testharness $baseline.Subset --engine $baseline.Engine --expectations $expectations
+    $renderer = $baseline.Renderer
+    $label = if ($renderer) { "$($baseline.Subset) [$($baseline.Engine)/$renderer]" } else { "$($baseline.Subset) [$($baseline.Engine)]" }
+    Write-Output "Checking WPT testharness baseline: $label"
+    $extra = if ($renderer) { @("--renderer", $renderer) } else { @() }
+    & $runner testharness $baseline.Subset --engine $baseline.Engine @extra --expectations $expectations
     if ($LASTEXITCODE -ne 0) {
-        throw "WPT testharness baseline failed: $($baseline.Subset) [$($baseline.Engine)]"
+        throw "WPT testharness baseline failed: $label"
     }
 }
 

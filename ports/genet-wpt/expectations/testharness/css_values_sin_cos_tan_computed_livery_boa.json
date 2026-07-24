@@ -1,0 +1,13 @@
+{
+  "command": "testharness",
+  "engine": "boa",
+  "renderer": "livery",
+  "tests": {
+    "css/css-values/sin-cos-tan-computed.html": {
+      "status": "pass",
+      "subtests_passed": 26,
+      "subtests_total": 26
+    }
+  },
+  "version": 1
+}

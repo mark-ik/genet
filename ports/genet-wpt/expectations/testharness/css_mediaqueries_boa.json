@@ -1,6 +1,7 @@
 {
   "command": "testharness",
   "engine": "boa",
+  "renderer": "stylo",
   "tests": {
     "css/mediaqueries/aspect-ratio-001.html": {
       "reason": "non-testharness",
@@ -26,13 +27,25 @@
       "reason": "non-testharness",
       "status": "skip"
     },
-    "css/mediaqueries/aspect-ratio-serialization.html": "pass",
+    "css/mediaqueries/aspect-ratio-serialization.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
     "css/mediaqueries/at-custom-media-basic.html": {
       "reason": "non-testharness",
       "status": "skip"
     },
-    "css/mediaqueries/at-custom-media-cssom.html": "fail",
-    "css/mediaqueries/at-custom-media-parsing.html": "fail",
+    "css/mediaqueries/at-custom-media-cssom.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 10
+    },
+    "css/mediaqueries/at-custom-media-parsing.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 14
+    },
     "css/mediaqueries/device-aspect-ratio-002.html": {
       "reason": "non-testharness",
       "status": "skip"
@@ -49,16 +62,40 @@
       "reason": "non-testharness",
       "status": "skip"
     },
-    "css/mediaqueries/display-mode.html": "fail",
-    "css/mediaqueries/display-mode.tentative.html": "fail",
+    "css/mediaqueries/display-mode.html": {
+      "status": "fail",
+      "subtests_passed": 6,
+      "subtests_total": 17
+    },
+    "css/mediaqueries/display-mode.tentative.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 2
+    },
     "css/mediaqueries/duplicate-media-stylesheet-crash.html": {
       "reason": "non-testharness",
       "status": "skip"
     },
-    "css/mediaqueries/dynamic-range.html": "fail",
-    "css/mediaqueries/forced-colors.html": "fail",
-    "css/mediaqueries/inverted-colors.html": "fail",
-    "css/mediaqueries/match-media-parsing.html": "pass",
+    "css/mediaqueries/dynamic-range.html": {
+      "status": "fail",
+      "subtests_passed": 11,
+      "subtests_total": 23
+    },
+    "css/mediaqueries/forced-colors.html": {
+      "status": "fail",
+      "subtests_passed": 7,
+      "subtests_total": 16
+    },
+    "css/mediaqueries/inverted-colors.html": {
+      "status": "fail",
+      "subtests_passed": 7,
+      "subtests_total": 15
+    },
+    "css/mediaqueries/match-media-parsing.html": {
+      "status": "pass",
+      "subtests_passed": 34,
+      "subtests_total": 34
+    },
     "css/mediaqueries/media-queries-001.xht": {
       "reason": "non-testharness",
       "status": "skip"
@@ -71,7 +108,11 @@
       "reason": "non-testharness",
       "status": "skip"
     },
-    "css/mediaqueries/media-query-matches-in-iframe.html": "fail",
+    "css/mediaqueries/media-query-matches-in-iframe.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 22
+    },
     "css/mediaqueries/min-width-001.xht": {
       "reason": "non-testharness",
       "status": "skip"
@@ -148,7 +189,11 @@
       "reason": "non-testharness",
       "status": "skip"
     },
-    "css/mediaqueries/mq-dynamic-empty-children.html": "fail",
+    "css/mediaqueries/mq-dynamic-empty-children.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
     "css/mediaqueries/mq-gamut-001.html": {
       "reason": "non-testharness",
       "status": "skip"
@@ -217,8 +262,16 @@
       "reason": "non-testharness",
       "status": "skip"
     },
-    "css/mediaqueries/mq-unknown-feature-custom-property.html": "fail",
-    "css/mediaqueries/navigation-controls.tentative.html": "fail",
+    "css/mediaqueries/mq-unknown-feature-custom-property.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "css/mediaqueries/navigation-controls.tentative.html": {
+      "status": "fail",
+      "subtests_passed": 2,
+      "subtests_total": 8
+    },
     "css/mediaqueries/negation-001.html": {
       "reason": "non-testharness",
       "status": "skip"
@@ -227,12 +280,36 @@
       "reason": "non-testharness",
       "status": "skip"
     },
-    "css/mediaqueries/overflow-media-features.html": "fail",
-    "css/mediaqueries/preferences-colorScheme.tentative.https.html": "fail",
-    "css/mediaqueries/preferences-contrast.tentative.https.html": "fail",
-    "css/mediaqueries/preferences-reducedData.tentative.https.html": "fail",
-    "css/mediaqueries/preferences-reducedMotion.tentative.https.html": "fail",
-    "css/mediaqueries/preferences-reducedTransparency.tentative.https.html": "fail",
+    "css/mediaqueries/overflow-media-features.html": {
+      "status": "fail",
+      "subtests_passed": 13,
+      "subtests_total": 28
+    },
+    "css/mediaqueries/preferences-colorScheme.tentative.https.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 13
+    },
+    "css/mediaqueries/preferences-contrast.tentative.https.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 14
+    },
+    "css/mediaqueries/preferences-reducedData.tentative.https.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 13
+    },
+    "css/mediaqueries/preferences-reducedMotion.tentative.https.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 13
+    },
+    "css/mediaqueries/preferences-reducedTransparency.tentative.https.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 13
+    },
     "css/mediaqueries/prefers-color-scheme-svg-as-image.html": {
       "reason": "non-testharness",
       "status": "skip"
@@ -253,11 +330,31 @@
       "reason": "non-testharness",
       "status": "skip"
     },
-    "css/mediaqueries/prefers-color-scheme.html": "fail",
-    "css/mediaqueries/prefers-contrast.html": "fail",
-    "css/mediaqueries/prefers-reduced-data.html": "fail",
-    "css/mediaqueries/prefers-reduced-motion.html": "fail",
-    "css/mediaqueries/prefers-reduced-transparency.html": "fail",
+    "css/mediaqueries/prefers-color-scheme.html": {
+      "status": "fail",
+      "subtests_passed": 8,
+      "subtests_total": 18
+    },
+    "css/mediaqueries/prefers-contrast.html": {
+      "status": "fail",
+      "subtests_passed": 11,
+      "subtests_total": 26
+    },
+    "css/mediaqueries/prefers-reduced-data.html": {
+      "status": "fail",
+      "subtests_passed": 7,
+      "subtests_total": 17
+    },
+    "css/mediaqueries/prefers-reduced-motion.html": {
+      "status": "fail",
+      "subtests_passed": 7,
+      "subtests_total": 16
+    },
+    "css/mediaqueries/prefers-reduced-transparency.html": {
+      "status": "fail",
+      "subtests_passed": 8,
+      "subtests_total": 17
+    },
     "css/mediaqueries/relative-units-001.html": {
       "reason": "non-testharness",
       "status": "skip"
@@ -274,7 +371,11 @@
       "reason": "non-testharness",
       "status": "skip"
     },
-    "css/mediaqueries/relative-units-005.html": "fail",
+    "css/mediaqueries/relative-units-005.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 3
+    },
     "css/mediaqueries/scripting-print-noscript.html": {
       "reason": "non-testharness",
       "status": "skip"
@@ -283,12 +384,20 @@
       "reason": "non-testharness",
       "status": "skip"
     },
-    "css/mediaqueries/scripting.html": "fail",
+    "css/mediaqueries/scripting.html": {
+      "status": "fail",
+      "subtests_passed": 5,
+      "subtests_total": 12
+    },
     "css/mediaqueries/test_media_queries.html": {
       "reason": "no-subtests",
       "status": "no-results"
     },
-    "css/mediaqueries/update-media-feature.html": "fail",
+    "css/mediaqueries/update-media-feature.html": {
+      "status": "fail",
+      "subtests_passed": 7,
+      "subtests_total": 14
+    },
     "css/mediaqueries/viewport-script-dynamic.html": {
       "reason": "non-testharness",
       "status": "skip"

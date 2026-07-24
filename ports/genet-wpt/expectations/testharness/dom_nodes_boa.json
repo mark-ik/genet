@@ -1,23 +1,72 @@
 {
   "command": "testharness",
   "engine": "boa",
+  "renderer": "stylo",
   "tests": {
-    "dom/nodes/CharacterData-appendChild.html": "fail",
-    "dom/nodes/CharacterData-appendData.html": "fail",
-    "dom/nodes/CharacterData-data.html": "pass",
-    "dom/nodes/CharacterData-deleteData.html": "pass",
-    "dom/nodes/CharacterData-insertData.html": "pass",
+    "dom/nodes/CharacterData-appendChild.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 9
+    },
+    "dom/nodes/CharacterData-appendData.html": {
+      "status": "fail",
+      "subtests_passed": 12,
+      "subtests_total": 14
+    },
+    "dom/nodes/CharacterData-data.html": {
+      "status": "pass",
+      "subtests_passed": 16,
+      "subtests_total": 16
+    },
+    "dom/nodes/CharacterData-deleteData.html": {
+      "status": "pass",
+      "subtests_passed": 18,
+      "subtests_total": 18
+    },
+    "dom/nodes/CharacterData-insertData.html": {
+      "status": "pass",
+      "subtests_passed": 18,
+      "subtests_total": 18
+    },
     "dom/nodes/CharacterData-remove.html": {
       "reason": "no-subtests",
       "status": "no-results"
     },
-    "dom/nodes/CharacterData-replaceData.html": "pass",
-    "dom/nodes/CharacterData-substringData.html": "fail",
-    "dom/nodes/CharacterData-surrogates.html": "fail",
-    "dom/nodes/ChildNode-after.html": "fail",
-    "dom/nodes/ChildNode-before.html": "fail",
-    "dom/nodes/ChildNode-replaceWith.html": "fail",
-    "dom/nodes/Comment-constructor.html": "fail",
+    "dom/nodes/CharacterData-replaceData.html": {
+      "status": "pass",
+      "subtests_passed": 34,
+      "subtests_total": 34
+    },
+    "dom/nodes/CharacterData-substringData.html": {
+      "status": "fail",
+      "subtests_passed": 26,
+      "subtests_total": 28
+    },
+    "dom/nodes/CharacterData-surrogates.html": {
+      "status": "fail",
+      "subtests_passed": 2,
+      "subtests_total": 8
+    },
+    "dom/nodes/ChildNode-after.html": {
+      "status": "fail",
+      "subtests_passed": 11,
+      "subtests_total": 45
+    },
+    "dom/nodes/ChildNode-before.html": {
+      "status": "fail",
+      "subtests_passed": 15,
+      "subtests_total": 45
+    },
+    "dom/nodes/ChildNode-replaceWith.html": {
+      "status": "fail",
+      "subtests_passed": 6,
+      "subtests_total": 33
+    },
+    "dom/nodes/Comment-constructor.html": {
+      "status": "fail",
+      "subtests_passed": 15,
+      "subtests_total": 16
+    },
     "dom/nodes/Comment-in-doctype.xhtml": {
       "reason": "xhtml",
       "status": "skip"
@@ -26,19 +75,55 @@
       "reason": "non-testharness",
       "status": "skip"
     },
-    "dom/nodes/DOMImplementation-createDocument.html": "fail",
-    "dom/nodes/DOMImplementation-createDocumentType.html": "fail",
+    "dom/nodes/DOMImplementation-createDocument.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 2
+    },
+    "dom/nodes/DOMImplementation-createDocumentType.html": {
+      "status": "fail",
+      "subtests_passed": 1,
+      "subtests_total": 82
+    },
     "dom/nodes/DOMImplementation-createHTMLDocument-with-null-browsing-context-crash.html": {
       "reason": "non-testharness",
       "status": "skip"
     },
-    "dom/nodes/DOMImplementation-createHTMLDocument-with-saved-implementation.html": "fail",
-    "dom/nodes/DOMImplementation-createHTMLDocument.html": "fail",
-    "dom/nodes/DOMImplementation-hasFeature.html": "pass",
-    "dom/nodes/Document-URL.html": "fail",
-    "dom/nodes/Document-adoptNode.html": "fail",
-    "dom/nodes/Document-characterSet-normalization-1.html": "fail",
-    "dom/nodes/Document-characterSet-normalization-2.html": "fail",
+    "dom/nodes/DOMImplementation-createHTMLDocument-with-saved-implementation.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/DOMImplementation-createHTMLDocument.html": {
+      "status": "fail",
+      "subtests_passed": 1,
+      "subtests_total": 13
+    },
+    "dom/nodes/DOMImplementation-hasFeature.html": {
+      "status": "pass",
+      "subtests_passed": 137,
+      "subtests_total": 137
+    },
+    "dom/nodes/Document-URL.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Document-adoptNode.html": {
+      "status": "fail",
+      "subtests_passed": 3,
+      "subtests_total": 4
+    },
+    "dom/nodes/Document-characterSet-normalization-1.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 315
+    },
+    "dom/nodes/Document-characterSet-normalization-2.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 339
+    },
     "dom/nodes/Document-constructor-svg.svg": {
       "reason": "no-subtests",
       "status": "no-results"
@@ -47,23 +132,91 @@
       "reason": "evaluation-threw",
       "status": "error"
     },
-    "dom/nodes/Document-constructor.html": "fail",
-    "dom/nodes/Document-contentType/contentType/contenttype_bmp.html": "fail",
-    "dom/nodes/Document-contentType/contentType/contenttype_css.html": "fail",
-    "dom/nodes/Document-contentType/contentType/contenttype_datauri_02.html": "fail",
-    "dom/nodes/Document-contentType/contentType/contenttype_gif.html": "fail",
-    "dom/nodes/Document-contentType/contentType/contenttype_html.html": "fail",
-    "dom/nodes/Document-contentType/contentType/contenttype_javascripturi.html": "fail",
-    "dom/nodes/Document-contentType/contentType/contenttype_jpg.html": "fail",
-    "dom/nodes/Document-contentType/contentType/contenttype_mimeheader_01.html": "fail",
-    "dom/nodes/Document-contentType/contentType/contenttype_mimeheader_02.html": "fail",
-    "dom/nodes/Document-contentType/contentType/contenttype_png.html": "fail",
-    "dom/nodes/Document-contentType/contentType/contenttype_txt.html": "fail",
-    "dom/nodes/Document-contentType/contentType/contenttype_xml.html": "fail",
-    "dom/nodes/Document-contentType/contentType/createDocument.html": "fail",
-    "dom/nodes/Document-contentType/contentType/createHTMLDocument.html": "fail",
-    "dom/nodes/Document-contentType/contentType/xhr_responseType_document.html": "fail",
-    "dom/nodes/Document-createAttribute.html": "fail",
+    "dom/nodes/Document-constructor.html": {
+      "status": "fail",
+      "subtests_passed": 1,
+      "subtests_total": 5
+    },
+    "dom/nodes/Document-contentType/contentType/contenttype_bmp.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Document-contentType/contentType/contenttype_css.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Document-contentType/contentType/contenttype_datauri_02.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Document-contentType/contentType/contenttype_gif.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Document-contentType/contentType/contenttype_html.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Document-contentType/contentType/contenttype_javascripturi.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Document-contentType/contentType/contenttype_jpg.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Document-contentType/contentType/contenttype_mimeheader_01.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Document-contentType/contentType/contenttype_mimeheader_02.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Document-contentType/contentType/contenttype_png.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Document-contentType/contentType/contenttype_txt.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Document-contentType/contentType/contenttype_xml.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Document-contentType/contentType/createDocument.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Document-contentType/contentType/createHTMLDocument.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Document-contentType/contentType/xhr_responseType_document.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Document-createAttribute.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 36
+    },
     "dom/nodes/Document-createCDATASection-xhtml.xhtml": {
       "reason": "xhtml",
       "status": "skip"
@@ -72,39 +225,123 @@
       "reason": "evaluation-threw",
       "status": "error"
     },
-    "dom/nodes/Document-createComment.html": "pass",
-    "dom/nodes/Document-createElement-namespace.html": "fail",
-    "dom/nodes/Document-createElement.html": "fail",
-    "dom/nodes/Document-createElementNS.html": "fail",
-    "dom/nodes/Document-createEvent-touchevent.window.html": "pass",
-    "dom/nodes/Document-createEvent.https.html": "fail",
+    "dom/nodes/Document-createComment.html": {
+      "status": "pass",
+      "subtests_passed": 6,
+      "subtests_total": 6
+    },
+    "dom/nodes/Document-createElement-namespace.html": {
+      "status": "fail",
+      "subtests_passed": 3,
+      "subtests_total": 51
+    },
+    "dom/nodes/Document-createElement.html": {
+      "status": "fail",
+      "subtests_passed": 39,
+      "subtests_total": 147
+    },
+    "dom/nodes/Document-createElementNS.html": {
+      "status": "fail",
+      "subtests_passed": 10,
+      "subtests_total": 596
+    },
+    "dom/nodes/Document-createEvent-touchevent.window.html": {
+      "status": "pass",
+      "subtests_passed": 3,
+      "subtests_total": 3
+    },
+    "dom/nodes/Document-createEvent.https.html": {
+      "status": "fail",
+      "subtests_passed": 165,
+      "subtests_total": 279
+    },
     "dom/nodes/Document-createProcessingInstruction-xhtml.xhtml": {
       "reason": "xhtml",
       "status": "skip"
     },
-    "dom/nodes/Document-createProcessingInstruction.html": "fail",
-    "dom/nodes/Document-createTextNode.html": "pass",
-    "dom/nodes/Document-createTreeWalker.html": "fail",
-    "dom/nodes/Document-doctype.html": "fail",
-    "dom/nodes/Document-getElementById.html": "fail",
-    "dom/nodes/Document-getElementsByClassName.html": "fail",
+    "dom/nodes/Document-createProcessingInstruction.html": {
+      "status": "fail",
+      "subtests_passed": 1,
+      "subtests_total": 12
+    },
+    "dom/nodes/Document-createTextNode.html": {
+      "status": "pass",
+      "subtests_passed": 6,
+      "subtests_total": 6
+    },
+    "dom/nodes/Document-createTreeWalker.html": {
+      "status": "fail",
+      "subtests_passed": 4,
+      "subtests_total": 5
+    },
+    "dom/nodes/Document-doctype.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 2
+    },
+    "dom/nodes/Document-getElementById.html": {
+      "status": "fail",
+      "subtests_passed": 14,
+      "subtests_total": 18
+    },
+    "dom/nodes/Document-getElementsByClassName.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
     "dom/nodes/Document-getElementsByTagName-xhtml.xhtml": {
       "reason": "xhtml",
       "status": "skip"
     },
-    "dom/nodes/Document-getElementsByTagName.html": "fail",
-    "dom/nodes/Document-getElementsByTagNameNS.html": "fail",
-    "dom/nodes/Document-implementation.html": "fail",
-    "dom/nodes/Document-importNode.html": "fail",
-    "dom/nodes/DocumentFragment-constructor.html": "pass",
-    "dom/nodes/DocumentFragment-getElementById.html": "fail",
-    "dom/nodes/DocumentFragment-querySelectorAll-after-modification.html": "pass",
+    "dom/nodes/Document-getElementsByTagName.html": {
+      "status": "fail",
+      "subtests_passed": 3,
+      "subtests_total": 18
+    },
+    "dom/nodes/Document-getElementsByTagNameNS.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 14
+    },
+    "dom/nodes/Document-implementation.html": {
+      "status": "fail",
+      "subtests_passed": 1,
+      "subtests_total": 2
+    },
+    "dom/nodes/Document-importNode.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 5
+    },
+    "dom/nodes/DocumentFragment-constructor.html": {
+      "status": "pass",
+      "subtests_passed": 2,
+      "subtests_total": 2
+    },
+    "dom/nodes/DocumentFragment-getElementById.html": {
+      "status": "fail",
+      "subtests_passed": 3,
+      "subtests_total": 5
+    },
+    "dom/nodes/DocumentFragment-querySelectorAll-after-modification.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
     "dom/nodes/DocumentType-literal-xhtml.xhtml": {
       "reason": "xhtml",
       "status": "skip"
     },
-    "dom/nodes/DocumentType-literal.html": "fail",
-    "dom/nodes/DocumentType-remove.html": "pass",
+    "dom/nodes/DocumentType-literal.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/DocumentType-remove.html": {
+      "status": "pass",
+      "subtests_passed": 4,
+      "subtests_total": 4
+    },
     "dom/nodes/Element-childElement-null-svg.svg": {
       "reason": "no-subtests",
       "status": "no-results"
@@ -113,7 +350,11 @@
       "reason": "xhtml",
       "status": "skip"
     },
-    "dom/nodes/Element-childElement-null.html": "pass",
+    "dom/nodes/Element-childElement-null.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
     "dom/nodes/Element-childElementCount-dynamic-add-svg.svg": {
       "reason": "no-subtests",
       "status": "no-results"
@@ -122,7 +363,11 @@
       "reason": "xhtml",
       "status": "skip"
     },
-    "dom/nodes/Element-childElementCount-dynamic-add.html": "pass",
+    "dom/nodes/Element-childElementCount-dynamic-add.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
     "dom/nodes/Element-childElementCount-dynamic-remove-svg.svg": {
       "reason": "no-subtests",
       "status": "no-results"
@@ -131,7 +376,11 @@
       "reason": "xhtml",
       "status": "skip"
     },
-    "dom/nodes/Element-childElementCount-dynamic-remove.html": "pass",
+    "dom/nodes/Element-childElementCount-dynamic-remove.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
     "dom/nodes/Element-childElementCount-nochild-svg.svg": {
       "reason": "no-subtests",
       "status": "no-results"
@@ -140,7 +389,11 @@
       "reason": "xhtml",
       "status": "skip"
     },
-    "dom/nodes/Element-childElementCount-nochild.html": "pass",
+    "dom/nodes/Element-childElementCount-nochild.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
     "dom/nodes/Element-childElementCount-svg.svg": {
       "reason": "no-subtests",
       "status": "no-results"
@@ -149,10 +402,26 @@
       "reason": "xhtml",
       "status": "skip"
     },
-    "dom/nodes/Element-childElementCount.html": "pass",
-    "dom/nodes/Element-children.html": "fail",
-    "dom/nodes/Element-classlist.html": "fail",
-    "dom/nodes/Element-closest.html": "fail",
+    "dom/nodes/Element-childElementCount.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/Element-children.html": {
+      "status": "fail",
+      "subtests_passed": 1,
+      "subtests_total": 2
+    },
+    "dom/nodes/Element-classlist.html": {
+      "status": "fail",
+      "subtests_passed": 785,
+      "subtests_total": 1420
+    },
+    "dom/nodes/Element-closest.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 29
+    },
     "dom/nodes/Element-firstElementChild-entity-xhtml.xhtml": {
       "reason": "xhtml",
       "status": "skip"
@@ -169,7 +438,11 @@
       "reason": "xhtml",
       "status": "skip"
     },
-    "dom/nodes/Element-firstElementChild-namespace.html": "pass",
+    "dom/nodes/Element-firstElementChild-namespace.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
     "dom/nodes/Element-firstElementChild-svg.svg": {
       "reason": "no-subtests",
       "status": "no-results"
@@ -178,15 +451,51 @@
       "reason": "xhtml",
       "status": "skip"
     },
-    "dom/nodes/Element-firstElementChild.html": "pass",
-    "dom/nodes/Element-getElementsByClassName.html": "fail",
-    "dom/nodes/Element-getElementsByTagName-change-document-HTMLNess.html": "fail",
-    "dom/nodes/Element-getElementsByTagName.html": "fail",
-    "dom/nodes/Element-getElementsByTagNameNS.html": "fail",
-    "dom/nodes/Element-hasAttribute.html": "fail",
-    "dom/nodes/Element-hasAttributes.html": "fail",
-    "dom/nodes/Element-insertAdjacentElement.html": "fail",
-    "dom/nodes/Element-insertAdjacentText.html": "fail",
+    "dom/nodes/Element-firstElementChild.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/Element-getElementsByClassName.html": {
+      "status": "fail",
+      "subtests_passed": 1,
+      "subtests_total": 3
+    },
+    "dom/nodes/Element-getElementsByTagName-change-document-HTMLNess.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Element-getElementsByTagName.html": {
+      "status": "fail",
+      "subtests_passed": 4,
+      "subtests_total": 19
+    },
+    "dom/nodes/Element-getElementsByTagNameNS.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 16
+    },
+    "dom/nodes/Element-hasAttribute.html": {
+      "status": "fail",
+      "subtests_passed": 1,
+      "subtests_total": 2
+    },
+    "dom/nodes/Element-hasAttributes.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 2
+    },
+    "dom/nodes/Element-insertAdjacentElement.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 6
+    },
+    "dom/nodes/Element-insertAdjacentText.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 6
+    },
     "dom/nodes/Element-lastElementChild-svg.svg": {
       "reason": "no-subtests",
       "status": "no-results"
@@ -195,9 +504,21 @@
       "reason": "xhtml",
       "status": "skip"
     },
-    "dom/nodes/Element-lastElementChild.html": "pass",
-    "dom/nodes/Element-matches-namespaced-elements.html": "fail",
-    "dom/nodes/Element-matches.html": "fail",
+    "dom/nodes/Element-lastElementChild.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/Element-matches-namespaced-elements.html": {
+      "status": "fail",
+      "subtests_passed": 2,
+      "subtests_total": 6
+    },
+    "dom/nodes/Element-matches.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
     "dom/nodes/Element-nextElementSibling-svg.svg": {
       "reason": "no-subtests",
       "status": "no-results"
@@ -206,7 +527,11 @@
       "reason": "xhtml",
       "status": "skip"
     },
-    "dom/nodes/Element-nextElementSibling.html": "pass",
+    "dom/nodes/Element-nextElementSibling.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
     "dom/nodes/Element-previousElementSibling-svg.svg": {
       "reason": "no-subtests",
       "status": "no-results"
@@ -215,12 +540,36 @@
       "reason": "xhtml",
       "status": "skip"
     },
-    "dom/nodes/Element-previousElementSibling.html": "pass",
-    "dom/nodes/Element-remove.html": "pass",
-    "dom/nodes/Element-removeAttribute.html": "fail",
-    "dom/nodes/Element-removeAttributeNS.html": "fail",
-    "dom/nodes/Element-setAttribute-crbug-1138487.html": "fail",
-    "dom/nodes/Element-setAttribute.html": "fail",
+    "dom/nodes/Element-previousElementSibling.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/Element-remove.html": {
+      "status": "pass",
+      "subtests_passed": 4,
+      "subtests_total": 4
+    },
+    "dom/nodes/Element-removeAttribute.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 2
+    },
+    "dom/nodes/Element-removeAttributeNS.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Element-setAttribute-crbug-1138487.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Element-setAttribute.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 2
+    },
     "dom/nodes/Element-siblingElement-null-svg.svg": {
       "reason": "no-subtests",
       "status": "no-results"
@@ -229,48 +578,152 @@
       "reason": "xhtml",
       "status": "skip"
     },
-    "dom/nodes/Element-siblingElement-null.html": "pass",
-    "dom/nodes/Element-tagName.html": "fail",
-    "dom/nodes/Element-webkitMatchesSelector.html": "fail",
-    "dom/nodes/MutationObserver-attributes.html": "fail",
-    "dom/nodes/MutationObserver-callback-arguments.html": "fail",
-    "dom/nodes/MutationObserver-characterData.html": "fail",
-    "dom/nodes/MutationObserver-childList.html": "fail",
+    "dom/nodes/Element-siblingElement-null.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/Element-tagName.html": {
+      "status": "fail",
+      "subtests_passed": 4,
+      "subtests_total": 6
+    },
+    "dom/nodes/Element-webkitMatchesSelector.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/MutationObserver-attributes.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 42
+    },
+    "dom/nodes/MutationObserver-callback-arguments.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/MutationObserver-characterData.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 23
+    },
+    "dom/nodes/MutationObserver-childList.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 38
+    },
     "dom/nodes/MutationObserver-cross-realm-callback-report-exception.html": {
       "reason": "evaluation-threw",
       "status": "error"
     },
-    "dom/nodes/MutationObserver-disconnect.html": "fail",
-    "dom/nodes/MutationObserver-document.html": "fail",
-    "dom/nodes/MutationObserver-inner-outer.html": "fail",
+    "dom/nodes/MutationObserver-disconnect.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 2
+    },
+    "dom/nodes/MutationObserver-document.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 4
+    },
+    "dom/nodes/MutationObserver-inner-outer.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 3
+    },
     "dom/nodes/MutationObserver-nested-crash.html": {
       "reason": "non-testharness",
       "status": "skip"
     },
-    "dom/nodes/MutationObserver-sanity.html": "fail",
-    "dom/nodes/MutationObserver-takeRecords.html": "fail",
-    "dom/nodes/MutationObserver-textContent.html": "fail",
-    "dom/nodes/Node-appendChild-cereactions-vs-script.window.html": "fail",
-    "dom/nodes/Node-appendChild.html": "fail",
-    "dom/nodes/Node-baseURI.html": "fail",
-    "dom/nodes/Node-childNodes-cache-2.html": "pass",
-    "dom/nodes/Node-childNodes-cache.html": "pass",
-    "dom/nodes/Node-childNodes.html": "fail",
-    "dom/nodes/Node-cloneNode-XMLDocument.html": "fail",
-    "dom/nodes/Node-cloneNode-document-allow-declarative-shadow-roots.window.html": "fail",
-    "dom/nodes/Node-cloneNode-document-with-doctype.html": "fail",
-    "dom/nodes/Node-cloneNode-external-stylesheet-no-bc.sub.html": "pass",
+    "dom/nodes/MutationObserver-sanity.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 13
+    },
+    "dom/nodes/MutationObserver-takeRecords.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 3
+    },
+    "dom/nodes/MutationObserver-textContent.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Node-appendChild-cereactions-vs-script.window.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Node-appendChild.html": {
+      "status": "fail",
+      "subtests_passed": 5,
+      "subtests_total": 11
+    },
+    "dom/nodes/Node-baseURI.html": {
+      "status": "fail",
+      "subtests_passed": 4,
+      "subtests_total": 9
+    },
+    "dom/nodes/Node-childNodes-cache-2.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/Node-childNodes-cache.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/Node-childNodes.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 6
+    },
+    "dom/nodes/Node-cloneNode-XMLDocument.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Node-cloneNode-document-allow-declarative-shadow-roots.window.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/Node-cloneNode-document-with-doctype.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 3
+    },
+    "dom/nodes/Node-cloneNode-external-stylesheet-no-bc.sub.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
     "dom/nodes/Node-cloneNode-on-inactive-document-crash.html": {
       "reason": "non-testharness",
       "status": "skip"
     },
-    "dom/nodes/Node-cloneNode-svg.html": "fail",
-    "dom/nodes/Node-cloneNode.html": "fail",
+    "dom/nodes/Node-cloneNode-svg.html": {
+      "status": "fail",
+      "subtests_passed": 2,
+      "subtests_total": 4
+    },
+    "dom/nodes/Node-cloneNode.html": {
+      "status": "fail",
+      "subtests_passed": 4,
+      "subtests_total": 135
+    },
     "dom/nodes/Node-compareDocumentPosition.html": {
       "reason": "evaluation-threw",
       "status": "error"
     },
-    "dom/nodes/Node-constants.html": "fail",
+    "dom/nodes/Node-constants.html": {
+      "status": "fail",
+      "subtests_passed": 4,
+      "subtests_total": 8
+    },
     "dom/nodes/Node-contains-xml.xml": {
       "reason": "evaluation-threw",
       "status": "error"
@@ -279,15 +732,35 @@
       "reason": "evaluation-threw",
       "status": "error"
     },
-    "dom/nodes/Node-insertBefore.html": "fail",
-    "dom/nodes/Node-isConnected-shadow-dom.html": "fail",
-    "dom/nodes/Node-isConnected.html": "fail",
+    "dom/nodes/Node-insertBefore.html": {
+      "status": "fail",
+      "subtests_passed": 11,
+      "subtests_total": 40
+    },
+    "dom/nodes/Node-isConnected-shadow-dom.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 2
+    },
+    "dom/nodes/Node-isConnected.html": {
+      "status": "pass",
+      "subtests_passed": 2,
+      "subtests_total": 2
+    },
     "dom/nodes/Node-isEqualNode-xhtml.xhtml": {
       "reason": "xhtml",
       "status": "skip"
     },
-    "dom/nodes/Node-isEqualNode.html": "fail",
-    "dom/nodes/Node-isSameNode.html": "fail",
+    "dom/nodes/Node-isEqualNode.html": {
+      "status": "fail",
+      "subtests_passed": 6,
+      "subtests_total": 9
+    },
+    "dom/nodes/Node-isSameNode.html": {
+      "status": "fail",
+      "subtests_passed": 7,
+      "subtests_total": 9
+    },
     "dom/nodes/Node-lookupNamespaceURI.html": {
       "reason": "evaluation-threw",
       "status": "error"
@@ -296,53 +769,162 @@
       "reason": "xhtml",
       "status": "skip"
     },
-    "dom/nodes/Node-mutation-adoptNode.html": "fail",
+    "dom/nodes/Node-mutation-adoptNode.html": {
+      "status": "fail",
+      "subtests_passed": 1,
+      "subtests_total": 2
+    },
     "dom/nodes/Node-nodeName-xhtml.xhtml": {
       "reason": "xhtml",
       "status": "skip"
     },
-    "dom/nodes/Node-nodeName.html": "fail",
-    "dom/nodes/Node-nodeValue.html": "fail",
-    "dom/nodes/Node-normalize.html": "fail",
-    "dom/nodes/Node-parentElement.html": "fail",
-    "dom/nodes/Node-parentNode.html": "fail",
+    "dom/nodes/Node-nodeName.html": {
+      "status": "fail",
+      "subtests_passed": 4,
+      "subtests_total": 6
+    },
+    "dom/nodes/Node-nodeValue.html": {
+      "status": "fail",
+      "subtests_passed": 3,
+      "subtests_total": 7
+    },
+    "dom/nodes/Node-normalize.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 4
+    },
+    "dom/nodes/Node-parentElement.html": {
+      "status": "fail",
+      "subtests_passed": 11,
+      "subtests_total": 12
+    },
+    "dom/nodes/Node-parentNode.html": {
+      "status": "fail",
+      "subtests_passed": 3,
+      "subtests_total": 5
+    },
     "dom/nodes/Node-properties.html": {
       "reason": "evaluation-threw",
       "status": "error"
     },
-    "dom/nodes/Node-removeChild.html": "fail",
-    "dom/nodes/Node-replaceChild.html": "fail",
-    "dom/nodes/Node-textContent.html": "fail",
-    "dom/nodes/NodeList-Iterable.html": "pass",
-    "dom/nodes/NodeList-live-mutations.window.html": "pass",
-    "dom/nodes/NodeList-static-length-getter-tampered-1.html": "fail",
-    "dom/nodes/NodeList-static-length-getter-tampered-2.html": "fail",
-    "dom/nodes/NodeList-static-length-getter-tampered-3.html": "fail",
-    "dom/nodes/NodeList-static-length-getter-tampered-indexOf-1.html": "fail",
-    "dom/nodes/NodeList-static-length-getter-tampered-indexOf-2.html": "fail",
-    "dom/nodes/NodeList-static-length-getter-tampered-indexOf-3.html": "fail",
-    "dom/nodes/ParentNode-append.html": "fail",
-    "dom/nodes/ParentNode-children.html": "fail",
-    "dom/nodes/ParentNode-prepend.html": "fail",
+    "dom/nodes/Node-removeChild.html": {
+      "status": "fail",
+      "subtests_passed": 18,
+      "subtests_total": 28
+    },
+    "dom/nodes/Node-replaceChild.html": {
+      "status": "fail",
+      "subtests_passed": 8,
+      "subtests_total": 29
+    },
+    "dom/nodes/Node-textContent.html": {
+      "status": "fail",
+      "subtests_passed": 10,
+      "subtests_total": 81
+    },
+    "dom/nodes/NodeList-Iterable.html": {
+      "status": "pass",
+      "subtests_passed": 8,
+      "subtests_total": 8
+    },
+    "dom/nodes/NodeList-live-mutations.window.html": {
+      "status": "pass",
+      "subtests_passed": 4,
+      "subtests_total": 4
+    },
+    "dom/nodes/NodeList-static-length-getter-tampered-1.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/NodeList-static-length-getter-tampered-2.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/NodeList-static-length-getter-tampered-3.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/NodeList-static-length-getter-tampered-indexOf-1.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/NodeList-static-length-getter-tampered-indexOf-2.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/NodeList-static-length-getter-tampered-indexOf-3.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/ParentNode-append.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 25
+    },
+    "dom/nodes/ParentNode-children.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/ParentNode-prepend.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 22
+    },
     "dom/nodes/ParentNode-querySelector-All-xht.xht": {
       "reason": "xhtml",
       "status": "skip"
     },
-    "dom/nodes/ParentNode-querySelector-All.html": "fail",
-    "dom/nodes/ParentNode-querySelector-case-insensitive.html": "fail",
-    "dom/nodes/ParentNode-querySelector-escapes.html": "fail",
-    "dom/nodes/ParentNode-querySelector-scope.html": "fail",
-    "dom/nodes/ParentNode-querySelectorAll-removed-elements.html": {
-      "reason": "evaluation-threw",
-      "status": "error"
+    "dom/nodes/ParentNode-querySelector-All.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
     },
-    "dom/nodes/ParentNode-querySelectors-exclusive.html": "pass",
+    "dom/nodes/ParentNode-querySelector-case-insensitive.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 2
+    },
+    "dom/nodes/ParentNode-querySelector-escapes.html": {
+      "status": "fail",
+      "subtests_passed": 18,
+      "subtests_total": 68
+    },
+    "dom/nodes/ParentNode-querySelector-scope.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 4
+    },
+    "dom/nodes/ParentNode-querySelectorAll-removed-elements.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/ParentNode-querySelectors-exclusive.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
     "dom/nodes/ParentNode-querySelectors-namespaces.html": {
       "reason": "evaluation-threw",
       "status": "error"
     },
-    "dom/nodes/ParentNode-querySelectors-space-and-dash-attribute-value.html": "pass",
-    "dom/nodes/ParentNode-replaceChildren.html": "fail",
+    "dom/nodes/ParentNode-querySelectors-space-and-dash-attribute-value.html": {
+      "status": "pass",
+      "subtests_passed": 2,
+      "subtests_total": 2
+    },
+    "dom/nodes/ParentNode-replaceChildren.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 29
+    },
     "dom/nodes/ProcessingInstruction-escapes-1.xhtml": {
       "reason": "xhtml",
       "status": "skip"
@@ -359,15 +941,51 @@
       "reason": "xhtml",
       "status": "skip"
     },
-    "dom/nodes/Text-constructor.html": "fail",
-    "dom/nodes/Text-splitText.html": "pass",
-    "dom/nodes/Text-wholeText.html": "pass",
-    "dom/nodes/adoption.window.html": "fail",
-    "dom/nodes/append-on-Document.html": "fail",
-    "dom/nodes/attributes-namednodemap-cross-document.window.html": "fail",
-    "dom/nodes/attributes-namednodemap.html": "fail",
-    "dom/nodes/attributes.html": "fail",
-    "dom/nodes/case.html": "fail",
+    "dom/nodes/Text-constructor.html": {
+      "status": "fail",
+      "subtests_passed": 15,
+      "subtests_total": 16
+    },
+    "dom/nodes/Text-splitText.html": {
+      "status": "pass",
+      "subtests_passed": 6,
+      "subtests_total": 6
+    },
+    "dom/nodes/Text-wholeText.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/adoption.window.html": {
+      "status": "fail",
+      "subtests_passed": 1,
+      "subtests_total": 6
+    },
+    "dom/nodes/append-on-Document.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 5
+    },
+    "dom/nodes/attributes-namednodemap-cross-document.window.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 2
+    },
+    "dom/nodes/attributes-namednodemap.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 8
+    },
+    "dom/nodes/attributes.html": {
+      "status": "fail",
+      "subtests_passed": 14,
+      "subtests_total": 67
+    },
+    "dom/nodes/case.html": {
+      "status": "fail",
+      "subtests_passed": 95,
+      "subtests_total": 285
+    },
     "dom/nodes/crashtests/attribute-index-when-no-attributes.html": {
       "reason": "non-testharness",
       "status": "skip"
@@ -388,63 +1006,291 @@
       "reason": "non-testharness",
       "status": "skip"
     },
-    "dom/nodes/getElementsByClassName-01.htm": "pass",
-    "dom/nodes/getElementsByClassName-02.htm": "pass",
-    "dom/nodes/getElementsByClassName-03.htm": "pass",
-    "dom/nodes/getElementsByClassName-04.htm": "pass",
-    "dom/nodes/getElementsByClassName-05.htm": "pass",
-    "dom/nodes/getElementsByClassName-06.htm": "pass",
-    "dom/nodes/getElementsByClassName-07.htm": "pass",
-    "dom/nodes/getElementsByClassName-08.htm": "pass",
-    "dom/nodes/getElementsByClassName-09.htm": "pass",
-    "dom/nodes/getElementsByClassName-10.xml": "fail",
-    "dom/nodes/getElementsByClassName-11.xml": "fail",
-    "dom/nodes/getElementsByClassName-12.htm": "pass",
-    "dom/nodes/getElementsByClassName-13.htm": "pass",
-    "dom/nodes/getElementsByClassName-14.htm": "fail",
-    "dom/nodes/getElementsByClassName-15.htm": "pass",
-    "dom/nodes/getElementsByClassName-16.htm": "pass",
-    "dom/nodes/getElementsByClassName-17.htm": "pass",
-    "dom/nodes/getElementsByClassName-18.htm": "pass",
-    "dom/nodes/getElementsByClassName-19.htm": "pass",
-    "dom/nodes/getElementsByClassName-20.htm": "fail",
-    "dom/nodes/getElementsByClassName-21.htm": "fail",
-    "dom/nodes/getElementsByClassName-22.htm": "fail",
-    "dom/nodes/getElementsByClassName-23.htm": "pass",
-    "dom/nodes/getElementsByClassName-24.htm": "pass",
-    "dom/nodes/getElementsByClassName-25.htm": "fail",
-    "dom/nodes/getElementsByClassName-26.htm": "pass",
-    "dom/nodes/getElementsByClassName-27.htm": "pass",
-    "dom/nodes/getElementsByClassName-28.htm": "pass",
-    "dom/nodes/getElementsByClassName-29.htm": "pass",
-    "dom/nodes/getElementsByClassName-30.htm": "pass",
-    "dom/nodes/getElementsByClassName-31.htm": "fail",
-    "dom/nodes/getElementsByClassName-32.html": "pass",
-    "dom/nodes/getElementsByClassName-empty-set.html": "pass",
-    "dom/nodes/getElementsByClassName-whitespace-class-names.html": "fail",
-    "dom/nodes/insert-adjacent.html": "fail",
-    "dom/nodes/insertion-removing-steps/Node-append-form-and-script-from-fragment.tentative.html": "fail",
-    "dom/nodes/insertion-removing-steps/Node-append-meta-referrer-and-script-from-fragment.tentative.html": "fail",
-    "dom/nodes/insertion-removing-steps/Node-appendChild-script-and-button-from-div.tentative.html": "fail",
-    "dom/nodes/insertion-removing-steps/Node-appendChild-script-and-custom-from-fragment.tentative.html": "fail",
-    "dom/nodes/insertion-removing-steps/Node-appendChild-script-and-default-style-meta-from-fragment.tentative.html": "fail",
-    "dom/nodes/insertion-removing-steps/Node-appendChild-script-and-div-from-fragment.tentative.html": "fail",
-    "dom/nodes/insertion-removing-steps/Node-appendChild-script-and-iframe.tentative.html": "fail",
-    "dom/nodes/insertion-removing-steps/Node-appendChild-script-and-source-from-fragment.tentative.html": "fail",
-    "dom/nodes/insertion-removing-steps/Node-appendChild-script-and-style.tentative.html": "fail",
-    "dom/nodes/insertion-removing-steps/Node-appendChild-script-in-script.tentative.html": "fail",
-    "dom/nodes/insertion-removing-steps/Node-appendChild-script-with-mutation-observer-takeRecords.html": "fail",
-    "dom/nodes/insertion-removing-steps/Node-appendChild-text-and-script-in-style.tentative.html": "fail",
-    "dom/nodes/insertion-removing-steps/Node-appendChild-text-in-script.tentative.html": "fail",
-    "dom/nodes/insertion-removing-steps/Node-appendChild-three-scripts-from-fragment.tentative.html": "fail",
-    "dom/nodes/insertion-removing-steps/Node-appendChild-three-scripts.tentative.html": "fail",
-    "dom/nodes/insertion-removing-steps/blur-event.window.html": "fail",
-    "dom/nodes/insertion-removing-steps/insertion-removing-steps-iframe.window.html": "fail",
-    "dom/nodes/insertion-removing-steps/insertion-removing-steps-script.window.html": "fail",
-    "dom/nodes/insertion-removing-steps/later-script-removed-by-earlier-script.html": "fail",
-    "dom/nodes/insertion-removing-steps/script-does-not-run-on-child-removal.window.html": "fail",
-    "dom/nodes/moveBefore/Node-moveBefore.html": "fail",
-    "dom/nodes/moveBefore/child-style-preserve.html": "fail",
+    "dom/nodes/getElementsByClassName-01.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-02.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-03.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-04.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-05.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-06.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-07.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-08.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-09.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-10.xml": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-11.xml": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-12.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-13.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-14.htm": {
+      "status": "fail",
+      "subtests_passed": 1,
+      "subtests_total": 2
+    },
+    "dom/nodes/getElementsByClassName-15.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-16.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-17.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-18.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-19.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-20.htm": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-21.htm": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-22.htm": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-23.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-24.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-25.htm": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-26.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-27.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-28.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-29.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-30.htm": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-31.htm": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/getElementsByClassName-32.html": {
+      "status": "pass",
+      "subtests_passed": 4,
+      "subtests_total": 4
+    },
+    "dom/nodes/getElementsByClassName-empty-set.html": {
+      "status": "pass",
+      "subtests_passed": 3,
+      "subtests_total": 3
+    },
+    "dom/nodes/getElementsByClassName-whitespace-class-names.html": {
+      "status": "fail",
+      "subtests_passed": 6,
+      "subtests_total": 26
+    },
+    "dom/nodes/insert-adjacent.html": {
+      "status": "fail",
+      "subtests_passed": 1,
+      "subtests_total": 14
+    },
+    "dom/nodes/insertion-removing-steps/Node-append-form-and-script-from-fragment.tentative.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/insertion-removing-steps/Node-append-meta-referrer-and-script-from-fragment.tentative.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/insertion-removing-steps/Node-appendChild-script-and-button-from-div.tentative.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/insertion-removing-steps/Node-appendChild-script-and-custom-from-fragment.tentative.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/insertion-removing-steps/Node-appendChild-script-and-default-style-meta-from-fragment.tentative.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/insertion-removing-steps/Node-appendChild-script-and-div-from-fragment.tentative.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/insertion-removing-steps/Node-appendChild-script-and-iframe.tentative.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 4
+    },
+    "dom/nodes/insertion-removing-steps/Node-appendChild-script-and-source-from-fragment.tentative.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/insertion-removing-steps/Node-appendChild-script-and-style.tentative.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 5
+    },
+    "dom/nodes/insertion-removing-steps/Node-appendChild-script-in-script.tentative.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/insertion-removing-steps/Node-appendChild-script-with-mutation-observer-takeRecords.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/insertion-removing-steps/Node-appendChild-text-and-script-in-style.tentative.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/insertion-removing-steps/Node-appendChild-text-in-script.tentative.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/insertion-removing-steps/Node-appendChild-three-scripts-from-fragment.tentative.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/insertion-removing-steps/Node-appendChild-three-scripts.tentative.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/insertion-removing-steps/blur-event.window.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 2
+    },
+    "dom/nodes/insertion-removing-steps/insertion-removing-steps-iframe.window.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 4
+    },
+    "dom/nodes/insertion-removing-steps/insertion-removing-steps-script.window.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/insertion-removing-steps/later-script-removed-by-earlier-script.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 2
+    },
+    "dom/nodes/insertion-removing-steps/script-does-not-run-on-child-removal.window.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/Node-moveBefore.html": {
+      "status": "fail",
+      "subtests_passed": 19,
+      "subtests_total": 32
+    },
+    "dom/nodes/moveBefore/child-style-preserve.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
     "dom/nodes/moveBefore/chrome-338071841-crash.html": {
       "reason": "non-testharness",
       "status": "skip"
@@ -453,86 +1299,294 @@
       "reason": "non-testharness",
       "status": "skip"
     },
-    "dom/nodes/moveBefore/continue-css-animation-left.html": "pass",
-    "dom/nodes/moveBefore/continue-css-animation-transform.html": "pass",
-    "dom/nodes/moveBefore/continue-css-transition-left-pseudo.html": "fail",
-    "dom/nodes/moveBefore/continue-css-transition-left.html": "fail",
-    "dom/nodes/moveBefore/continue-css-transition-transform-pseudo.html": "fail",
-    "dom/nodes/moveBefore/continue-css-transition-transform.html": "fail",
-    "dom/nodes/moveBefore/css-animation-commit-styles.html": "fail",
-    "dom/nodes/moveBefore/css-transition-cross-document.html": "fail",
-    "dom/nodes/moveBefore/css-transition-cross-shadow.html": "fail",
-    "dom/nodes/moveBefore/css-transition-to-disconnected-document.html": "fail",
-    "dom/nodes/moveBefore/css-transition-trigger.html": "fail",
-    "dom/nodes/moveBefore/custom-element-move-reactions.html": "fail",
-    "dom/nodes/moveBefore/fieldset-child-blur-event.html": "fail",
-    "dom/nodes/moveBefore/fire-focusin-focusout.html": "fail",
+    "dom/nodes/moveBefore/continue-css-animation-left.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/continue-css-animation-transform.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/continue-css-transition-left-pseudo.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/continue-css-transition-left.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/continue-css-transition-transform-pseudo.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/continue-css-transition-transform.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/css-animation-commit-styles.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/css-transition-cross-document.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/css-transition-cross-shadow.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/css-transition-to-disconnected-document.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/css-transition-trigger.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/custom-element-move-reactions.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 6
+    },
+    "dom/nodes/moveBefore/fieldset-child-blur-event.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/fire-focusin-focusout.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 5
+    },
     "dom/nodes/moveBefore/focus-preserve-render.html": {
       "reason": "non-testharness",
       "status": "skip"
     },
-    "dom/nodes/moveBefore/focus-preserve.html": "fail",
-    "dom/nodes/moveBefore/focus-within.html": "fail",
-    "dom/nodes/moveBefore/fullscreen-preserve.html": "fail",
-    "dom/nodes/moveBefore/hover-style-update.html": "fail",
-    "dom/nodes/moveBefore/iframe-document-preserve.window.html": "fail",
+    "dom/nodes/moveBefore/focus-preserve.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 4
+    },
+    "dom/nodes/moveBefore/focus-within.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 5
+    },
+    "dom/nodes/moveBefore/fullscreen-preserve.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/hover-style-update.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 2
+    },
+    "dom/nodes/moveBefore/iframe-document-preserve.window.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 7
+    },
     "dom/nodes/moveBefore/input-moveBefore-crash.html": {
       "reason": "non-testharness",
       "status": "skip"
     },
-    "dom/nodes/moveBefore/listed-form-element-reset.html": "fail",
-    "dom/nodes/moveBefore/live-range-updates.html": "fail",
-    "dom/nodes/moveBefore/modal-dialog.html": "fail",
+    "dom/nodes/moveBefore/listed-form-element-reset.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/live-range-updates.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 3
+    },
+    "dom/nodes/moveBefore/modal-dialog.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
     "dom/nodes/moveBefore/moveBefore-as-flex-item.html": {
       "reason": "non-testharness",
       "status": "skip"
     },
-    "dom/nodes/moveBefore/moveBefore-from-light-to-shadow.html": "fail",
-    "dom/nodes/moveBefore/moveBefore-id-map.html": "fail",
-    "dom/nodes/moveBefore/moveBefore-name-map.html": "fail",
-    "dom/nodes/moveBefore/moveBefore-option-recalc-style.html": "fail",
-    "dom/nodes/moveBefore/moveBefore-selector-matching.html": "fail",
-    "dom/nodes/moveBefore/moveBefore-shadow-inside.html": "fail",
-    "dom/nodes/moveBefore/moveBefore-shadow-root.html": "fail",
-    "dom/nodes/moveBefore/moveBefore-size-query.html": "fail",
-    "dom/nodes/moveBefore/mutation-observer.html": "fail",
-    "dom/nodes/moveBefore/nonce.html": "fail",
-    "dom/nodes/moveBefore/object-crash-regression.html": "fail",
-    "dom/nodes/moveBefore/pointer-events.html": "fail",
-    "dom/nodes/moveBefore/popover-preserve.html": "fail",
-    "dom/nodes/moveBefore/preserve-render-blocking-script.html": "pass",
+    "dom/nodes/moveBefore/moveBefore-from-light-to-shadow.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/moveBefore-id-map.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/moveBefore-name-map.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/moveBefore-option-recalc-style.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/moveBefore-selector-matching.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/moveBefore-shadow-inside.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/moveBefore-shadow-root.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/moveBefore-size-query.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/mutation-observer.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 2
+    },
+    "dom/nodes/moveBefore/nonce.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/object-crash-regression.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/pointer-events.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/popover-preserve.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/preserve-render-blocking-script.html": {
+      "status": "pass",
+      "subtests_passed": 1,
+      "subtests_total": 1
+    },
     "dom/nodes/moveBefore/preserve-render-blocking-style.html": {
       "reason": "evaluation-threw",
       "status": "error"
     },
-    "dom/nodes/moveBefore/relevant-mutations.html": "fail",
-    "dom/nodes/moveBefore/script-move-before.html": "pass",
-    "dom/nodes/moveBefore/select-option-optgroup.html": "fail",
-    "dom/nodes/moveBefore/selection-preserve.html": "fail",
-    "dom/nodes/moveBefore/slotchange-events.html": "fail",
-    "dom/nodes/moveBefore/style-applies.html": "fail",
-    "dom/nodes/moveBefore/throws-exception.html": "fail",
-    "dom/nodes/name-validation.html": "fail",
+    "dom/nodes/moveBefore/relevant-mutations.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 2
+    },
+    "dom/nodes/moveBefore/script-move-before.html": {
+      "status": "pass",
+      "subtests_passed": 2,
+      "subtests_total": 2
+    },
+    "dom/nodes/moveBefore/select-option-optgroup.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/selection-preserve.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 6
+    },
+    "dom/nodes/moveBefore/slotchange-events.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 4
+    },
+    "dom/nodes/moveBefore/style-applies.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/moveBefore/throws-exception.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/name-validation.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 5
+    },
     "dom/nodes/node-appendchild-crash.html": {
       "reason": "non-testharness",
       "status": "skip"
     },
-    "dom/nodes/prepend-on-Document.html": "fail",
-    "dom/nodes/query-target-in-load-event.html": "fail",
-    "dom/nodes/querySelector-mixed-case.html": "fail",
-    "dom/nodes/remove-and-adopt-thcrash.html": "fail",
+    "dom/nodes/prepend-on-Document.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 5
+    },
+    "dom/nodes/query-target-in-load-event.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/querySelector-mixed-case.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/remove-and-adopt-thcrash.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
     "dom/nodes/remove-from-shadow-host-and-adopt-into-iframe.html": {
       "reason": "non-testharness",
       "status": "skip"
     },
-    "dom/nodes/remove-next-sibling-during-replace-with.html": "fail",
-    "dom/nodes/remove-unscopable.html": "fail",
+    "dom/nodes/remove-next-sibling-during-replace-with.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 1
+    },
+    "dom/nodes/remove-unscopable.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 6
+    },
     "dom/nodes/replaceWith-document-element-crash.html": {
       "reason": "non-testharness",
       "status": "skip"
     },
-    "dom/nodes/rootNode.html": "fail",
-    "dom/nodes/svg-template-querySelector.html": "fail"
+    "dom/nodes/rootNode.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 5
+    },
+    "dom/nodes/svg-template-querySelector.html": {
+      "status": "fail",
+      "subtests_passed": 0,
+      "subtests_total": 3
+    }
   },
   "version": 1
 }
