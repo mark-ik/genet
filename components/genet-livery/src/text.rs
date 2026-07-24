@@ -136,12 +136,11 @@ impl TextSystem {
             });
         let strut_center_height = if zero_line_strut {
             let mut strut_spans = Vec::<SourceSpan<()>>::new();
-            let strut_items = self.shape::<()>("\u{200b}", &mut strut_spans, &[], width, parent_style);
+            let strut_items =
+                self.shape::<()>("\u{200b}", &mut strut_spans, &[], width, parent_style);
             strut_items.into_iter().find_map(|item| match item {
                 ShapedItem::Text(run) => Some(
-                    (run.line_baseline
-                        - (run.line_block_min + run.line_block_max) * 0.5)
-                        .abs(),
+                    (run.line_baseline - (run.line_block_min + run.line_block_max) * 0.5).abs(),
                 ),
                 ShapedItem::InlineBox { .. } => None,
             })
@@ -229,10 +228,7 @@ impl TextSystem {
             return;
         };
         let mut inline_parent_style = parent_style.clone();
-        if matches!(
-            parent_style.position,
-            Position::Absolute | Position::Fixed
-        ) {
+        if matches!(parent_style.position, Position::Absolute | Position::Fixed) {
             inline_parent_style.vertical_align = VerticalAlign::Baseline;
         }
         let mut group = Vec::new();
@@ -461,9 +457,9 @@ impl TextSystem {
         Id: Copy,
     {
         self.shape_count = self.shape_count.saturating_add(1);
-        let mut builder = self
-            .layout_context
-            .ranged_builder(&mut self.font_context, text, 1.0, true);
+        let mut builder =
+            self.layout_context
+                .ranged_builder(&mut self.font_context, text, 1.0, true);
         push_defaults(
             &mut builder,
             spans.first().map_or(root_style, |span| &span.style),
@@ -504,10 +500,10 @@ impl TextSystem {
                     .fold((false, false), |(has_text_top, has_text_bottom), item| {
                         let PositionedLayoutItem::GlyphRun(run) = item else {
                             return (has_text_top, has_text_bottom);
-                    };
-                    let value = spans
-                        .get(run.style().brush.source_index)
-                        .map(|span| span.style.vertical_align);
+                        };
+                        let value = spans
+                            .get(run.style().brush.source_index)
+                            .map(|span| span.style.vertical_align);
                         (
                             has_text_top || matches!(value, Some(VerticalAlign::TextTop)),
                             has_text_bottom || matches!(value, Some(VerticalAlign::TextBottom)),
@@ -691,11 +687,12 @@ impl TextSystem {
                             source: inline_box.source,
                             owners: inline_box.owners.clone(),
                             fragment: Fragment {
-                                x: positioned.x + if inline_box.edge {
-                                    0.0
-                                } else {
-                                    inline_box.margin_left
-                                },
+                                x: positioned.x
+                                    + if inline_box.edge {
+                                        0.0
+                                    } else {
+                                        inline_box.margin_left
+                                    },
                                 y: base_y
                                     + vertical_shift
                                     + if inline_box.edge {
@@ -1005,12 +1002,7 @@ where
                     {
                         let font_size = super::paint::used_font_size(&style);
                         let (line_width, line_box_height, margin_left, margin_top) =
-                            inline_margin_box(
-                                &style,
-                                fragment,
-                                font_size,
-                                self.percentage_basis,
-                            );
+                            inline_margin_box(&style, fragment, font_size, self.percentage_basis);
                         self.inline_boxes.push(InlineAtom {
                             source: id,
                             owners: self.owners.clone(),
@@ -1041,12 +1033,7 @@ where
                     {
                         let font_size = super::paint::used_font_size(&style);
                         let (line_width, line_box_height, margin_left, margin_top) =
-                            inline_margin_box(
-                                &style,
-                                fragment,
-                                font_size,
-                                self.percentage_basis,
-                            );
+                            inline_margin_box(&style, fragment, font_size, self.percentage_basis);
                         self.inline_boxes.push(InlineAtom {
                             source: id,
                             owners: self.owners.clone(),
@@ -1093,9 +1080,8 @@ where
                     }
                 }
                 self.owners.pop();
-                self.negative_margin_offset = previous_negative_margin
-                    + leading_negative_margin
-                    + trailing_negative_margin;
+                self.negative_margin_offset =
+                    previous_negative_margin + leading_negative_margin + trailing_negative_margin;
                 let has_inline_content = self.inline_boxes.len() > content_start;
                 self.push_edge(id, &style, &ancestor_owners, false);
                 if self.text.len() == text_start && !has_inline_content {
@@ -1310,7 +1296,10 @@ fn append_inline_text(target: &mut String, source: &str, style: &ComputedValues)
 }
 
 fn is_css_whitespace(character: char) -> bool {
-    matches!(character, '\u{0009}' | '\u{000A}' | '\u{000C}' | '\u{000D}' | ' ')
+    matches!(
+        character,
+        '\u{0009}' | '\u{000A}' | '\u{000C}' | '\u{000D}' | ' '
+    )
 }
 
 fn collapse_css_whitespace(source: &str) -> String {

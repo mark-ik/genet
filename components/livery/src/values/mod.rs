@@ -19,9 +19,9 @@ pub use property::{
     Display, Duration, FlexDirection, FlexFactor, FlexWrap, Float, FontFamily, FontSize, FontStyle,
     FontWeight, Gap, GridAutoFlow, GridPlacement, GridTemplate, GridTrack, Inset, LineHeight,
     ListStyleType, Margin, Opacity, Order, Overflow, Padding, PointerEvents, Position, Radius,
-    Rotate, Scale, Size, Spacing, TextAlign, TextDecorationColor, TextDecorationLine,
-    TextWrapMode, TimingFunction, Transform, TransformFunction, TransitionProperty, VerticalAlign,
-    Visibility, WhiteSpaceCollapse, WritingMode, ZIndex,
+    Rotate, Scale, Size, Spacing, TextAlign, TextDecorationColor, TextDecorationLine, TextWrapMode,
+    TimingFunction, Transform, TransformFunction, TransitionProperty, VerticalAlign, Visibility,
+    WhiteSpaceCollapse, WritingMode, ZIndex,
 };
 pub use transform_matrix::Matrix2D;
 

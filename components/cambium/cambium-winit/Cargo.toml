@@ -3,9 +3,9 @@ name = "cambium-winit"
 version = "0.3.0"
 description = "winit input translation for Cambium applications"
 edition.workspace = true
-rust-version.workspace = true
+rust-version = "1.92"
 license = "MPL-2.0"
-repository.workspace = true
+repository = "https://github.com/mark-ik/genet"
 publish = true
 
 [dependencies]
@@ -14,9 +14,10 @@ sprigging = { version = "0.2.0", path = "../sprigging" }
 winit = "0.30.13"
 # The a11y host (src/a11y.rs) projects a laid-out genet DOM into an AccessKit
 # tree with each Sprigging leaf's own semantics, and drives the platform adapter.
-# Genet crates by git branch (apps redirect to local checkouts via [patch]).
-genet-layout = { git = "https://github.com/mark-ik/genet.git", branch = "main" }
-genet-winit-host = { git = "https://github.com/mark-ik/genet.git", branch = "main" }
-genet-scripted-dom = { git = "https://github.com/mark-ik/genet.git", branch = "main" }
-layout-dom-api = { git = "https://github.com/mark-ik/genet.git", branch = "main" }
+# Genet crates by path — cambium became a genet component on 2026-07-23, so the
+# git pins and the [patch] redirection they needed are gone.
+genet-layout = { path = "../../genet-layout" }
+genet-winit-host = { path = "../../genet-winit-host" }
+genet-scripted-dom = { path = "../../genet-scripted-dom" }
+layout-dom-api = { path = "../../shared/layout-dom" }
 accesskit = "0.24"

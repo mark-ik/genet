@@ -471,16 +471,12 @@ fn parse_general_one<'i, 't>(
             let function = general_function(name).ok_or_else(|| parse_error(input))?;
             input.parse_nested_block(|nested| match function {
                 GeneralFunction::Calc => parse_general_sum(nested, builder),
-                GeneralFunction::Min => parse_comparison_arguments(
-                    nested,
-                    builder,
-                    MathOperation::Min,
-                ),
-                GeneralFunction::Max => parse_comparison_arguments(
-                    nested,
-                    builder,
-                    MathOperation::Max,
-                ),
+                GeneralFunction::Min => {
+                    parse_comparison_arguments(nested, builder, MathOperation::Min)
+                },
+                GeneralFunction::Max => {
+                    parse_comparison_arguments(nested, builder, MathOperation::Max)
+                },
                 GeneralFunction::Clamp => parse_clamp_arguments(nested, builder),
                 GeneralFunction::Round => parse_round_arguments(nested, builder),
                 GeneralFunction::Mod => {
@@ -503,18 +499,10 @@ fn parse_general_one<'i, 't>(
                 },
                 GeneralFunction::Atan2 => parse_atan2_arguments(nested, builder),
                 GeneralFunction::Pow => parse_pow_arguments(nested, builder),
-                GeneralFunction::Sqrt => parse_number_unary(
-                    nested,
-                    builder,
-                    MathOperation::Sqrt,
-                ),
+                GeneralFunction::Sqrt => parse_number_unary(nested, builder, MathOperation::Sqrt),
                 GeneralFunction::Hypot => parse_hypot_arguments(nested, builder),
                 GeneralFunction::Log => parse_log_arguments(nested, builder),
-                GeneralFunction::Exp => parse_number_unary(
-                    nested,
-                    builder,
-                    MathOperation::Exp,
-                ),
+                GeneralFunction::Exp => parse_number_unary(nested, builder, MathOperation::Exp),
             })
         },
         token => Err(location.new_unexpected_token_error(token.clone())),

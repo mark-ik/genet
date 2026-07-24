@@ -2371,11 +2371,15 @@ impl FromStr for ZIndex {
                 .parse::<i32>()
                 .ok()
                 .or_else(|| {
-                    input.contains('(').then(|| super::calc::parse_number(input).ok()).flatten().and_then(|value| {
-                        let rounded = (value + 0.5).floor();
-                        (rounded >= i32::MIN as f32 && rounded <= i32::MAX as f32)
-                            .then_some(rounded as i32)
-                    })
+                    input
+                        .contains('(')
+                        .then(|| super::calc::parse_number(input).ok())
+                        .flatten()
+                        .and_then(|value| {
+                            let rounded = (value + 0.5).floor();
+                            (rounded >= i32::MIN as f32 && rounded <= i32::MAX as f32)
+                                .then_some(rounded as i32)
+                        })
                 })
                 .ok_or_else(|| ParseError::expected("auto or an integer"))?;
             Ok(Self::Integer(integer))

@@ -1214,7 +1214,7 @@ fn element_style_inline_cssom<E: ScriptEngine>() {
             "color: blue; font-size: 12px; margin-top: 4px; font-weight: bold;",
             "12px,true,false", // removeProperty returns old; 'color' in / 'display' in
             "padding: 1px; color: green;,green", // cssText set + read; .color
-            "width: 7px;", // [PutForwards=cssText] assignment
+            "width: 7px;",     // [PutForwards=cssText] assignment
         ],
     );
 }

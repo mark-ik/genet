@@ -124,12 +124,7 @@ struct LiveryComputedStyle {
 fn needs_used_values(property: &str) -> bool {
     matches!(
         property.to_ascii_lowercase().as_str(),
-        "width"
-            | "height"
-            | "margin-top"
-            | "margin-right"
-            | "margin-bottom"
-            | "margin-left"
+        "width" | "height" | "margin-top" | "margin-right" | "margin-bottom" | "margin-left"
     )
 }
 
@@ -168,13 +163,13 @@ impl ComputedStyleHandler for LiveryComputedStyle {
         let used = needs_used_values(property)
             .then(|| {
                 layout_used_value_context(
-                &host.dom,
-                computed_styles,
-                device.viewport_width,
-                device.viewport_height,
+                    &host.dom,
+                    computed_styles,
+                    device.viewport_width,
+                    device.viewport_height,
                     node,
-            )
-            .ok()
+                )
+                .ok()
                 .flatten()
             })
             .flatten();
@@ -265,8 +260,8 @@ impl ComputedStyleHandler for LiveryComputedStyle {
         let used = needs_used_values(property)
             .then(|| {
                 layout_used_value_context(&scoped, &child_plane, width, height, node)
-                .ok()
-                .flatten()
+                    .ok()
+                    .flatten()
             })
             .flatten();
         child_plane.computed_style_with_used_values(node, property, used)

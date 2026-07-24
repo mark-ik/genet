@@ -57,6 +57,23 @@ members = [
     "components/script-engine-nova",
     "components/script-engine-piccolo",
     "components/script-runtime-api",
+    # The reactive UI toolkit, adopted 2026-07-23 (the repo consolidation plan in
+    # mere's design docs): cambium and its winit/nematic adapters, the meristem
+    # diff core, and the sprigging custom-paint leaves. They keep their published
+    # names, versions, and licenses (meristem Apache-2.0, sprigging MIT/Apache,
+    # the rest MPL-2.0), so they spell out their package metadata rather than
+    # inheriting this workspace's Servo-shaped defaults. Absorbing them retired
+    # three [patch.crates-io] entries cambium needed only because path patches do
+    # not transit to git consumers.
+    "components/cambium/cambium",
+    "components/cambium/cambium-nematic",
+    "components/cambium/cambium-winit",
+    "components/cambium/meristem",
+    "components/cambium/sprigging",
+    # The Fetch network engine, adopted the same day: genet and mere were its only
+    # consumers, and it must stay genet-side to keep mere's dependency direction
+    # one-way.
+    "components/netfetcher",
     "ports/pelt-core",
     "ports/pelt-desktop",
     "ports/pelt",

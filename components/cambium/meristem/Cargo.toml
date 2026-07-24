@@ -3,12 +3,12 @@
 # the pinned bases and the local semantic patch ledger.
 [package]
 name = "meristem"
-version.workspace = true
+version = "0.1.0"
 description = "The reactive diff and message core of the Cambium GUI toolkit"
 edition.workspace = true
-rust-version.workspace = true
+rust-version = "1.92"
 license = "Apache-2.0"
-repository.workspace = true
+repository = "https://github.com/mark-ik/genet"
 publish = true
 
 [lib]

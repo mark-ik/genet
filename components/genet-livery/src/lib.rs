@@ -20,8 +20,7 @@ pub use invalidation::{AttributeSnapshot, ElementSnapshot, IncrementalStyle, Res
 pub(crate) use layout::hit_test_with_scroll;
 pub use layout::{
     Fragment, FragmentPlane, LayoutError, content_box_size, hit_test, layout,
-    resolve_container_query_styles, resolve_container_relative_styles,
-    used_value_context,
+    resolve_container_query_styles, resolve_container_relative_styles, used_value_context,
 };
 pub use livery::media::{Device, ViewportSize, ViewportSizes};
 pub use livery::stylesheet::RuleMutationError;

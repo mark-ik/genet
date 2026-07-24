@@ -713,7 +713,7 @@ const MATH_ROUNDING_STRATEGY: u8 = 59;
 const MATH_NUMBER: u8 = 60;
 const MATH_PERCENTAGE: u8 = 61;
 const MATH_NONE: u8 = 62;
-const MATH_TOKEN_BITS: usize = 5;
+const MATH_TOKEN_BITS: usize = 6;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -820,60 +820,60 @@ impl MathToken {
     const fn code(self) -> u8 {
         match self {
             Self::Operand(index) => index,
-            Self::Operation(MathOperation::Add) => 8,
-            Self::Operation(MathOperation::Subtract) => 9,
-            Self::Operation(MathOperation::Multiply) => 10,
-            Self::Operation(MathOperation::Divide) => 11,
-            Self::Operation(MathOperation::Min) => 12,
-            Self::Operation(MathOperation::Max) => 13,
-            Self::Operation(MathOperation::Clamp) => 14,
-            Self::Operation(MathOperation::Round) => 15,
-            Self::Operation(MathOperation::Mod) => 16,
-            Self::Operation(MathOperation::Rem) => 17,
-            Self::Operation(MathOperation::Sin) => 18,
-            Self::Operation(MathOperation::Cos) => 19,
-            Self::Operation(MathOperation::Tan) => 20,
-            Self::Operation(MathOperation::Asin) => 21,
-            Self::Operation(MathOperation::Acos) => 22,
-            Self::Operation(MathOperation::Atan) => 23,
-            Self::Operation(MathOperation::Atan2) => 24,
-            Self::Operation(MathOperation::Pow) => 25,
-            Self::Operation(MathOperation::Sqrt) => 26,
-            Self::Operation(MathOperation::Hypot) => 27,
-            Self::Operation(MathOperation::Ln) => 28,
-            Self::Operation(MathOperation::Log) => 29,
-            Self::Operation(MathOperation::Exp) => 30,
-            Self::Operation(MathOperation::Abs) => 31,
+            Self::Operation(MathOperation::Add) => 16,
+            Self::Operation(MathOperation::Subtract) => 17,
+            Self::Operation(MathOperation::Multiply) => 18,
+            Self::Operation(MathOperation::Divide) => 19,
+            Self::Operation(MathOperation::Min) => 20,
+            Self::Operation(MathOperation::Max) => 21,
+            Self::Operation(MathOperation::Clamp) => 22,
+            Self::Operation(MathOperation::Round) => 23,
+            Self::Operation(MathOperation::Mod) => 24,
+            Self::Operation(MathOperation::Rem) => 25,
+            Self::Operation(MathOperation::Sin) => 26,
+            Self::Operation(MathOperation::Cos) => 27,
+            Self::Operation(MathOperation::Tan) => 28,
+            Self::Operation(MathOperation::Asin) => 29,
+            Self::Operation(MathOperation::Acos) => 30,
+            Self::Operation(MathOperation::Atan) => 31,
+            Self::Operation(MathOperation::Atan2) => 32,
+            Self::Operation(MathOperation::Pow) => 33,
+            Self::Operation(MathOperation::Sqrt) => 34,
+            Self::Operation(MathOperation::Hypot) => 35,
+            Self::Operation(MathOperation::Ln) => 36,
+            Self::Operation(MathOperation::Log) => 37,
+            Self::Operation(MathOperation::Exp) => 38,
+            Self::Operation(MathOperation::Abs) => 39,
         }
     }
 
     const fn from_code(code: u8) -> Self {
         match code {
-            0..=7 => Self::Operand(code),
-            8 => Self::Operation(MathOperation::Add),
-            9 => Self::Operation(MathOperation::Subtract),
-            10 => Self::Operation(MathOperation::Multiply),
-            11 => Self::Operation(MathOperation::Divide),
-            12 => Self::Operation(MathOperation::Min),
-            13 => Self::Operation(MathOperation::Max),
-            14 => Self::Operation(MathOperation::Clamp),
-            15 => Self::Operation(MathOperation::Round),
-            16 => Self::Operation(MathOperation::Mod),
-            17 => Self::Operation(MathOperation::Rem),
-            18 => Self::Operation(MathOperation::Sin),
-            19 => Self::Operation(MathOperation::Cos),
-            20 => Self::Operation(MathOperation::Tan),
-            21 => Self::Operation(MathOperation::Asin),
-            22 => Self::Operation(MathOperation::Acos),
-            23 => Self::Operation(MathOperation::Atan),
-            24 => Self::Operation(MathOperation::Atan2),
-            25 => Self::Operation(MathOperation::Pow),
-            26 => Self::Operation(MathOperation::Sqrt),
-            27 => Self::Operation(MathOperation::Hypot),
-            28 => Self::Operation(MathOperation::Ln),
-            29 => Self::Operation(MathOperation::Log),
-            30 => Self::Operation(MathOperation::Exp),
-            31 => Self::Operation(MathOperation::Abs),
+            0..=15 => Self::Operand(code),
+            16 => Self::Operation(MathOperation::Add),
+            17 => Self::Operation(MathOperation::Subtract),
+            18 => Self::Operation(MathOperation::Multiply),
+            19 => Self::Operation(MathOperation::Divide),
+            20 => Self::Operation(MathOperation::Min),
+            21 => Self::Operation(MathOperation::Max),
+            22 => Self::Operation(MathOperation::Clamp),
+            23 => Self::Operation(MathOperation::Round),
+            24 => Self::Operation(MathOperation::Mod),
+            25 => Self::Operation(MathOperation::Rem),
+            26 => Self::Operation(MathOperation::Sin),
+            27 => Self::Operation(MathOperation::Cos),
+            28 => Self::Operation(MathOperation::Tan),
+            29 => Self::Operation(MathOperation::Asin),
+            30 => Self::Operation(MathOperation::Acos),
+            31 => Self::Operation(MathOperation::Atan),
+            32 => Self::Operation(MathOperation::Atan2),
+            33 => Self::Operation(MathOperation::Pow),
+            34 => Self::Operation(MathOperation::Sqrt),
+            35 => Self::Operation(MathOperation::Hypot),
+            36 => Self::Operation(MathOperation::Ln),
+            37 => Self::Operation(MathOperation::Log),
+            38 => Self::Operation(MathOperation::Exp),
+            39 => Self::Operation(MathOperation::Abs),
             _ => panic!("invalid math token"),
         }
     }
@@ -912,7 +912,7 @@ enum EvaluatedMath {
 pub struct MathLengthPercentage {
     leaf_meta: [u32; 3],
     leaf_values: [f32; MAX_MATH_LEAVES],
-    program: [u32; 5],
+    program: [u32; 6],
     leaf_len: u8,
     token_len: u8,
 }
@@ -931,7 +931,7 @@ impl MathLengthPercentage {
         let mut stored = Self {
             leaf_meta: [0; 3],
             leaf_values: [0.0; MAX_MATH_LEAVES],
-            program: [0; 5],
+            program: [0; 6],
             leaf_len: leaves.len() as u8,
             token_len: tokens.len() as u8,
         };
@@ -950,15 +950,15 @@ impl MathLengthPercentage {
             MATH_NUMBER => MathOperand::Number(self.leaf_values[index]),
             MATH_PERCENTAGE => MathOperand::Percentage(self.leaf_values[index]),
             MATH_ANGLE => MathOperand::Angle(self.leaf_values[index]),
-            MATH_ROUNDING_STRATEGY => MathOperand::RoundingStrategy(
-                match self.leaf_values[index] as u8 {
+            MATH_ROUNDING_STRATEGY => {
+                MathOperand::RoundingStrategy(match self.leaf_values[index] as u8 {
                     0 => RoundingStrategy::Nearest,
                     1 => RoundingStrategy::Up,
                     2 => RoundingStrategy::Down,
                     3 => RoundingStrategy::ToZero,
                     _ => panic!("invalid rounding strategy"),
-                },
-            ),
+                })
+            },
             MATH_NONE => MathOperand::None,
             unit => MathOperand::Length(Length {
                 value: self.leaf_values[index],
@@ -1344,22 +1344,14 @@ fn packed_value(words: &[u32], bit: usize, width: usize) -> u8 {
     let word = bit / u32::BITS as usize;
     let shift = bit % u32::BITS as usize;
     let low = u64::from(words[word]);
-    let high = words
-        .get(word + 1)
-        .copied()
-        .map(u64::from)
-        .unwrap_or(0);
+    let high = words.get(word + 1).copied().map(u64::from).unwrap_or(0);
     (((low | (high << u32::BITS)) >> shift) & ((1_u64 << width) - 1)) as u8
 }
 
 fn set_packed_value(words: &mut [u32], bit: usize, width: usize, value: u8) {
     let word = bit / u32::BITS as usize;
     let shift = bit % u32::BITS as usize;
-    let high = words
-        .get(word + 1)
-        .copied()
-        .map(u64::from)
-        .unwrap_or(0);
+    let high = words.get(word + 1).copied().map(u64::from).unwrap_or(0);
     let pair = u64::from(words[word]) | (high << u32::BITS);
     let mask = ((1_u64 << width) - 1) << shift;
     let updated = (pair & !mask) | (u64::from(value) << shift);
@@ -1564,8 +1556,8 @@ impl FromStr for LengthPercentage {
                 .or_else(|_| super::calc::parse_math(input).map(Self::Math));
         }
         if [
-            "min(", "max(", "clamp(", "round(", "mod(", "rem(", "sin(", "cos(", "tan(",
-            "asin(", "acos(", "atan(", "atan2(", "pow(", "sqrt(", "hypot(", "log(", "exp(",
+            "min(", "max(", "clamp(", "round(", "mod(", "rem(", "sin(", "cos(", "tan(", "asin(",
+            "acos(", "atan(", "atan2(", "pow(", "sqrt(", "hypot(", "log(", "exp(",
         ]
         .iter()
         .any(|function| {

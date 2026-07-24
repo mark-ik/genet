@@ -52,7 +52,7 @@ nematic = { workspace = true, optional = true }
 document-canvas = { workspace = true, features = ["netrender"], optional = true }
 errand = { workspace = true, optional = true }
 # Same git source pelt uses; not a root workspace entry (sibling repo).
-netfetcher = { git = "https://github.com/mark-ik/netfetcher.git", branch = "main", optional = true }
+netfetcher = { path = "../netfetcher", optional = true }
 tokio = { workspace = true, features = ["rt"], optional = true }
 bytes = { workspace = true, optional = true }
 url = { workspace = true, optional = true }

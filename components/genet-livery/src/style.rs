@@ -582,11 +582,7 @@ fn used_px(value: f32) -> String {
     }
 }
 
-fn used_margin(
-    margin: Margin,
-    values: &ComputedValues,
-    context: UsedValueContext,
-) -> Option<f32> {
+fn used_margin(margin: Margin, values: &ComputedValues, context: UsedValueContext) -> Option<f32> {
     let Margin::Value(value) = margin else {
         return None;
     };

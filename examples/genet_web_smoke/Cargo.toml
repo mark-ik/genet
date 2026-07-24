@@ -34,7 +34,7 @@ path = "src/lib.rs"
 # Cambium currently declares genet-scripted-dom by version. Patch that
 # registry edge back to this checkout so the ScriptedDom and observable
 # contracts unify with genet-layout's graph.
-cambium = { path = "../../../cambium/crates/cambium" }
+cambium = { path = "../../components/cambium/cambium" }
 
 # genet engine core (path deps resolve workspace-inherited fields
 # against the genet workspace root).

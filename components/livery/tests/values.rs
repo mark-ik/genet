@@ -535,7 +535,10 @@ fn trigonometric_math_accepts_numbers_and_canonical_angles() {
         ("calc(10px * sin(asin(1)))", 10.0),
         ("calc(10px * cos(acos(1)))", 10.0),
         ("calc(10px * tan(atan(1)))", 10.0),
-        ("calc(10px * sin(atan2(1px, -1px)))", std::f32::consts::FRAC_1_SQRT_2 * 10.0),
+        (
+            "calc(10px * sin(atan2(1px, -1px)))",
+            std::f32::consts::FRAC_1_SQRT_2 * 10.0,
+        ),
     ] {
         let value = source.parse::<LengthPercentage>().expect(source);
         assert!((value.to_px(16.0, 16.0, 0.0) - expected).abs() < 0.01);
