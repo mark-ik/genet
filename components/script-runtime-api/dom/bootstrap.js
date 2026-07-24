@@ -2180,6 +2180,22 @@
   wrappers.set(docRef, document);
   globalThis.document = document;
 
+  // A snapshot-cloned runtime keeps this JS heap but swaps the Rust host, so
+  // the retained `document` still points at the donor document's root -- any
+  // DOM access through it would hand a foreign NodeId to the fresh host. The
+  // host calls this after a swap; reflectors are canonical per host, so on an
+  // unswapped runtime the root compares identical and this is a no-op.
+  globalThis.__rebindDocument = function() {
+    var freshRef = __documentRoot();
+    if (freshRef === docRef || freshRef === undefined || freshRef === null) {
+      return;
+    }
+    wrappers.delete(docRef);
+    docRef = freshRef;
+    document.__ref = docRef;
+    wrappers.set(docRef, document);
+  };
+
   // Refresh the parse-time named-element properties after the host clones a
   // source document into this live tree. The getter keeps later replacement
   // of an element with the same id observable without pinning its wrapper.
@@ -2201,7 +2217,21 @@
         Object.defineProperty(globalThis, namedId, {
           configurable: true,
           enumerable: true,
-          get: function() { return document.getElementById(namedId); }
+          get: function() { return document.getElementById(namedId); },
+          // HTML puts named properties on Window's prototype chain, so a
+          // script assigning the same name shadows them. Here they are own
+          // accessors, and a getter-only accessor would make that assignment
+          // fail silently -- an `id="test"` element would then shadow
+          // testharness's own `test()`. Replacing self with a data property
+          // reproduces the shadowing.
+          set: function(value) {
+            Object.defineProperty(globalThis, namedId, {
+              configurable: true,
+              enumerable: true,
+              writable: true,
+              value: value
+            });
+          }
         });
       })(name);
       installedNamedProperties.push(name);

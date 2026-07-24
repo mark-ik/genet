@@ -244,7 +244,7 @@ fn parse_complex(s: &str) -> Option<Complex> {
                 }
                 raws.push(Raw::Child);
             },
-            ('+' | '~') if depth == 0 => return None, // sibling combinators unsupported
+            '+' | '~' if depth == 0 => return None, // sibling combinators unsupported
             _ => cur.push(ch),
         }
     }

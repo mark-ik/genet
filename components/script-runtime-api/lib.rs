@@ -267,6 +267,7 @@ impl<E: ScriptEngine> Runtime<E> {
     /// dependency source). Returns `Ok(None)` when the backend does not support
     /// modules, so the host can log and skip rather than fail. See
     /// [`ScriptEngine::eval_module`].
+    #[allow(clippy::type_complexity)]
     pub fn eval_module(
         &mut self,
         source: &str,
@@ -287,7 +288,11 @@ impl<E: ScriptEngine> Runtime<E> {
             let root = host.dom.document();
             dom::clone_into(src, src.document(), &mut host.dom, root);
         }
-        let _ = self.engine.eval("globalThis.__refreshNamedProperties()");
+        // The rebind is a no-op unless the host was swapped under a retained
+        // JS heap (snapshot_clone); it must run before any JS DOM access.
+        let _ = self
+            .engine
+            .eval("globalThis.__rebindDocument(); globalThis.__refreshNamedProperties()");
     }
 
     /// Drain pending microtasks (Promise reaction jobs) to quiescence — a microtask
@@ -1000,6 +1005,9 @@ impl<E: ScriptEngineSnapshot> Runtime<E> {
         let mut engine = self.engine.snapshot_clone()?;
         let host: SharedHost = Rc::new(RefCell::new(HostState::default()));
         engine.set_host_data(host.clone());
+        // The cloned heap's `document` wrapper still holds the donor host's
+        // root reflector; point it at this fresh host before any script runs.
+        engine.eval("globalThis.__rebindDocument()")?;
         Ok(Self {
             engine,
             host,
