@@ -74,15 +74,62 @@ nothing is deleted until F5/F6, after the receipts exist.
   WPT runs pure Livery. Receipt: the cssom-view and hit-testing subsets
   pinned on Livery; the Stylo session in genet-scripted is behind an
   opt-back-in flag with nothing on by default requiring it.
-- **F3 - the fullweb fidelity ledger.** Run both renderers over the same
-  css2/ and named css/ directories and diff the pass sets. Every cluster
-  where the Stylo lane passes and Livery fails becomes a named slice:
-  harvest it, build it, or knock it out with a recorded capability decision.
-  Candidate clusters, to be confirmed by the diff rather than assumed:
-  tables, replaced elements and intrinsic ratios, writing modes beyond
-  horizontal-tb, multicol, pseudo-element content breadth. The ledger is the
-  scope instrument; no date claims until it exists. Done when no directory
-  remains where the Stylo lane's pinned baseline beats the Livery lane's.
+- **F3 - the fullweb fidelity ledger. First pass RUN 2026-07-24 (testharness
+  lane).** Both renderers over the same 27 `css/` directories, Boa,
+  `--write-expectations` diffed per file. Reproduce with
+  `docs/tools/ledger_run.sh` + `ledger_diff.py`.
+
+  **Headline: Livery leads the testharness lane by +3,499 subtests**
+  (11,492 vs 7,993), ahead in 21 of 27 directories, and runs about 2.4x
+  faster on the same corpus. The layout directories predicted to be Stylo
+  strongholds are Livery wins: sizing +471, grid +334, align +280, position
+  +253, flexbox +237, writing-modes +48, CSS2 +55.
+
+  **The caveat that bounds this result, stated first because it is the
+  honest scope limit:** this is the *testharness* lane only. It measures
+  parsing, computed values, and CSSOM. It does **not** measure layout and
+  paint fidelity, which live in reftests (`genet-wpt reftest`, needs a GPU
+  and was not run here). The directories that scored identically under both
+  renderers are the tell: css-multicol skips 617 of 708 files, css-tables
+  195 of 328, css-borders and cssom-view likewise flat. Identical scores
+  there mean *not measured*, not parity. **A reftest pass over the same
+  directories is required before F4 can claim parity**, and it is the one
+  place where the "Livery is ahead" reading could still invert.
+
+  Net-negative directories (the real slices): css-color -451, css-images
+  -207, css-pseudo -35, cssom -34, css-cascade -5.
+
+  Named clusters, grouped by cause rather than by directory:
+  1. **Modern color syntax** (~1,230 subtests, the largest by far):
+     relative color 583->12, `color-mix()` 230->1, `color-layers()` 160->0,
+     `color()` 81->0, `contrast-color()` 16->0, alpha parsing 20->0, plus
+     most of CSS2 `syntax/colors-007.html` 288->141. Livery's hex and named
+     parsing are already complete and correct (it uses the same shared
+     `cssparser` entry points Stylo does); the gap is entirely CSS Color
+     4/5 function grammar.
+  2. **Gradients** (~600): `gradient-interpolation-method` 585->0,
+     gradient-position 14->0, conic-gradient calc angles.
+  3. **CSS Values 5 advanced** (~220): `attr()` typed forms,
+     `if-conditionals` 19->0, `random()`, minmax angle serialization.
+  4. **Property-grammar breadth**, the recurring `parsing/*-valid.html`
+     family across align, backgrounds, box, text, position, transitions,
+     transforms, fonts, flexbox, sizing (~200 total, each file small).
+     This is the same surface F0 addresses; expect F0 to close much of it.
+  5. **Grid template grammar** (~160): subgrid 38->0, `repeat()` intrinsic
+     21->0 (x2), template serialization.
+  6. **Variables in animations** (~68) and **CSSOM serialization breadth**
+     (~52, mostly `serialize-values.html` 529->497).
+  7. **Pseudo-elements** (~35): replaced-element pseudos, highlight cascade.
+  8. **Cascade `revert`/`revert-layer`** (~7), small and self-contained.
+
+  Every cluster is grammar, serialization, or function coverage. None is
+  structural: nothing in this pass says the lane's architecture cannot host
+  fullweb. That is the finding that makes the lane ruling safe on the
+  measured surface, and exactly what the reftest pass must confirm on the
+  unmeasured one.
+
+  Done when no directory remains where the Stylo lane's pinned baseline
+  beats the Livery lane's, **on both the testharness and reftest lanes**.
 - **F4 - the default flip.** Today the renderer switch exists only in
   genet-wpt's runner. Add the product-facing selection at the profile tier
   (genet-host-api / genet-documents): the fullweb profile routes to Livery by
