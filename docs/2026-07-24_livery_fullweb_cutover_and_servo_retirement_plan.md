@@ -130,6 +130,26 @@ nothing is deleted until F5/F6, after the receipts exist.
 
   Done when no directory remains where the Stylo lane's pinned baseline
   beats the Livery lane's, **on both the testharness and reftest lanes**.
+
+  **`css/selectors` is unmeasured** in this pass: both renderers exceeded a
+  30-minute per-run budget before writing expectations (it is the largest
+  directory, `:has()` invalidation included). Its information value is low
+  by construction — the harvest plan keeps `selectors` a shared dependency
+  lifted nowhere, so both lanes run the same matching engine and any delta
+  is integration, not matching. Re-running it with no timeout; fold the
+  result in when it lands.
+
+- **F3b - the reftest lane (the gate F3 does not close).** Same directory
+  list, `genet-wpt reftest <dir> --renderer {stylo,livery}
+  --write-expectations`, which is already wired for both renderers
+  (`render_html_livery`) and needs a GPU. This is where layout and paint
+  fidelity actually live, and where the F3 result could invert: only two
+  reftest baselines exist today (css_mediaqueries, css_position), both
+  Stylo-era. Priority directories are exactly the ones testharness could
+  not see: CSS2, css-tables, css-multicol, css-flexbox, css-grid,
+  css-position, css-backgrounds, css-borders, css-writing-modes. Receipt:
+  a reftest ledger table in the same shape as F3's, and every Livery-losing
+  cluster named. **F4 may not claim parity until this exists.**
 - **F4 - the default flip.** Today the renderer switch exists only in
   genet-wpt's runner. Add the product-facing selection at the profile tier
   (genet-host-api / genet-documents): the fullweb profile routes to Livery by
