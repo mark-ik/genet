@@ -41,6 +41,14 @@ pub const GRAPH_CANVAS_SWATCH_CSS: &str = r#"
     opacity: 0.85;
     pointer-events: none;
 }
+.graph-canvas-swatch-label.selected {
+    font-weight: bold;
+    opacity: 1;
+}
+.graph-canvas-swatch-label.focused,
+.graph-canvas-swatch-label.hovered {
+    opacity: 1;
+}
 .graph-canvas-swatch-expand {
     background-color: rgba(127, 127, 127, 0.10);
     border: 0;
@@ -106,6 +114,10 @@ pub struct GraphCanvasSwatch<Id, Kind> {
     /// target (it is always the accessible name). Defaults off — a dense
     /// minimap reads better bare; an overview where identity is the point
     /// (sessions, clusters) switches it on.
+    ///
+    /// Visible labels carry the same `selected` / `focused` / `hovered`
+    /// modifiers as the node buttons, so a consumer can emphasize the label of
+    /// the node that matters without hand-rolling a parallel label layer.
     pub show_labels: bool,
 }
 
@@ -290,8 +302,23 @@ where
             .iter()
             .zip(swatch.projected_positions())
             .map(|(node, (_, (x, y)))| {
+                // Same state modifiers the node buttons carry. A label layer
+                // that cannot say which node is selected forces a consumer to
+                // keep hand-rolling the whole layer for the sake of one
+                // emphasis, which is what Isometry's pointcrawl was doing: the
+                // party's location is the first thing that layer has to say.
+                let mut class = String::from("graph-canvas-swatch-label");
+                if swatch.selected.as_ref() == Some(&node.id) {
+                    class.push_str(" selected");
+                }
+                if swatch.focus.as_ref() == Some(&node.id) {
+                    class.push_str(" focused");
+                }
+                if swatch.hovered.as_ref() == Some(&node.id) {
+                    class.push_str(" hovered");
+                }
                 el::<_, State, AppAction>("span", node.label.clone())
-                    .attr("class", "graph-canvas-swatch-label")
+                    .attr("class", class)
                     .attr("aria-hidden", "true")
                     .attr(
                         "style",
@@ -514,6 +541,60 @@ mod tests {
             find_attr(&dom.borrow(), root, "aria-label", "Expand graph").expect("expand target");
         runner.dispatch_click(expand, PointerClick::at((2.0, 2.0)));
         assert!(runner.state().expanded);
+    }
+
+    fn labelled_view(state: &State) -> TestView {
+        let swatch = model(state.hovered, state.focused).with_node_labels(true);
+        Box::new(graph_canvas_swatch_with_focus(
+            &swatch,
+            |state: &mut State, id| state.clicked.push(id),
+            |state: &mut State, id| state.hovered = id,
+            |state: &mut State, id| state.focused = id,
+            |state: &mut State| state.expanded = true,
+        ))
+    }
+
+    /// Collect the class attribute of every element whose *base* class is
+    /// `base`. Matching the first token rather than a prefix keeps the
+    /// `-labels` container out of a search for `-label` elements.
+    fn classes_of(dom: &ScriptedDom, root: NodeId, base: &str, out: &mut Vec<String>) {
+        if let Some(class) = attr(dom, root, "class") {
+            if class.split_whitespace().next() == Some(base) {
+                out.push(class.to_string());
+            }
+        }
+        for child in dom.dom_children(root) {
+            classes_of(dom, child, base, out);
+        }
+    }
+
+    /// Visible labels carry the node's state, not just its text.
+    ///
+    /// Without this a consumer that needs to emphasize one label (which node is
+    /// "here") has to hand-roll the entire label layer to get it, which defeats
+    /// the point of the component rendering labels at all.
+    #[test]
+    fn visible_labels_carry_node_state() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let state = State {
+            hovered: Some(2),
+            ..State::default()
+        };
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(dom.clone(), labelled_view, state);
+        let root = runner.root();
+        let mut found = Vec::new();
+        classes_of(&dom.borrow(), root, "graph-canvas-swatch-label", &mut found);
+
+        assert_eq!(found.len(), 2, "one label per node: {found:?}");
+        // `model` selects node 1; the test state hovers node 2.
+        assert!(
+            found.iter().any(|c| c == "graph-canvas-swatch-label selected"),
+            "the selected node's label must say so: {found:?}"
+        );
+        assert!(
+            found.iter().any(|c| c == "graph-canvas-swatch-label hovered"),
+            "the hovered node's label must say so: {found:?}"
+        );
     }
 
     #[test]
