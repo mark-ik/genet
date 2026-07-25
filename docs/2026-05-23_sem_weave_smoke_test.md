@@ -26,6 +26,18 @@ helpers for agent-heavy development:
 > @ataraxy-labs/sem` / the binary; not committed-wired). Both stay
 > **non-authoritative** — they never replace compile/test validation. See the
 > workspace-level note: [`mere/design_docs/2026-05-24_external_deps_topology_brief.md`](../../mere/design_docs/2026-05-24_external_deps_topology_brief.md).
+>
+> **Update 2026-07-24:** fully superseded, on both points. `weave` now
+> covers every repo in `repos/` (the 2026-05-24 rollout plus isometry,
+> merecat, merely-made.github, smolweb, wavicle, wired the same day), and the
+> merge-driver definition moved from per-repo local `.git/config` to `git
+> config --global merge.weave.driver`, closing the fresh-clone gap the
+> original rollout still had. `sem` moved off the ad-hoc `npx` posture too:
+> installed via `cargo install --git https://github.com/Ataraxy-Labs/sem
+> sem-cli` and registered as a user-scoped Claude Code MCP server
+> (`sem_diff`/`sem_context`/`sem_impact`/`sem_entities`/`sem_blame`/`sem_log`
+> as native tools; the CLI still works as a fallback). Every repo's
+> `CLAUDE.md` now documents both tools for agents.
 
 Do not enable repo-wide setup by default yet. Prefer explicit commands,
 temporary tests, and local-only configuration until the tools have been used on
