@@ -15,9 +15,14 @@ items: CSS2's 449 is a long tail over 26 buckets, css-grid slices into 13
 with absolutely-positioned children the clear leader, and css-flexbox does
 not slice at all.
 
-Open: WPT pins for the color work (the cheapest next receipt), the
-css/selectors re-run, and the layout clusters the sub-diff now names.
-Everything after F4 stays gated on receipts, not dates.
+The color slice now has a measured receipt, not a prediction:
+`css/css-color` went from **-451 to +1571** against Stylo (+2,022 subtests,
+zero regressions). It was the worst directory in the F3 ledger and is now a
+Livery win.
+
+Open: the css/selectors re-run, specified-value serialization for the
+unresolved color functions (813 subtests, one seam), and the layout clusters
+the sub-diff names. Everything after F4 stays gated on receipts, not dates.
 **Decision record:** Mark, 2026-07-24: "no more servo-*. we grow our own
 equivalents and obviate servo-* crates, or delete 'em," with the teardown
 explicitly sequenced **after Livery replaces Stylo**. This plan defines that
@@ -210,13 +215,50 @@ reviewed; the direction holds and the grind is accepted. Two riders:
   math, so `hsl(calc(60 + 60) 100% 50%)` failed. A hue takes both an angle
   and a bare number of degrees; both now parse.
 
-  **Receipts:** 31 tests in `components/livery/tests/color.rs`;
-  `cargo test -p livery -p genet-livery` is 233 green, and genet-wpt,
-  genet-documents, and genet-scripted build on the livery feature. Not yet a
-  WPT pin: the css-color directory has not been re-run on the Livery route,
-  so the ~1,230-subtest and 583-subtest figures stay predictions until it is.
-  **Re-running `css/css-color` on both renderers is the cheapest way to turn
-  this slice into a receipt, and it should come before more color work.**
+  **RECEIPT, measured 2026-07-25.** `css/css-color` re-run on both
+  renderers, data at `Code/testing/genet/wpt-ledger/2026-07-25_color_v2/`:
+
+  | | 2026-07-24 | 2026-07-25 |
+  |---|---:|---:|
+  | Stylo subtests | 1107 | 1107 (control, unchanged) |
+  | Livery subtests | 656 | **2678** |
+  | css-color delta | **-451** | **+1571** |
+  | Livery all-pass files | 9 | 13 |
+
+  **+2,022 subtests, zero regressions**, and the directory the F3 ledger
+  named as Livery's single worst (-451, the largest net-negative anywhere)
+  now leads by 1,571. Stylo's total is identical across both runs, so the
+  comparison is sound rather than an environment artifact.
+
+  The run also caught a real defect the unit tests missed: the legacy comma
+  forms are **type-uniform**, so `rgb(10%, 20, 30%)` and
+  `rgba(-2, 300, 400%, -0.5)` are invalid for mixing percentages with
+  numbers even though every channel would clamp into range alone. Livery
+  accepted both, before and after the slice. Fixed, with the rule extended
+  to `hsl()`/`hwb()` (number-or-angle hue, both remaining channels
+  percentages), and `color-invalid.html` went 8/10 to all-pass.
+
+  **What remains in css-color is 1,014 subtests across 6 files, and it is
+  mostly one architectural gap rather than missing features:**
+
+  - **813 subtests (relative color 583, `color-mix()` 230) are already
+    computed-correct and fail only as *specified* values.** The `-computed-`
+    twins pass outright: relative color 0 to 810, `color-mix()` 0 to 567.
+    The `-valid-` family asserts through `div.style.getPropertyValue()`,
+    which returns the specified value, so `color: rgb(from red r g b)` must
+    serialize back as written. Livery resolves both functions eagerly at
+    parse time and keeps no authored form to return. Closing this means
+    retaining the unresolved function, not implementing anything new, and it
+    is the same seam `contrast-color()` and `color-layers()` will need.
+  - **176 subtests are genuinely unimplemented functions**: `color-layers()`
+    160, `contrast-color()` 16.
+  - **20 subtests are the `alpha()` function**, not implemented and not
+    previously named in this plan.
+  - 5 subtests in `opacity-valid.html` (4 of 5), a tail.
+
+  **Unit receipts:** 32 tests in `components/livery/tests/color.rs`;
+  `cargo test -p livery -p genet-livery` is 234 green, and genet-wpt,
+  genet-documents, and genet-scripted build on the livery feature.
 
   **Three defects surfaced, all pre-existing:**
 
@@ -671,11 +713,9 @@ to that sequencing even though it is technically independent today.
    now lives at `Code/testing/genet/wpt-ledger/`. **The css/selectors re-run
    is still open** and is now the only unmeasured directory in either lane.
    Its spec is at F3's selectors note; it is a long run, not hard work.
-2. ~~**The F0 color slice.**~~ **DONE**, relative color syntax included. The
-   F0 instrument landed alongside it. **What it now needs is a receipt, not
-   more code:** re-run `css/css-color` on both renderers and pin it. That
-   converts the whole slice from prediction to measurement and is the
-   cheapest receipt available anywhere in this plan.
+2. ~~**The F0 color slice.**~~ **DONE and measured.** `css/css-color` went
+   -451 to +1571 (+2,022 subtests, zero regressions); see F0's receipt
+   table. The F0 instrument landed alongside it.
 3. ~~**Slice the flexbox/grid cluster.**~~ **DONE** (F3b cluster 1 carries
    both tables). The work it exposes is below.
 
@@ -697,6 +737,17 @@ to that sequencing even though it is technically independent today.
 - **css-flexbox** last, deliberately. Its 196 files are 123 buckets with no
   item above 5.1%, so it is grind with no leverage; every other item above
   buys more per unit of work.
+
+**Also newly named, from the css-color receipt:**
+
+- **Specified-value serialization for the unresolved color functions** (813
+  subtests: relative color 583, `color-mix()` 230). Both are already
+  computed-correct; they fail only because Livery resolves them at parse
+  time and cannot return the authored form from
+  `getPropertyValue()`. One seam, and the same one `contrast-color()` and
+  `color-layers()` will need, so it is worth building before them.
+- `color-layers()` (160), `alpha()` (20), `contrast-color()` (16): three
+  unimplemented functions, in that order by value.
 
 Remaining instrument debt: none. The census reports the consumed set, the
 ledger is preserved outside `target/`, and the diff readers are checked in.

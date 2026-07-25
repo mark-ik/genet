@@ -64,45 +64,61 @@ impl Channel {
     }
 }
 
+/// How a channel was written, which the legacy forms constrain.
+#[derive(Clone, Copy, PartialEq)]
+enum Written {
+    Number,
+    Percentage,
+    /// `none`, a keyword, or a math function: never valid in a legacy form,
+    /// so its exact spelling does not need distinguishing.
+    Other,
+}
+
 /// One parsed channel. `None` is CSS `none`, carried as a missing component.
 fn parse_channel<'i>(
     input: &mut Parser<'i, '_>,
     channel: Channel,
     bindings: Option<&Bindings>,
-) -> Result<Option<f32>, Failure<'i>> {
+) -> Result<(Option<f32>, Written), Failure<'i>> {
     // `none` is a plain ident and must be checked before the number grammar,
     // as must a bound channel keyword in a relative color.
     let start = input.state();
     if let Ok(ident) = input.expect_ident_cloned() {
         if ident.eq_ignore_ascii_case("none") {
-            return Ok(None);
+            return Ok((None, Written::Other));
         }
         if let Some(bindings) = bindings
             && let Some(value) = relative::lookup(bindings, &ident)
         {
-            return Ok(Some(value));
+            return Ok((Some(value), Written::Other));
         }
     }
     input.reset(&start);
 
     if channel == Channel::Hue {
-        return parse_hue(input, bindings).map(Some);
+        return parse_hue(input, bindings).map(|hue| (Some(hue), Written::Number));
     }
 
     let location = input.current_source_location();
-    let value = match input.next()?.clone() {
-        Token::Number { value, .. } => value,
-        Token::Percentage { unit_value, .. } => unit_value * channel.percentage_basis(),
+    let (value, written) = match input.next()?.clone() {
+        Token::Number { value, .. } => (value, Written::Number),
+        Token::Percentage { unit_value, .. } => (
+            unit_value * channel.percentage_basis(),
+            Written::Percentage,
+        ),
         Token::Function(name) => {
             input.reset(&start);
-            parse_math_number(input, &name, channel, bindings)?
+            (
+                parse_math_number(input, &name, channel, bindings)?,
+                Written::Other,
+            )
         },
         _ => return Err(location.new_custom_error(())),
     };
     if !value.is_finite() {
         return Err(fail(input));
     }
-    Ok(Some(value))
+    Ok((Some(value), written))
 }
 
 /// A hue: `<number>` or `<angle>`.
@@ -241,16 +257,40 @@ fn parse_components<'i>(
     channels: [Channel; 3],
     bindings: Option<&Bindings>,
 ) -> Result<Parsed, Failure<'i>> {
-    let first = parse_channel(input, channels[0], bindings)?;
+    let (first, first_written) = parse_channel(input, channels[0], bindings)?;
     // A relative color is always modern syntax: `rgb(from red r, g, b)` is
     // invalid, so a comma is a failure there rather than a legacy form.
     let legacy = bindings.is_none() && input.try_parse(|i| i.expect_comma()).is_ok();
 
-    let second = parse_channel(input, channels[1], bindings)?;
+    let (second, second_written) = parse_channel(input, channels[1], bindings)?;
     if legacy {
         input.expect_comma()?;
     }
-    let third = parse_channel(input, channels[2], bindings)?;
+    let (third, third_written) = parse_channel(input, channels[2], bindings)?;
+
+    // The legacy comma forms are type-uniform, which the modern forms are
+    // not: `rgb(10%, 20, 30%)` and `rgba(-2, 300, 400%, -0.5)` are both
+    // invalid for mixing percentages with numbers, even though every channel
+    // would clamp into range on its own. `rgb()` requires all three the same;
+    // `hsl()` and `hwb()` require a number or angle hue with both remaining
+    // channels percentages.
+    if legacy {
+        let uniform = match channels[0] {
+            Channel::Hue => {
+                first_written == Written::Number
+                    && second_written == Written::Percentage
+                    && third_written == Written::Percentage
+            },
+            _ => {
+                matches!(first_written, Written::Number | Written::Percentage)
+                    && first_written == second_written
+                    && second_written == third_written
+            },
+        };
+        if !uniform {
+            return Err(fail(input));
+        }
+    }
 
     let alpha = if legacy {
         if input.try_parse(|i| i.expect_comma()).is_ok() {

@@ -463,3 +463,27 @@ fn keyword_substitution_does_not_corrupt_neighbouring_tokens() {
     // single-letter match. Blackness/blue keywords next to numbers:
     assert_eq!(srgb8("rgb(from #0a0b0c calc(r * 1) g b)"), (10, 11, 12, 255));
 }
+
+#[test]
+fn legacy_syntax_requires_uniform_channel_types() {
+    // CSS Color 4: the comma forms are type-uniform. Mixing a percentage
+    // with a number is invalid even when every channel would clamp into
+    // range on its own, which is why `rgba(-2, 300, 400%, -0.5)` is invalid
+    // rather than clamped. WPT: css-color/parsing/color-invalid.html.
+    for css in [
+        "rgb(10%, 20, 30%)",
+        "rgba(-2, 300, 400%, -0.5)",
+        "rgb(10, 20%, 30)",
+        "hsl(120, 50, 50%)",
+        "hsl(120, 50%, 50)",
+    ] {
+        assert!(css.parse::<Color>().is_err(), "accepted {css}");
+    }
+    // All-number and all-percentage legacy forms stay valid.
+    assert_eq!(srgb8("rgb(10, 20, 30)"), (10, 20, 30, 255));
+    assert_eq!(srgb8("rgb(100%, 0%, 0%)"), (255, 0, 0, 255));
+    assert_eq!(srgb8("hsl(120, 100%, 50%)"), (0, 255, 0, 255));
+    // Modern syntax has no such rule: mixing is fine there.
+    assert_eq!(srgb8("rgb(10% 20 30)"), (26, 20, 30, 255));
+    assert_eq!(srgb8("hsl(120 100% 50%)"), (0, 255, 0, 255));
+}
