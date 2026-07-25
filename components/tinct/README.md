@@ -42,4 +42,9 @@ on the same maths the base `derive_palette` uses.
 
 Seed → base `Palette` derivation + the OKLCH primitives. Consumers (Woodshed's
 `audio_widgets`, Mere's `register-theme`) layer their own richer token sets on
-top. License: MPL-2.0.
+top.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT) at your option.

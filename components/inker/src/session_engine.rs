@@ -1,6 +1,5 @@
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+// Copyright 2026 Mark AB (markik)
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Session-engine traits and registry — the third engine kind
 //! (2026-07-10 session-engines plan).

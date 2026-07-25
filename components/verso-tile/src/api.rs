@@ -1,3 +1,6 @@
+// Copyright 2026 Mark AB (markik)
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! The engine-agnostic flip contract (was the `verso-api` crate).
 //!
 //! A *flip* re-presents the same page through a different engine with the user's

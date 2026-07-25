@@ -1,3 +1,6 @@
+// Copyright 2026 Mark AB (markik)
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! The flip orchestrator (the carrier; was the `verso` crate).
 //!
 //! A *flip* re-presents the same page through a different engine, carrying the

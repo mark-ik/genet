@@ -2,7 +2,10 @@
 name = "verso-tile"
 version = "0.1.0"
 edition.workspace = true
-license.workspace = true
+authors = ["Mark AB (markik)"]
+# Not workspace: this crate is ours, not Servo-derived, so it keeps the founding
+# license rather than inheriting genet's MPL-2.0.
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/mark-ik/genet"
 publish = true
 description = "The engine-flip tile: re-present the same page through a different engine with the user's place and session carried across. Portable view-state + donor/back/receiver contracts (api), the one-hop degrade-never-block orchestrator (flip), the black-box system-WebView receiver (scry), and, behind the genet-donor feature, the glass-box genet donor. Consolidated 2026-07-09 from the mere workspace's verso / verso-api / verso-scry / verso-genet per the inker-genet adoption plan; the flip is the dynamic counterpart of inker's per-address multiplexer."

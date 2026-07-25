@@ -1,3 +1,6 @@
+// Copyright 2026 Mark AB (markik)
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! The genet [`FlipDonor`] glass-box donor (was the `verso-genet` crate; the `genet-donor` feature).
 //!
 //! genet is a glass-box primary: a flip *out of* genet can export the full live

@@ -2,7 +2,10 @@
 name = "graft-engine"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+authors = ["Mark AB (markik)"]
+# Not workspace: this crate is ours, not Servo-derived, so it keeps the founding
+# license rather than inheriting genet's MPL-2.0.
+license = "MIT OR Apache-2.0"
 repository.workspace = true
 description = "inker SurfaceEngine implementation backed by the wgpu-graft Servo embedding (GL-FBO / DX12-shared / Vulkan-external-memory / IOSurface interop)."
 publish = false

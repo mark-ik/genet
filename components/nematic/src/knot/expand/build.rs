@@ -1,3 +1,6 @@
+// Copyright 2026 Mark AB (markik)
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use inker::{Block, BlockProvenanceMap, DocumentProvenance, DocumentTrustState, EngineDocument};
 
 /// Build a knot file (frontmatter + body) from a sequence of blocks plus

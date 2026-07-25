@@ -1,3 +1,6 @@
+// Copyright 2026 Mark AB (markik)
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! The scry (system-WebView) flip receiver (was the `verso-scry` crate).
 //!
 //! scry is a black-box secondary (charter §3, asymmetric fidelity): the host cannot
