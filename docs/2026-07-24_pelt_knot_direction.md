@@ -49,6 +49,19 @@ Daily-drive browser features split two ways:
   identity; pelt persists a local file. The shared piece is the
   navigation-event facts the host contract already implies.
 
+  **Resolved 2026-07-25: the schema is the shared basis.** Mere needing the
+  graph and these components to be synonymous is satisfied at the
+  content-class layer, not the storage layer. One class definition per kind
+  (facets plus engram schema), two materializations: a bookmark is the same
+  declared thing in both hosts, stored as a chartulary engram in merecat and
+  as a local file record in pelt. The split above stands unchanged.
+
+  Settings are the exception and get no class. History, bookmarks, and
+  sessions are about pages, which are already nodes, so a content class fits
+  them. Settings are host configuration, and settings-as-nodes was tried and
+  came back a bust in the pane taxonomy revision, with pelt's settings dying
+  unported.
+
 This resolves "who builds the boring 80 percent": the majority is component
 work that serves merecat first, and pelt's private remainder is small.
 
