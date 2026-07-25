@@ -7,7 +7,9 @@ authors.workspace = true
 license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Product-neutral host contracts for Genet: engine profiles, capabilities, resource fetching, and tile composition."
+description = "Product-neutral host contracts for Genet: engine profiles, capabilities, resource fetching, and the pane-frame (tile) vocabulary."
+keywords = ["genet", "host", "tile", "pane", "contract"]
+categories = ["gui", "api-bindings"]
 
 [lib]
 name = "genet_host_api"

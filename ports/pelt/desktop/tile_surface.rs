@@ -23,11 +23,11 @@ use std::rc::Rc;
 
 use accesskit::{NodeId as AccessNodeId, Tree, TreeId, TreeUpdate};
 use cambium::{
-    AnyView, DomHandle, GenetAppRunner, GenetCtx, GenetElement, PointerClick, custom_leaf, el,
-    on_click,
+    AnyView, DomHandle, FRISKET_CSS, GenetAppRunner, GenetCtx, GenetElement, PointerClick,
+    custom_leaf, divider_target, el, frisket, tab_drop_index, tab_target,
 };
 use genet_host_api::tile::{
-    ContentSource, DocumentRef, DropTarget, SplitAxis, TabStack, TileEvent, TileId, TilePath,
+    ContentSource, DocumentRef, DropTarget, SplitAxis, TileEvent, TileId, TilePath,
     TileTree,
 };
 use genet_layout::{IncrementalLayout, LeafPaintSource, ScrollOffsets};
@@ -103,9 +103,17 @@ pub const TREE_GLYPH_LEAF_KEY: u64 = 902;
 /// status bar carries two chisel widget leaves fed with real data (no placebo):
 /// a miniature of the live tile-tree topology and a frame-time meter.
 fn tile_view(state: &TileState) -> TileView {
-    let tree = el::<_, TileState, ()>("div", render_node(&state.tree, &[]))
-        .attr("class", "tile-body")
-        .attr("style", "flex: 1 1 0; min-height: 0; display: flex;");
+    // The pane frame is `cambium::frisket`: splits, dividers, tab bars, and the
+    // content holes. Pelt keeps what is Pelt's -- the status bar, the document
+    // compositing, and the authoritative tree the component reports against.
+    let tree = el::<_, TileState, ()>(
+        "div",
+        frisket(&state.tree, |state: &mut TileState, event: TileEvent| {
+            state.pending.push(event)
+        }),
+    )
+    .attr("class", "tile-body")
+    .attr("style", "flex: 1 1 0; min-height: 0; display: flex;");
     let status = state.status_bar.then(|| {
         el::<_, TileState, ()>(
             "div",
@@ -240,175 +248,32 @@ fn tree_glyph_topology(tree: &TileTree) -> (Vec<GraphGlyphNode>, Vec<(u16, u16)>
     (nodes, edges)
 }
 
-/// Encode a split path (`[0, 1]`) as a DOM-attr string (`"0.1"`); the empty path (the
-/// root split) is `""`.
-fn encode_path(path: &[usize]) -> String {
-    path.iter()
-        .map(|i| i.to_string())
-        .collect::<Vec<_>>()
-        .join(".")
-}
-
-/// Decode the `data-divider` attr back to a [`TilePath`].
-fn decode_path(s: &str) -> TilePath {
-    if s.is_empty() {
-        TilePath(Vec::new())
-    } else {
-        TilePath(s.split('.').filter_map(|p| p.parse().ok()).collect())
-    }
-}
-
-fn render_node(node: &TileTree, path: &[usize]) -> TileView {
-    match node {
-        TileTree::Split { axis, children } => {
-            let dir = match axis {
-                SplitAxis::Row => "row",
-                SplitAxis::Column => "column",
-            };
-            let path_attr = encode_path(path);
-            // Interleave a draggable divider between adjacent children. Each divider
-            // carries its split's path + the boundary index, so the host can resolve a
-            // drag to a `DividerMoved`.
-            let mut items: Vec<TileView> = Vec::new();
-            for (j, branch) in children.iter().enumerate() {
-                let mut child_path = path.to_vec();
-                child_path.push(j);
-                let inner = render_node(&branch.tree, &child_path);
-                let style = format!(
-                    "flex: {frac} {frac} 0; min-width: 0; min-height: 0;",
-                    frac = branch.fraction
-                );
-                items.push(Box::new(
-                    el::<_, TileState, ()>("div", inner)
-                        .attr("class", "tile-branch")
-                        .attr("style", style),
-                ) as TileView);
-                if j + 1 < children.len() {
-                    items.push(Box::new(
-                        el::<_, TileState, ()>("div", ())
-                            .attr("class", "tile-divider")
-                            .attr("data-divider", path_attr.clone())
-                            .attr("data-dindex", j.to_string()),
-                    ) as TileView);
-                }
-            }
-            Box::new(
-                el::<_, TileState, ()>("div", items)
-                    .attr("class", "tile-split")
-                    .attr("style", format!("display: flex; flex-direction: {dir};")),
-            )
-        },
-        TileTree::Stack(stack) => render_stack(stack, path),
-    }
-}
-
-fn render_stack(stack: &TabStack, path: &[usize]) -> TileView {
-    // The tab bar: a clickable tab per tile, the active one highlighted. Each tab's
-    // handler queues an `Activated` for its own id (a per-tab capturing closure).
-    let tabs: Vec<TileView> = stack
-        .tabs
-        .iter()
-        .enumerate()
-        .map(|(i, tile)| {
-            let id = tile.id;
-            let class = if i == stack.active {
-                "tile-tab active"
-            } else {
-                "tile-tab"
-            };
-            // The label activates the tab; the close × removes it. The × stops
-            // propagation so its click does not also reach the tab's activate handler.
-            let label =
-                el::<_, TileState, ()>("span", tile.title.clone()).attr("class", "tile-label");
-            let close = on_click(
-                el::<_, TileState, ()>("span", "\u{00d7}")
-                    .attr("class", "tile-close")
-                    // Its own control, not part of the tab's name: an icon-only
-                    // button a screen reader announces as "Close <title>".
-                    .attr("role", "button")
-                    .attr("aria-label", format!("Close {}", tile.title)),
-                move |s: &mut TileState, ev: PointerClick| {
-                    ev.stop_propagation();
-                    s.pending.push(TileEvent::Closed(id));
-                },
-            );
-            // A host accent paints this tab inline (background + label color), overriding
-            // the theme's tab CSS — mere tints each tab to match its node. Empty otherwise,
-            // so the tab keeps the default styling.
-            let style = match tile.accent {
-                Some(a) => format!(
-                    "background-color: rgb({}, {}, {}); color: rgb({}, {}, {});",
-                    a.background[0],
-                    a.background[1],
-                    a.background[2],
-                    a.foreground[0],
-                    a.foreground[1],
-                    a.foreground[2],
-                ),
-                None => String::new(),
-            };
-            Box::new(on_click(
-                el::<_, TileState, ()>("div", (label, close))
-                    .attr("class", class)
-                    .attr("data-tabid", id.0.to_string())
-                    // ARIA tab semantics: the title lives in a child span, so the
-                    // tab names itself with aria-label; selection is real state,
-                    // not a class name.
-                    .attr("role", "tab")
-                    .attr("aria-label", tile.title.clone())
-                    .attr(
-                        "aria-selected",
-                        if i == stack.active { "true" } else { "false" },
-                    )
-                    .attr("style", style),
-                move |s: &mut TileState, _: PointerClick| s.pending.push(TileEvent::Activated(id)),
-            )) as TileView
-        })
-        .collect();
-    // The tab bar carries its stack's path so a tab dropped here resolves to a
-    // `DropTarget::Stack` (insert into this stack) rather than an edge split.
-    let tab_bar = el::<_, TileState, ()>("div", tabs)
-        .attr("class", "tile-tabbar")
-        .attr("role", "tablist")
-        .attr("data-stack", encode_path(path));
-
-    // The content-area placeholder for the active tile, marked with its id so the host
-    // can find its laid-out rect and composite the tile's content there — a document
-    // scene (the document lane, a [`TileLayer`]) or, for the external-texture lane, the
-    // producer's texture (a constellation actor, a scrying WebView) composited into the
-    // rect ([`TileFrame::external_tiles`]). The lane is read off the tile's
-    // `ContentSource`, not the DOM, so the placeholder stays lane-neutral.
-    let active_id = stack.tabs.get(stack.active).map(|t| t.id.0).unwrap_or(0);
-    let content = el::<_, TileState, ()>("div", ())
-        .attr("class", "tile-content")
-        .attr("data-tile", active_id.to_string());
-
-    Box::new(
-        el::<_, TileState, ()>("div", (tab_bar, content))
-            .attr("class", "tile-stack")
-            .attr("style", "display: flex; flex-direction: column;"),
-    )
-}
-
-/// The default tile-frame stylesheet (the structural + tab-bar styling; a theme layers
-/// over it, like the chrome's).
+/// Pelt's own frame styling: the document reset, the status bar, and the drag
+/// ghost. The pane frame's structural CSS is [`FRISKET_CSS`], pushed as a second
+/// sheet, so the component's look is consumed rather than forked.
 const DEFAULT_TILE_CSS: &str = "\
     div { display: block; box-sizing: border-box; } \
     head, style, script, title, meta, link, base { display: none; } \
-    .tile-split { width: 100%; height: 100%; } \
-    .tile-branch { display: flex; } \
-    .tile-stack { width: 100%; height: 100%; } \
-    .tile-tabbar { display: flex; align-items: stretch; height: 44px; padding: 4px 2px 0 2px; background: #33333a; } \
-    .tile-tab { display: flex; align-items: center; min-width: 0; padding: 8px 14px; font-size: 15px; line-height: 1.2; color: #cccccc; background: #2a2a30; margin-right: 3px; } \
-    .tile-tab.active { color: #ffffff; background: #4a4a55; } \
-    .tile-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } \
-    .tile-close { flex: 0 0 auto; margin-left: 10px; padding: 0 5px; font-size: 15px; color: #999999; } \
-    .tile-content { flex: 1 1 0; min-height: 0; background: #ffffff; } \
-    .tile-divider { flex: 0 0 10px; background: #1a1a1f; } \
+    .tile-body { display: flex; } \
     .tile-statusbar { display: flex; align-items: center; height: 26px; padding: 0 10px; background: #1a1a1f; } \
     .tile-status-spacer { flex: 1 1 auto; height: 1px; } \
     .tile-status-leaf { margin-left: 10px; } \
     .tile-ghost { display: inline-block; padding: 8px 14px; font-size: 15px; line-height: 1.2; color: #ffffff; background: #4a4a55; border: 1px solid #6a6a77; opacity: 0.85; }";
+
+/// Walk from a divider element to the split container holding it: the parent,
+/// whose measured extent sets the pixels-per-fraction of a divider drag. Ours
+/// because the measurement is ours; the component answers *which* divider.
+fn split_container_of<D: layout_dom_api::LayoutDom>(dom: &D, hit: D::NodeId) -> Option<D::NodeId> {
+    let ns = Namespace::default();
+    let marker = LocalName::from("data-divider");
+    let mut node = hit;
+    loop {
+        if dom.attribute(node, &ns, &marker).is_some() {
+            return dom.parent(node);
+        }
+        node = dom.parent(node)?;
+    }
+}
 
 /// A rendered tile-tree frame: the frame scene (tab bars + dividers), one layer per
 /// active *document* tile (its content-area rect + its document's scene), the
@@ -530,7 +395,7 @@ impl TileSurface {
         let mut surface = Self {
             runner,
             docs: HashMap::new(),
-            sheets: vec![DEFAULT_TILE_CSS.to_string()],
+            sheets: vec![DEFAULT_TILE_CSS.to_string(), FRISKET_CSS.to_string()],
             leaves,
             rendered: RenderedLeaves::new(),
             frame_peak: 0.0,
@@ -578,7 +443,7 @@ impl TileSurface {
     /// it every time it (re)builds the surface or when its theme changes without the
     /// sheets accumulating. Later sheets win the cascade at equal specificity, so the
     /// theme need only restate the properties it overrides (e.g. the panel background on
-    /// `.tile-content`, the tab-bar / active-tab colors).
+    /// `.frisket-content`, the tab-bar / active-tab colors).
     pub fn set_theme(&mut self, css: impl Into<String>) {
         self.sheets.truncate(1); // keep DEFAULT_TILE_CSS as the base
         self.sheets.push(css.into());
@@ -879,107 +744,56 @@ impl TileSurface {
         let dom = dom.borrow();
         let session =
             IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32);
-        let mut node = session.hit_test(&*dom, x, y, &genet_layout::ScrollOffsets::default())?;
-        let ns = Namespace::default();
-        loop {
-            if let Some(path_str) = dom.attribute(node, &ns, &LocalName::from("data-divider")) {
-                let index: usize = dom
-                    .attribute(node, &ns, &LocalName::from("data-dindex"))?
-                    .parse()
-                    .ok()?;
-                let path = decode_path(path_str);
-                // The divider's parent is the split container; its extent sets the
-                // pixels-per-fraction for the drag.
-                let split_node = dom.parent(node)?;
-                let split_rect = absolute_rect(&dom, &session, split_node)?;
-                let horizontal = matches!(
-                    self.runner.state().tree.axis_at(&path),
-                    Some(SplitAxis::Row)
-                );
-                let extent = if horizontal {
-                    split_rect.2
-                } else {
-                    split_rect.3
-                };
-                return Some(DividerHit {
-                    path,
-                    index,
-                    horizontal,
-                    extent,
-                });
-            }
-            node = dom.parent(node)?;
-        }
+        let hit = session.hit_test(&*dom, x, y, &genet_layout::ScrollOffsets::default())?;
+        // Which divider the hit belongs to is the component's question: it owns
+        // the DOM shape being asked about.
+        let target = divider_target(&*dom, hit)?;
+        // The extent is ours, measured by our layout, and it turns a drag delta
+        // into a fraction.
+        let split_rect = absolute_rect(&dom, &session, split_container_of(&*dom, hit)?)?;
+        let horizontal = matches!(
+            self.runner.state().tree.axis_at(&target.path),
+            Some(SplitAxis::Row)
+        );
+        Some(DividerHit {
+            path: target.path,
+            index: target.index,
+            horizontal,
+            extent: if horizontal {
+                split_rect.2
+            } else {
+                split_rect.3
+            },
+        })
     }
 
-    /// The tile id of the tab at `(x, y)`, if a tab is there and the press is not on its
-    /// close × (which the host dispatches as a click instead). Lets the host start a
-    /// tab drag from the press.
+    /// The tile id of the tab at `(x, y)`, if a tab is there and the press is not
+    /// on its close x (which the host dispatches as a click instead). Lets the
+    /// host start a tab drag from the press.
     pub fn tab_at(&self, x: f32, y: f32, width: u32, height: u32) -> Option<TileId> {
         let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
         let dom = self.runner.dom();
         let dom = dom.borrow();
         let session =
             IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32);
-        let mut node = session.hit_test(&*dom, x, y, &genet_layout::ScrollOffsets::default())?;
-        let ns = Namespace::default();
-        let class = LocalName::from("class");
-        // A press on the close × is a close, not a drag.
-        if dom
-            .attribute(node, &ns, &class)
-            .is_some_and(|c| c.split_whitespace().any(|w| w == "tile-close"))
-        {
-            return None;
-        }
-        let tabid = LocalName::from("data-tabid");
-        loop {
-            if let Some(id) = dom
-                .attribute(node, &ns, &tabid)
-                .and_then(|s| s.parse::<u64>().ok())
-            {
-                return Some(TileId(id));
-            }
-            node = dom.parent(node)?;
-        }
+        let hit = session.hit_test(&*dom, x, y, &genet_layout::ScrollOffsets::default())?;
+        // Refusing a press on the close x is the component's rule, not ours.
+        tab_target(&*dom, hit)
     }
 
-    /// If `(x, y)` is over a stack's tab bar, that stack's path plus the tab index a
-    /// drop would insert at (counting the tabs whose horizontal centre sits left of the
-    /// cursor). Lets the host resolve a tab drop onto a tab bar to a `DropTarget::Stack`
-    /// — merging the dragged tile into that stack rather than splitting a pane.
+    /// If `(x, y)` is over a stack's tab bar, that stack's path plus the tab index
+    /// a drop would insert at. Lets the host resolve a tab drop onto a tab bar to
+    /// a `DropTarget::Stack` -- merging into that stack rather than splitting.
     pub fn tabbar_at(&self, x: f32, y: f32, width: u32, height: u32) -> Option<(TilePath, usize)> {
         let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
         let dom = self.runner.dom();
         let dom = dom.borrow();
         let session =
             IncrementalLayout::new(&*dom, &sheets, width.max(1) as f32, height.max(1) as f32);
-        let mut node = session.hit_test(&*dom, x, y, &genet_layout::ScrollOffsets::default())?;
-        let ns = Namespace::default();
-        let stack_attr = LocalName::from("data-stack");
-        // Walk up to the tab bar carrying its stack path.
-        let bar = loop {
-            if dom.attribute(node, &ns, &stack_attr).is_some() {
-                break node;
-            }
-            node = dom.parent(node)?;
-        };
-        let path = decode_path(dom.attribute(bar, &ns, &stack_attr)?);
-        // Insertion index: how many tab centres are left of the cursor.
-        let tabid = LocalName::from("data-tabid");
-        let mut centres = Vec::new();
-        let mut stack = vec![bar];
-        while let Some(n) = stack.pop() {
-            if dom.attribute(n, &ns, &tabid).is_some() {
-                if let Some(r) = absolute_rect(&dom, &session, n) {
-                    centres.push(r.0 + r.2 / 2.0);
-                }
-            }
-            for child in dom.dom_children(n) {
-                stack.push(child);
-            }
-        }
-        let index = centres.iter().filter(|&&c| c < x).count();
-        Some((path, index))
+        let hit = session.hit_test(&*dom, x, y, &genet_layout::ScrollOffsets::default())?;
+        // The insertion index needs real tab rects, so the component takes them
+        // through this closure rather than growing a layout dependency.
+        tab_drop_index(&*dom, hit, x, |node| absolute_rect(&dom, &session, node))
     }
 
     /// Move `tile` onto `to` (a tab drag), applied through the reducer, then reconcile
@@ -1562,13 +1376,13 @@ mod tests {
             .is_some_and(|c| c.split_whitespace().any(|w| w == class))
     }
 
-    /// Find a tab `<div class="tile-tab">` whose label text contains `label`.
+    /// Find a tab `<div class="frisket-tab">` whose label text contains `label`.
     fn find_tab(surface: &TileSurface, label: &str) -> Option<NodeId> {
         let dom = surface.dom();
         let dom = dom.borrow();
         let mut stack = vec![dom.document()];
         while let Some(node) = stack.pop() {
-            if has_class(&dom, node, "tile-tab") && node_text(&dom, node).contains(label) {
+            if has_class(&dom, node, "frisket-tab") && node_text(&dom, node).contains(label) {
                 return Some(node);
             }
             for child in dom.dom_children(node) {
@@ -1578,14 +1392,14 @@ mod tests {
         None
     }
 
-    /// Find the `.tile-close` span inside the tab labelled `label`.
+    /// Find the `.frisket-close` span inside the tab labelled `label`.
     fn find_close(surface: &TileSurface, label: &str) -> Option<NodeId> {
         let tab = find_tab(surface, label)?;
         let dom = surface.dom();
         let dom = dom.borrow();
         let mut stack = vec![tab];
         while let Some(node) = stack.pop() {
-            if has_class(&dom, node, "tile-close") {
+            if has_class(&dom, node, "frisket-close") {
                 return Some(node);
             }
             for child in dom.dom_children(node) {

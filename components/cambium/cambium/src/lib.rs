@@ -66,6 +66,7 @@ mod splice;
 mod styled_field;
 mod summary_body;
 mod sectioned_list;
+mod frisket;
 mod split;
 mod tabs;
 mod tags;
@@ -148,6 +149,10 @@ pub use summary_body::{SummaryBody, summary_body};
 // `h1`/`h2`/`h3`, `ul`/`ol`/`li`. (No `button` here — `controls::button` is the
 // button view, with a handler.)
 pub use sectioned_list::{ListRow, ListRowKind, ListSection, sectioned_list};
+pub use frisket::{
+    DividerTarget, FRISKET_CSS, FRISKET_TILE_ATTR, PaneView, decode_pane_path, divider_target,
+    encode_pane_path, frisket, stack_target, tab_drop_index, tab_target,
+};
 pub use split::{Split, SplitAxis, split};
 pub use tabs::{TabStrip, tab_strip};
 pub use tags::*;

@@ -191,7 +191,15 @@ sha2 = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 # Chrome profile (behind the `chrome` feature): the Cambium reactive toolkit the
 # omnibar + back/forward views are built with, over a ScriptedDom the runner drives.
-cambium = { version = "0.2.0", optional = true }
+#
+# By path like every other component here. The registry pin this replaces
+# (`version = "0.2.0"`) dates from 2026-07-14, when Cambium was still a sibling
+# repo and a published dep plus `[patch.crates-io]` seam redirects was the only
+# way to share DOM types with it. Cambium became a Genet component on
+# 2026-07-23, so the pin outlived its reason: it left the reference host building
+# against a nine-day-old published toolkit while the workspace copy moved to
+# 0.3.1, which is how `cambium::frisket` was unreachable from Pelt.
+cambium = { path = "../../../components/cambium/cambium", optional = true }
 # OS clipboard access for the omnibar's Ctrl/Cmd+V paste (chrome feature). Reads only;
 # a failed open (e.g. a headless host) degrades to a no-op paste.
 genet-clipboard = { path = "../../../components/genet-clipboard", optional = true }

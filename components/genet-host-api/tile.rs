@@ -86,9 +86,19 @@ pub struct TabAccent {
     pub foreground: [u8; 3],
 }
 
-/// Where a tile's content comes from — the two lanes the surface composites. The
-/// contract names the lane only; the host resolves the actual content. This is the
-/// `genet content-root subtree` vs `external_texture(key)` distinction V6 routes on.
+/// Where a tile's content comes from. The contract names the lane only; the host
+/// resolves the actual content. This is the `genet content-root subtree` vs
+/// `external_texture(key)` distinction V6 routes on.
+///
+/// **A recognized core plus an open tail** (2026-07-25), the same shape as
+/// `sceno::Representation`. The three named lanes are the ones a Genet surface
+/// composites itself, and they are browser vocabulary: a document, a texture, a
+/// settings page. That was the one part of this contract which was not really
+/// product-neutral, and it blocked the pane frame from serving a non-browser app
+/// — a practice-set pane or a tactical map is none of the three, and making it
+/// masquerade as a `Document` would be a lie the host then has to decode.
+/// [`ContentSource::Open`] lets such a host name its own lane without this
+/// contract learning what is in it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ContentSource {
     /// A genet document. Standalone pelt carries the document URL here; mere carries
@@ -106,6 +116,16 @@ pub enum ContentSource {
     /// ref; the settings protocol itself (page schema, permission model) is the
     /// provider's concern, not the tile contract's.
     Settings(SettingsRef),
+    /// Open tail: a lane this contract does not name, filled by the host that
+    /// recognizes `kind`.
+    ///
+    /// `kind` names the lane, namespaced like [`SettingsRef`]
+    /// (`"merecat.roster"`, `"woodshed.fretboard"`); `id` is whatever that host
+    /// needs to resolve it and is opaque here — an id, a key, a serialized
+    /// descriptor. A Genet surface draws the tile's frame and leaves the content
+    /// hole for its host to fill, exactly as it does for the named lanes, so an
+    /// unrecognized `kind` degrades to an empty pane rather than a broken one.
+    Open { kind: String, id: String },
 }
 
 /// An opaque reference to a document the host resolves. Standalone pelt stores the
@@ -457,6 +477,40 @@ mod tests {
             content: ContentSource::Document(DocumentRef(url.to_string())),
             accent: None,
         }
+    }
+
+    /// A lane this contract does not name rides through the tree and the reducer
+    /// untouched: the point of the open tail is that a non-browser pane needs no
+    /// permission from here, and needs to tell no lies about being a document.
+    #[test]
+    fn an_open_lane_is_carried_not_interpreted() {
+        let pane = Tile {
+            id: TileId(7),
+            title: "Roster".into(),
+            content: ContentSource::Open {
+                kind: "merecat.roster".into(),
+                id: "graph:9f2c".into(),
+            },
+            accent: None,
+        };
+        let mut tree = TileTree::single(doc_tile(1, "a.html"));
+        // A host adds the pane to its own tree; the contract never invents tiles.
+        if let TileTree::Stack(stack) = &mut tree {
+            stack.tabs.push(pane.clone());
+        }
+        assert_eq!(tree.tiles().len(), 2);
+        tree.apply(&TileEvent::Activated(TileId(7)));
+        assert_eq!(tree.find(TileId(7)), Some(&pane), "carried verbatim");
+        assert!(
+            !matches!(
+                tree.find(TileId(7)).map(|t| &t.content),
+                Some(ContentSource::Document(_))
+            ),
+            "an open lane is not a document wearing a costume"
+        );
+        // Closing it is the same operation as closing any tile.
+        tree.apply(&TileEvent::Closed(TileId(7)));
+        assert_eq!(tree.tiles().len(), 1);
     }
 
     /// A single-tile tree has one tile, found by id.

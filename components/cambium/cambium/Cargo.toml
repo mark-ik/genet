@@ -15,6 +15,10 @@ highlight = ["dep:illume", "dep:tinct"]
 meristem = { version = "0.1.0", path = "../meristem" }
 sprigging = { version = "0.2.0", path = "../sprigging" }
 genet-scripted-dom = { version = "0.1.0", path = "../../genet-scripted-dom" }
+# The pane-frame contract the `frisket` module renders (TileTree / TileEvent).
+# A zero-dependency contract leaf, and the same one platen projects onto, so the
+# pane vocabulary has exactly one definition in the family.
+genet-host-api = { version = "0.1.0", path = "../../genet-host-api" }
 layout_dom_api = { package = "layout-dom-api", version = "0.1.0", path = "../../shared/layout-dom" }
 unicode-segmentation = "1.13.2"
 illume = { version = "=0.0.2", optional = true }
