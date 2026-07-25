@@ -73,7 +73,9 @@ needs `input` and `textarea` for real pages, and contenteditable after that;
 the knot editor needs the same machinery. Build it once at the cambium/genet
 primitive layer and keep `knot-editor-host` a consumer, which it already is
 architecturally. This is the gate for the authoring browser; the promised
-nematic lexers (CSS/HTML/JS/Turtle) are small beside it.
+nematic lexers (CSS/HTML/JS/Turtle) are small beside it. Owner: the
+[text-editing primitive plan](2026-07-25_text_editing_primitive_plan.md),
+founded 2026-07-25.
 
 ## Queued receipt: an agent drives pelt
 

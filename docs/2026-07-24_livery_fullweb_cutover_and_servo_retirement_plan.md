@@ -1,9 +1,10 @@
 # Livery fullweb cutover and the servo-* retirement
 
 **Date:** 2026-07-24
-**Status:** scoped. F0 rides the active H5 cadence; F3's ledger can start as
-soon as both renderers run the same directories; everything after F4 is gated
-on the D0 ruling below and on receipts, not dates.
+**Status:** scoped; D0's F3b checkpoint resolved 2026-07-25 (lane at the
+revised price, multicol knocked out — see the D0 riders). Next work is
+ordered at the end of Sequencing: instruments, then the color slice, then
+flexbox/grid. Everything after F4 stays gated on receipts, not dates.
 **Decision record:** Mark, 2026-07-24: "no more servo-*. we grow our own
 equivalents and obviate servo-* crates, or delete 'em," with the teardown
 explicitly sequenced **after Livery replaces Stylo**. This plan defines that
@@ -62,6 +63,20 @@ background paint, multicol from nothing) before F4, not just grammar slices.
 Mark should see the F3b table before more is spent either way; if the answer
 is that the price is too high, the fallback is the one already named — lift
 the failing subsystems out of genet-layout into the lane — not a re-seam.
+
+**RULED by Mark, 2026-07-25: lane, at the revised price.** The F3b table was
+reviewed; the direction holds and the grind is accepted. Two riders:
+
+- **Multicol is knocked out rather than built.** `column-count`,
+  `column-width`, and `column-span` stay `[[unimplemented]]`, the
+  css-multicol reftest directory leaves the F4 parity bar, and the
+  capability returns as its own planned build after F5 — a recorded
+  knockout per the established practice, never a silent gap. It was the
+  only structural item in either ledger; with it out, every remaining F3b
+  cluster is fidelity work.
+- **The genet-layout lift fallback stays in reserve.** It is invoked per
+  subsystem only if the flexbox/grid fidelity pass shows taffy integration
+  cannot close the 386; nothing is lifted preemptively.
 
 ## Stages, each with a receipt
 
@@ -216,7 +231,8 @@ the failing subsystems out of genet-layout into the lane — not a re-seam.
      `column-width`, and `column-span` are all `[[unimplemented]]`, and taffy
      has no multi-column algorithm. This one is build-or-knock-out, not a
      fidelity pass — the only cluster in either ledger that is genuinely
-     structural.
+     structural. **RULED 2026-07-25: knocked out** (see the D0 riders); the
+     directory leaves the F4 bar.
   5. Writing-modes (35), position (23), tables (14), borders (6): small tails.
 
   **F4 remains blocked**, and the reopened question is D0's cost basis, not
@@ -225,7 +241,8 @@ the failing subsystems out of genet-layout into the lane — not a re-seam.
   genet-wpt's runner. Add the product-facing selection at the profile tier
   (genet-host-api / genet-documents): the fullweb profile routes to Livery by
   default, Stylo behind an explicit opt-out that F5 removes. Receipt: every
-  pinned baseline re-pinned under the Livery default; merecat, isometry,
+  pinned baseline re-pinned under the Livery default (css-multicol excluded
+  by the 2026-07-25 knockout); merecat, isometry,
   woodshed, and hocket build and smoke against genet main with no renderer
   flag set.
 - **F5 - the retirement event.** The harvest plan's trigger fires:
@@ -274,6 +291,23 @@ start now in parallel (it is read-only over both renderers). F4 needs D0
 confirmed plus F0-F3 receipts. F5 fires the harvest plan's trigger. F6 is
 strictly after F5, per the 2026-07-24 ruling, with F6b's media knockout held
 to that sequencing even though it is technically independent today.
+
+**Next work, ordered 2026-07-25 (audit with Mark):**
+
+1. **The two open instruments**, read-only and parallel: the CSS2 sub-diff
+   over its 449 S-only files (the cluster is unsliceable until diffed) and
+   the css/selectors re-run folded into F3. Tooling exists
+   (`docs/tools/ledger_*.sh` and diff scripts).
+2. **The F0 color slice**, the biggest single lever in either ledger
+   (~1,230 subtests), bounded, quarry sized, correct under every ruling;
+   rides the H5 cadence immediately and does not wait on the instruments.
+3. **The flexbox/grid fidelity pass** (386 files), sliced by what the
+   instruments return.
+
+Multicol is out per the D0 riders. The text-editing primitive has its own
+founding plan (`2026-07-25_text_editing_primitive_plan.md`) and does not
+ride this one. The agent-drives-pelt receipt stays queued per the direction
+doc.
 
 ## Done condition
 
