@@ -15,3 +15,9 @@ selectors = "0.39"
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }
 toml = "1"
+
+[dev-dependencies]
+# Reads the checked-in consumed-longhand contract in tests/consumed_set.rs.
+# Same crate the build script uses, so the data file cannot drift into a shape
+# the generator would reject.
+toml = "1"

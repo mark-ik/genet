@@ -1363,21 +1363,23 @@ fn used_text_color(style: &ComputedValues) -> ColorF {
 }
 
 pub(crate) fn resolve_color(color: Color, current: ColorF) -> ColorF {
-    match color {
-        Color::Transparent => ColorF::TRANSPARENT,
-        Color::CurrentColor => current,
-        Color::CanvasText => ColorF::BLACK,
-        Color::Rgba {
-            red,
-            green,
-            blue,
-            alpha,
-        } => ColorF::new(
-            f32::from(red) / 255.0,
-            f32::from(green) / 255.0,
-            f32::from(blue) / 255.0,
-            f32::from(alpha) / 255.0,
+    // `to_srgb` resolves missing components and converts out of whatever space
+    // the color was authored in, and returns None only for the two unresolved
+    // forms (`currentcolor` and system colors). Channels can land outside
+    // 0..=1 for a wide-gamut source; clamping here is a gamut clip, which is
+    // the same approximation `Color::to_srgb8` documents.
+    match color.to_srgb() {
+        Some((red, green, blue, alpha)) => ColorF::new(
+            red.clamp(0.0, 1.0),
+            green.clamp(0.0, 1.0),
+            blue.clamp(0.0, 1.0),
+            alpha.clamp(0.0, 1.0),
         ),
+        None if color == Color::CurrentColor => current,
+        // System colors other than the inherited one paint from Livery's
+        // bounded palette; `to_srgb` already resolves those, so this arm is
+        // only reached for `currentcolor`-shaped values it cannot.
+        None => ColorF::BLACK,
     }
 }
 

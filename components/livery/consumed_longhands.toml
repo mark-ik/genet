@@ -1,0 +1,153 @@
+# The Genet consumed-longhand contract: the 126 longhands the current
+# product path actually reads.
+#
+# Source: docs/2026-07-13_genet_consumed_css_property_audit.md (landed
+# against Genet 6b955ff96ed, Stylo eec60c2464). This file is the
+# machine-readable form of that audit's overlap table, checked in so the
+# F0 receipt ("census reads 126/126 consumed implemented") can be
+# asserted by `tests/consumed_set.rs` with no stylo fork checkout. That
+# matters: the fork archives at F5 of the cutover plan, and a receipt
+# that needs it would die with it.
+#
+# `consumers` records which surface reads each name:
+#   L = taffy layout adapter
+#   R = direct render/text/box read
+#   C = getComputedStyle
+#   A = animation or transition control
+#
+# Update this file only from a re-run of the audit, never by hand to make
+# a test pass.
+
+[meta]
+audit = "2026-07-13_genet_consumed_css_property_audit.md"
+genet_rev = "6b955ff96ed"
+stylo_rev = "eec60c2464"
+count = 126
+
+[longhands]
+align_content = { name = "align-content", consumers = "L" }
+align_items = { name = "align-items", consumers = "L" }
+align_self = { name = "align-self", consumers = "L" }
+animation_delay = { name = "animation-delay", consumers = "A" }
+animation_direction = { name = "animation-direction", consumers = "A" }
+animation_duration = { name = "animation-duration", consumers = "A" }
+animation_fill_mode = { name = "animation-fill-mode", consumers = "A" }
+animation_iteration_count = { name = "animation-iteration-count", consumers = "A" }
+animation_name = { name = "animation-name", consumers = "A" }
+animation_play_state = { name = "animation-play-state", consumers = "A" }
+animation_timing_function = { name = "animation-timing-function", consumers = "A" }
+aspect_ratio = { name = "aspect-ratio", consumers = "L" }
+background_attachment = { name = "background-attachment", consumers = "R" }
+background_clip = { name = "background-clip", consumers = "R" }
+background_color = { name = "background-color", consumers = "R C" }
+background_image = { name = "background-image", consumers = "R" }
+background_origin = { name = "background-origin", consumers = "R" }
+background_position_x = { name = "background-position-x", consumers = "R" }
+background_position_y = { name = "background-position-y", consumers = "R" }
+background_repeat = { name = "background-repeat", consumers = "R" }
+background_size = { name = "background-size", consumers = "R" }
+border_bottom_color = { name = "border-bottom-color", consumers = "R" }
+border_bottom_left_radius = { name = "border-bottom-left-radius", consumers = "R" }
+border_bottom_right_radius = { name = "border-bottom-right-radius", consumers = "R" }
+border_bottom_style = { name = "border-bottom-style", consumers = "L R" }
+border_bottom_width = { name = "border-bottom-width", consumers = "L R" }
+border_image_outset = { name = "border-image-outset", consumers = "R" }
+border_image_repeat = { name = "border-image-repeat", consumers = "R" }
+border_image_slice = { name = "border-image-slice", consumers = "R" }
+border_image_source = { name = "border-image-source", consumers = "R" }
+border_image_width = { name = "border-image-width", consumers = "R" }
+border_left_color = { name = "border-left-color", consumers = "R" }
+border_left_style = { name = "border-left-style", consumers = "L R" }
+border_left_width = { name = "border-left-width", consumers = "L R" }
+border_right_color = { name = "border-right-color", consumers = "R" }
+border_right_style = { name = "border-right-style", consumers = "L R" }
+border_right_width = { name = "border-right-width", consumers = "L R" }
+border_top_color = { name = "border-top-color", consumers = "R" }
+border_top_left_radius = { name = "border-top-left-radius", consumers = "R" }
+border_top_right_radius = { name = "border-top-right-radius", consumers = "R" }
+border_top_style = { name = "border-top-style", consumers = "L R" }
+border_top_width = { name = "border-top-width", consumers = "L R" }
+bottom = { name = "bottom", consumers = "L R C" }
+box_shadow = { name = "box-shadow", consumers = "R" }
+box_sizing = { name = "box-sizing", consumers = "L" }
+clear = { name = "clear", consumers = "L R" }
+clip_path = { name = "clip-path", consumers = "R" }
+color = { name = "color", consumers = "R C" }
+column_gap = { name = "column-gap", consumers = "L" }
+contain = { name = "contain", consumers = "R" }
+content = { name = "content", consumers = "R" }
+direction = { name = "direction", consumers = "L" }
+display = { name = "display", consumers = "L R C" }
+filter = { name = "filter", consumers = "R" }
+flex_basis = { name = "flex-basis", consumers = "L" }
+flex_direction = { name = "flex-direction", consumers = "L" }
+flex_grow = { name = "flex-grow", consumers = "L" }
+flex_shrink = { name = "flex-shrink", consumers = "L" }
+flex_wrap = { name = "flex-wrap", consumers = "L" }
+float = { name = "float", consumers = "L R" }
+font_family = { name = "font-family", consumers = "R C" }
+font_size = { name = "font-size", consumers = "R C" }
+font_style = { name = "font-style", consumers = "R C" }
+font_weight = { name = "font-weight", consumers = "R C" }
+grid_auto_columns = { name = "grid-auto-columns", consumers = "L" }
+grid_auto_flow = { name = "grid-auto-flow", consumers = "L" }
+grid_auto_rows = { name = "grid-auto-rows", consumers = "L" }
+grid_column_end = { name = "grid-column-end", consumers = "L" }
+grid_column_start = { name = "grid-column-start", consumers = "L" }
+grid_row_end = { name = "grid-row-end", consumers = "L" }
+grid_row_start = { name = "grid-row-start", consumers = "L" }
+grid_template_areas = { name = "grid-template-areas", consumers = "L" }
+grid_template_columns = { name = "grid-template-columns", consumers = "L" }
+grid_template_rows = { name = "grid-template-rows", consumers = "L" }
+height = { name = "height", consumers = "L R C" }
+image_rendering = { name = "image-rendering", consumers = "R" }
+justify_content = { name = "justify-content", consumers = "L" }
+justify_items = { name = "justify-items", consumers = "L" }
+justify_self = { name = "justify-self", consumers = "L" }
+left = { name = "left", consumers = "L R C" }
+letter_spacing = { name = "letter-spacing", consumers = "R" }
+line_height = { name = "line-height", consumers = "R C" }
+list_style_position = { name = "list-style-position", consumers = "R" }
+list_style_type = { name = "list-style-type", consumers = "R" }
+margin_bottom = { name = "margin-bottom", consumers = "L C" }
+margin_left = { name = "margin-left", consumers = "L C" }
+margin_right = { name = "margin-right", consumers = "L C" }
+margin_top = { name = "margin-top", consumers = "L C" }
+max_height = { name = "max-height", consumers = "L" }
+max_width = { name = "max-width", consumers = "L" }
+min_height = { name = "min-height", consumers = "L" }
+min_width = { name = "min-width", consumers = "L" }
+mix_blend_mode = { name = "mix-blend-mode", consumers = "R" }
+object_fit = { name = "object-fit", consumers = "R" }
+opacity = { name = "opacity", consumers = "R C" }
+order = { name = "order", consumers = "R" }
+overflow_x = { name = "overflow-x", consumers = "L R C" }
+overflow_y = { name = "overflow-y", consumers = "L R C" }
+padding_bottom = { name = "padding-bottom", consumers = "L C" }
+padding_left = { name = "padding-left", consumers = "L C" }
+padding_right = { name = "padding-right", consumers = "L C" }
+padding_top = { name = "padding-top", consumers = "L C" }
+perspective = { name = "perspective", consumers = "R" }
+pointer_events = { name = "pointer-events", consumers = "R" }
+position = { name = "position", consumers = "L R C" }
+right = { name = "right", consumers = "L R C" }
+row_gap = { name = "row-gap", consumers = "L" }
+text_align = { name = "text-align", consumers = "L C" }
+text_decoration_color = { name = "text-decoration-color", consumers = "R" }
+text_decoration_line = { name = "text-decoration-line", consumers = "R" }
+text_overflow = { name = "text-overflow", consumers = "R" }
+text_wrap_mode = { name = "text-wrap-mode", consumers = "R" }
+top = { name = "top", consumers = "L R C" }
+transform = { name = "transform", consumers = "R C" }
+transition_behavior = { name = "transition-behavior", consumers = "A" }
+transition_delay = { name = "transition-delay", consumers = "A" }
+transition_duration = { name = "transition-duration", consumers = "A" }
+transition_property = { name = "transition-property", consumers = "A" }
+transition_timing_function = { name = "transition-timing-function", consumers = "A" }
+translate = { name = "translate", consumers = "R" }
+visibility = { name = "visibility", consumers = "C" }
+white_space_collapse = { name = "white-space-collapse", consumers = "R C" }
+width = { name = "width", consumers = "L R C" }
+will_change = { name = "will-change", consumers = "R" }
+word_spacing = { name = "word-spacing", consumers = "R" }
+z_index = { name = "z-index", consumers = "R" }

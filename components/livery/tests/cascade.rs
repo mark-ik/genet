@@ -111,15 +111,12 @@ fn background_color_shorthand_accepts_the_bounded_color_form() {
         block.declarations[0].property.metadata().name,
         "background-color"
     );
-    assert!(matches!(
-        &block.declarations[0].value,
-        livery::cascade::DeclaredValue::Value(PropertyValue::Color(Color::Rgba {
-            red: 0,
-            green: 0,
-            blue: 0,
-            alpha: 255,
-        }))
-    ));
+    let livery::cascade::DeclaredValue::Value(PropertyValue::Color(color)) =
+        &block.declarations[0].value
+    else {
+        panic!("background-color did not parse as a color");
+    };
+    assert_eq!(color.to_srgb8(), Some((0, 0, 0, 255)));
 }
 
 #[test]

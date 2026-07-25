@@ -342,7 +342,7 @@ fn named_container_queries_recascade_from_laid_out_sizes() {
 
     assert_eq!(
         retained.computed_style(wide, "color").as_deref(),
-        Some("#008000")
+        Some("rgb(0, 128, 0)")
     );
     assert_eq!(
         retained.computed_style(wide, "width").as_deref(),
@@ -350,7 +350,7 @@ fn named_container_queries_recascade_from_laid_out_sizes() {
     );
     assert_eq!(
         retained.computed_style(narrow, "color").as_deref(),
-        Some("#ff0000")
+        Some("rgb(255, 0, 0)")
     );
     assert_eq!(
         retained.computed_style(narrow, "width").as_deref(),

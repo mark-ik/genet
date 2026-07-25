@@ -185,7 +185,8 @@ impl FromStr for BackgroundImage {
                 "none, url(<image>), or a two-stop linear-gradient",
             ));
         };
-        let mut colors = arguments.split(',').map(str::trim);
+        let stops = split_top_level_commas(arguments);
+        let mut colors = stops.iter().map(|stop| stop.trim());
         let from = colors
             .next()
             .ok_or_else(|| ParseError::expected("two gradient colors"))?
@@ -199,6 +200,32 @@ impl FromStr for BackgroundImage {
         }
         Ok(Self::LinearGradient { from, to })
     }
+}
+
+/// Split on commas that are not inside parentheses.
+///
+/// A gradient stop list cannot be split with `str::split(',')`: a functional
+/// color carries its own commas, so `linear-gradient(rgb(255, 0, 0), blue)`
+/// would read as four stops. This surfaced when colors started serializing in
+/// the `rgb()` form CSS Color 4 requires, but the bug predates that: an
+/// authored comma-form color inside a gradient never parsed.
+pub(crate) fn split_top_level_commas(input: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (index, ch) in input.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(&input[start..index]);
+                start = index + 1;
+            },
+            _ => {},
+        }
+    }
+    parts.push(&input[start..]);
+    parts
 }
 
 impl fmt::Display for BackgroundImage {

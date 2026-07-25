@@ -35,7 +35,7 @@ fn computed_style_serializes_longhands_and_custom_properties() {
 
     assert_eq!(
         retained.computed_style(card, "color").as_deref(),
-        Some("#ff0000")
+        Some("rgb(255, 0, 0)")
     );
     assert_eq!(
         retained.computed_style(card, "--accent").as_deref(),
@@ -54,7 +54,7 @@ fn computed_style_resolves_without_a_prior_frame() {
     let (retained, card) = retained(".card { color: #00ff00; }");
     assert_eq!(
         retained.computed_style(card, "color").as_deref(),
-        Some("#00ff00")
+        Some("rgb(0, 255, 0)")
     );
 }
 
@@ -84,7 +84,7 @@ fn insert_and_delete_author_rules_restyle_the_retained_document() {
     retained.frame(200, 100).unwrap();
     assert_eq!(
         retained.computed_style(card, "color").as_deref(),
-        Some("#111111")
+        Some("rgb(17, 17, 17)")
     );
 
     // A later same-specificity rule wins the cascade tie.
@@ -95,14 +95,14 @@ fn insert_and_delete_author_rules_restyle_the_retained_document() {
     retained.frame(200, 100).unwrap();
     assert_eq!(
         retained.computed_style(card, "color").as_deref(),
-        Some("#222222")
+        Some("rgb(34, 34, 34)")
     );
 
     retained.delete_author_rule(0, 1).expect("delete");
     retained.frame(200, 100).unwrap();
     assert_eq!(
         retained.computed_style(card, "color").as_deref(),
-        Some("#111111")
+        Some("rgb(17, 17, 17)")
     );
 }
 
@@ -119,7 +119,7 @@ fn inserted_media_rules_respect_the_device() {
     retained.frame(200, 100).unwrap();
     assert_eq!(
         retained.computed_style(card, "color").as_deref(),
-        Some("#111111")
+        Some("rgb(17, 17, 17)")
     );
 
     retained
@@ -132,7 +132,7 @@ fn inserted_media_rules_respect_the_device() {
     retained.frame(200, 100).unwrap();
     assert_eq!(
         retained.computed_style(card, "color").as_deref(),
-        Some("#444444")
+        Some("rgb(68, 68, 68)")
     );
 }
 
@@ -155,6 +155,6 @@ fn rule_mutation_errors_surface_and_leave_the_document_intact() {
     ));
     assert_eq!(
         retained.computed_style(card, "color").as_deref(),
-        Some("#111111")
+        Some("rgb(17, 17, 17)")
     );
 }

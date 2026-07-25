@@ -8,7 +8,7 @@ mod length;
 mod property;
 mod transform_matrix;
 
-pub use color::Color;
+pub use color::{Color, ColorSpace, HueInterpolation, SystemColor};
 pub use length::{
     CalcLengthPercentage, ContainerAxisSize, Length, LengthPercentage, LengthUnit,
     MathLengthPercentage, RelativeLengthEnvironment, TreeCounts,

@@ -97,13 +97,13 @@ fn class_snapshot_restyles_one_branch_and_preserves_sibling_matching() {
         session
             .styles()
             .computed_style(by_id(&dom, "leaf"), "color"),
-        Some("#0000ff".to_string())
+        Some("rgb(0, 0, 255)".to_string())
     );
     assert_eq!(
         session
             .styles()
             .computed_style(by_id(&dom, "peer"), "color"),
-        Some("#008000".to_string())
+        Some("rgb(0, 128, 0)".to_string())
     );
     assert_matches_full(&dom, &session, &styles, &states);
 }
@@ -134,7 +134,7 @@ fn interaction_state_restyles_only_the_stateful_subtree() {
         session
             .styles()
             .computed_style(by_id(&dom, "leaf"), "color"),
-        Some("#0000ff".to_string())
+        Some("rgb(0, 0, 255)".to_string())
     );
     assert_matches_full(&dom, &session, &styles, &states);
 }
@@ -166,11 +166,11 @@ fn structural_selector_restyles_its_parent_after_insert_and_remove() {
     assert!(inserted.restyled_elements < inserted.total_elements);
     assert_eq!(
         session.styles().computed_style(first, "color"),
-        Some("CanvasText".to_string())
+        Some("canvastext".to_string())
     );
     assert_eq!(
         session.styles().computed_style(second, "color"),
-        Some("#0000ff".to_string())
+        Some("rgb(0, 0, 255)".to_string())
     );
     assert_matches_full(&dom, &session, &styles, &states);
 
@@ -184,7 +184,7 @@ fn structural_selector_restyles_its_parent_after_insert_and_remove() {
     assert!(removed.restyled_elements < removed.total_elements);
     assert_eq!(
         session.styles().computed_style(first, "color"),
-        Some("#0000ff".to_string())
+        Some("rgb(0, 0, 255)".to_string())
     );
     assert_matches_full(&dom, &session, &styles, &states);
 }
@@ -212,6 +212,6 @@ fn stylesheet_generation_makes_document_wide_work_explicit() {
         session
             .styles()
             .computed_style(by_id(&dom, "right"), "color"),
-        Some("#008000".to_string())
+        Some("rgb(0, 128, 0)".to_string())
     );
 }

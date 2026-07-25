@@ -13,6 +13,65 @@ Regenerate after fork realignments or livery property additions.
 | of which livery-local (outside the servo lane) | 2 | 0 |
 | remaining (known, unimplemented) | 162 | 49 |
 
+## The consumed-set bar (cutover plan F0)
+
+The property space above is the whole servo lane. F0 of the
+[cutover plan](../../docs/2026-07-24_livery_fullweb_cutover_and_servo_retirement_plan.md)
+bars on a much smaller set: the 126 longhands the current Genet product
+path actually reads, per `consumed_longhands.toml`. That is the number
+the default flip waits on, so it is reported separately here.
+
+| consumed-set parity | longhands |
+| --- | --- |
+| consumed contract (the F0 bar) | 126 |
+| implemented | 88 |
+| **remaining** | **38** |
+
+`tests/consumed_set.rs` asserts this intersection as a ratchet and
+needs no fork checkout, so the receipt outlives the fork's archival
+at F5. This table is the readable half of the same check.
+
+Remaining consumed longhands, the F0 worklist:
+
+- `align-self`
+- `animation-delay`
+- `animation-direction`
+- `animation-fill-mode`
+- `animation-iteration-count`
+- `animation-play-state`
+- `background-attachment`
+- `background-clip`
+- `background-origin`
+- `background-position-x`
+- `background-position-y`
+- `background-size`
+- `border-image-outset`
+- `border-image-repeat`
+- `border-image-slice`
+- `border-image-source`
+- `border-image-width`
+- `clear`
+- `clip-path`
+- `contain`
+- `content`
+- `direction`
+- `filter`
+- `grid-auto-columns`
+- `grid-auto-rows`
+- `grid-template-areas`
+- `image-rendering`
+- `justify-items`
+- `justify-self`
+- `list-style-position`
+- `mix-blend-mode`
+- `object-fit`
+- `perspective`
+- `text-overflow`
+- `transition-behavior`
+- `transition-timing-function`
+- `translate`
+- `will-change`
+
 Livery-local names are livery catalog entries with no same-name servo-lane
 longhand or shorthand (bounded simplifications such as a single `overflow`
 longhand). They are not wrong; they are seams to reconcile as their

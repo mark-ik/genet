@@ -203,6 +203,29 @@ fn main() {
         })
         .collect();
 
+    // The Genet consumed-longhand contract (the cutover plan's F0 bar). Read
+    // from livery's checked-in copy, not from the fork: F0's receipt has to
+    // survive the fork archiving at F5. `tests/consumed_set.rs` asserts the
+    // same intersection; this half only reports it.
+    let consumed_path = livery_dir.join("consumed_longhands.toml");
+    let consumed_names: BTreeSet<String> = std::fs::read_to_string(&consumed_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", consumed_path.display()))
+        .parse::<toml::Table>()
+        .unwrap_or_else(|error| panic!("parse {}: {error}", consumed_path.display()))
+        .get("longhands")
+        .and_then(|value| value.as_table())
+        .expect("consumed_longhands.toml has a [longhands] table")
+        .values()
+        .filter_map(|entry| entry.get("name").and_then(|name| name.as_str()))
+        .map(str::to_owned)
+        .collect();
+    let consumed_missing: Vec<&String> = consumed_names
+        .iter()
+        .filter(|name| {
+            !implemented_longhands.contains(*name) && !implemented_shorthands.contains(*name)
+        })
+        .collect();
+
     let servo_longhand_names: BTreeSet<&str> =
         longhands.iter().map(|longhand| longhand.name.as_str()).collect();
     let servo_shorthand_names: BTreeSet<&str> =
@@ -328,7 +351,21 @@ fn main() {
          | servo-lane destination | {} | {} |\n\
          | implemented in livery | {} | {} |\n\
          | of which livery-local (outside the servo lane) | {} | {} |\n\
-         | remaining (known, unimplemented) | {} | {} |\n\n",
+         | remaining (known, unimplemented) | {} | {} |\n\n\
+         ## The consumed-set bar (cutover plan F0)\n\n\
+         The property space above is the whole servo lane. F0 of the\n\
+         [cutover plan](../../docs/2026-07-24_livery_fullweb_cutover_and_servo_retirement_plan.md)\n\
+         bars on a much smaller set: the {} longhands the current Genet product\n\
+         path actually reads, per `consumed_longhands.toml`. That is the number\n\
+         the default flip waits on, so it is reported separately here.\n\n\
+         | consumed-set parity | longhands |\n\
+         | --- | --- |\n\
+         | consumed contract (the F0 bar) | {} |\n\
+         | implemented | {} |\n\
+         | **remaining** | **{}** |\n\n\
+         `tests/consumed_set.rs` asserts this intersection as a ratchet and\n\
+         needs no fork checkout, so the receipt outlives the fork's archival\n\
+         at F5. This table is the readable half of the same check.\n\n",
         stylo_longhands.len(),
         stylo_shorthands.len(),
         longhands.len(),
@@ -339,7 +376,18 @@ fn main() {
         livery_local_shorthands.len(),
         unimplemented_longhands.len(),
         unimplemented_shorthands.len(),
+        consumed_names.len(),
+        consumed_names.len(),
+        consumed_names.len() - consumed_missing.len(),
+        consumed_missing.len(),
     ));
+    if !consumed_missing.is_empty() {
+        census.push_str("Remaining consumed longhands, the F0 worklist:\n\n");
+        for name in &consumed_missing {
+            census.push_str(&format!("- `{name}`\n"));
+        }
+        census.push('\n');
+    }
     census.push_str(
         "Livery-local names are livery catalog entries with no same-name servo-lane\n\
          longhand or shorthand (bounded simplifications such as a single `overflow`\n\

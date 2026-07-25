@@ -393,5 +393,5 @@ fn rules_join_selector_media_and_cascade_ordering() {
 
     let plain = cascade_rules(None, &plain, &Device::screen(800.0, 600.0), &rules);
     assert_eq!(plain.color, "#111111".parse::<Color>().unwrap());
-    assert_eq!(plain.background_color, Color::Transparent);
+    assert_eq!(plain.background_color, Color::TRANSPARENT);
 }

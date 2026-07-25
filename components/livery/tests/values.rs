@@ -287,7 +287,7 @@ fn background_image_interpolation_preserves_gradient_stops() {
         .expect("to image");
     assert_eq!(
         from.interpolate(&to, 0.5).to_string(),
-        "linear-gradient(#ff8080, #000080)"
+        "linear-gradient(rgb(255, 128, 128), rgb(0, 0, 128))"
     );
 }
 
@@ -319,7 +319,7 @@ fn box_shadow_interpolation_preserves_matching_shape() {
         .expect("to shadow");
     assert_eq!(
         from.interpolate(&to, 0.5).to_string(),
-        "10px 2px 5px 0 #800080"
+        "10px 2px 5px 0 rgb(128, 0, 128)"
     );
 }
 
@@ -764,7 +764,15 @@ fn invalid_seed_values_are_rejected() {
     assert!("-1rem".parse::<Padding>().is_err());
     assert!("1100".parse::<FontWeight>().is_err());
     assert!("calc(100% 1px)".parse::<LengthPercentage>().is_err());
-    assert!("rgb(300, 0, 0)".parse::<Color>().is_err());
+    // Not here: `rgb(300, 0, 0)` is valid CSS. CSS Color 4 clamps
+    // out-of-range channels rather than rejecting them, so it means
+    // `rgb(255, 0, 0)`. Livery rejected it before the F0 color slice.
+    assert_eq!(
+        "rgb(300, 0, 0)".parse::<Color>().unwrap().to_srgb8(),
+        Some((255, 0, 0, 255))
+    );
+    assert!("rgb(0, 0)".parse::<Color>().is_err());
+    assert!("rgb(none, 0, 0)".parse::<Color>().is_err());
     assert!("all, color".parse::<TransitionProperty>().is_err());
     assert!("opacity, opacity".parse::<TransitionProperty>().is_err());
     assert!("NaN".parse::<Opacity>().is_err());
