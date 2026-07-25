@@ -29,7 +29,8 @@ helpers for agent-heavy development:
 >
 > **Update 2026-07-24:** fully superseded, on both points. `weave` now
 > covers every repo in `repos/` (the 2026-05-24 rollout plus isometry,
-> merecat, merely-made.github, smolweb, wavicle, wired the same day), and the
+> merecat, merely-made.github, smolweb, wavicle, wired the same day, plus
+> retinue once it was cloned later that day), and the
 > merge-driver definition moved from per-repo local `.git/config` to `git
 > config --global merge.weave.driver`, closing the fresh-clone gap the
 > original rollout still had. `sem` moved off the ad-hoc `npx` posture too:
