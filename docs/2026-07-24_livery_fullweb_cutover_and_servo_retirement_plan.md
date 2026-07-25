@@ -50,6 +50,19 @@ impact. proceed." The apprehension is the right instinct and the sequencing
 answers it: F3's ledger measures the radius before F4 flips anything, and
 nothing is deleted until F5/F6, after the receipts exist.
 
+**Cost basis revised the same day by F3b.** The lane ruling was taken partly
+on the F3 testharness reading (Livery ahead everywhere, nothing structural
+left). The reftest lane does not support that: Livery trails by 241 files and
+**1,055 files would regress** if the default flipped today. The direction
+still holds — re-seam would keep genet-layout, which *is* the Servo layout
+cone the "no more servo-*" ruling exists to remove, so re-seaming buys layout
+fidelity by preserving exactly what F5/F6 are meant to delete. What changed is
+price: the lane owes real layout and paint work (flexbox and grid fidelity,
+background paint, multicol from nothing) before F4, not just grammar slices.
+Mark should see the F3b table before more is spent either way; if the answer
+is that the price is too high, the fallback is the one already named — lift
+the failing subsystems out of genet-layout into the lane — not a re-seam.
+
 ## Stages, each with a receipt
 
 - **F0 - consumed-set parity.** Close the 38 consumed longhands Livery does
@@ -159,17 +172,55 @@ nothing is deleted until F5/F6, after the receipts exist.
   is integration, not matching. Re-running it with no timeout; fold the
   result in when it lands.
 
-- **F3b - the reftest lane (the gate F3 does not close).** Same directory
-  list, `genet-wpt reftest <dir> --renderer {stylo,livery}
-  --write-expectations`, which is already wired for both renderers
-  (`render_html_livery`) and needs a GPU. This is where layout and paint
-  fidelity actually live, and where the F3 result could invert: only two
-  reftest baselines exist today (css_mediaqueries, css_position), both
-  Stylo-era. Priority directories are exactly the ones testharness could
-  not see: CSS2, css-tables, css-multicol, css-flexbox, css-grid,
-  css-position, css-backgrounds, css-borders, css-writing-modes. Receipt:
-  a reftest ledger table in the same shape as F3's, and every Livery-losing
-  cluster named. **F4 may not claim parity until this exists.**
+- **F3b - the reftest lane. RUN 2026-07-24. THE RESULT INVERTS F3.**
+  Nine layout-heavy directories, both renderers, `genet-wpt reftest`.
+  Reproduce with `docs/tools/ledger_reftest.sh` + `ledger_reftest_diff.py`.
+
+  | directory | stylo | livery | delta | S-only | L-only |
+  |---|---:|---:|---:|---:|---:|
+  | css-flexbox | 469 | 342 | **-127** | 196 | 69 |
+  | css-backgrounds | 321 | 218 | **-103** | 127 | 24 |
+  | css-grid | 470 | 371 | **-99** | 190 | 91 |
+  | css-position | 62 | 43 | -19 | 23 | 4 |
+  | css-writing-modes | 231 | 222 | -9 | 35 | 26 |
+  | css-multicol | 106 | 102 | -4 | 15 | 11 |
+  | css-tables | 60 | 62 | +2 | 14 | 16 |
+  | css-borders | 25 | 28 | +3 | 6 | 9 |
+  | CSS2 | 4149 | 4264 | +115 | 449 | 564 |
+  | **TOTAL** | **5893** | **5652** | **-241** | **1055** | **814** |
+
+  **The gate reads: not ready.** On layout and paint Livery is 241 files
+  behind, and the net figure understates the churn. The engines disagree on
+  ~1,869 files: **1,055 that Stylo renders and Livery does not** (the real
+  F4 regression count) against 814 the other way. CSS2's +115 is the clearest
+  trap — a healthy-looking net that hides 449 files which would regress.
+  **Net deltas are not the measure here; `S-only` is.**
+
+  This directly contradicts the F3 reading. Testharness put Livery +3,499 and
+  concluded "nothing structural remains"; that conclusion was scoped to
+  parsing, computed values, and CSSOM, and it does not survive contact with
+  layout. **css-flexbox is the cautionary case: +237 on testharness, -127 on
+  reftest.** Parsing every flex longhand correctly is not laying flexbox out
+  correctly.
+
+  Named clusters, in gate order:
+  1. **Flexbox and grid fidelity** (386 files). Taffy implements both
+     algorithms, so this is integration and edge-case fidelity, not missing
+     capability — the most tractable large cluster.
+  2. **CSS2 core** (449 files). The broad fullweb body; needs its own
+     sub-diff before it can be sliced, since it spans floats, inline layout,
+     tables, and positioning.
+  3. **Background paint** (127 files): sizing, positioning, repeat, and
+     layering fidelity in the neutral paint path.
+  4. **Multicol** (15 files, but **structurally absent**): `column-count`,
+     `column-width`, and `column-span` are all `[[unimplemented]]`, and taffy
+     has no multi-column algorithm. This one is build-or-knock-out, not a
+     fidelity pass — the only cluster in either ledger that is genuinely
+     structural.
+  5. Writing-modes (35), position (23), tables (14), borders (6): small tails.
+
+  **F4 remains blocked**, and the reopened question is D0's cost basis, not
+  its direction — see the D0 note above.
 - **F4 - the default flip.** Today the renderer switch exists only in
   genet-wpt's runner. Add the product-facing selection at the profile tier
   (genet-host-api / genet-documents): the fullweb profile routes to Livery by
