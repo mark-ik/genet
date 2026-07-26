@@ -48,6 +48,28 @@ editing was the one ruled capability no plan carried.
 - **T4. First consumer: cambium `text_input`.** The control rides the core;
   selection, IME, and undo work in a cambium view. This is the consumer that
   makes the toolkit credible.
+
+  **A constraint from a real app, recorded 2026-07-26.** Isometry tried to adopt
+  `caret_text_field` and could not, for a reason T4 should design against rather
+  than discover: its winit host handles every key itself and calls
+  `runner.dispatch_key` nowhere, so no key reaches a DOM key handler at all. A
+  control whose mechanism is `on_key` on an element is therefore inert in that
+  host, and Isometry carries three bespoke key-capture lanes (a `>` command
+  line, a whisper composer, a compendium filter) precisely because of it. So
+  "the control rides the core" is not sufficient for an app consumer; there is a
+  host-side routing question (who owns a keystroke when a field is focused, and
+  how an app's own shortcuts keep working) that T4 either answers or explicitly
+  leaves to hosts. Isometry is downstream of T4 rather than a fourth direct
+  consumer of the core, since it consumes cambium — but it is the case that shows
+  T4's seam is not only inside the view tree. Its blocker is recorded in
+  `repos/isometry/design_docs/2026-07-20_perf_and_cambification_plan.md`.
+
+  Second-order: the natural translation helper, `cambium-winit`'s
+  `key_event_from_winit`, sits in a crate cargo cannot publish (bare `path` deps
+  on `genet-layout`, `genet-winit-host`, `genet-scripted-dom`, `layout-dom-api`;
+  the 0.1.0 on crates.io is stale). Any app pinning published catalog API cannot
+  reach it, so T4's story for a registry consumer depends on `genet-layout`'s
+  standalone release too.
 - **T5. Fullweb forms.** `input` and `textarea` route through the same core
   in the document lane. Sequenced with the cutover's needs, not ahead of
   them.
@@ -70,3 +92,9 @@ work lives in the knot port plan, not here.
 ## Progress
 
 - **2026-07-25.** Founded, phases sketched, queued behind livery. No code.
+- **2026-07-26.** A fourth would-be consumer surfaced and was turned away on
+  purpose. Isometry's obviation lane reached `caret_text_field`, found it
+  unadoptable, and stopped rather than hand-rolling around it; the host
+  key-routing constraint that blocked it is now recorded under T4, where it is
+  evidence for T0's IME/host inventory instead of a surprise later. Nothing here
+  started; the queue position is unchanged.
