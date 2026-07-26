@@ -106,3 +106,58 @@ fn preserved_whitespace_still_generates_its_box() {
         "preserved whitespace must still occupy a grid cell",
     );
 }
+
+/// `&nbsp;` is not collapsible white space, so it generates a line box.
+///
+/// Rust's `str::trim` treats U+00A0 as whitespace; CSS does not. Trimming it
+/// away deletes the line a test built with `&nbsp;` was relying on, which is
+/// how 143 CSS2 reftests broke on 2026-07-26 before the rule was narrowed to
+/// css-text-3's actual set.
+#[test]
+fn a_no_break_space_still_generates_a_line_box() {
+    let css = "#box { display: grid; grid-template-columns: 100px; } \
+               #a { background: red; }";
+    let with_nbsp = "<html><body><div id=\"box\">\
+                     <div id=\"a\">\u{a0}</div></div></body></html>";
+    let with_space = "<html><body><div id=\"box\">\
+                      <div id=\"a\"> </div></div></body></html>";
+    let heights = |html: &str| {
+        let document = StaticDocument::parse(html);
+        let styles = resolve_styles(
+            &document,
+            &StyleSet::cambium(&[css]),
+            &Device::screen(800.0, 600.0),
+            &InteractionStates::default(),
+        );
+        let fragments = layout(&document, &styles, 800.0, 600.0).expect("layout");
+        let id = find(&document, document.document(), "a").expect("a");
+        fragments.get(id).copied().unwrap_or_default().height
+    };
+    assert!(
+        heights(with_nbsp) > 0.0,
+        "a no-break space must generate a line box",
+    );
+    assert_eq!(
+        heights(with_space),
+        0.0,
+        "an ordinary space between blocks collapses away",
+    );
+}
+
+/// Block containers keep their current anonymous boxes.
+///
+/// The blank-run rule is scoped to flex and grid on purpose: the same change
+/// in block flow measured -131 files on CSS2 (2026-07-26), because the extra
+/// boxes are load-bearing for the current table and inline-formatting
+/// emulation. This pins the scope so widening it is a deliberate act with a
+/// measurement behind it, not an accident.
+#[test]
+fn block_containers_are_out_of_scope_for_now() {
+    let css = "#box { display: block; width: 200px; }";
+    let spaced = origins(SPACED, css, &IDS);
+    let tight = origins(TIGHT, css, &IDS);
+    assert_eq!(
+        spaced, tight,
+        "block flow stacks its children the same either way",
+    );
+}

@@ -844,18 +844,32 @@ where
 
     /// Whether a pending inline run generates no box at all.
     ///
-    /// A run of collapsible whitespace sitting between two block boxes is
-    /// removed by white-space processing, so it must not become an anonymous
-    /// box. In block flow an empty box is merely harmless, but a grid or flex
-    /// container turns every in-flow child into an item, so a stray
-    /// whitespace box consumes a grid cell and shifts every following item by
-    /// one. The preliminary pass already drops these text nodes; this keeps
-    /// the text-measuring pass agreeing with it.
+    /// css-flexbox section 4 and css-grid section 6 both say a run of
+    /// collapsible white space between two items generates no anonymous item.
+    /// That matters because a flex or grid container turns every in-flow
+    /// child into an item, so the ordinary newline-and-indent between two
+    /// items would otherwise consume a cell and shift every following item by
+    /// one position.
+    ///
+    /// **Deliberately scoped to those two container types.** White-space
+    /// processing removes the run in block flow too, and the preliminary pass
+    /// already drops it there, but the text-measuring pass's extra boxes are
+    /// load-bearing for the current table and inline-formatting emulation:
+    /// removing them there measured -131 files on CSS2 and -18 on css-tables
+    /// against +62 on css-grid (2026-07-26). Widening this predicate is the
+    /// right end state, and it is gated on that emulation being fixed first,
+    /// not on the rule being wrong.
     fn inline_group_is_blank(
         &self,
         roots: &[D::NodeId],
         parent_style: &ComputedValues,
     ) -> bool {
+        if !matches!(
+            parent_style.display,
+            CssDisplay::Flex | CssDisplay::Grid
+        ) {
+            return roots.is_empty();
+        }
         if matches!(
             parent_style.white_space_collapse,
             WhiteSpaceCollapse::Preserve | WhiteSpaceCollapse::BreakSpaces
@@ -867,7 +881,7 @@ where
                 && self
                     .dom
                     .text(*root)
-                    .is_some_and(|text| text.trim().is_empty())
+                    .is_some_and(is_collapsible_whitespace)
         })
     }
 
@@ -1031,7 +1045,9 @@ where
                         WhiteSpaceCollapse::Preserve | WhiteSpaceCollapse::BreakSpaces
                     )
                 });
-                if text.is_empty() || (!preserves_whitespace && text.trim().is_empty()) {
+                if text.is_empty()
+                    || (!preserves_whitespace && is_collapsible_whitespace(text))
+                {
                     return Ok(None);
                 }
                 let font_size = parent_font_size;
@@ -1134,6 +1150,19 @@ where
         collect_inline_fragments(tree, sources, child, origin, fragments)?;
     }
     Ok(())
+}
+
+/// Whether every character is CSS collapsible white space.
+///
+/// CSS collapsible white space is exactly space, tab, line feed, carriage
+/// return, and form feed (css-text-3 section 3). It is deliberately *not*
+/// Rust's `char::is_whitespace`, which also matches U+00A0 no-break space
+/// and the other Unicode spaces. Those generate content: `&nbsp;` is the
+/// standard way a test forces a line box to exist, so trimming it away
+/// silently deletes the line.
+fn is_collapsible_whitespace(text: &str) -> bool {
+    text.chars()
+        .all(|ch| matches!(ch, ' ' | '\t' | '\n' | '\r' | '\u{c}'))
 }
 
 fn is_inline<D>(dom: &D, styles: &StylePlane<D::NodeId>, id: D::NodeId) -> bool
@@ -1619,16 +1648,11 @@ fn to_taffy_style(computed: &ComputedValues, font_size: f32) -> Style {
         },
         align_items: Some(align_items(computed.align_items)),
         // `auto` on the self properties defers to the parent's items value,
-        // which is taffy's `None`.
-        align_self: match computed.align_self {
-            CssAlignment::Auto => None,
-            value => Some(align_items(value)),
-        },
+        // which is taffy's `None`. A content-keyword size in that axis
+        // additionally suppresses stretch (see `suppresses_stretch`).
+        align_self: self_alignment(computed.align_self, computed.height),
         justify_items: Some(align_items(computed.justify_items)),
-        justify_self: match computed.justify_self {
-            CssAlignment::Auto => None,
-            value => Some(align_items(value)),
-        },
+        justify_self: self_alignment(computed.justify_self, computed.width),
         align_content: Some(align_content(computed.align_content)),
         justify_content: Some(justify_content(computed.justify_content)),
         grid_template_columns: grid_template(&computed.grid_template_columns, font_size),
@@ -1678,6 +1702,37 @@ fn grid_template(value: &CssGridTemplate, em: f32) -> Vec<GridTemplateComponent<
             })
             .collect(),
     }
+}
+
+/// The taffy self-alignment for one axis.
+///
+/// `auto` normally defers to the parent's items value, which taffy spells
+/// `None`. The exception is a size that suppresses stretch: css-align applies
+/// `stretch` only when the item's size in that axis computes to `auto`, and
+/// Livery maps the content keywords onto `Dimension::auto()` because taffy's
+/// safe `Dimension` constructors cannot express them. Without this the item
+/// would inherit the container's `stretch` and fill its grid area instead of
+/// taking its content size. Resolving to `Start` here is the fallback
+/// alignment stretch degrades to.
+fn self_alignment(value: CssAlignment, size: CssSize) -> Option<AlignItems> {
+    match value {
+        CssAlignment::Auto if suppresses_stretch(size) => {
+            Some(align_items(CssAlignment::Start))
+        },
+        CssAlignment::Auto => None,
+        value => Some(align_items(value)),
+    }
+}
+
+/// Whether a size is not `auto` but reaches taffy as `auto`.
+///
+/// An explicit length or percentage already defeats stretch on its own, since
+/// the definite size wins. Only the content keywords need saying out loud.
+fn suppresses_stretch(size: CssSize) -> bool {
+    matches!(
+        size,
+        CssSize::MinContent | CssSize::MaxContent | CssSize::FitContent(_)
+    )
 }
 
 fn align_items(value: CssAlignment) -> AlignItems {
