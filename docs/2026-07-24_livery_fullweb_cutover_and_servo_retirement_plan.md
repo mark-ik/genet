@@ -739,10 +739,59 @@ to that sequencing even though it is technically independent today.
 
 **New work the sub-diff exposed, in rough value order:**
 
-- **Absolutely positioned grid children** (about 41 files: css-grid's
-  `abspos` bucket is 43 S-only against 7 L-only, and by theme it is
-  `positioned-grid` 24 plus `orthogonal-positioned` 17). The densest single
-  feature in the 386, and coherent rather than scattered.
+- ~~**Absolutely positioned grid children**~~ **TAKEN 2026-07-26, and the
+  diagnosis was better than this plan's.** The cluster was never layout
+  work: taffy 0.12 already implements grid-area containing blocks for
+  abspos children, and the failures were **grammar**. The
+  `grid-row`/`grid-column`/`grid-area` shorthands were unimplemented, so
+  placements never reached taffy and every abspos item fell to the
+  padding-box fallback. The reference pages compounded it: they use the
+  `grid` and `place-items` shorthands, also unimplemented, so many old
+  "passes" were test and reference wrong together. Landed: the three
+  placement shorthands, `grid`/`grid-template` (template form; the
+  auto-flow forms reject rather than mis-implement), `place-items`, and the
+  `align-self`/`justify-items`/`justify-self` longhands with
+  `Alignment::Auto` deferring to the parent. F0's ratchet advanced 38 to 35.
+
+  **The residual then turned out to be a second, larger bug: whitespace
+  between block siblings generated an anonymous box.** White-space
+  processing removes a collapsible run sitting between two block boxes, and
+  Livery's preliminary layout pass did drop it; the text-measuring pass did
+  not. In block flow the extra empty box is invisible, which is why it
+  survived this long. In a grid or flex container every in-flow child
+  becomes an item, so the newline-and-indent between two items consumed a
+  cell and shifted every following item by one. The flagship test was
+  rendering its *reference* wrong, not its test: four items landed in
+  column 2 of rows 1-4 instead of filling the 2x2. Fixed by giving the text
+  pass the preliminary pass's blank-run rule;
+  `components/genet-livery/tests/anonymous_boxes.rs` guards it for grid and
+  flex, including that `white-space: pre` still generates its box.
+
+  **The receipt, the largest single reftest movement so far** (data at
+  `wpt-ledger/2026-07-26_grid-*`):
+
+  | css-grid (livery) | files | S-only vs Stylo |
+  |---|---:|---:|
+  | 2026-07-24 baseline | 371 | 190 |
+  | after the grammar slice | 375 | 169 |
+  | **after the blank-run fix** | **433** | **111** |
+
+  Stylo is 470 on the same corpus, so the gap closes from 99 files to 37,
+  and the flagship reftest is pixel-identical (diff 0, maxδ 0). The plan's
+  estimate of "41 files behind one feature" was right in shape; the feature
+  was grammar, and behind it sat an engine bug worth twice as much.
+
+  **32 regressions sit inside the churn**, 23 from the grammar slice and 9
+  from the blank-run fix, all of them defects the phantom boxes had been
+  hiding rather than new breakage. The two named groups:
+
+  - `grid-item-non-auto-height-stretch-001..004`: an item whose block-size
+    is not `auto` (`height: max-content`) is still stretched by the default
+    `align-items: stretch`, which css-align allows only when the size
+    computes to `auto`. `max-content` parses correctly, so this is
+    integration, not grammar.
+  - `order/column-order-property-auto-placement-001..005`: the `order`
+    property's effect on auto-placement.
 - **`table-layout: fixed`** (about 69 files across CSS2/tables and
   css-tables, 38 of them one test family). The densest capability gap in
   CSS2, and one of the two subsystems D0 named as a lift candidate.
@@ -752,9 +801,14 @@ to that sequencing even though it is technically independent today.
   pattern) and the **replaced-element sizing family** in normal-flow (about
   26 files). The latter is D0's other named lift candidate, so measure
   before deciding whether to lift or fix in place.
-- **css-flexbox** last, deliberately. Its 196 files are 123 buckets with no
-  item above 5.1%, so it is grind with no leverage; every other item above
-  buys more per unit of work.
+- **css-flexbox** was ranked last deliberately (196 files over 123 buckets,
+  none above 5.1%), but **re-measure before believing that**: the
+  2026-07-26 blank-run fix was in shared inline construction and moved
+  css-grid by 62 files, so flexbox's tail may already have shortened. A
+  read costs one reftest run and no code.
+- **Grid self-alignment against non-auto sizes**, and **`order` with
+  auto-placement**: the nine defects the blank-run fix exposed, named
+  above.
 
 **Also newly named, from the css-color receipt:**
 

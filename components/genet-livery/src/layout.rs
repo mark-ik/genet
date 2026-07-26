@@ -820,19 +820,19 @@ where
                 inline_group.push(child);
                 continue;
             }
-            if !inline_group.is_empty() {
+            if !self.inline_group_is_blank(&inline_group, parent_style) {
                 children.push(self.build_inline_group(
                     &inline_group,
                     parent_style,
                     parent_font_size,
                 )?);
-                inline_group.clear();
             }
+            inline_group.clear();
             if let Some(node) = self.build_node(child, Some(parent_style), parent_font_size)? {
                 children.push(node);
             }
         }
-        if !inline_group.is_empty() {
+        if !self.inline_group_is_blank(&inline_group, parent_style) {
             children.push(self.build_inline_group(
                 &inline_group,
                 parent_style,
@@ -840,6 +840,35 @@ where
             )?);
         }
         Ok(children)
+    }
+
+    /// Whether a pending inline run generates no box at all.
+    ///
+    /// A run of collapsible whitespace sitting between two block boxes is
+    /// removed by white-space processing, so it must not become an anonymous
+    /// box. In block flow an empty box is merely harmless, but a grid or flex
+    /// container turns every in-flow child into an item, so a stray
+    /// whitespace box consumes a grid cell and shifts every following item by
+    /// one. The preliminary pass already drops these text nodes; this keeps
+    /// the text-measuring pass agreeing with it.
+    fn inline_group_is_blank(
+        &self,
+        roots: &[D::NodeId],
+        parent_style: &ComputedValues,
+    ) -> bool {
+        if matches!(
+            parent_style.white_space_collapse,
+            WhiteSpaceCollapse::Preserve | WhiteSpaceCollapse::BreakSpaces
+        ) {
+            return roots.is_empty();
+        }
+        roots.iter().all(|root| {
+            self.dom.kind(*root) == NodeKind::Text
+                && self
+                    .dom
+                    .text(*root)
+                    .is_some_and(|text| text.trim().is_empty())
+        })
     }
 
     fn build_inline_group(
