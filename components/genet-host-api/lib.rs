@@ -6,7 +6,7 @@
 //!
 //! Hosts keep browser chrome, platform integration, protocol UI, and automation
 //! routing distinct from whichever Genet engine profile they embed. Pelt is the
-//! reference host, while Mere and Merecat consume the same tile vocabulary.
+//! reference host, while Mere and Turnstone consume the same tile vocabulary.
 
 use std::fmt;
 use std::str::FromStr;

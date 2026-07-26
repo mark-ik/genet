@@ -1,10 +1,10 @@
 # Grand audit: genet + netrender (WPT, capabilities, wasm/async, architecture)
 
 **Date:** 2026-06-24 (status refresh 2026-07-16)
-**Status:** audit (code-grounded). Historical WebGL wording below is refreshed in this section; the remaining WebGL work is host extraction and composition for Merecat.
+**Status:** audit (code-grounded). Historical WebGL wording below is refreshed in this section; the remaining WebGL work is host extraction and composition for Turnstone.
 **Method:** an 18-agent fan-out read the actual code (not just docs) and cited everything at file:line; the WPT baselines were re-measured against the repo, an adversarial pass verified each candidate lever, and a completeness critic checked the drafts. Numbers below are from the repo's logs/docs or an agent re-measure, attributed inline.
 **Scope:** genet (engine), netrender (renderer), the current transitional Mere host
-checkout (`repos/mere/crates/meerkat`, slated for extraction into Merecat), and
+checkout (`repos/mere/crates/meerkat`, slated for extraction into Turnstone), and
 the sibling crates errand / netfetcher / tincture / wgpu-{graft,scry,weld}.
 **Headline correction:** the conformance baselines in circulation are stale by 5x to 40x. Floats is 42/197 not 7/197, css-backgrounds 334/1325 not 15/1326, normal-flow 462/1044 not 1/1045. DOM core is panic-free on both Nova and Boa. genet is well past the dangerous early phase; the remaining distance is dominated by **harness plumbing**, then the **CSS layout long tail**, in that order.
 
@@ -25,7 +25,7 @@ Genet-side seam is integrated:
   is green through both the Boa and Vano-backed `nova_vm` WPT harness paths and
   the WGPU adapter.
 
-The remaining boundary is the Merecat extraction host: construct the WebGL
+The remaining boundary is the Turnstone extraction host: construct the WebGL
 handler from its shared WGPU device, register its canvas texture with the
 compositor, and route `RenderedFrame.external_textures` into the composition
 path. The current Meerkat checkout is useful as a donor seam, not the target
@@ -56,7 +56,7 @@ Ranked by scoreboard impact, harness-gating first. Two candidate levers were re-
 4. **Per-tag HTML interface hierarchy + interface table (ENGINE/DOM, medium mechanism / incremental payload).** `createElement('button')` returns a generic HTMLElement; only HTMLCanvasElement of ~100 interfaces is wired, and the whole DOM surface is built from a ~900-line JS bootstrap string (`components/script-runtime-api/dom.rs:1066`, `:1989-2015`). Build a declarative interface table to hang the ~100 prototypes + reflected IDL attributes on the existing chain. Honest hedge: adding HTMLElement alone did not fix the dom/nodes count-tail, so this is breadth across many small tests, not one jump; prerequisite for moving custom-elements off 3/2807. *(Plan: HTML interface table.)*
 5. **Re-run dom/+fetch corpora, publish aggregates, add a checked-in expectations/regression guard (HARNESS, small-to-medium).** Levers were being sized against numbers that no longer exist. Re-scoring restores prioritization. Updated 2026-06-30: the default hostable `testharness` lane now has checked Boa baselines for full `dom`, focused `dom/abort`, focused `dom/nodes`, and `html/webappapis/timers`, enforced by `support/wpt/check-testharness-baselines.ps1` and `.github/workflows/wpt-harness.yml`. Fetch remains a separate server-mode/netfetch guard because it needs `wpt serve`, `--features netfetch`, and local host mapping. *(Plan: WPT harness exactness.)*
 
-## 3. Five best next moves for the Merecat extraction
+## 3. Five best next moves for the Turnstone extraction
 
 Breadth-first. render.rs is 2001 LOC, input.rs 2405, plus main.rs/content.rs/window_view.rs/card.rs all over Mere's enforced 600-LOC ceiling.
 
@@ -88,7 +88,7 @@ Each rides on something already built and tested; the work is wiring.
    binding and frame metadata seam is now live: a pre-script WebGL factory is
    available to Boa and Vano's `nova_vm` backend, and `gl-clear.html` renders
    through the WGPU adapter on both. The remaining work is host-owned
-   shared-device construction and texture registration in the Merecat
+   shared-device construction and texture registration in the Turnstone
    extraction before `compose_external_texture` can consume the frame metadata.
 4. **Register graft(Servo) and weld(CEF) as inker SurfaceEngines.** The multiplexer is seated: traits + registry + engine-id vocabulary + one live reference engine (`repos/mere/crates/inker/src/surface_engine.rs:247-358`). wgpu-graft and wgpu-weld already produce importable textures. *(Folds into the inker engine-picker plan, Phase 5; its Phase 0 routing fold-in already shipped, but the transitional host's scry pool still binds the producer concretely, so registry producer-construction is the Phase-5 companion.)*
 5. **Stand up genet CI + a dependency-cone witness guard.** There is no CI in the genet repo, so the witness boundaries that make the profile ladder real (genet-extract's render-free cone) can silently regress. Cheap, and it protects every sidequest above.
@@ -160,7 +160,7 @@ New, genet (this directory):
 
 New, mere:
 
-- `repos/mere/design_docs/mere_docs/implementation_strategy/2026-06-24_meerkat_render_perf_plan.md` — current transitional-host §3 dev moves + §4 GUI perf, to be carried into Merecat extraction.
+- `repos/mere/design_docs/mere_docs/implementation_strategy/2026-06-24_meerkat_render_perf_plan.md` — current transitional-host §3 dev moves + §4 GUI perf, to be carried into Turnstone extraction.
 
 Extended (existing plans carry this audit's deltas):
 

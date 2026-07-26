@@ -5,7 +5,7 @@
 //! A sectioned list: grouped rows under section headers, each row inert, muted,
 //! or activatable.
 //!
-//! Consumer-pull (merecat, 2026-07-17): four panes render exactly this shape —
+//! Consumer-pull (turnstone, 2026-07-17): four panes render exactly this shape —
 //! Trail (Recent / This node / Removed), Steward (active / queued), Alembic
 //! (Recent / Saved), and Apparatus's diagnostics — and Trail was hand-DOM. Not
 //! grown out of `action_list`: that component is palette-shaped (it wraps

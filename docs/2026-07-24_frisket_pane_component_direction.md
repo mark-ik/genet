@@ -6,7 +6,7 @@ view is deleted. See [What landed](#what-landed).
 
 The family currently spells "a tree of resizable panes" four times, in four
 repos. This ruling converges them on one implementation, named **frisket**,
-living as a module in Cambium. The name comes from merecat's crate, which
+living as a module in Cambium. The name comes from turnstone's crate, which
 retires into it.
 
 Two intents from Mark govern it. First: draw boundaries such that duplicate
@@ -22,12 +22,12 @@ first only.
 | Where | What it contributes | Home |
 |---|---|---|
 | [`genet-host-api::tile`](../components/genet-host-api/tile.rs) | The contract: n-ary splits with fractional shares, tab-stacks with an active tile, `TilePath`, `TileEvent`, `DropTarget`/`Edge`, and the `apply` reducer | components (product-neutral) |
-| [`cambium::split`](../components/cambium/cambium/src/split.rs) + [`tabs`](../components/cambium/cambium/src/tabs.rs) | The furniture: draggable ARIA divider with keyboard resize and geometry as state math; the tab strip | components (both landed on merecat consumer-pull, July) |
+| [`cambium::split`](../components/cambium/cambium/src/split.rs) + [`tabs`](../components/cambium/cambium/src/tabs.rs) | The furniture: draggable ARIA divider with keyboard resize and geometry as state math; the tab strip | components (both landed on turnstone consumer-pull, July) |
 | [`pelt/desktop/tile_surface.rs`](../ports/pelt/desktop/tile_surface.rs) + [`tile_shell.rs`](../ports/pelt/desktop/tile_shell.rs) | The renderer: `TileTree` to Cambium flex DOM, tab activation, drag lane, content rects for compositing | **a port** — unreachable by anything else |
-| `merecat:crates/frisket` | A savable pane tree: binary splits with one ratio, a leaf per pane, persistence, uxtree projection | **an app** |
+| `turnstone:crates/frisket` | A savable pane tree: binary splits with one ratio, a leaf per pane, persistence, uxtree projection | **an app** |
 
 Mere sits across the seam: `platen::tree_projection::tile_tree_from_plan`
-produces a `TileTree` that, today, nothing renders. Merecat imports
+produces a `TileTree` that, today, nothing renders. Turnstone imports
 `genet-host-api` only to convert a `SplitAxis` and hand-rolls its pane views on
 the Cambium furniture instead. So the contract has a producer with no consumer
 on one side, and a renderer that cannot be reached on the other.
@@ -35,7 +35,7 @@ on one side, and a renderer that cannot be reached on the other.
 ## The ruling
 
 **Genet, not Mere.** Pelt needs panes and cannot depend on Mere without
-inverting the stack, so anything Pelt and Merecat both need must live at or
+inverting the stack, so anything Pelt and Turnstone both need must live at or
 below Genet. The [port boundary](2026-07-24_pelt_port_boundary.md)'s CI
 dependency-cone witness already enforces that direction: components may not
 depend on packages below `ports/`. Lifting the surface out of Pelt is the
@@ -44,7 +44,7 @@ sanctioned direction of travel, and the witness keeps it honest afterwards.
 **Tile's tree wins; frisket's does not travel.** The two trees are different
 models, not two spellings of one:
 
-- merecat frisket: binary `Split { axis, ratio, first, second }`, one content
+- turnstone frisket: binary `Split { axis, ratio, first, second }`, one content
   per leaf, no tabs, `First`/`Second` paths.
 - `genet-host-api::tile`: n-ary branches with fractional shares, tab-stacks
   with an active tile, `Vec<usize>` paths, a reducer, drop targets.
@@ -53,17 +53,17 @@ Tile is the more capable model and the one with a renderer. Landing frisket's
 tree beside it would leave two tiling models in one repo, which is worse than
 the status quo.
 
-**Only the name travels.** merecat's frisket is graph-bound by construction:
+**Only the name travels.** turnstone's frisket is graph-bound by construction:
 every `PaneNode::Leaf` carries a `GraphId`, the multi-graph rule lives in the
 tree ("differing IDs in one frame = multi-graph window"), and four operations
 exist to retag that binding. That is Mere's multi-graph pane model, and it must
-not enter the repo whose contract says it "never grows toward forme". Merecat's
+not enter the repo whose contract says it "never grows toward forme". Turnstone's
 convergence is to retire its tree onto frisket's and keep `PaneContent` plus
 `graph_id` as **content payload** behind an open content lane, not as tree
 structure.
 
 > **Corrected 2026-07-25.** This paragraph's conclusion did not survive contact
-> with merecat's code: it composites one surface per pane rather than rendering a
+> with turnstone's code: it composites one surface per pane rather than rendering a
 > pane frame, so its tree is not a duplicate to retire. See
 > [Follow-ons](#follow-ons-2026-07-25) §2.
 
@@ -78,11 +78,11 @@ structure.
   document compositing stay host-side.
 - `cambium::split` and `cambium::tabs` become its siblings rather than its
   dependencies — the module composes furniture from the same crate.
-- `merecat:crates/frisket` is deleted. The name survives as the module's.
+- `turnstone:crates/frisket` is deleted. The name survives as the module's.
 
 Why Cambium rather than a new component, in order of force:
 
-1. **It is already the shared home.** Pelt, Merecat, Woodshed, and Isometry all
+1. **It is already the shared home.** Pelt, Turnstone, Woodshed, and Isometry all
    depend on Cambium. A new component would need a new dependency edge, a new
    version to keep aligned, and a new `[patch]` line in four repos — the exact
    tax that produced three silent-green build failures in this family on
@@ -102,7 +102,7 @@ zero-dependency leaf. Ordering constraint: Cambium is `publish = true` while
 `genet-host-api` is `publish = true` but not yet on crates.io, so it has to go
 up before or alongside Cambium's next release.
 
-Wins on landing: Pelt keeps working through the extracted component, Merecat
+Wins on landing: Pelt keeps working through the extracted component, Turnstone
 deletes its hand-rolled pane views and its own tree, platen's projection
 finally reaches a renderer, and Woodshed and Isometry can have panes without
 importing Mere.
@@ -110,7 +110,7 @@ importing Mere.
 ## The name
 
 A frisket is the hinged frame whose cut-out apertures decide what prints where,
-which describes the Cambium module at least as well as it described the merecat
+which describes the Cambium module at least as well as it described the turnstone
 crate. Mark: fun names are welcome; what is not warranted is announcing every
 one of them to the world.
 
@@ -118,7 +118,7 @@ So the name lives on with no *consumable* package attached — but not as an
 orphan. The first draft here ruled "orphan like eidetic", and Mark caught the
 mismatch (2026-07-26): eidetic's bare name fell out of use, while frisket's is
 the module's *active* name, so leaving crates.io describing "the pane model for
-Merecat" against a deleted crate would misinform about our own vocabulary. The
+Turnstone" against a deleted crate would misinform about our own vocabulary. The
 fix is genet's existing practice: a **name claim** (`support/name-claims/
 frisket`, 0.0.2, the fourteenth in that directory) whose description points at
 the real home — the `frisket` module of `cambium` 0.3.2+ — and whose repository
@@ -140,7 +140,7 @@ state-math geometry with Pelt's flex-derived rects.
 
 **Landed 2026-07-25** rather than waiting for a payer, because Pelt was already
 the consumer: lifting its surface out of the port is what created the module.
-The other trigger named here, "Merecat retargeting its panes", turned out to be
+The other trigger named here, "Turnstone retargeting its panes", turned out to be
 the wrong goal on inspection — see [Follow-ons](#follow-ons-2026-07-25) §2.
 Isometry wanting tiling for its overmap, board, and compendium remains a live
 future consumer; Woodshed needs a tool panel beside practice, which is one split
@@ -197,7 +197,7 @@ cargo's "patch was not used". The others: Woodshed's stale `cambium = "0.2.0"`,
 
 `ContentSource::Open { kind, id }` landed, the recognized-core-plus-open-tail
 shape `sceno::Representation` uses. `kind` names the lane, namespaced like
-`SettingsRef` (`"merecat.roster"`, `"woodshed.fretboard"`); `id` is opaque here.
+`SettingsRef` (`"turnstone.roster"`, `"woodshed.fretboard"`); `id` is opaque here.
 An unrecognized kind degrades to an empty pane, because a Genet surface draws the
 frame and leaves the hole for its host either way. Test:
 `an_open_lane_is_carried_not_interpreted` — a non-browser pane rides the tree and
@@ -205,21 +205,21 @@ the reducer verbatim and is never a `Document` wearing a costume. The three name
 lanes remain the ones a Genet surface composites itself. genet-host-api: 13
 tests green; Pelt unaffected (its matches carry catch-alls).
 
-### 2. The Merecat half: the goal was wrong, and the code says why
+### 2. The Turnstone half: the goal was wrong, and the code says why
 
-Retargeting merecat's panes onto `cambium::frisket` **should not happen**, and
+Retargeting turnstone's panes onto `cambium::frisket` **should not happen**, and
 the doc above was written from an outside-in reading that does not survive
-contact with merecat.
+contact with turnstone.
 
-Merecat does not render a pane frame. `shell::surface_plan` walks its pane tree
+Turnstone does not render a pane frame. `shell::surface_plan` walks its pane tree
 into **one composited surface per pane** plus divider bands, which is how a live
 WebView, the Orrery's GPU canvas, and a cambium-rendered pane coexist in one
 window. `src/pane.rs` is that host-side geometry, and it already consumes
 `cambium::Split`'s state math rather than its view — deliberately, since
-2026-07-17: "merecat composites surfaces, so it consumes the component's state
+2026-07-17: "turnstone composites surfaces, so it consumes the component's state
 math rather than its view (the math is the single geometry truth)". `src/
 cambium_pane.rs` is not a pane renderer either; it is the seam for rendering a
-cambium view *inside* one merecat pane surface.
+cambium view *inside* one turnstone pane surface.
 
 So the two are not two spellings of one idea. They are two presentation
 strategies — a DOM frame with content holes, and per-pane composited surfaces —
@@ -227,17 +227,17 @@ over one shared geometry truth that was already converged in July. What looked
 like duplication from the outside was the shared part already being shared.
 
 **Recorded as a deliberate divergence**, not debt: the family has two pane tree
-shapes (merecat's binary split with one ratio, the contract's n-ary branches with
+shapes (turnstone's binary split with one ratio, the contract's n-ary branches with
 tab-stacks). Converging them costs ~473 references and buys nothing while the
-renderers differ on purpose. Revisit only if merecat ever wants tabs, or wants
+renderers differ on purpose. Revisit only if turnstone ever wants tabs, or wants
 its panes inside one DOM.
 
-**What did land:** merecat's `frisket` crate folded into `src/panes` (2026-07-25).
+**What did land:** turnstone's `frisket` crate folded into `src/panes` (2026-07-25).
 It had exactly one consumer, so it wanted no package identity, and the name
-`frisket` now belongs to `cambium::frisket`, which merecat consumes — a crate and
+`frisket` now belongs to `cambium::frisket`, which turnstone consumes — a crate and
 a module of the same name in one dependency graph is a trap for the next reader.
 13 call-site files rebased, the workspace member and path dep removed, `serde`
-and `incipit` moved onto merecat's own manifest. The published `frisket 0.0.1`
+and `incipit` moved onto turnstone's own manifest. The published `frisket 0.0.1`
 becomes an orphaned version, the end `eidetic`'s bare name reached.
 
 ### 3. Publish order: proven, and Mark's step

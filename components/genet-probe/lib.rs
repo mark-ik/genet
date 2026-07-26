@@ -15,7 +15,7 @@
 //! resolver every one of those verbs stands on).
 //!
 //! A [`ProbeSurface`] is one retained runner's DOM plus where it sits in the
-//! window and the sheet it lays out under. An app with several runners (merecat:
+//! window and the sheet it lays out under. An app with several runners (turnstone:
 //! chrome, roster grid, gloss, trail) lists one each; [`resolve`] searches them
 //! in order and returns the first match's centre. Because the resolution is one
 //! function over all surfaces, an app stops needing a bespoke geometry lookup

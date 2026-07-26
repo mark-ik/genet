@@ -106,7 +106,7 @@ impl DocumentSession<Scene> for StaticDocumentSession {
     }
     /// The structural report, through the trait: this session type is private,
     /// so a host cannot take the `as_any` detour meerkat uses on its own types
-    /// (the accessor merecat's Inspector pane needs — rung-5 plan, slice F's
+    /// (the accessor turnstone's Inspector pane needs — rung-5 plan, slice F's
     /// "genet ask").
     fn inspect(&self) -> Option<inker::ContentReport> {
         Some(self.doc.inspect())
@@ -668,7 +668,7 @@ mod tests {
     }
 
     /// The structural report is reachable THROUGH THE TRAIT — the accessor a
-    /// host without downcast access (merecat: this session type is private)
+    /// host without downcast access (turnstone: this session type is private)
     /// stands on. Title, links, and headings come back from the live session.
     #[test]
     fn static_session_reports_structure_through_the_trait() {

@@ -19,7 +19,7 @@ by other hosts. It is now `components/genet-host-api`. That component owns:
 - the host-supplied resource-fetch seam;
 - the tile-tree presentation contract.
 
-Pelt, Mere, and Merecat consume `genet-host-api`. Mere and Merecat do not
+Pelt, Mere, and Turnstone consume `genet-host-api`. Mere and Turnstone do not
 depend on Pelt. The package rename is deliberate: the contract describes how
 a host embeds Genet, while Pelt is one implementation of that host boundary.
 

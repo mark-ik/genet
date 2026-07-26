@@ -33,7 +33,7 @@ verified in source:
 meerkat's content actor dispatches these as a cfg-and-if ladder
 (`handlers.rs::render`), and the inker registry only ever sees nematic's
 block engines. The `genet.*` routing ids resolve to nothing. Every new host
-(merecat first) would re-write the ladder.
+(turnstone first) would re-write the ladder.
 
 The reason the ladder exists: neither of inker's two engine kinds fits.
 `Engine` returns `EngineDocument` (blocks — forcing HTML through it is the
@@ -111,7 +111,7 @@ untouched; decisions already carry ids.
 **genet** gets the formalization Mark asked for: the three lane types
 promote OUT of pelt into a new component, **`components/genet-documents`**
 (review decision 2026-07-10: "session" is load-bearing family-wide for
-app/persistence sessions — mere's session-runtime, merecat's session.rs,
+app/persistence sessions — mere's session-runtime, turnstone's session.rs,
 "window = graph-shaped session" — and the trait is already
 `DocumentSession`), that implements `SessionEngine` for
 `genet.web`, `genet.scripted`, `genet.scripted.nova`, and the smolweb
@@ -137,7 +137,7 @@ the address, resolve the kind, spawn or fetch accordingly. Behavior
 identical, receipts via the existing 82+247 suite plus the apparatus scene
 checks.
 
-**merecat** consumes the same registries for its content lane, per its
+**turnstone** consumes the same registries for its content lane, per its
 architecture plan's sequencing note. It never learns the ladder existed.
 
 ## What deliberately does not change
@@ -190,16 +190,16 @@ architecture plan's sequencing note. It never learns the ladder existed.
    (RUST_MIN_STACK=16M — Boa on 2MB test threads overflows; the feature
    build did not even compile at baseline, so this fixes a red, not
    preserves a green); smolweb green.
-4. **merecat content lane.** merecat spawns sessions through the same
-   facade for its first web render. Done when the merecat vertical slice
+4. **turnstone content lane.** turnstone spawns sessions through the same
+   facade for its first web render. Done when the turnstone vertical slice
    renders an https page through a registry-dispatched session.
-   **DONE 2026-07-11** (merecat d1e6234, genet 41ee1b962b0): the prepped
+   **DONE 2026-07-11** (turnstone d1e6234, genet 41ee1b962b0): the prepped
    runner arm went live exactly as its handoff contract said — route,
    spawn through the SessionRegistry (static lane under genet.web),
    sessions held port-side keyed by node id, focused session composed
    into the layered present and the scenario self-capture. Receipt:
    scenarios/rung4_content.scn, RESULT ok, capture shows the rendered
-   page under the caption chip (testing/merecat/images/
+   page under the caption chip (testing/turnstone/images/
    rung4_content_live.png). The receipt caught two bugs the unit tests
    could not: URL-round-trip node resolution (fixed via
    focused_member()) and genet's root-background propagation treating a
@@ -235,7 +235,7 @@ architecture plan's sequencing note. It never learns the ladder existed.
 - ~~Engine activation~~ RESOLVED: stays host-side. It is app state
   (meerkat's node colors ride it), and inker staying policy-neutral is its
   identity. The kind index is a map, deliberately non-generic.
-- ~~Worker story~~ RESOLVED: no collision; merecat's content lane starts on
+- ~~Worker story~~ RESOLVED: no collision; turnstone's content lane starts on
   the shell thread, and the worker lane keeps content-contract packets.
 - Script-initiated navigation (`location.href` and successors): the
   scripted lane does not surface it yet, but it is the next thing after
@@ -243,7 +243,7 @@ architecture plan's sequencing note. It never learns the ladder existed.
   A session-emitted navigation event (polled like `pump`, or returned from
   it) is the likely shape; design when the scripted lane grows it.
 
-Phase 4 verifier, noted 2026-07-10: merecat's scenario lane landed (open
+Phase 4 verifier, noted 2026-07-10: turnstone's scenario lane landed (open
 url, settle, GPU self-capture, assert — no synthetic input), so "renders an
 https page through a registry-dispatched session" has a deterministic
 receipt, not a screenshot-by-hand.

@@ -38,7 +38,7 @@ The lane is deliberately narrower than a complete application theme. It covers:
 - Cambium's first real component-catalog theme, covering its button, checkbox,
   toggle, radio, select, slider, and text-field compositions.
 
-It does not claim to be Merecat's production theme. The fixture is the bounded
+It does not claim to be Turnstone's production theme. The fixture is the bounded
 toolkit corpus that lets the engine grow before an application theme is ready.
 
 ## Why this lane
@@ -199,7 +199,7 @@ handoff: the named engine crate owns the database, fixture, generator, typed
 computed values, and guard.
 
 The original 40-property set is the catalog contract, not a promise about every
-future Merecat theme declaration. Capability-driven rows may join it with their
+future Turnstone theme declaration. Capability-driven rows may join it with their
 own executable paint proof; `opacity` and `transform` are the first two ratchet
 rows.
 

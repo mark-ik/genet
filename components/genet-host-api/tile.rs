@@ -120,7 +120,7 @@ pub enum ContentSource {
     /// recognizes `kind`.
     ///
     /// `kind` names the lane, namespaced like [`SettingsRef`]
-    /// (`"merecat.roster"`, `"woodshed.fretboard"`); `id` is whatever that host
+    /// (`"turnstone.roster"`, `"woodshed.fretboard"`); `id` is whatever that host
     /// needs to resolve it and is opaque here — an id, a key, a serialized
     /// descriptor. A Genet surface draws the tile's frame and leaves the content
     /// hole for its host to fill, exactly as it does for the named lanes, so an
@@ -488,7 +488,7 @@ mod tests {
             id: TileId(7),
             title: "Roster".into(),
             content: ContentSource::Open {
-                kind: "merecat.roster".into(),
+                kind: "turnstone.roster".into(),
                 id: "graph:9f2c".into(),
             },
             accent: None,

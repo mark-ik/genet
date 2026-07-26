@@ -6,7 +6,7 @@ findings verified against source the same day; no code has moved yet.
 
 Companion to [2026-07-09_native_automation_plan.md](./2026-07-09_native_automation_plan.md)
 (pelt is the reference shell both plans converge on) and mere's
-2026-07-09 mere/merecat boundary pass plan (this move removes inker from that
+2026-07-09 mere/turnstone boundary pass plan (this move removes inker from that
 boundary question entirely).
 
 ## Motivation
@@ -25,7 +25,7 @@ Moving inker into genet fixes the layering. The stack becomes:
       -> inker (contracts + document/surface registries)
         -> engines (nematic in-repo; scrying/graft/weld adapters)
           -> pelt (reference shell)
-            -> apps (merecat's mere, strophe, isometry, woodshed)
+            -> apps (turnstone's mere, strophe, isometry, woodshed)
 
 Pelt's three lanes (static, scripted, smolweb) get real `impl Engine`
 wrappers in-repo. Apps register engines and hand frames to their compositor;
@@ -106,7 +106,7 @@ Apps choose engines as build conditions. Two layers:
 
 Example app postures (illustrative only): strophe takes nematic
 markdown+file for docs panes; isometry takes nematic file+markdown plus
-scrying for its compendium web cards; merecat takes everything with graft and
+scrying for its compendium web cards; turnstone takes everything with graft and
 weld off by default.
 
 ## Mere-side consumer flips
@@ -125,7 +125,7 @@ Verified consumers across repos/:
   three of five consumers are genet-side and the smolweb column (errand
   parse, nematic blocks, smolweb-views native views, pelt shell) lives in one
   repo. **Recommend: move into genet as a component.** errand keeps its
-  MIT/Apache license per-crate. mere/merecat's fetch actor keeps consuming it
+  MIT/Apache license per-crate. mere/turnstone's fetch actor keeps consuming it
   via git dep. Its protocol deps (nex-protocol, spartan-protocol,
   guppy-protocol; each errand-only) come along as workspace members under
   errand's subtree, each keeping its own published crate identity
@@ -154,7 +154,7 @@ Verified consumers across repos/:
 
 ### verso family (amends the boundary-pass slate)
 
-The 2026-07-09 boundary-pass plan slates verso to move with merecat, grouped
+The 2026-07-09 boundary-pass plan slates verso to move with turnstone, grouped
 with orrery/platen. With inker in genet, that grouping looks stale: verso is
 engine machinery, not app orchestration. It is the *dynamic* counterpart of
 inker's multiplexer: inker picks an engine per address; verso swaps engines
@@ -189,7 +189,7 @@ api + flip + scry, no engine dependencies; a `genet-donor` feature gates
 published verso-tile description is rewritten to the flip charter on next
 publish. meerkat-browser-worker stays app-side (it is the app's worker host,
 not flip machinery). The boundary-pass slate is amended in its own doc: verso
-leaves the merecat web lane for genet; the first-vertical-path statement
+leaves the turnstone web lane for genet; the first-vertical-path statement
 (routes through verso-api from day one) survives with the import path
 changed.
 
@@ -199,7 +199,7 @@ changed.
   standing doctrine; crates.io-only, one-way deps. (misfin additionally has
   direct mere consumers: shell/comms.)
 - **netrender, netfetcher**: the established sibling shape for engine-grade
-  crates; both serve genet and mere/merecat equally.
+  crates; both serve genet and mere/turnstone equally.
 - **muniment / codicil / chartulary / stemma / scholia**: the data family's
   extraction out of mere is fresh, deliberate design (G0-G5); not revisited
   here.

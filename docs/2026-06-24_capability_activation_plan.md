@@ -26,7 +26,7 @@
   binding. `ScriptedDocument` accepts a pre-script `WebGlFactory` for both Boa
   and Vano's `nova_vm` backend, and the Genet render frame carries the canvas
   texture key and placement as external-texture metadata.
-- Work remaining: construct the factory from Merecat's shared WGPU device,
+- Work remaining: construct the factory from Turnstone's shared WGPU device,
   register each canvas output in the compositor's texture registry, and feed
   the frame metadata into `compose_external_texture`.
 - **Done when** a WebGL `<canvas>` renders live in a Genet document through the

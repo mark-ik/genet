@@ -2384,10 +2384,10 @@ where
     }
 
     // A sole element that is absolutely positioned and not `<html>` is a
-    // host-DOM floating widget (merecat's caption chip with the omnibar
+    // host-DOM floating widget (turnstone's caption chip with the omnibar
     // closed), not a document root: its background must stay on its own box,
     // never the canvas. Caught 2026-07-11 — the chip's background painted
-    // over merecat's whole frame, invisible dark-on-dark until a content
+    // over turnstone's whole frame, invisible dark-on-dark until a content
     // layer composed beneath the chrome. A real parsed document always roots
     // at `<html>`, which keeps spec propagation even if a stylesheet
     // positions it; in-flow host roots (smolweb's themed page div) keep
@@ -5244,7 +5244,7 @@ mod tests {
     #[test]
     fn canvas_background_not_taken_from_a_sole_absolute_host_widget() {
         // A host-built DOM whose only document-level element is an
-        // absolutely-positioned widget (merecat's caption chip with the
+        // absolutely-positioned widget (turnstone's caption chip with the
         // omnibar closed) is not a document root: its background stays on
         // its own box and never propagates over the canvas.
         use layout_dom_api::{LayoutDomMut, QualName};

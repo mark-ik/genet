@@ -14,12 +14,12 @@ One residual, below: the local checkout *folder* is still `repos/serval`.
 | `genet-scripted` | 45 passed |
 | `servo-paint` html→pixels | 30 passed |
 | `serval-xilem` (protected crate) | 101 passed |
-| merecat builds against genet | green (16m51s, full cold resolve) |
+| turnstone builds against genet | green (16m51s, full cold resolve) |
 
 Every number matches the pre-rename baseline exactly.
 
 Commits: genet `7383cb73dfb`; stylo fork main `3703b212f6`; netrender
-`1040835e7`; mere `2fb78c4`, merecat `37e536f`, woodshed `dab7595`,
+`1040835e7`; mere `2fb78c4`, turnstone `37e536f`, woodshed `dab7595`,
 strophe `f53f8c4`, isometry `d5e2e1e`.
 
 **Residual — the local folder.** `C:\Users\mark_\Code\repos\serval` could
@@ -136,7 +136,7 @@ step, as always.
    serval-scripted, and the nine WPT baselines.
 3. **P2 — The stylo fork.** `serval-stylo*` → `genet-stylo*` on fork `main`
    (Track U already realigned it onto v0.19.0), plus the vendored taffy.
-4. **P3 — Consumers.** mere, merecat, woodshed, strophe, isometry: manifests,
+4. **P3 — Consumers.** mere, turnstone, woodshed, strophe, isometry: manifests,
    imports, and the gitignored local `.cargo/config.toml` patch tables.
 5. **P4 — Remotes.** Rename `mark-ik/serval` → `mark-ik/genet` on GitHub
    (its redirects keep existing git deps resolving, so this is not a flag

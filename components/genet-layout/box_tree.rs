@@ -586,7 +586,7 @@ where
     //   - A `Document` wrapper node with ONE element child (the normal case):
     //     that child (`<html>`, skipping comments/doctype) is the real root.
     //   - A `Document` wrapper with SEVERAL element children (a host-built
-    //     synthetic DOM — merecat's chrome layer, widget pools — which has no
+    //     synthetic DOM — turnstone's chrome layer, widget pools — which has no
     //     UA `<html>` wrapper): every child must lay out, so they hang off a
     //     synthetic block root sized by the viewport. Parsed HTML never hits
     //     this (one `<html>`); taking only the first child silently dropped

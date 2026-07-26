@@ -179,7 +179,7 @@ mod tests {
         el
     }
 
-    /// The style-sharing repro (found by merecat's chrome migration,
+    /// The style-sharing repro (found by turnstone's chrome migration,
     /// 2026-07-18): a subtree-rooted cascade over DENSE SAME-CLASS SIBLING
     /// runs trips genet-stylo's style-sharing cache — `parent_style_identity`
     /// unwraps an inheritance parent (`sharing/mod.rs:259`) that an element

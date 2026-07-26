@@ -112,7 +112,7 @@ pub struct SessionLink {
 /// render crate (genet-render's `content_report` builds one from a LayoutDom
 /// and re-exports these types). Hosts that cannot downcast a session to its
 /// concrete type (the type may be private to its engine crate) read this
-/// instead — merecat's Inspector pane is the first such consumer.
+/// instead — turnstone's Inspector pane is the first such consumer.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ContentReport {
     /// The `<title>` text, if any.
@@ -237,7 +237,7 @@ pub trait DocumentSession<F>: Any {
 
     /// A structural [`ContentReport`] of the addressed content, for hosts that
     /// cannot downcast to the concrete session type (it may be private to its
-    /// engine crate — merecat's one registered lane is exactly that case, which
+    /// engine crate — turnstone's one registered lane is exactly that case, which
     /// is why this is a trait method and not an `as_any` detour). `None` for
     /// lanes without a structural read; the host reports the absence honestly
     /// rather than synthesizing one.

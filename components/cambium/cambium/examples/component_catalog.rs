@@ -160,7 +160,7 @@ impl Default for CatalogState {
                 .with_selected("workspace"),
             select: SelectState::new(1).with_label("Rendering mode"),
             slider: Slider::new(0.35).with_steps(0.05, 0.2).with_label("Zoom"),
-            text: TextInput::new("merecat"),
+            text: TextInput::new("turnstone"),
             multiline: TextInput::new("First line\nSecond line"),
             styled: TextInput::new("let answer = 42;"),
             actions: CommandState::default()
@@ -1673,7 +1673,7 @@ fn run_interactions(runner: &mut CatalogRunner) {
     .expect("single-line input");
     runner.set_focus(Some(text));
     runner.dispatch_key(KeyEvent::new(Key::Character("!".into())));
-    assert_eq!(runner.state().text.text(), "merecat!");
+    assert_eq!(runner.state().text.text(), "turnstone!");
 
     let actions_root = find_id(&runner.dom().borrow(), root, "catalog-action-list");
     let actions = find_where(&runner.dom().borrow(), actions_root, &|dom, node| {

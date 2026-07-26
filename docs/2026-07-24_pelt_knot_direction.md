@@ -23,9 +23,9 @@ after that.
 **Pelt is the thin sovereign browser.** Reference host and acceptance runner
 first (servoshell posture), with room to grow daily-drive chrome after the
 cutover. It stays graph-free: the dependency-cone witness already keeps mere
-and merecat off pelt, and the reverse discipline (pelt grows no mere
-dependency) is deliberate. History-as-graph belongs to merecat embedding the
-same engine; pelt and merecat are two hosts of one engine, not rivals.
+and turnstone off pelt, and the reverse discipline (pelt grows no mere
+dependency) is deliberate. History-as-graph belongs to turnstone embedding the
+same engine; pelt and turnstone are two hosts of one engine, not rivals.
 
 **Knot's destination is the authoring browser, not an IDE.** The point
 between an IDE and a browser is the read-write document, and inker already
@@ -43,9 +43,9 @@ Daily-drive browser features split two ways:
   cache, and auth belong to netfetcher; certificate facts surface at the
   fetch seam; downloads are a netfetcher stream with progress facts;
   find-in-page is a document capability behind `genet-host-api`. Every host
-  (pelt, mere, merecat) benefits without depending on another product.
+  (pelt, mere, turnstone) benefits without depending on another product.
 - **Per-host persistence, deliberately divergent.** History, bookmarks,
-  sessions, settings. Merecat persists them as graph engrams, which is its
+  sessions, settings. Turnstone persists them as graph engrams, which is its
   identity; pelt persists a local file. The shared piece is the
   navigation-event facts the host contract already implies.
 
@@ -53,7 +53,7 @@ Daily-drive browser features split two ways:
   graph and these components to be synonymous is satisfied at the
   content-class layer, not the storage layer. One class definition per kind
   (facets plus engram schema), two materializations: a bookmark is the same
-  declared thing in both hosts, stored as a chartulary engram in merecat and
+  declared thing in both hosts, stored as a chartulary engram in turnstone and
   as a local file record in pelt. The split above stands unchanged.
 
   Settings are the exception and get no class. History, bookmarks, and
@@ -63,7 +63,7 @@ Daily-drive browser features split two ways:
   unported.
 
 This resolves "who builds the boring 80 percent": the majority is component
-work that serves merecat first, and pelt's private remainder is small.
+work that serves turnstone first, and pelt's private remainder is small.
 
 ## Text editing (ruled): one primitive, three consumers
 
@@ -91,7 +91,7 @@ not compete with livery focus. It does not wait on fullweb, and it turns
 
 Mere-side candidate decision: knot documents as the "page" content class for
 the shared-engram commons (small textual diffs make small sync ops, fit for
-LoRa budgets; one document renders in pelt over http and in merecat over the
+LoRa budgets; one document renders in pelt over http and in turnstone over the
 mesh). Recorded in mere's
 `design_docs/mere_docs/research/2026-07-24_shared_engram_commons_brief.md`;
 genet's stake is only that the editing primitives above arrive.

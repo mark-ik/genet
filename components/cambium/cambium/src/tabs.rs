@@ -5,7 +5,7 @@
 //! A tab strip: one strip of labelled tabs, one active — `radio_group`'s
 //! one-of-N shape wearing the ARIA tabs pattern.
 //!
-//! Consumer-pull (merecat, 2026-07-15): three surfaces want the same widget and
+//! Consumer-pull (turnstone, 2026-07-15): three surfaces want the same widget and
 //! were each about to hand-roll it — the Roster's data tabs (Nodes / Links /
 //! Graphlets / Fields over one `data_grid`), the workbench's tile tabs, and a
 //! stacked pane's tabs. One strip, one active index, click or arrow keys to

@@ -704,7 +704,7 @@ reviewed; the direction holds and the grind is accepted. Two riders:
     recorded `renderer` differs from the run's, so stale pins fail loudly
     rather than silently passing.
 
-  Receipt: the bar above holds, and merecat, isometry, woodshed, and hocket
+  Receipt: the bar above holds, and turnstone, isometry, woodshed, and hocket
   build and smoke against genet main with no renderer flag set.
 - **F5 - the retirement event.** The harvest plan's trigger fires ("Livery
   takes the fullweb default with WPT parity receipts"). Five steps, each

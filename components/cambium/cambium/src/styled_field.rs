@@ -172,7 +172,7 @@ pub fn styled_text_field(input: &TextInput, styles: &[StyleRange]) -> crate::Tex
 /// A single-line field that renders its own caret: the `▍` glyph as an in-flow
 /// `<span class="field-caret">` at the caret split (after any preedit), themed by
 /// the host through [`FIELD_CARET_CLASS`]. For hosts that paint the whole scene
-/// from the DOM (no overlay layer) — merecat's omnibar is the first consumer.
+/// from the DOM (no overlay layer) — turnstone's omnibar is the first consumer.
 ///
 /// Trade-off vs [`text_field`](crate::text_field): the glyph is in flow, so the
 /// runs no longer concatenate to exactly the committed text and a `caret_rect`

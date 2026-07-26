@@ -8,7 +8,7 @@ session, take paint frames, scroll, click, settle).
 > `components/genet-documents`. Born 2026-07-10 in the session-engines
 > plan: these types began as pelt's convenience lanes and were promoted to
 > an engine-grade component; pelt is now one consumer among hosts
-> (merecat's mere, meerkat).
+> (turnstone's mere, meerkat).
 
 - `LoadedDocument` / `StaticSessionEngine` (`genet.web`): fetched HTML laid
   out by genet's cascade, no scripts.

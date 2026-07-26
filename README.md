@@ -75,7 +75,7 @@ resources/    bundled runtime resources (UA assets, fonts, prefs)
   input mapping. Consumed by pelt and by sibling hosts.
 - `genet-host-api` — the light host-facing contract: engine profiles,
   capabilities, resource fetching, and tile composition. Pelt, Mere, and
-  Merecat consume it without making the products depend on one another.
+  Turnstone consume it without making the products depend on one another.
 - `script-engine-api` — engine-neutral scripting backend contract (names
   capabilities only; engine-native types stay inside each backend).
 - `script-engine-nova` / `script-engine-boa` / `script-engine-piccolo` —
@@ -202,7 +202,7 @@ engine-rendered form controls) and the scripted-tier consumer wiring.
   moved there on 2026-07-23; their names belong to those protocols'
   communities rather than to this engine.
 - genet is consumed as the engine/host layer by the `mere` platform workspace
-  and by all four products (`merecat`, `isometry`, `woodshed`, `hocket`). The
+  and by all four products (`turnstone`, `isometry`, `woodshed`, `hocket`). The
   dependency direction is one-way: those consume genet, genet does not depend
   on them.
 

@@ -1058,7 +1058,7 @@ fn cascade_traverse<D>(
     //    as a whole. We pass `None` for the pool (serial) — measurement only.
     let t_recalc = timing.then(std::time::Instant::now);
     // Traverse from EVERY document-level element, not just the first: a
-    // host-built synthetic DOM (merecat's chrome layer, widget pools) has no
+    // host-built synthetic DOM (turnstone's chrome layer, widget pools) has no
     // `<html>` wrapper and hangs several roots off the document; styling only
     // the first left its siblings at initial values (unstyled, unpositioned).
     // Parsed HTML has exactly one root element, so this loop runs once there.

@@ -6,9 +6,9 @@
 //!
 //! On a hand press the *frisket* is the hinged frame whose cut-out apertures
 //! decide what prints where; this is the same frame, over a window. The name
-//! comes from merecat's crate, which this module retires: the family had spelled
+//! comes from turnstone's crate, which this module retires: the family had spelled
 //! "a tree of resizable panes" four times (this view trapped in `ports/pelt`, a
-//! second tree in merecat, the contract in `genet-host-api`, the furniture here),
+//! second tree in turnstone, the contract in `genet-host-api`, the furniture here),
 //! and they resolve to one implementation. Direction:
 //! `genet:docs/2026-07-24_frisket_pane_component_direction.md`.
 //!

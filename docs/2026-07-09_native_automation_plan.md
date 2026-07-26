@@ -21,7 +21,7 @@ Code samples are illustrative unless marked implementation-ready.
 
 ## Goal
 
-Every xilem-serval app (mere/merecat, strophe, isometry, pelt) becomes drivable
+Every xilem-serval app (mere/turnstone, strophe, isometry, pelt) becomes drivable
 and inspectable by a program: find an element semantically, act on it, wait for
 the engine to settle, read state back. One engine-level surface serves test
 harnesses, off-the-shelf WebDriver clients, and in-process agents alike.

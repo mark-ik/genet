@@ -4,7 +4,7 @@
 
 //! A detail panel: key/value rows grouped under section headers, all inert.
 //!
-//! Consumer-pull (merecat, 2026-07-17): the Inspector pane renders exactly
+//! Consumer-pull (turnstone, 2026-07-17): the Inspector pane renders exactly
 //! this shape — sections of labelled facts (node identity, content lifecycle,
 //! document structure) — and the surfaces-in-cambium mapping names it the
 //! pane's expression. Steward's status rows and Apparatus's diagnostics

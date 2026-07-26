@@ -5,7 +5,7 @@
 //! A split: two slots and a draggable divider — the pane furniture as a
 //! component.
 //!
-//! Consumer-pull (merecat, 2026-07-17): the frisket pane tiling hand-computes
+//! Consumer-pull (turnstone, 2026-07-17): the frisket pane tiling hand-computes
 //! its rects and has no divider gesture; the Workbench's platen tiling is about
 //! to want the same furniture. The split owns the seam: the divider element,
 //! its drag and keyboard resize, and the geometry both sides sit in.

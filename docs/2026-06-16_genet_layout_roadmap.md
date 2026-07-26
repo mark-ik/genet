@@ -76,7 +76,7 @@ These are settled. The roadmap does not reopen them; it builds on them.
   plan; the genet side is done, the open work is meerkat's render-loop swap.
 - **Multi-root documents** (2026-07-11, `f7b3c53`): a host-built synthetic
   DOM may hang several element children directly off the document node (no
-  `<html>` wrapper — merecat's chrome layer, widget pools). Box tree wraps
+  `<html>` wrapper — turnstone's chrome layer, widget pools). Box tree wraps
   them in a synthetic block root, the cascade traverses every root, and
   root-background propagation gates on a sole root. Before this, everything
   after the first element child silently emitted nothing — worth remembering

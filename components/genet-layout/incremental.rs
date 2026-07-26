@@ -2348,10 +2348,10 @@ mod tests {
     }
 
     /// A host-built document with SEVERAL root elements (no `<html>` wrapper —
-    /// merecat's chrome layer, widget pools) lays out and paints every one of
+    /// turnstone's chrome layer, widget pools) lays out and paints every one of
     /// them. `build_box_tree` used to take only the document's first element
     /// child, so the second absolute sibling's whole subtree silently emitted
-    /// nothing (merecat's omnibar card blanked whenever its caption chip
+    /// nothing (turnstone's omnibar card blanked whenever its caption chip
     /// preceded it).
     #[test]
     fn multi_root_document_paints_every_root_element() {

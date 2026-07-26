@@ -3,7 +3,7 @@
 
 //! The shared scenario driver: a generic verb loop over an [`Automatable`] app.
 //!
-//! merecat proved the shape — a text scenario, pumped one step per rendered
+//! turnstone proved the shape — a text scenario, pumped one step per rendered
 //! frame, asserting against a typed observation and an event stream. This is
 //! that loop, lifted off the app: it parses a small generic grammar, and each
 //! [`tick`](Scenario::tick) drives the app through the [`Automatable`] trait and
@@ -25,7 +25,7 @@
 //! A `click` miss attributes itself into the event stream as
 //! `interaction-missed <selector>`, so a scenario that drives a miss can assert
 //! it rather than have it vanish — the "loud AND attributable" rule, generalized
-//! off merecat into the loop every app inherits.
+//! off turnstone into the loop every app inherits.
 
 use crate::{Automatable, AutomatableExt, Match, Selector, text_present};
 
