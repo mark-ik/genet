@@ -48,14 +48,25 @@ had to be corrected. Prefer a bisect to a hypothesis: reverting one hunk
 attributed a 128-file CSS2 regression precisely and cleared three other
 changes of suspicion in one run.
 
+**Awaiting a ruling:** table layout. The 2026-07-26 work improved the
+emulation and did not build the standard; per the project's own practice a
+capability is either implemented or a recorded knockout, and an emulation
+that scores on the ledger is neither. See the table entry under the
+sub-diff findings.
+
 **Open, in measured value order:** the `content` longhand (F0 ratchet plus
 19 CSS2 files, one slice paid twice), the three color functions
-(`color-layers()` 160, `alpha()` 20, `contrast-color()` 16), a fixed and
-auto table sizing algorithm (the 38-file `fixed-table-layout-003*` family,
-now a sizing problem rather than a box-tree one), `order` with grid
-auto-placement, and the css-flexbox long tail, which is measured as
+(`color-layers()` 160, `alpha()` 20, `contrast-color()` 16), `order` with
+grid auto-placement, and the css-flexbox long tail, which is measured as
 genuinely flat and stays ranked last. Everything after F4 is gated on
 receipts, not dates.
+
+**A standing correction to how this plan reasons.** Several entries were
+written as "the incumbent does X, so X is on-target". That is a valid
+argument about the F4 bar, which is defined against Stylo, and an invalid
+one about the engine, which is defined against the specifications. Where
+the two diverge the specification wins and the gap is recorded, never
+emulated quietly. Deferrals are tracked in the register below.
 
 **Decision record:** Mark, 2026-07-24: "no more servo-*. we grow our own
 equivalents and obviate servo-* crates, or delete 'em," with the teardown
@@ -759,6 +770,55 @@ reviewed; the direction holds and the grind is accepted. Two riders:
   - Receipt: zero `servo-` prefixed workspace members (48 today); genet
     workspace green; product smokes green.
 
+## Deferral register
+
+Every capability this plan has left unbuilt, in one place, because they were
+previously visible only inside the stage that created them and the aggregate
+is what matters. A specification gap is only acceptable in two forms: **built
+to spec**, or a **recorded knockout** with a planned rebuild and its
+directory removed from the F4 bar. A third state has appeared in practice, an
+**emulation** that scores on the ledger while the standard stays unbuilt, and
+it is the dangerous one because it reads like completion. Emulations are
+listed as such and each needs a ruling that turns it into one of the two
+legitimate states.
+
+**Compounds** marks a deferral that gets more expensive the longer it stands,
+usually because other code is growing around the wrong behaviour. Those are
+the ones to take first, ahead of anything ranked purely by file count.
+
+| capability | state | new or inherited | compounds |
+|---|---|---|---|
+| multicol (`column-*`) | **recorded knockout**, ruled D0 | inherited | no |
+| table layout (fixed/auto sizing, spans, border-collapse, captions, colgroups) | **emulation**, ruling needed | inherited | no |
+| block-flow anonymous boxes | **wrong behaviour retained**, scoped away | **new** | **yes** |
+| `min-content` / `max-content` sizing | **wrong behaviour retained** | inherited | **yes** |
+| gamut mapping (out-of-gamut colors clip per channel) | not built | inherited | no |
+| `color-layers()`, `alpha()`, `contrast-color()` | not built | inherited | no |
+| percentage `calc()` in color channels | rejected, not approximated | inherited | no |
+| `order` with grid auto-placement | not built | inherited | no |
+| relative-position rows inside a flattened table | guarded fallback | **new** | no |
+
+**The two that compound, in detail, because they are the ones that will hurt:**
+
+- **Block-flow anonymous boxes.** Collapsible white space between two block
+  boxes generates a box in the text-measuring pass that should not exist.
+  Removing it is correct and measured at -131 files on CSS2, because the
+  table and inline-formatting emulation has grown to depend on the phantom
+  boxes. The rule is therefore scoped to flex and grid containers, where it
+  is unambiguously right, and block flow keeps a known-wrong behaviour that
+  more code can accrete around. Widening it requires fixing the emulation
+  first; the longer both stand, the more entangled they get.
+- **`min-content` / `max-content` sizing.** Both collapse to
+  `Dimension::auto()`, because taffy's safe `Dimension` constructors cannot
+  express content sizes and genet-livery forbids unsafe. The alignment
+  consequence is fixed (they no longer stretch), so this now fails
+  *quietly*: a `min-content` box is sized as though it were `auto` rather
+  than visibly breaking. Quiet wrongness is harder to find later than loud
+  wrongness, which is why it is ranked here rather than by its file count.
+
+Nothing in this register is a silent gap: each is named in the code at the
+point where it is taken, and this table is the index.
+
 ## Non-goals, named
 
 - No re-seam of Stylo into anything after F5; the fallback path lifts
@@ -864,17 +924,36 @@ to that sequencing even though it is technically independent today.
     *sizing*, so `min-content` does not size narrower than `max-content`.
   - `order/column-order-property-auto-placement-001..005`: the `order`
     property's effect on auto-placement. Still open.
-- ~~**`table-layout: fixed`**~~ **TAKEN 2026-07-26, and the premise was
-  wrong.** Neither lane implements fixed table layout: genet-layout's UA
-  sheet calls it a first-cut deferral outright and `stylo_taffy` carries a
-  "TODO: Support table layout in Taffy". The incumbent wins those files
-  because it lays a table out **as a grid**, flattening the row-group and
-  row nesting and giving every cell an explicit `(row, column)`. Livery
-  mapped a table to a flex row and a table-row to another flex row, with no
-  row or column structure at all, so every cell landed on one line. Porting
-  the incumbent's shape into both Livery builders (possible only because
-  grid placement landed the same day) moved **S-only 971 to 916** across
-  the F3b set, with CSS2 449 to 398 and css-tables 14 to 8.
+- **Table layout: emulation improved, standard still unbuilt.** This entry
+  used to read `table-layout: fixed` and is reclassified, because the work
+  done on 2026-07-26 is not that and must not be filed as though it were.
+
+  What landed is 147 lines of box-tree mapping: a `display: table` box
+  collects its cells through the row and row-group nesting and hands each
+  one an explicit `(row, column)` on a grid container. It moved **S-only 971
+  to 916** across the F3b set (CSS2 449 to 398, css-tables 14 to 8) and is
+  structurally much closer to correct than the flex row it replaced.
+
+  **It is not CSS table layout.** Unbuilt: the fixed and auto sizing
+  algorithms, colgroups, rowspan and colspan distribution, border-collapse
+  conflict resolution, caption placement, and anonymous table-box fixup.
+
+  **The justification originally recorded here was wrong** and is kept
+  visible rather than quietly replaced: it argued that the incumbent
+  emulates tables the same way and carries the same deferral, so parity is
+  on-target. Parity with genet-layout is a milestone, not the goal. This
+  project is building a standards-compliant engine, so a capability is
+  either implemented to spec or it is a **recorded knockout** with a planned
+  rebuild, the way multicol was ruled at D0. An emulation that scores on the
+  ledger while leaving the standard unbuilt is neither, and it reads like
+  completion, which is the failure mode a knockout exists to prevent.
+
+  **Ruling needed from Mark**, the same shape as the multicol one: either
+  css-tables and CSS2/tables leave the F4 parity bar as a recorded knockout
+  with table layout scheduled as its own build, or table layout is
+  scheduled now and the emulation is labelled a stepping stone with an
+  explicit expiry. Until one of those is chosen this entry stays open, and
+  the 38-file `fixed-table-layout-003*` family stays unmoved either way.
 
   css-tables is the row worth remembering: its **file count fell by 3 while
   its S-only fell by 6**. The two move independently and only S-only bears
