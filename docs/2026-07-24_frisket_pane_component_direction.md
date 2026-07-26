@@ -114,10 +114,17 @@ which describes the Cambium module at least as well as it described the merecat
 crate. Mark: fun names are welcome; what is not warranted is announcing every
 one of them to the world.
 
-So the name lives on with no package attached. `frisket` 0.0.1 remains on
-crates.io from the crate's earlier life and becomes an orphaned version when
-merecat's crate is deleted, the same end `eidetic`'s bare name reached. No
-republish, no name to defend, no version to align.
+So the name lives on with no *consumable* package attached — but not as an
+orphan. The first draft here ruled "orphan like eidetic", and Mark caught the
+mismatch (2026-07-26): eidetic's bare name fell out of use, while frisket's is
+the module's *active* name, so leaving crates.io describing "the pane model for
+Merecat" against a deleted crate would misinform about our own vocabulary. The
+fix is genet's existing practice: a **name claim** (`support/name-claims/
+frisket`, 0.0.2, the fourteenth in that directory) whose description points at
+the real home — the `frisket` module of `cambium` 0.3.2+ — and whose repository
+points at genet. Deliberately doc-only, no re-export of cambium: a facade would
+be a second consumable path to the module (two names for one idea, the thing
+this ruling exists to stop) and a version pin that goes stale.
 
 The press metaphor does now straddle two repos, since forme and platen stay in
 Mere. Accepted deliberately.
@@ -242,7 +249,11 @@ becomes an orphaned version, the end `eidetic`'s bare name reached.
 - `cambium 0.3.2` **fails**: "no matching package named `genet-host-api` found".
   Cambium's new dependency on the contract is the only thing blocking it.
 
-So the order is genet-host-api, then cambium, and publication stays Mark's step
-per the family convention. Nothing in the family needs it: Woodshed, Hocket, and
-Isometry take Cambium from `genet.git` by branch, and Pelt now path-deps the
-workspace copy. The publish matters only for consumers outside the family.
+So the order was genet-host-api, then cambium. **Both published 2026-07-25**
+(genet-host-api 0.1.0; cambium 0.3.2 with the host-api dep resolving on the
+index), so the registry story is whole for out-of-family consumers. The family
+itself is unchanged: Woodshed, Hocket, and Isometry take Cambium from
+`genet.git` by branch, and Pelt path-deps the workspace copy — the git-only rule
+for the cambium family still stands, since the registry sprigging/cambium pair
+still carries the crates.io `paint_list_api` while the stack git-deps
+netrender's.

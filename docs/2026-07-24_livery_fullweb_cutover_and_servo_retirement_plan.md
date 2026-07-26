@@ -21,9 +21,14 @@ regressions across three runs). It was the worst directory in the F3 ledger
 and is now Livery's largest lead. The specified-value layer that closed the
 second half is the seam `contrast-color()` and `color-layers()` will reuse.
 
-Open: the css/selectors re-run, three unimplemented color functions (196
-subtests), and the layout clusters the sub-diff names. Everything after F4
-stays gated on receipts, not dates.
+The css/selectors hole is closed (2026-07-26): +56 Livery over 5,376
+subtests with a single 4-subtest regressing file, confirming that matching
+is shared and leaving the directory out of the ledger permanently. Every F3
+instrument is now complete.
+
+Open: three unimplemented color functions (196 subtests) and the layout
+clusters the sub-diff names, grid abspos first. Everything after F4 stays
+gated on receipts, not dates.
 **Decision record:** Mark, 2026-07-24: "no more servo-*. we grow our own
 equivalents and obviate servo-* crates, or delete 'em," with the teardown
 explicitly sequenced **after Livery replaces Stylo**. This plan defines that
@@ -383,25 +388,29 @@ reviewed; the direction holds and the grind is accepted. Two riders:
   Done when no directory remains where the Stylo lane's pinned baseline
   beats the Livery lane's, **on both the testharness and reftest lanes**.
 
-  **`css/selectors` is unmeasured** in this pass: both renderers exceeded a
-  30-minute per-run budget before writing expectations (it is the largest
-  directory, `:has()` invalidation included). Its information value is low
-  by construction: the harvest plan keeps `selectors` a shared dependency
-  lifted nowhere, so both lanes run the same matching engine and any delta
-  is integration, not matching.
+  **`css/selectors`: RUN 2026-07-25/26, and the falsifier reads clean.**
+  The original pass could not measure it (both renderers exceeded a
+  30-minute budget); run unbudgeted it costs about 2h40m per renderer, which
+  is why it was the last hole. Prediction: near-parity, because the harvest
+  plan keeps `selectors` a shared dependency lifted nowhere, so both lanes
+  run the same matching engine and any delta is integration, not matching.
 
-  **Closing the hole (instrument spec).** Add `css/selectors` to
-  `ledger_run.sh`'s directory list and run it alone, with no per-run time
-  budget, one renderer at a time (the sequential-runs rule stands). The
-  existing `ledger_diff.py` needs no change; the run is the only cost.
-  Because the prediction is "near-parity, and any delta is integration",
-  the result is read as a **falsifier, not a scoreboard**: a delta inside
-  noise confirms the shared-dependency reading and the directory leaves the
-  ledger permanently; a delta large enough to change a directory's sign is
-  evidence the shared `selectors` crate is being driven differently by the
-  two lanes, which is an integration bug to file against the lane rather
-  than a Livery capability gap. Record whichever outcome lands here and
-  fold the counts into the F3 headline.
+  Measured (data at `Code/testing/genet/wpt-ledger/2026-07-25_selectors/`):
+
+  | | stylo | livery | delta |
+  |---|---:|---:|---:|
+  | subtests | 2145 | 2201 | **+56** |
+  | files worse than the other | 1 (4 subtests) | 18 (60 subtests) | |
+
+  A one-percent delta with **one** regressing file (`placeholder-shown.html`,
+  a form-control pseudo-class, 4 subtests) confirms the shared-dependency
+  reading; Livery's small lead is invalidation integration
+  (`invalidation/*` accounts for most of the 60). Both renderers also took
+  near-identical wall time (2h40m vs 2h43m), which is what shared-engine
+  dominance looks like. **Per the falsifier rule, the directory leaves the
+  ledger permanently.** Folding it in moves the F3 headline from +3,499 to
+  **+3,555**, ahead in 22 of 28 measured directories. No instrument in F3
+  remains open.
 
 - **F3b - the reftest lane. RUN 2026-07-24. THE RESULT INVERTS F3.**
   Nine layout-heavy directories, both renderers, `genet-wpt reftest`.
@@ -719,11 +728,9 @@ to that sequencing even though it is technically independent today.
 
 **Ordered 2026-07-25 (audit with Mark), and where each stands:**
 
-1. ~~**The two open instruments.**~~ **CSS2 sub-diff DONE** (F3b cluster 2
-   carries the result). The ledger data was recovered rather than re-run and
-   now lives at `Code/testing/genet/wpt-ledger/`. **The css/selectors re-run
-   is still open** and is now the only unmeasured directory in either lane.
-   Its spec is at F3's selectors note; it is a long run, not hard work.
+1. ~~**The two open instruments.**~~ **BOTH DONE.** The CSS2 sub-diff is at
+   F3b cluster 2; the css/selectors run landed 2026-07-26 and reads clean
+   (see F3). The testharness lane has no unmeasured directory left.
 2. ~~**The F0 color slice.**~~ **DONE and measured.** `css/css-color` went
    -451 to +1571 (+2,022 subtests, zero regressions); see F0's receipt
    table. The F0 instrument landed alongside it.
