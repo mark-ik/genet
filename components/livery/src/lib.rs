@@ -29,10 +29,43 @@ pub fn canonicalize_specified_longhand(name: &str, value: &str) -> Option<String
         "initial" => Some("initial".to_string()),
         "inherit" => Some("inherit".to_string()),
         "unset" => Some("unset".to_string()),
-        _ => PropertyValue::parse(property, value)
-            .ok()
-            .map(|parsed| parsed.to_css_string()),
+        _ => {
+            // Color longhands serialize their *specified* form, which keeps
+            // more of the authored shape than the computed Color does:
+            // keywords stay keywords, and color-mix() and relative colors
+            // serialize as themselves (csswg-drafts #7302).
+            if property.metadata().value_type == ValueType::Color {
+                return value
+                    .parse::<values::SpecifiedColor>()
+                    .ok()
+                    .map(|specified| specified.to_string());
+            }
+            // Opacity clamps at computed-value time, not at parse:
+            // `opacity: 3` is valid and its specified value serializes as
+            // `3`. The Opacity type stores the clamped computed form, so the
+            // raw number is reconstructed here at the specified boundary.
+            if property.metadata().value_type == ValueType::Opacity
+                && value.trim().parse::<values::Opacity>().is_ok()
+                && let Some(raw) = specified_opacity(value.trim())
+            {
+                return Some(raw);
+            }
+            PropertyValue::parse(property, value)
+                .ok()
+                .map(|parsed| parsed.to_css_string())
+        },
     }
+}
+
+/// The specified serialization of a plain opacity value: the authored
+/// number, unclamped, with percentages resolved to their number form.
+fn specified_opacity(value: &str) -> Option<String> {
+    let raw = if let Some(percentage) = value.strip_suffix('%') {
+        percentage.trim().parse::<f32>().ok()? / 100.0
+    } else {
+        value.parse::<f32>().ok()?
+    };
+    raw.is_finite().then(|| values::format_number_public(raw))
 }
 
 /// Canonicalize one specified CSSOM value covered by Livery's retained value

@@ -15,14 +15,15 @@ items: CSS2's 449 is a long tail over 26 buckets, css-grid slices into 13
 with absolutely-positioned children the clear leader, and css-flexbox does
 not slice at all.
 
-The color slice now has a measured receipt, not a prediction:
-`css/css-color` went from **-451 to +1571** against Stylo (+2,022 subtests,
-zero regressions). It was the worst directory in the F3 ledger and is now a
-Livery win.
+The color slice has a measured receipt, not a prediction: `css/css-color`
+went from **-451 to +3091** against Stylo in one day (+3,542 subtests, zero
+regressions across three runs). It was the worst directory in the F3 ledger
+and is now Livery's largest lead. The specified-value layer that closed the
+second half is the seam `contrast-color()` and `color-layers()` will reuse.
 
-Open: the css/selectors re-run, specified-value serialization for the
-unresolved color functions (813 subtests, one seam), and the layout clusters
-the sub-diff names. Everything after F4 stays gated on receipts, not dates.
+Open: the css/selectors re-run, three unimplemented color functions (196
+subtests), and the layout clusters the sub-diff names. Everything after F4
+stays gated on receipts, not dates.
 **Decision record:** Mark, 2026-07-24: "no more servo-*. we grow our own
 equivalents and obviate servo-* crates, or delete 'em," with the teardown
 explicitly sequenced **after Livery replaces Stylo**. This plan defines that
@@ -215,20 +216,41 @@ reviewed; the direction holds and the grind is accepted. Two riders:
   math, so `hsl(calc(60 + 60) 100% 50%)` failed. A hue takes both an angle
   and a bare number of degrees; both now parse.
 
-  **RECEIPT, measured 2026-07-25.** `css/css-color` re-run on both
-  renderers, data at `Code/testing/genet/wpt-ledger/2026-07-25_color_v2/`:
+  **RECEIPT, measured 2026-07-25, twice.** `css/css-color` on both
+  renderers; data at `Code/testing/genet/wpt-ledger/2026-07-25_color_v2/`
+  (after the function grammar) and `_v4/` (after the specified-value layer):
 
-  | | 2026-07-24 | 2026-07-25 |
-  |---|---:|---:|
-  | Stylo subtests | 1107 | 1107 (control, unchanged) |
-  | Livery subtests | 656 | **2678** |
-  | css-color delta | **-451** | **+1571** |
-  | Livery all-pass files | 9 | 13 |
+  | | 2026-07-24 | after grammar | after specified layer |
+  |---|---:|---:|---:|
+  | Stylo subtests | 1107 | 1107 | 1107 (control) |
+  | Livery subtests | 656 | 2678 | **4198** |
+  | css-color delta | **-451** | +1571 | **+3091** |
 
-  **+2,022 subtests, zero regressions**, and the directory the F3 ledger
-  named as Livery's single worst (-451, the largest net-negative anywhere)
-  now leads by 1,571. Stylo's total is identical across both runs, so the
-  comparison is sound rather than an environment artifact.
+  **+3,542 subtests in the day, zero regressions at every step**, and the
+  directory the F3 ledger named as Livery's single worst (-451, the largest
+  net-negative anywhere) now leads by 3,091. Stylo's total is identical
+  across all three runs, so the comparison is sound rather than an
+  environment artifact.
+
+  **The specified-value layer (the second jump, +1,520).** CSSOM's
+  `getPropertyValue()` returns the *specified* value, which keeps more of
+  the authored shape than the computed value does: keywords stay keywords
+  (`red`, `rebeccapurple`, `canvastext`), and `color-mix()` and relative
+  colors serialize as themselves with only their arguments canonicalized
+  (csswg-drafts #7302), resolving at computed-value time. Livery resolved
+  everything at parse time. `SpecifiedColor`
+  (`components/livery/src/values/color/specified.rs`) is the retained layer
+  in between: validation stays the resolving parser's job (nothing it
+  rejects becomes a specified value), and the capture only remembers what
+  the resolver forgets. It hooks in at exactly one seam,
+  `canonicalize_specified_longhand`, keyed on the property catalog's value
+  type; the cascade, computed values, and paint are untouched. The same
+  boundary now carries opacity's authored range (`opacity: 3` is valid,
+  serializes as `3` specified, clamps computed). One regression appeared
+  mid-course and was caught by the third run: the first opacity fix
+  unclamped the computed level too (`opacity-computed.html` 8 to 4); moving
+  the clamp back to parse and reconstructing the raw form only at the
+  specified boundary restored it.
 
   The run also caught a real defect the unit tests missed: the legacy comma
   forms are **type-uniform**, so `rgb(10%, 20, 30%)` and
@@ -238,23 +260,12 @@ reviewed; the direction holds and the grind is accepted. Two riders:
   to `hsl()`/`hwb()` (number-or-angle hue, both remaining channels
   percentages), and `color-invalid.html` went 8/10 to all-pass.
 
-  **What remains in css-color is 1,014 subtests across 6 files, and it is
-  mostly one architectural gap rather than missing features:**
-
-  - **813 subtests (relative color 583, `color-mix()` 230) are already
-    computed-correct and fail only as *specified* values.** The `-computed-`
-    twins pass outright: relative color 0 to 810, `color-mix()` 0 to 567.
-    The `-valid-` family asserts through `div.style.getPropertyValue()`,
-    which returns the specified value, so `color: rgb(from red r g b)` must
-    serialize back as written. Livery resolves both functions eagerly at
-    parse time and keeps no authored form to return. Closing this means
-    retaining the unresolved function, not implementing anything new, and it
-    is the same seam `contrast-color()` and `color-layers()` will need.
-  - **176 subtests are genuinely unimplemented functions**: `color-layers()`
-    160, `contrast-color()` 16.
-  - **20 subtests are the `alpha()` function**, not implemented and not
-    previously named in this plan.
-  - 5 subtests in `opacity-valid.html` (4 of 5), a tail.
+  **What remains in css-color: 3 files where Stylo leads, all genuinely
+  unimplemented functions** (196 subtests): `color-layers()` 160, `alpha()`
+  20, `contrast-color()` 16. The 813-subtest specified-value gap the first
+  receipt diagnosed is closed; the two big `-valid-` files now read 997/1147
+  and 523/642, with the tails being math-percentage arguments and
+  `currentcolor` operands (both named gaps).
 
   **Unit receipts:** 32 tests in `components/livery/tests/color.rs`;
   `cargo test -p livery -p genet-livery` is 234 green, and genet-wpt,
@@ -740,14 +751,11 @@ to that sequencing even though it is technically independent today.
 
 **Also newly named, from the css-color receipt:**
 
-- **Specified-value serialization for the unresolved color functions** (813
-  subtests: relative color 583, `color-mix()` 230). Both are already
-  computed-correct; they fail only because Livery resolves them at parse
-  time and cannot return the authored form from
-  `getPropertyValue()`. One seam, and the same one `contrast-color()` and
-  `color-layers()` will need, so it is worth building before them.
+- ~~Specified-value serialization~~ **DONE 2026-07-25** (`SpecifiedColor`,
+  the +1,520 jump in the receipt; see F0).
 - `color-layers()` (160), `alpha()` (20), `contrast-color()` (16): three
-  unimplemented functions, in that order by value.
+  unimplemented functions, in that order by value; the retained specified
+  form they need now exists.
 
 Remaining instrument debt: none. The census reports the consumed set, the
 ledger is preserved outside `target/`, and the diff readers are checked in.

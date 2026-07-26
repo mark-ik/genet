@@ -62,6 +62,11 @@ convergence is to retire its tree onto frisket's and keep `PaneContent` plus
 `graph_id` as **content payload** behind an open content lane, not as tree
 structure.
 
+> **Corrected 2026-07-25.** This paragraph's conclusion did not survive contact
+> with merecat's code: it composites one surface per pane rather than rendering a
+> pane frame, so its tree is not a duplicate to retire. See
+> [Follow-ons](#follow-ons-2026-07-25) §2.
+
 ## Shape
 
 **A module in Cambium. No new crate, nothing published, nothing else moved.**
@@ -119,23 +124,20 @@ Mere. Accepted deliberately.
 
 ## Open decisions
 
-1. **`ContentSource`'s open tail.** Today it is a closed enum of `Document`,
-   `ExternalTexture`, and `Settings` — browser vocabulary, and the one part of
-   the contract that is not product-neutral. A Woodshed or Isometry pane needs
-   to name its own lane; the recognized-core-plus-open-tail shape that `sceno`'s
-   `Representation` uses is the precedent.
-2. **Reconciling the two rect derivations.** Cambium's `split` computes
-   geometry as state math so a host placing its own surfaces cannot drift from
-   what the component drew; Pelt's surface takes rects from flex layout via
-   `fragments().rect_of`. As siblings in one crate this is no longer a choice of
-   authority, but the lift still has to converge them.
+Both were answered on 2026-07-25; see [Follow-ons](#follow-ons-2026-07-25) for
+what landed. Kept here as the questions the ruling had to leave open:
+the shape of `ContentSource`'s open tail, and reconciling Cambium `split`'s
+state-math geometry with Pelt's flex-derived rects.
 
 ## Sequencing
 
-Not speculative work. It lands when one of the two existing duplicators pays
-for it: Merecat retargeting its panes, or Isometry wanting tiling for its
-overmap, board, and compendium. Woodshed needs a tool panel beside practice,
-which is one split that Cambium's component already covers.
+**Landed 2026-07-25** rather than waiting for a payer, because Pelt was already
+the consumer: lifting its surface out of the port is what created the module.
+The other trigger named here, "Merecat retargeting its panes", turned out to be
+the wrong goal on inspection — see [Follow-ons](#follow-ons-2026-07-25) §2.
+Isometry wanting tiling for its overmap, board, and compendium remains a live
+future consumer; Woodshed needs a tool panel beside practice, which is one split
+that Cambium's `split` already covers.
 
 ## What landed
 

@@ -17,11 +17,13 @@ mod mix;
 mod parse;
 mod relative;
 mod space;
+mod specified;
 
 use std::{fmt, str::FromStr};
 
 pub use mix::HueInterpolation;
 pub use space::ColorSpace;
+pub use specified::SpecifiedColor;
 
 use space::Components;
 
@@ -175,7 +177,7 @@ impl Color {
                 f32::from(green) / 255.0,
                 f32::from(blue) / 255.0,
             ),
-            alpha: quantize_alpha(alpha),
+            alpha,
             legacy: true,
         }
     }
@@ -185,7 +187,7 @@ impl Color {
         Self::Absolute {
             space: ColorSpace::Srgb,
             components: Components(red, green, blue),
-            alpha: quantize_alpha(alpha),
+            alpha,
             legacy: true,
         }
     }
@@ -295,7 +297,7 @@ impl Color {
             } => Self::Absolute {
                 space,
                 components,
-                alpha: quantize_alpha(alpha),
+                alpha,
                 legacy: true,
             },
             other => other,
@@ -348,25 +350,15 @@ fn alpha_suffix(alpha: f32) -> String {
     format!(" / {}", format_number(alpha))
 }
 
-/// Snap alpha to the 8-bit grid the legacy form serializes on.
-///
-/// The legacy `rgb()`/`rgba()` form is an 8-bit value end to end, so its alpha
-/// is quantized on the way in. Without this, `#33669980` (alpha 128/255)
-/// serializes as `0.502` and reparses as a different float, and
-/// serialize-then-reparse stops being stable.
-pub(crate) fn quantize_alpha(alpha: f32) -> f32 {
-    if alpha.is_nan() {
-        return alpha;
-    }
-    (alpha.clamp(0.0, 1.0) * 255.0).round() / 255.0
-}
-
 /// Legacy alpha serialization: three decimals, trailing zeros trimmed.
 ///
-/// Three decimals is exactly enough to distinguish every 8-bit alpha (1/255 is
-/// about 0.0039), and it is the shape other engines emit, so `#33669980`
-/// serializes as `rgba(51, 102, 153, 0.502)`. Paired with `quantize_alpha`,
-/// reparsing lands on the same float.
+/// Three decimals is exactly enough to distinguish every 8-bit alpha (1/255
+/// is about 0.0039), so `#33669980` serializes as
+/// `rgba(51, 102, 153, 0.502)` while an authored `0.5` stays `0.5`. The
+/// stored alpha is never quantized: WPT requires `hsl(... / .5)` to keep
+/// serializing `0.5`, which an 8-bit snap would turn into `0.502`.
+/// Serialization is therefore lossy for hex alphas but idempotent after one
+/// cycle, the same trade every engine makes.
 fn legacy_alpha(alpha: f32) -> String {
     let text = format!("{:.3}", alpha);
     let trimmed = text.trim_end_matches('0').trim_end_matches('.');

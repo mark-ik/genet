@@ -200,7 +200,7 @@ fn parse_math_number<'i>(
     crate::values::calc::parse_number(source).map_err(|_| fail(input))
 }
 
-fn is_math_function(name: &str) -> bool {
+pub(super) fn is_math_function(name: &str) -> bool {
     const MATH: &[&str] = &[
         "calc", "min", "max", "clamp", "round", "mod", "rem", "sin", "cos", "tan", "asin", "acos",
         "atan", "atan2", "pow", "sqrt", "hypot", "log", "exp", "abs", "sign",
@@ -495,7 +495,7 @@ fn finish(space: ColorSpace, parsed: Parsed) -> Color {
     Color::Absolute {
         space,
         components,
-        alpha: if legacy { super::quantize_alpha(alpha) } else { alpha },
+        alpha,
         legacy,
     }
 }

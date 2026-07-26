@@ -8,7 +8,7 @@ mod length;
 mod property;
 mod transform_matrix;
 
-pub use color::{Color, ColorSpace, HueInterpolation, SystemColor};
+pub use color::{Color, ColorSpace, HueInterpolation, SpecifiedColor, SystemColor};
 pub use length::{
     CalcLengthPercentage, ContainerAxisSize, Length, LengthPercentage, LengthUnit,
     MathLengthPercentage, RelativeLengthEnvironment, TreeCounts,
@@ -444,6 +444,11 @@ impl Interpolate for Transform {
     fn interpolate_value(&self, other: &Self, progress: f32) -> Self {
         self.interpolate(other, progress)
     }
+}
+
+/// Crate-internal alias for the specified-value boundary in lib.rs.
+pub(crate) fn format_number_public(value: f32) -> String {
+    format_number(value)
 }
 
 pub(crate) fn format_number(value: f32) -> String {

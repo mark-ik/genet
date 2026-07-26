@@ -289,7 +289,7 @@ fn the_srgb_family_serializes_as_legacy_rgb() {
         ("#800080", "rgb(128, 0, 128)"),
         ("rebeccapurple", "rgb(102, 51, 153)"),
         ("rgb(1 2 3)", "rgb(1, 2, 3)"),
-        ("rgb(1 2 3 / 0.5)", "rgba(1, 2, 3, 0.502)"),
+        ("rgb(1 2 3 / 0.5)", "rgba(1, 2, 3, 0.5)"),
         ("hsl(0 100% 50%)", "rgb(255, 0, 0)"),
         ("hwb(0 0% 0%)", "rgb(255, 0, 0)"),
         ("transparent", "rgba(0, 0, 0, 0)"),
@@ -486,4 +486,137 @@ fn legacy_syntax_requires_uniform_channel_types() {
     // Modern syntax has no such rule: mixing is fine there.
     assert_eq!(srgb8("rgb(10% 20 30)"), (26, 20, 30, 255));
     assert_eq!(srgb8("hsl(120 100% 50%)"), (0, 255, 0, 255));
+}
+
+// ── The specified level (CSSOM getPropertyValue) ─────────────────────────
+
+#[test]
+fn specified_level_keeps_keywords() {
+    use livery::values::SpecifiedColor;
+    for (input, expected) in [
+        ("red", "red"),
+        ("RED", "red"),
+        ("rebeccapurple", "rebeccapurple"),
+        ("transparent", "transparent"),
+        ("currentcolor", "currentcolor"),
+        ("CanvasText", "canvastext"),
+        // Non-keyword forms still serialize resolved.
+        ("#663399", "rgb(102, 51, 153)"),
+        ("hsl(0 100% 50%)", "rgb(255, 0, 0)"),
+    ] {
+        let parsed = input.parse::<SpecifiedColor>().unwrap();
+        assert_eq!(parsed.to_string(), expected, "{input}");
+    }
+    assert!("florp".parse::<livery::values::SpecifiedColor>().is_err());
+}
+
+#[test]
+fn specified_level_retains_relative_colors() {
+    use livery::values::SpecifiedColor;
+    // Expected strings are WPT css-color/parsing/color-valid-relative-color
+    // expectations verbatim.
+    for (input, expected) in [
+        ("rgb(from rebeccapurple r g b)", "rgb(from rebeccapurple r g b)"),
+        ("rgba(from rebeccapurple r g b / alpha)", "rgb(from rebeccapurple r g b / alpha)"),
+        (
+            "rgb(from rgb(20%, 40%, 60%, 80%) r g b / alpha)",
+            "rgb(from rgba(51, 102, 153, 0.8) r g b / alpha)",
+        ),
+        (
+            "rgb(from hsl(120deg 20% 50% / .5) r g b / alpha)",
+            "rgb(from rgba(102, 153, 102, 0.5) r g b / alpha)",
+        ),
+        (
+            "rgb(from rgb(from rebeccapurple r g b) r g b)",
+            "rgb(from rgb(from rebeccapurple r g b) r g b)",
+        ),
+        ("rgb(from rebeccapurple 0 0 0)", "rgb(from rebeccapurple 0 0 0)"),
+        ("rgb(from rebeccapurple 20% g b / alpha)", "rgb(from rebeccapurple 20% g b / alpha)"),
+        ("oklch(from red l c h)", "oklch(from red l c h)"),
+        (
+            "rgb(from rebeccapurple calc(r / 2) g b)",
+            "rgb(from rebeccapurple calc(r / 2) g b)",
+        ),
+        ("color(from red srgb r g b)", "color(from red srgb r g b)"),
+    ] {
+        let parsed = input.parse::<SpecifiedColor>().unwrap();
+        assert_eq!(parsed.to_string(), expected, "{input}");
+        // The retained form must itself reparse and resolve.
+        assert!(parsed.to_string().parse::<SpecifiedColor>().is_ok());
+        assert!(parsed.resolved().is_some(), "{input} did not resolve");
+    }
+}
+
+#[test]
+fn specified_level_retains_color_mix() {
+    use livery::values::SpecifiedColor;
+    // Expected strings are WPT css-color/parsing/color-valid-color-mix
+    // expectations verbatim, including the percentage normalization rules.
+    for (input, expected) in [
+        ("color-mix(in srgb, red, blue)", "color-mix(in srgb, red, blue)"),
+        (
+            "color-mix(in srgb, 70% red, 50% blue)",
+            "color-mix(in srgb, red 70%, blue 50%)",
+        ),
+        ("color-mix(in hsl, red 50%, blue)", "color-mix(in hsl, red, blue)"),
+        ("color-mix(in hsl, red, blue 50%)", "color-mix(in hsl, red, blue)"),
+        (
+            "color-mix(in hsl, red 25%, blue)",
+            "color-mix(in hsl, red 25%, blue 75%)",
+        ),
+        (
+            "color-mix(in hsl, red, 25% blue)",
+            "color-mix(in hsl, red 75%, blue 25%)",
+        ),
+        (
+            "color-mix(in hsl, red 30%, blue 90%)",
+            "color-mix(in hsl, red 30%, blue 90%)",
+        ),
+        (
+            "color-mix(in hsl, red 0%, blue)",
+            "color-mix(in hsl, red 0%, blue 100%)",
+        ),
+        (
+            "color-mix(in lch decreasing hue, red, hsl(120, 100%, 50%))",
+            "color-mix(in lch decreasing hue, red, rgb(0, 255, 0))",
+        ),
+        (
+            "color-mix(in hsl shorter hue, red, blue)",
+            "color-mix(in hsl, red, blue)",
+        ),
+        (
+            "color-mix(in hsl, hsl(120deg 10% 20% / .4), hsl(30deg 30% 40% / .8))",
+            "color-mix(in hsl, rgba(46, 56, 46, 0.4), rgba(133, 102, 71, 0.8))",
+        ),
+    ] {
+        let parsed = input.parse::<SpecifiedColor>().unwrap();
+        assert_eq!(parsed.to_string(), expected, "{input}");
+        assert!(parsed.resolved().is_some(), "{input} did not resolve");
+    }
+}
+
+#[test]
+fn specified_level_flows_through_the_cssom_seam() {
+    // The seam the WPT -valid- family actually reads.
+    for (input, expected) in [
+        ("red", "red"),
+        ("rgb(from rebeccapurple r g b)", "rgb(from rebeccapurple r g b)"),
+        ("color-mix(in srgb, red, blue)", "color-mix(in srgb, red, blue)"),
+        ("#663399", "rgb(102, 51, 153)"),
+    ] {
+        assert_eq!(
+            livery::canonicalize_specified_longhand("color", input).as_deref(),
+            Some(expected),
+            "{input}",
+        );
+    }
+    assert_eq!(livery::canonicalize_specified_longhand("color", "florp"), None);
+    // Opacity keeps its authored range at the specified level.
+    for (input, expected) in [("-2", "-2"), ("3", "3"), ("-100%", "-1"), ("300%", "3")] {
+        assert_eq!(
+            livery::canonicalize_specified_longhand("opacity", input).as_deref(),
+            Some(expected),
+            "opacity {input}",
+        );
+    }
 }

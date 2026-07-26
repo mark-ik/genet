@@ -101,13 +101,19 @@ fn color_values_round_trip() {
         "CanvasText",
         "#abc",
         "#202733",
-        "#33669980",
         "rgb(32, 39, 51)",
         "rgb(10 20 30 / 50%)",
         "rebeccapurple",
     ] {
         assert_round_trip::<Color>(value);
     }
+    // A hex alpha is not exactly representable in the serialized decimal
+    // (0x80 is 0.50196..., printed "0.502"), so it round-trips to a stable
+    // serialization rather than to the identical float. Same trade every
+    // engine makes; tests/color.rs holds the stability half.
+    let once = "#33669980".parse::<Color>().unwrap().to_css_string();
+    assert_eq!(once, "rgba(51, 102, 153, 0.502)");
+    assert_eq!(once.parse::<Color>().unwrap().to_css_string(), once);
 }
 
 #[test]
@@ -115,7 +121,7 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<Display>("inline-block");
     assert_round_trip::<AspectRatio>("16 / 9");
     assert_round_trip::<BoxSizing>("border-box");
-    assert_round_trip::<BoxShadow>("0 2px 4px #00000055");
+    assert_round_trip::<BoxShadow>("0 2px 4px rgba(0, 0, 0, 0.5)");
     assert_round_trip::<BackgroundImage>("linear-gradient(red, blue)");
     assert_round_trip::<BackgroundImage>("url(data:image/png;base64,seed)");
     assert_round_trip::<BackgroundPosition>("center 10px");
