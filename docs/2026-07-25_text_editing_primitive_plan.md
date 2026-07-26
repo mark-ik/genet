@@ -64,12 +64,15 @@ editing was the one ruled capability no plan carried.
   T4's seam is not only inside the view tree. Its blocker is recorded in
   `repos/isometry/design_docs/2026-07-20_perf_and_cambification_plan.md`.
 
-  Second-order: the natural translation helper, `cambium-winit`'s
-  `key_event_from_winit`, sits in a crate cargo cannot publish (bare `path` deps
-  on `genet-layout`, `genet-winit-host`, `genet-scripted-dom`, `layout-dom-api`;
-  the 0.1.0 on crates.io is stale). Any app pinning published catalog API cannot
-  reach it, so T4's story for a registry consumer depends on `genet-layout`'s
-  standalone release too.
+  ~~Second-order: the natural translation helper, `cambium-winit`'s
+  `key_event_from_winit`, sits in a crate cargo cannot publish.~~ **Resolved
+  2026-07-26.** Only the a11y host needed the unpublishable genet crates, so it
+  moved to `cambium-winit-a11y` and the thin `cambium-winit` (key translation +
+  wheel axes) depends on `cambium` + `winit` alone; `cargo publish --dry-run`
+  passes. Mark also ruled git-first for the whole family the same day, so the
+  reachability question is moot either way: a consumer takes it from genet.git.
+  What remains for T4 is only the routing question above, which is the
+  interesting half.
 - **T5. Fullweb forms.** `input` and `textarea` route through the same core
   in the document lane. Sequenced with the cutover's needs, not ahead of
   them.
@@ -98,3 +101,12 @@ work lives in the knot port plan, not here.
   key-routing constraint that blocked it is now recorded under T4, where it is
   evidence for T0's IME/host inventory instead of a surprise later. Nothing here
   started; the queue position is unchanged.
+- **2026-07-26.** One of that consumer's two blockers cleared, and it was the
+  boring one: `cambium-winit` split so its key translation is publishable
+  (`cambium-winit-a11y` now holds the parts that cannot be). T0's inventory of
+  "what IME events genet-winit-host already delivers" has a working reference to
+  read: **woodshed already routes winit keys into the DOM**, translating with
+  `key_event_from_winit` and handing off to `runner.dispatch_key` after its own
+  shortcuts decline (`woodshed-genet/src/main.rs`). That is the seam Isometry
+  lacks, already built and in use, so T3/T4 can start from a real
+  implementation rather than a design.

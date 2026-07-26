@@ -41,14 +41,18 @@ fn probe_positioned_grid_items() {
     );
     let fragments = layout(&document, &styles, 800.0, 600.0).unwrap();
 
-    fn find(dom: &StaticDocument, node: <StaticDocument as LayoutDom>::NodeId, needle: &str)
-        -> Option<<StaticDocument as LayoutDom>::NodeId> {
+    fn find(
+        dom: &StaticDocument,
+        node: <StaticDocument as LayoutDom>::NodeId,
+        needle: &str,
+    ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
         if dom.kind(node) == NodeKind::Element
             && dom.attribute(node, &Namespace::from(""), &LocalName::from("id")) == Some(needle)
         {
             return Some(node);
         }
-        dom.dom_children(node).find_map(|child| find(dom, child, needle))
+        dom.dom_children(node)
+            .find_map(|child| find(dom, child, needle))
     }
     let by_id = |needle: &str| find(&document, document.document(), needle).expect(needle);
     // css-grid section 9: a grid-placed absolutely positioned item's
@@ -62,7 +66,10 @@ fn probe_positioned_grid_items() {
         ("third", 23.0, 187.0),
         ("fourth", 223.0, 187.0),
     ] {
-        let fragment = fragments.get(by_id(name)).copied().unwrap_or_default();
+        let fragment = fragments
+            .get(by_id(name))
+            .map(|fragment| fragment.physical_rect())
+            .unwrap_or_default();
         assert_eq!(
             (fragment.x, fragment.y),
             (x, y),

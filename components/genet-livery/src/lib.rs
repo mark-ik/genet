@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+mod box_tree;
 mod document;
 mod dom;
 mod invalidation;
@@ -14,12 +15,19 @@ mod paint;
 mod style;
 mod text;
 
+pub use buckram::{
+    AnonymousBoxKind, Baselines, BoxGeneration, BoxId, BoxOrigin, BreakToken, ContainingBlock,
+    ContainingBlockRule, CssBox, CssBoxTree, DisplayInside, DisplayOutside, DisplayRole,
+    FormattingContextKind, Fragment as LayoutFragment, FragmentId, FragmentTree,
+    FragmentationContextId, InternalTableRole, LayoutResult, LogicalRect, PhysicalRect,
+    PositioningScheme, PseudoElement,
+};
 pub use document::{ClickOutcome, LinkTarget, LiveryDocument};
 pub use dom::{ElementRef, InteractionStates, SelectorTree};
 pub use invalidation::{AttributeSnapshot, ElementSnapshot, IncrementalStyle, RestyleStats};
 pub(crate) use layout::hit_test_with_scroll;
 pub use layout::{
-    Fragment, FragmentPlane, LayoutError, content_box_size, hit_test, layout,
+    Fragment, FragmentPlane, LayoutError, LiveryLayout, content_box_size, hit_test, layout,
     resolve_container_query_styles, resolve_container_relative_styles, used_value_context,
 };
 pub use livery::media::{Device, ViewportSize, ViewportSizes};

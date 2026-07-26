@@ -8,16 +8,10 @@ license = "MPL-2.0"
 repository = "https://github.com/mark-ik/genet"
 publish = true
 
+# Two dependencies, and it stays that way. The a11y host moved to
+# `cambium-winit-a11y` on 2026-07-26 because its genet deps (`genet-layout`,
+# `genet-winit-host`) inherit `publish = false` and made this crate
+# unpublishable with them. Adding anything unpublishable here undoes that.
 [dependencies]
-cambium = { version = "0.3.0", path = "../cambium" }
-sprigging = { version = "0.2.0", path = "../sprigging" }
+cambium = { version = "0.3.2", path = "../cambium" }
 winit = "0.30.13"
-# The a11y host (src/a11y.rs) projects a laid-out genet DOM into an AccessKit
-# tree with each Sprigging leaf's own semantics, and drives the platform adapter.
-# Genet crates by path — cambium became a genet component on 2026-07-23, so the
-# git pins and the [patch] redirection they needed are gone.
-genet-layout = { path = "../../genet-layout" }
-genet-winit-host = { path = "../../genet-winit-host" }
-genet-scripted-dom = { path = "../../genet-scripted-dom" }
-layout-dom-api = { path = "../../shared/layout-dom" }
-accesskit = "0.24"

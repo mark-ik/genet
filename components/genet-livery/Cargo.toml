@@ -8,6 +8,7 @@ description = "Genet integration for the clean-room Livery CSS engine."
 readme = "README.md"
 
 [dependencies]
+buckram = { path = "../buckram" }
 data-url = { workspace = true }
 euclid.workspace = true
 image = { workspace = true }

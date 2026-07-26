@@ -1,4 +1,14 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
 //! Accessibility host for a genet-backed Cambium app.
+//!
+//! Split out of `cambium-winit` on 2026-07-26, code unchanged. It lives apart
+//! for one reason: it needs the laid-out genet DOM and the platform adapter,
+//! which cannot be published, and holding them here leaves `cambium-winit` with
+//! only `cambium` and `winit` so its key translation is reachable from a
+//! registry consumer. A host that wants both takes both crates.
 //!
 //! Every Cambium app emits a semantic, ARIA-attributed DOM laid out by
 //! genet-layout, and paints its custom visuals with Sprigging leaves. This

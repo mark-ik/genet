@@ -5,13 +5,19 @@
 //! Platform integration for Cambium applications hosted with winit.
 //!
 //! Window presentation remains the host's responsibility. This crate translates
-//! winit's keyboard vocabulary into Cambium events, and (in [`a11y`]) hosts the
-//! OS accessibility tree so every Cambium app reaches a screen reader.
+//! winit's keyboard vocabulary into Cambium events and maps its wheel deltas to
+//! scroll axes.
+//!
+//! Deliberately thin, and thin on purpose: it depends on `cambium` and `winit`
+//! and nothing else, so it can be published and reached from a consumer that
+//! resolves the catalog from the registry. The accessibility host moved to
+//! `cambium-winit-a11y` on 2026-07-26 for exactly that reason -- it needs the
+//! laid-out genet DOM and the platform adapter, neither of which can be
+//! published, and holding them here made this crate unpublishable too. A host
+//! that wants a screen-reader tree takes both crates.
 
-pub mod a11y;
 pub mod scroll;
 
-pub use a11y::{A11yHost, SpriggingA11y};
 pub use scroll::{ScrollbarFade, wheel_axes};
 
 use cambium::{Key, KeyEvent, Modifiers, NamedKey};

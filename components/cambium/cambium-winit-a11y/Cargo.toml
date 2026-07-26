@@ -1,0 +1,24 @@
+[package]
+name = "cambium-winit-a11y"
+version = "0.3.0"
+description = "AccessKit hosting for genet-backed Cambium applications on winit"
+edition.workspace = true
+rust-version = "1.92"
+license = "MPL-2.0"
+repository = "https://github.com/mark-ik/genet"
+# Can never be published, and that is the reason this crate exists. It needs the
+# laid-out genet DOM (`genet-layout`) and the platform adapter
+# (`genet-winit-host`), both of which inherit genet's `publish = false`. Holding
+# them here keeps `cambium-winit` itself down to `cambium` + `winit`, so the
+# key-translation half is publishable and reachable from a registry consumer.
+# Split out of cambium-winit 2026-07-26; the code is unchanged.
+publish = false
+
+[dependencies]
+sprigging = { version = "0.2.0", path = "../sprigging" }
+winit = "0.30.13"
+accesskit = "0.24"
+genet-layout = { path = "../../genet-layout" }
+genet-winit-host = { path = "../../genet-winit-host" }
+genet-scripted-dom = { path = "../../genet-scripted-dom" }
+layout-dom-api = { path = "../../shared/layout-dom" }

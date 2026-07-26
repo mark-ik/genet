@@ -38,10 +38,56 @@ fn origins(html: &str, css: &str, ids: &[&str]) -> Vec<(f32, f32)> {
     ids.iter()
         .map(|name| {
             let id = find(&document, document.document(), name).expect(name);
-            let fragment = fragments.get(id).copied().unwrap_or_default();
+            let fragment = fragments
+                .get(id)
+                .map(|fragment| fragment.physical_rect())
+                .unwrap_or_default();
             (fragment.x, fragment.y)
         })
         .collect()
+}
+
+#[test]
+fn live_layout_exposes_buckram_box_and_fragment_identity() {
+    let document = StaticDocument::parse(
+        "<html><body><div id=\"parent\"><div id=\"child\">child</div></div></body></html>",
+    );
+    let styles = resolve_styles(
+        &document,
+        &StyleSet::cambium(&[]),
+        &Device::screen(800.0, 600.0),
+        &InteractionStates::default(),
+    );
+    let layout = layout(&document, &styles, 800.0, 600.0).expect("layout");
+    let parent_node = find(&document, document.document(), "parent").expect("parent");
+    let child_node = find(&document, document.document(), "child").expect("child");
+    let parent_box = layout
+        .boxes()
+        .principal_box(parent_node)
+        .expect("parent box");
+    let child_box = layout.boxes().principal_box(child_node).expect("child box");
+
+    assert_eq!(layout.boxes()[child_box].parent(), Some(parent_box));
+
+    let parent_fragment = layout
+        .fragments_for_node(parent_node)
+        .next()
+        .expect("parent fragment");
+    let child_fragment = layout
+        .fragments_for_node(child_node)
+        .next()
+        .expect("child fragment");
+    assert_eq!(parent_fragment.box_id(), parent_box);
+    assert_eq!(child_fragment.box_id(), child_box);
+    assert_eq!(child_fragment.parent(), Some(parent_fragment.id()));
+    assert_eq!(
+        child_fragment.containing_fragment(),
+        Some(parent_fragment.id())
+    );
+    assert_eq!(
+        layout.fragments().fragment_ids_for_box(child_box),
+        &[child_fragment.id()]
+    );
 }
 
 /// Newlines and indentation between grid items are how every real document is
@@ -131,7 +177,11 @@ fn a_no_break_space_still_generates_a_line_box() {
         );
         let fragments = layout(&document, &styles, 800.0, 600.0).expect("layout");
         let id = find(&document, document.document(), "a").expect("a");
-        fragments.get(id).copied().unwrap_or_default().height
+        fragments
+            .get(id)
+            .map(|fragment| fragment.physical_rect())
+            .unwrap_or_default()
+            .height
     };
     assert!(
         heights(with_nbsp) > 0.0,

@@ -995,7 +995,11 @@ fn emit_inline_replaced_image<D>(
     let paintable = frame
         .inline_fragments(id)
         .map(|fragments| fragments.to_vec())
-        .or_else(|| fragments.get(id).copied().map(|fragment| vec![fragment]))
+        .or_else(|| {
+            fragments
+                .get(id)
+                .map(|fragment| vec![fragment.physical_rect()])
+        })
         .unwrap_or_default();
     for fragment in paintable
         .iter()

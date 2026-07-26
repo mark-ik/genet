@@ -11,6 +11,7 @@ members = [
     "components/genet-probe",
     "components/genet-clipboard",
     "components/livery",
+    "components/buckram",
     "components/genet-livery",
     "components/genet-static-dom",
     "components/genet-extract",
@@ -66,6 +67,7 @@ members = [
     "components/cambium/cambium",
     "components/cambium/cambium-nematic",
     "components/cambium/cambium-winit",
+    "components/cambium/cambium-winit-a11y",
     "components/cambium/meristem",
     "components/cambium/sprigging",
     # The Fetch network engine, adopted the same day: genet and mere were its only

@@ -28,6 +28,27 @@ use parley::{
 
 use crate::{Fragment, FragmentPlane, StylePlane, paint::resolve_color};
 
+pub(crate) trait FragmentLookup<Id> {
+    fn rect(&self, id: Id) -> Option<&Fragment>;
+
+    fn atomic_rect(&self, id: Id) -> Option<&Fragment> {
+        self.rect(id)
+    }
+}
+
+impl<Id> FragmentLookup<Id> for FragmentPlane<Id>
+where
+    Id: Copy + Eq + Hash,
+{
+    fn rect(&self, id: Id) -> Option<&Fragment> {
+        self.get(id).map(|fragment| &**fragment)
+    }
+
+    fn atomic_rect(&self, id: Id) -> Option<&Fragment> {
+        self.atomic(id).or_else(|| self.rect(id))
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Brush {
     color: [f32; 4],
@@ -77,11 +98,11 @@ impl TextSystem {
 
     /// Measure one consecutive inline group with the same collection, styles,
     /// atomic boxes, and line breaking used by paint.
-    pub(crate) fn measure_inline_group<D>(
+    pub(crate) fn measure_inline_group<D, F>(
         &mut self,
         dom: &D,
         styles: &StylePlane<D::NodeId>,
-        fragments: &FragmentPlane<D::NodeId>,
+        fragments: &F,
         roots: &[D::NodeId],
         parent_style: &ComputedValues,
         width: f32,
@@ -89,6 +110,7 @@ impl TextSystem {
     where
         D: LayoutDom,
         D::NodeId: Copy + Eq + Hash,
+        F: FragmentLookup<D::NodeId>,
     {
         let mut text = String::new();
         let mut spans = Vec::new();
@@ -222,7 +244,7 @@ impl TextSystem {
         let Some(parent_fragment) = frame
             .inline_fragments(parent)
             .and_then(|fragments| fragments.first())
-            .or_else(|| fragments.get(parent))
+            .or_else(|| fragments.get(parent).map(|fragment| &**fragment))
             .copied()
         else {
             return;
@@ -947,13 +969,14 @@ where
             .is_some_and(|name| name.local.as_ref().eq_ignore_ascii_case("img"))
 }
 
-struct InlineCollector<'a, D>
+struct InlineCollector<'a, D, F>
 where
     D: LayoutDom,
+    F: FragmentLookup<D::NodeId>,
 {
     dom: &'a D,
     styles: &'a StylePlane<D::NodeId>,
-    fragments: &'a FragmentPlane<D::NodeId>,
+    fragments: &'a F,
     already_prepared: &'a HashSet<D::NodeId>,
     owners: &'a mut Vec<D::NodeId>,
     text: &'a mut String,
@@ -963,10 +986,11 @@ where
     percentage_basis: f32,
 }
 
-impl<D> InlineCollector<'_, D>
+impl<D, F> InlineCollector<'_, D, F>
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
+    F: FragmentLookup<D::NodeId>,
 {
     fn collect(&mut self, id: D::NodeId, inherited: &ComputedValues) {
         match self.dom.kind(id) {
@@ -995,12 +1019,7 @@ where
                     return;
                 }
                 if is_replaced_element(self.dom, id) && style.display != Display::InlineBlock {
-                    if let Some(fragment) = self
-                        .fragments
-                        .atomic(id)
-                        .or_else(|| self.fragments.get(id))
-                        .copied()
-                    {
+                    if let Some(fragment) = self.fragments.atomic_rect(id).copied() {
                         let font_size = super::paint::used_font_size(&style);
                         let (line_width, line_box_height, margin_left, margin_top) =
                             inline_margin_box(&style, fragment, font_size, self.percentage_basis);
@@ -1026,12 +1045,7 @@ where
                     return;
                 }
                 if style.display == Display::InlineBlock {
-                    if let Some(fragment) = self
-                        .fragments
-                        .atomic(id)
-                        .or_else(|| self.fragments.get(id))
-                        .copied()
-                    {
+                    if let Some(fragment) = self.fragments.atomic_rect(id).copied() {
                         let font_size = super::paint::used_font_size(&style);
                         let (line_width, line_box_height, margin_left, margin_top) =
                             inline_margin_box(&style, fragment, font_size, self.percentage_basis);
@@ -1094,10 +1108,11 @@ where
     }
 }
 
-impl<D> InlineCollector<'_, D>
+impl<D, F> InlineCollector<'_, D, F>
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
+    F: FragmentLookup<D::NodeId>,
 {
     fn push_edge(
         &mut self,

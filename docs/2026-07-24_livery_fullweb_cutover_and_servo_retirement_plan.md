@@ -78,8 +78,11 @@ tables become grid, rows become flex, most display values become block,
 auto. CSS defines those as distinct box roles, formatting contexts, and
 intrinsic sizes, not interchangeable backend modes. Every "the premise was
 wrong" finding in this plan is a symptom of that one defect. The structural
-answer is a spec-owned box tree between computed values and Taffy; see the
-[box-tree plan](./2026-07-26_livery_box_tree_and_formatting_contexts_plan.md).
+answer is a standards-owned layout engine with a box tree and fragment tree;
+see the
+[Buckram plan](./2026-07-26_buckram_css_layout_engine_plan.md). The earlier
+[box-tree plan](./2026-07-26_livery_box_tree_and_formatting_contexts_plan.md)
+is preserved for its completed B-1/B0 receipt.
 Deferrals are tracked in the register below, and the two ledgers are split
 in the section above.
 
@@ -104,11 +107,11 @@ own linebox, paint) to fullweb fidelity and flips the default to it.
 
 **Recommendation: lane.** Evidence, verified 2026-07-24:
 
-- genet-livery's only layout dependency is **crates.io taffy 0.12.1 with
-  `float_layout`** enabled. No servo-* crate, no stylo family, no vendored
-  patch. The lane is already the own-equivalent the servo-* ruling asks for;
-  the `livery_taffy` idea exists today as the lane's in-crate taffy seam, and
-  needs no standalone adapter crate.
+- genet-livery's layout dependency is Taffy 0.12.1 with `float_layout`
+  enabled, redirected through `support/patches/taffy`. The earlier claim that
+  it used crates.io directly was stale. Buckram is the standalone,
+  standards-owned layout crate; its Taffy adapter uses the low-level algorithm
+  API rather than `TaffyTree`.
 - Every WPT receipt and every pinned `--renderer livery` baseline accrues on
   the lane. A re-seamed genet-layout would start its receipt history from
   zero.
@@ -720,8 +723,11 @@ reviewed; the direction holds and the grind is accepted. Two riders:
      nothing left needs them.
   4. **Archive the fork checkout** `Code/crates/stylo`; freeze the
      genet-stylo publish family at its last release.
-  5. **Drop stylo_taffy and the vendored patches** that exist only for it:
-     `support/patches/{stylo_taffy,taffy,ipc-channel,gpu-allocator}`.
+  5. **Drop stylo_taffy and the vendored patches that exist only for the Stylo
+     cone:** `support/patches/{stylo_taffy,ipc-channel,gpu-allocator}`.
+     Buckram retains `support/patches/taffy` while its documented flex, float,
+     and containment changes are still needed. Each patch leaves only after
+     upstream release adoption or an owned Buckram replacement.
      `support/patches/sonic-rs-0.5.8` is unrelated and stays.
 
   **Verified state, 2026-07-25.** No reverse build edge blocks the gate.
