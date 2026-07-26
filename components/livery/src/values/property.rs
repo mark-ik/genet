@@ -973,6 +973,7 @@ keyword_value! {
 keyword_value! {
     /// Flex and grid main/cross-axis alignment keywords.
     pub enum Alignment {
+        Auto => "auto",
         Start => "start",
         End => "end",
         FlexStart => "flex-start",

@@ -1,6 +1,6 @@
 use genet_livery::{Device, InteractionStates, StyleSet, layout, resolve_styles};
 use genet_static_dom::StaticDocument;
-use layout_dom_api::LayoutDom;
+use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
 
 #[test]
 fn probe_positioned_grid_items() {
@@ -41,23 +41,32 @@ fn probe_positioned_grid_items() {
     );
     let fragments = layout(&document, &styles, 800.0, 600.0).unwrap();
 
-    let by_id = |needle: &str| {
-        document
-            .all_nodes()
-            .find(|&id| document.attribute(id, "id").as_deref() == Some(needle))
-            .expect(needle)
-    };
-    for name in ["grid", "first", "second", "third", "fourth"] {
-        let id = by_id(name);
-        let fragment = fragments.get(id).copied().unwrap_or_default();
-        println!(
-            "{name:8} x={:7.2} y={:7.2} w={:7.2} h={:7.2}",
-            fragment.x, fragment.y, fragment.width, fragment.height,
+    fn find(dom: &StaticDocument, node: <StaticDocument as LayoutDom>::NodeId, needle: &str)
+        -> Option<<StaticDocument as LayoutDom>::NodeId> {
+        if dom.kind(node) == NodeKind::Element
+            && dom.attribute(node, &Namespace::from(""), &LocalName::from("id")) == Some(needle)
+        {
+            return Some(node);
+        }
+        dom.dom_children(node).find_map(|child| find(dom, child, needle))
+    }
+    let by_id = |needle: &str| find(&document, document.document(), needle).expect(needle);
+    // css-grid section 9: a grid-placed absolutely positioned item's
+    // containing block is its grid area, and with auto insets its static
+    // position is the grid-area origin. The grid's content origin is its
+    // border (6,9) plus padding (5,20) inside a border box at (12,8); the
+    // column tracks are 200/300 and the row tracks 150/100.
+    for (name, x, y) in [
+        ("first", 23.0, 37.0),
+        ("second", 223.0, 37.0),
+        ("third", 23.0, 187.0),
+        ("fourth", 223.0, 187.0),
+    ] {
+        let fragment = fragments.get(by_id(name)).copied().unwrap_or_default();
+        assert_eq!(
+            (fragment.x, fragment.y),
+            (x, y),
+            "{name}: abspos grid item must sit at its grid-area origin",
         );
     }
-    // Spec: each item's containing block is its grid area. With auto insets
-    // the static position is the grid-area origin. Grid content origin is
-    // border(6,9)+padding(5,20) inside the container, which sits at the
-    // body margin plus its own margin.
-    panic!("probe only");
 }

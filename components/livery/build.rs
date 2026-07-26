@@ -181,6 +181,7 @@ fn value_type_is_copy(value_type: &str) -> bool {
 
 fn initial_expression(property: &Property) -> &'static str {
     match (property.value_type.as_str(), property.initial.as_str()) {
+        ("alignment", "auto") => "crate::values::Alignment::Auto",
         ("alignment", "start") => "crate::values::Alignment::Start",
         ("alignment", "stretch") => "crate::values::Alignment::Stretch",
         ("animation-name", "none") => "crate::values::AnimationName::None",

@@ -1589,6 +1589,17 @@ fn to_taffy_style(computed: &ComputedValues, font_size: f32) -> Style {
             height: gap(computed.row_gap, font_size),
         },
         align_items: Some(align_items(computed.align_items)),
+        // `auto` on the self properties defers to the parent's items value,
+        // which is taffy's `None`.
+        align_self: match computed.align_self {
+            CssAlignment::Auto => None,
+            value => Some(align_items(value)),
+        },
+        justify_items: Some(align_items(computed.justify_items)),
+        justify_self: match computed.justify_self {
+            CssAlignment::Auto => None,
+            value => Some(align_items(value)),
+        },
         align_content: Some(align_content(computed.align_content)),
         justify_content: Some(justify_content(computed.justify_content)),
         grid_template_columns: grid_template(&computed.grid_template_columns, font_size),

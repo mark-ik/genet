@@ -120,7 +120,7 @@ reviewed; the direction holds and the grind is accepted. Two riders:
   | animation/transition controls | 7 | `animation-delay`, `animation-direction`, `animation-fill-mode`, `animation-iteration-count`, `animation-play-state`, `transition-behavior`, `transition-timing-function` |
   | background family | 6 | `background-attachment`, `background-clip`, `background-origin`, `background-position-x`, `background-position-y`, `background-size` |
   | border-image | 5 | `border-image-outset`, `border-image-repeat`, `border-image-slice`, `border-image-source`, `border-image-width` |
-  | grid and alignment stragglers | 6 | `align-self`, `justify-items`, `justify-self`, `grid-auto-columns`, `grid-auto-rows`, `grid-template-areas` |
+  | grid and alignment stragglers | 6 | `align-self`, `justify-items`, `justify-self` (**landed 2026-07-26**, ratchet 38 to 35), `grid-auto-columns`, `grid-auto-rows`, `grid-template-areas` |
   | layout/paint/effects singles | 14 | `clear`, `clip-path`, `contain`, `content`, `direction`, `filter`, `image-rendering`, `list-style-position`, `mix-blend-mode`, `object-fit`, `perspective`, `text-overflow`, `translate`, `will-change` |
 
   The earlier 8/13 split for the first and last units was off by one in each

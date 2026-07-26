@@ -9,9 +9,9 @@ Regenerate after fork realignments or livery property additions.
 | stylo full database | 427 | 92 |
 | excluded (gecko-only engine) | 172 | 24 |
 | servo-lane destination | 255 | 68 |
-| implemented in livery | 95 | 17 |
+| implemented in livery | 98 | 23 |
 | of which livery-local (outside the servo lane) | 2 | 0 |
-| remaining (known, unimplemented) | 162 | 49 |
+| remaining (known, unimplemented) | 159 | 43 |
 
 ## The consumed-set bar (cutover plan F0)
 
@@ -24,8 +24,8 @@ the default flip waits on, so it is reported separately here.
 | consumed-set parity | longhands |
 | --- | --- |
 | consumed contract (the F0 bar) | 126 |
-| implemented | 88 |
-| **remaining** | **38** |
+| implemented | 91 |
+| **remaining** | **35** |
 
 `tests/consumed_set.rs` asserts this intersection as a ratchet and
 needs no fork checkout, so the receipt outlives the fork's archival
@@ -33,7 +33,6 @@ at F5. This table is the readable half of the same check.
 
 Remaining consumed longhands, the F0 worklist:
 
-- `align-self`
 - `animation-delay`
 - `animation-direction`
 - `animation-fill-mode`
@@ -60,8 +59,6 @@ Remaining consumed longhands, the F0 worklist:
 - `grid-auto-rows`
 - `grid-template-areas`
 - `image-rendering`
-- `justify-items`
-- `justify-self`
 - `list-style-position`
 - `mix-blend-mode`
 - `object-fit`
@@ -250,9 +247,8 @@ are covered, with the upstream decomposition still ahead of them.
 - `padding-inline-end` (logical)
 - `padding-inline-start` (logical)
 
-### position (20)
+### position (17)
 
-- `align-self` (discrete)
 - `block-size` (logical)
 - `grid-auto-columns` (discrete)
 - `grid-auto-rows` (discrete)
@@ -262,8 +258,6 @@ are covered, with the upstream decomposition still ahead of them.
 - `inset-block-start` (logical)
 - `inset-inline-end` (logical)
 - `inset-inline-start` (logical)
-- `justify-items` (discrete)
-- `justify-self` (discrete)
 - `max-block-size` (logical)
 - `max-inline-size` (logical)
 - `min-block-size` (logical)
@@ -314,7 +308,7 @@ are covered, with the upstream decomposition still ahead of them.
 - `view-transition-class` (discrete)
 - `view-transition-name` (discrete)
 
-## Remaining shorthands (49)
+## Remaining shorthands (43)
 
 - `-webkit-perspective` -> `perspective`
 - `-webkit-transform` -> `transform`
@@ -344,11 +338,6 @@ are covered, with the upstream decomposition still ahead of them.
 - `flex` -> `flex-grow`, `flex-shrink`, `flex-basis`
 - `flex-flow` -> `flex-direction`, `flex-wrap`
 - `font-variant` -> `font-variant-caps`, `font-variant-east-asian`, `font-variant-ligatures`, `font-variant-numeric`, `font-variant-position`
-- `grid` -> `grid-template-rows`, `grid-template-columns`, `grid-template-areas`, `grid-auto-rows`, `grid-auto-columns`, `grid-auto-flow`
-- `grid-area` -> `grid-row-start`, `grid-row-end`, `grid-column-start`, `grid-column-end`
-- `grid-column` -> `grid-column-start`, `grid-column-end`
-- `grid-row` -> `grid-row-start`, `grid-row-end`
-- `grid-template` -> `grid-template-rows`, `grid-template-columns`, `grid-template-areas`
 - `inset` -> `top`, `right`, `bottom`, `left`
 - `inset-block` -> `inset-block-start`, `inset-block-end`
 - `inset-inline` -> `inset-inline-start`, `inset-inline-end`
@@ -362,7 +351,6 @@ are covered, with the upstream decomposition still ahead of them.
 - `padding-block` -> `padding-block-start`, `padding-block-end`
 - `padding-inline` -> `padding-inline-start`, `padding-inline-end`
 - `place-content` -> `align-content`, `justify-content`
-- `place-items` -> `align-items`, `justify-items`
 - `place-self` -> `align-self`, `justify-self`
 - `text-decoration` -> `text-decoration-color`, `text-decoration-line`, `text-decoration-style`
 

@@ -321,6 +321,131 @@ fn expand_box_shorthand(
     true
 }
 
+/// Expand `grid-row`, `grid-column`, and `grid-area` into their placement
+/// longhands (css-grid section 3.4). Livery's `<grid-line>` grammar has no
+/// named lines, so the spec's copy-the-custom-ident rule for omitted values
+/// never applies and every omitted position is `auto`.
+fn expand_grid_placement(
+    block: &mut DeclarationBlock,
+    shorthand: ShorthandId,
+    value: &str,
+    important: bool,
+) {
+    let longhands = shorthand.metadata().longhands;
+    let parts = split_top_level(value, '/');
+    let parsed = if parts.is_empty() || parts.len() > longhands.len() {
+        None
+    } else {
+        parts
+            .iter()
+            .map(|part| part.trim().parse::<crate::values::GridPlacement>())
+            .collect::<Result<Vec<_>, _>>()
+            .ok()
+    };
+    let Some(mut placements) = parsed else {
+        block.errors.push(DeclarationError {
+            name: shorthand.metadata().name.to_owned(),
+            value: value.to_owned(),
+            kind: DeclarationErrorKind::InvalidValue,
+        });
+        return;
+    };
+    placements.resize(longhands.len(), crate::values::GridPlacement::Auto);
+    for (&property, placement) in longhands.iter().zip(placements) {
+        block.declarations.push(Declaration {
+            property,
+            value: DeclaredValue::Value(PropertyValue::GridPlacement(placement)),
+            important,
+        });
+    }
+}
+
+/// Expand `grid-template` and the template form of `grid`:
+/// `none | <'grid-template-rows'> / <'grid-template-columns'>`. The `grid`
+/// shorthand additionally resets `grid-auto-flow` to its initial. The
+/// auto-flow forms of `grid` are outside the bounded grammar and reject.
+fn expand_grid_template(
+    block: &mut DeclarationBlock,
+    shorthand: ShorthandId,
+    value: &str,
+    important: bool,
+) {
+    use crate::values::{GridAutoFlow, GridTemplate};
+    let parts = split_top_level(value, '/');
+    let templates = match parts.as_slice() {
+        [only] if only.trim().eq_ignore_ascii_case("none") => {
+            Some((GridTemplate::None, GridTemplate::None))
+        },
+        [rows, columns] => rows
+            .trim()
+            .parse::<GridTemplate>()
+            .ok()
+            .zip(columns.trim().parse::<GridTemplate>().ok()),
+        _ => None,
+    };
+    let Some((rows, columns)) = templates else {
+        block.errors.push(DeclarationError {
+            name: shorthand.metadata().name.to_owned(),
+            value: value.to_owned(),
+            kind: DeclarationErrorKind::InvalidValue,
+        });
+        return;
+    };
+    let mut values = vec![
+        (PropertyId::GridTemplateRows, PropertyValue::GridTemplate(rows)),
+        (PropertyId::GridTemplateColumns, PropertyValue::GridTemplate(columns)),
+    ];
+    if shorthand == ShorthandId::Grid {
+        values.push((
+            PropertyId::GridAutoFlow,
+            PropertyValue::GridAutoFlow(GridAutoFlow::Row),
+        ));
+    }
+    for (property, value) in values {
+        block.declarations.push(Declaration {
+            property,
+            value: DeclaredValue::Value(value),
+            important,
+        });
+    }
+}
+
+/// Expand `place-items`: `<align-items> <justify-items>?`, the second
+/// defaulting to the first.
+fn expand_place_items(block: &mut DeclarationBlock, value: &str, important: bool) {
+    use crate::values::Alignment;
+    let parts = split_components(value);
+    let parsed = match parts.as_slice() {
+        [only] => only.parse::<Alignment>().ok().map(|both| (both, both)),
+        [align, justify] => align
+            .parse::<Alignment>()
+            .ok()
+            .zip(justify.parse::<Alignment>().ok()),
+        _ => None,
+    };
+    // `auto` is a self-alignment value; the items properties reject it.
+    let Some((align, justify)) =
+        parsed.filter(|(a, j)| *a != Alignment::Auto && *j != Alignment::Auto)
+    else {
+        block.errors.push(DeclarationError {
+            name: "place-items".to_owned(),
+            value: value.to_owned(),
+            kind: DeclarationErrorKind::InvalidValue,
+        });
+        return;
+    };
+    for (property, alignment) in [
+        (PropertyId::AlignItems, align),
+        (PropertyId::JustifyItems, justify),
+    ] {
+        block.declarations.push(Declaration {
+            property,
+            value: DeclaredValue::Value(PropertyValue::Alignment(alignment)),
+            important,
+        });
+    }
+}
+
 fn expand_transition(block: &mut DeclarationBlock, value: &str, important: bool) {
     let mut property = None;
     let mut duration = None;
@@ -761,6 +886,15 @@ pub fn parse_declaration_block(input: &str) -> DeclarationBlock {
                 | ShorthandId::BorderLeft
         ) {
             expand_border(&mut block, shorthand, value, important);
+        } else if matches!(
+            shorthand,
+            ShorthandId::GridRow | ShorthandId::GridColumn | ShorthandId::GridArea
+        ) {
+            expand_grid_placement(&mut block, shorthand, value, important);
+        } else if matches!(shorthand, ShorthandId::Grid | ShorthandId::GridTemplate) {
+            expand_grid_template(&mut block, shorthand, value, important);
+        } else if shorthand == ShorthandId::PlaceItems {
+            expand_place_items(&mut block, value, important);
         } else if shorthand == ShorthandId::WhiteSpace {
             expand_white_space(&mut block, value, important);
         } else if shorthand == ShorthandId::Font {

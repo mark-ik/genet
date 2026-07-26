@@ -166,6 +166,42 @@ grammar = "<length-percentage>{1,2}"
 seed_values = ["0", "px", "percentage"]
 source = "css_box_alignment_3"
 
+[shorthands.grid_row]
+longhands = ["grid-row-start", "grid-row-end"]
+grammar = "<grid-line> [ / <grid-line> ]?"
+seed_values = ["1", "1 / 3", "span 2", "2 / span 2", "auto"]
+source = "css_grid_1"
+
+[shorthands.grid_column]
+longhands = ["grid-column-start", "grid-column-end"]
+grammar = "<grid-line> [ / <grid-line> ]?"
+seed_values = ["1", "1 / 3", "span 2", "2 / span 2", "auto"]
+source = "css_grid_1"
+
+[shorthands.grid_area]
+longhands = ["grid-row-start", "grid-column-start", "grid-row-end", "grid-column-end"]
+grammar = "<grid-line> [ / <grid-line> ]{0,3}"
+seed_values = ["1", "1 / 2", "1 / 2 / 3", "1 / 2 / 3 / 4", "auto"]
+source = "css_grid_1"
+
+[shorthands.grid_template]
+longhands = ["grid-template-rows", "grid-template-columns"]
+grammar = "none | <track-list> / <track-list>"
+seed_values = ["none", "100px 100px / 200px 200px", "auto / auto"]
+source = "css_grid_1"
+
+[shorthands.grid]
+longhands = ["grid-template-rows", "grid-template-columns", "grid-auto-flow"]
+grammar = "none | <track-list> / <track-list>"
+seed_values = ["none", "100px 100px / 200px 200px", "150px 100px / 200px 300px"]
+source = "css_grid_1"
+
+[shorthands.place_items]
+longhands = ["align-items", "justify-items"]
+grammar = "<alignment>{1,2}"
+seed_values = ["start", "center stretch", "stretch"]
+source = "css_box_alignment_3"
+
 [shorthands.transition]
 longhands = ["transition-property", "transition-duration"]
 grammar = "[ none | all | opacity | background-color | color | border-top-color | border-bottom-color | border-top-style | border-bottom-style | border-left-style | border-right-style | border-radius | transform | background-position | box-shadow | background-image | background-repeat ] || <time>"
@@ -501,6 +537,36 @@ inherited = false
 initial = "stretch"
 grammar = "start | end | flex-start | flex-end | center | baseline | stretch"
 seed_values = ["stretch", "center", "baseline"]
+animation = "discrete"
+source = "css_box_alignment_3"
+
+[[property]]
+name = "align-self"
+value_type = "alignment"
+inherited = false
+initial = "auto"
+grammar = "auto | start | end | flex-start | flex-end | center | baseline | stretch"
+seed_values = ["auto", "center", "stretch"]
+animation = "discrete"
+source = "css_box_alignment_3"
+
+[[property]]
+name = "justify-items"
+value_type = "alignment"
+inherited = false
+initial = "stretch"
+grammar = "start | end | flex-start | flex-end | center | baseline | stretch"
+seed_values = ["stretch", "center", "start"]
+animation = "discrete"
+source = "css_box_alignment_3"
+
+[[property]]
+name = "justify-self"
+value_type = "alignment"
+inherited = false
+initial = "auto"
+grammar = "auto | start | end | flex-start | flex-end | center | baseline | stretch"
+seed_values = ["auto", "center", "stretch"]
 animation = "discrete"
 source = "css_box_alignment_3"
 
@@ -2009,13 +2075,6 @@ spec = "https://drafts.csswg.org/css-logical-props/#propdef-padding-inline-start
 
 # group: position
 [[unimplemented]]
-name = "align-self"
-group = "position"
-inherited = false
-animation = "discrete"
-spec = "https://drafts.csswg.org/css-align/#align-self-property"
-
-[[unimplemented]]
 name = "block-size"
 group = "position"
 inherited = false
@@ -2083,20 +2142,6 @@ inherited = false
 animation = "by-computed-value"
 logical = true
 spec = "https://drafts.csswg.org/css-logical-props/#propdef-inset-inline-start"
-
-[[unimplemented]]
-name = "justify-items"
-group = "position"
-inherited = false
-animation = "discrete"
-spec = "https://drafts.csswg.org/css-align/#propdef-justify-items"
-
-[[unimplemented]]
-name = "justify-self"
-group = "position"
-inherited = false
-animation = "discrete"
-spec = "https://drafts.csswg.org/css-align/#justify-self-property"
 
 [[unimplemented]]
 name = "max-block-size"
@@ -2506,31 +2551,6 @@ sub_properties = ["font-variant-caps", "font-variant-east-asian", "font-variant-
 spec = "https://drafts.csswg.org/css-fonts-3/#propdef-font-variant"
 
 [[unimplemented_shorthand]]
-name = "grid"
-sub_properties = ["grid-template-rows", "grid-template-columns", "grid-template-areas", "grid-auto-rows", "grid-auto-columns", "grid-auto-flow"]
-spec = "https://drafts.csswg.org/css-grid/#propdef-grid"
-
-[[unimplemented_shorthand]]
-name = "grid-area"
-sub_properties = ["grid-row-start", "grid-row-end", "grid-column-start", "grid-column-end"]
-spec = "https://drafts.csswg.org/css-grid/#propdef-grid-area"
-
-[[unimplemented_shorthand]]
-name = "grid-column"
-sub_properties = ["grid-column-start", "grid-column-end"]
-spec = "https://drafts.csswg.org/css-grid/#propdef-grid-column"
-
-[[unimplemented_shorthand]]
-name = "grid-row"
-sub_properties = ["grid-row-start", "grid-row-end"]
-spec = "https://drafts.csswg.org/css-grid/#propdef-grid-row"
-
-[[unimplemented_shorthand]]
-name = "grid-template"
-sub_properties = ["grid-template-rows", "grid-template-columns", "grid-template-areas"]
-spec = "https://drafts.csswg.org/css-grid/#propdef-grid-template"
-
-[[unimplemented_shorthand]]
 name = "inset"
 sub_properties = ["top", "right", "bottom", "left"]
 spec = "https://drafts.csswg.org/css-logical/#propdef-inset"
@@ -2594,11 +2614,6 @@ spec = "https://drafts.csswg.org/css-logical/#propdef-padding-inline"
 name = "place-content"
 sub_properties = ["align-content", "justify-content"]
 spec = "https://drafts.csswg.org/css-align/#propdef-place-content"
-
-[[unimplemented_shorthand]]
-name = "place-items"
-sub_properties = ["align-items", "justify-items"]
-spec = "https://drafts.csswg.org/css-align/#place-items-property"
 
 [[unimplemented_shorthand]]
 name = "place-self"

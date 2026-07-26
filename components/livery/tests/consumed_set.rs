@@ -105,8 +105,9 @@ fn the_consumed_set_is_the_audits_126_longhands() {
 /// baseline. When it reaches 0, replace the ratchet with a plain equality
 /// assertion and F0's receipt is closed.
 ///
-/// 38 as of 2026-07-25, matching the plan's F0 table.
-const MAX_REMAINING: usize = 38;
+/// 38 as of 2026-07-25; 35 as of 2026-07-26 (the grid/alignment
+/// stragglers landed: align-self, justify-items, justify-self).
+const MAX_REMAINING: usize = 35;
 
 /// F0's receipt, as a ratchet. Prints the exact remaining worklist with the
 /// catalog group for each name, so a failure message is the next slice.

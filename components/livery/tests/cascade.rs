@@ -503,3 +503,65 @@ fn inheritance_and_css_wide_keywords_are_property_aware() {
     assert_eq!(values.width, parent.width);
     assert_eq!(values.margin_left, Margin::Value(LengthPercentage::ZERO));
 }
+
+#[test]
+fn grid_placement_shorthands_expand_to_their_longhands() {
+    use livery::values::GridPlacement;
+    let placements = |css: &str| {
+        let block = parse_declaration_block(css);
+        assert!(block.errors.is_empty(), "{css}: {:?}", block.errors);
+        block
+            .declarations
+            .iter()
+            .map(|declaration| {
+                let livery::cascade::DeclaredValue::Value(PropertyValue::GridPlacement(
+                    placement,
+                )) = &declaration.value
+                else {
+                    panic!("{css}: not a grid placement");
+                };
+                (declaration.property.metadata().name, *placement)
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        placements("grid-column: 1 / 2"),
+        vec![
+            ("grid-column-start", GridPlacement::Line(1)),
+            ("grid-column-end", GridPlacement::Line(2)),
+        ]
+    );
+    // An omitted second value is auto, never a copy: the bounded grammar has
+    // no named lines for the copy rule to apply to.
+    assert_eq!(
+        placements("grid-row: span 2"),
+        vec![
+            ("grid-row-start", GridPlacement::Span(2)),
+            ("grid-row-end", GridPlacement::Auto),
+        ]
+    );
+    assert_eq!(
+        placements("grid-area: 1 / 2 / 3 / 4"),
+        vec![
+            ("grid-row-start", GridPlacement::Line(1)),
+            ("grid-column-start", GridPlacement::Line(2)),
+            ("grid-row-end", GridPlacement::Line(3)),
+            ("grid-column-end", GridPlacement::Line(4)),
+        ]
+    );
+    assert_eq!(
+        placements("grid-area: 2"),
+        vec![
+            ("grid-row-start", GridPlacement::Line(2)),
+            ("grid-column-start", GridPlacement::Auto),
+            ("grid-row-end", GridPlacement::Auto),
+            ("grid-column-end", GridPlacement::Auto),
+        ]
+    );
+    // Malformed forms are declaration errors, not silent drops.
+    for css in ["grid-column: 1 / 2 / 3", "grid-row: florp", "grid-area: 1 / 2 / 3 / 4 / 5"] {
+        let block = parse_declaration_block(css);
+        assert_eq!(block.errors.len(), 1, "{css}");
+        assert!(block.declarations.is_empty(), "{css}");
+    }
+}
