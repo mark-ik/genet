@@ -841,9 +841,35 @@ to that sequencing even though it is technically independent today.
     *sizing*, so `min-content` does not size narrower than `max-content`.
   - `order/column-order-property-auto-placement-001..005`: the `order`
     property's effect on auto-placement. Still open.
-- **`table-layout: fixed`** (about 69 files across CSS2/tables and
-  css-tables, 38 of them one test family). The densest capability gap in
-  CSS2, and one of the two subsystems D0 named as a lift candidate.
+- ~~**`table-layout: fixed`**~~ **TAKEN 2026-07-26, and the premise was
+  wrong.** Neither lane implements fixed table layout: genet-layout's UA
+  sheet calls it a first-cut deferral outright and `stylo_taffy` carries a
+  "TODO: Support table layout in Taffy". The incumbent wins those files
+  because it lays a table out **as a grid**, flattening the row-group and
+  row nesting and giving every cell an explicit `(row, column)`. Livery
+  mapped a table to a flex row and a table-row to another flex row, with no
+  row or column structure at all, so every cell landed on one line. Porting
+  the incumbent's shape into both Livery builders (possible only because
+  grid placement landed the same day) moved **S-only 971 to 916** across
+  the F3b set, with CSS2 449 to 398 and css-tables 14 to 8.
+
+  css-tables is the row worth remembering: its **file count fell by 3 while
+  its S-only fell by 6**. The two move independently and only S-only bears
+  on the F4 flip, which is the whole reason F3b leads with it.
+
+  **Still deferred, and now named in the code:** border-collapse, caption
+  placement, colgroup, row and column spans, and real fixed or auto table
+  sizing. Tracks are implicit and auto-sized, so column widths come from
+  content rather than the first row, which is exactly why the 38-file
+  `fixed-table-layout-003*` family did not move. That family remains the
+  best-defined table work left, and it now needs a sizing algorithm rather
+  than a box-tree change.
+
+  A guard rides along: a table containing a `position: relative` row or row
+  group keeps the old nesting, because flattening discards an offset the
+  cells must inherit and Livery cannot resolve it yet (the incumbent keeps a
+  side list of "cells owed a row-relative shift" for this). Without it,
+  sixteen `position-relative-table-*` files regress.
 - **The `content` longhand.** It is on F0's 38-item list *and* it is 19 of
   CSS2/generated-content's 22 S-only files. One slice, paid twice.
 - **`*-applies-to-*`** (36 files in margin-padding-clear, one systematic
