@@ -1,40 +1,62 @@
 # Livery fullweb cutover and the servo-* retirement
 
 **Date:** 2026-07-24
-**Status:** in execution. D0's F3b checkpoint resolved 2026-07-25 (lane at
-the revised price, multicol knocked out, see the D0 riders). Every stage
-F0-F6 carries its detail, its instrument, and its receipt, and each figure
-was verified against the tree on 2026-07-25 (see "Verified state" under each
-stage).
+**Status:** in execution, as of 2026-07-26. D0 is ruled (lane, at the
+revised price; multicol knocked out). Every stage F0-F6 carries its detail,
+its instrument, and its receipt.
 
-Landed 2026-07-25: **F0's receipt instrument** (a consumed-set ratchet that
-survives the fork's archival), **the F0 color slice** (CSS Color 4/5
-including relative color syntax), and **the sub-diff instrument**, run over
-CSS2, css-flexbox, and css-grid. It found that F3b's clusters are not work
-items: CSS2's 449 is a long tail over 26 buckets, css-grid slices into 13
-with absolutely-positioned children the clear leader, and css-flexbox does
-not slice at all.
+**Where the two lanes stand.**
 
-The color slice has a measured receipt, not a prediction: `css/css-color`
-went from **-451 to +3091** against Stylo in one day (+3,542 subtests, zero
-regressions across three runs). It was the worst directory in the F3 ledger
-and is now Livery's largest lead. The specified-value layer that closed the
-second half is the seam `contrast-color()` and `color-layers()` will reuse.
+| lane | measure | 2026-07-24 | now |
+|---|---|---:|---:|
+| testharness (F3) | subtests vs Stylo | +3,499 | **+3,555** |
+| reftest (F3b) | files vs Stylo | -241 | **-149** |
+| reftest (F3b) | **S-only, the F4 bar** | **1,055** | **916** |
+| F0 | consumed longhands missing | 38 | **35** |
 
-The css/selectors hole is closed (2026-07-26): +56 Livery over 5,376
-subtests with a single 4-subtest regressing file, confirming that matching
-is shared and leaving the directory out of the ledger permanently. Every F3
-instrument is now complete.
+S-only is the count of files Stylo renders and Livery does not, which is the
+F4 regression count and the only reftest number the flip depends on. Net
+deltas are reported because they are asked for, not because they gate
+anything; css-tables is the standing counter-example, where the file count
+fell by 3 in the same change that cut S-only by 6. Excluding css-multicol
+per the D0 knockout, the F4 bar is **901 files**.
 
-The reftest lane moved too, and F3b's table is re-measured as of
-2026-07-26: **S-only 1055 to 971**, net -241 to -167, almost all of it
-css-grid. That came from a grammar slice plus one engine bug, and the bug's
-first fix was itself a net loss until the whole set was re-measured; the
-episode is recorded at F3b cluster 1 because the lesson generalizes.
+**What has been taken, and what it taught.** Four slices have landed, and in
+three of them the plan's own diagnosis was wrong in a way worth recording:
 
-Open: three unimplemented color functions (196 subtests) and the layout
-clusters the sub-diff names, grid abspos first. Everything after F4 stays
-gated on receipts, not dates.
+- **The color subsystem (F0).** css-color went -451 to **+3091**, the
+  largest single swing in the ledger, in two steps: the CSS Color 4/5
+  function grammar, then a specified-value layer for the forms CSSOM must
+  serialize as authored. Three unimplemented functions remain (196
+  subtests).
+- **css/selectors (F3).** The last unmeasured directory, and the falsifier
+  read clean: +56 over 5,376 subtests, one regressing file. Matching is
+  genuinely shared, so the directory leaves the ledger permanently.
+- **Grid abspos.** Predicted as a layout gap; it was **grammar**. The
+  placement and alignment shorthands were unimplemented, so placements never
+  reached taffy. Behind it sat an engine bug (whitespace generating
+  anonymous boxes) worth more than the slice itself.
+- **Tables.** Predicted as `table-layout: fixed`; **neither lane implements
+  it.** The incumbent wins by laying tables out as a grid, which Livery now
+  does too.
+
+**The method that produced those corrections is the transferable part.**
+Measure the whole affected set before believing a slice, because two of
+today's changes looked like wins on their target directory and were net
+losses across the corpus; the blank-run rule was committed in that state and
+had to be corrected. Prefer a bisect to a hypothesis: reverting one hunk
+attributed a 128-file CSS2 regression precisely and cleared three other
+changes of suspicion in one run.
+
+**Open, in measured value order:** the `content` longhand (F0 ratchet plus
+19 CSS2 files, one slice paid twice), the three color functions
+(`color-layers()` 160, `alpha()` 20, `contrast-color()` 16), a fixed and
+auto table sizing algorithm (the 38-file `fixed-table-layout-003*` family,
+now a sizing problem rather than a box-tree one), `order` with grid
+auto-placement, and the css-flexbox long tail, which is measured as
+genuinely flat and stays ranked last. Everything after F4 is gated on
+receipts, not dates.
+
 **Decision record:** Mark, 2026-07-24: "no more servo-*. we grow our own
 equivalents and obviate servo-* crates, or delete 'em," with the teardown
 explicitly sequenced **after Livery replaces Stylo**. This plan defines that
@@ -762,8 +784,9 @@ to that sequencing even though it is technically independent today.
    F3b cluster 2; the css/selectors run landed 2026-07-26 and reads clean
    (see F3). The testharness lane has no unmeasured directory left.
 2. ~~**The F0 color slice.**~~ **DONE and measured.** `css/css-color` went
-   -451 to +1571 (+2,022 subtests, zero regressions); see F0's receipt
-   table. The F0 instrument landed alongside it.
+   -451 to **+3091** across two steps, the grammar and then the
+   specified-value layer; see F0's receipt table. The F0 instrument landed
+   alongside it and its ratchet now stands at 35.
 3. ~~**Slice the flexbox/grid cluster.**~~ **DONE** (F3b cluster 1 carries
    both tables). The work it exposes is below.
 
