@@ -26,6 +26,12 @@ subtests with a single 4-subtest regressing file, confirming that matching
 is shared and leaving the directory out of the ledger permanently. Every F3
 instrument is now complete.
 
+The reftest lane moved too, and F3b's table is re-measured as of
+2026-07-26: **S-only 1055 to 971**, net -241 to -167, almost all of it
+css-grid. That came from a grammar slice plus one engine bug, and the bug's
+first fix was itself a net loss until the whole set was re-measured; the
+episode is recorded at F3b cluster 1 because the lesson generalizes.
+
 Open: three unimplemented color functions (196 subtests) and the layout
 clusters the sub-diff names, grid abspos first. Everything after F4 stays
 gated on receipts, not dates.
@@ -429,8 +435,32 @@ reviewed; the direction holds and the grind is accepted. Two riders:
   | CSS2 | 4149 | 4264 | +115 | 449 | 564 |
   | **TOTAL** | **5893** | **5652** | **-241** | **1055** | **814** |
 
-  The table is the as-run 2026-07-24 result and stays unedited. **After the
-  2026-07-25 multicol knockout, the F4 bar reads over the other eight
+  **Re-measured 2026-07-26** after the color, grid-grammar, and blank-run
+  work (livery only; Stylo is untouched, so its column stands). Data at
+  `wpt-ledger/2026-07-26_scoped/`:
+
+  | directory | stylo | livery | delta | S-only |
+  |---|---:|---:|---:|---:|
+  | css-flexbox | 469 | 350 | -119 | 189 |
+  | css-backgrounds | 321 | 219 | -102 | 126 |
+  | css-grid | 470 | 434 | -36 | 114 |
+  | css-position | 62 | 43 | -19 | 23 |
+  | css-writing-modes | 231 | 224 | -7 | 35 |
+  | css-multicol | 106 | 102 | -4 | 15 |
+  | css-tables | 60 | 62 | +2 | 14 |
+  | css-borders | 25 | 28 | +3 | 6 |
+  | CSS2 | 4149 | 4264 | +115 | 449 |
+  | **TOTAL** | **5893** | **5726** | **-167** | **971** |
+
+  **S-only, the measure that matters, goes 1055 to 971**, and the net delta
+  goes -241 to -167. Almost all of it is css-grid, which is the only
+  directory that has had a slice taken at it; the rest moved by single
+  digits or not at all. Excluding css-multicol per the D0 knockout, the F4
+  bar is **956 files**, down from 1,040.
+
+  The 2026-07-24 table above is the as-run original and stays unedited.
+  **After the 2026-07-25 multicol knockout, the F4 bar reads over the other
+  eight
   directories: 5,787 Stylo, 5,550 Livery, -237, and 1,040 S-only files.**
   That 1,040 is the number F4 has to drive to zero or knock out.
 
@@ -767,31 +797,50 @@ to that sequencing even though it is technically independent today.
   `components/genet-livery/tests/anonymous_boxes.rs` guards it for grid and
   flex, including that `white-space: pre` still generates its box.
 
-  **The receipt, the largest single reftest movement so far** (data at
-  `wpt-ledger/2026-07-26_grid-*`):
+  **The receipt** (data at `wpt-ledger/2026-07-26_scoped/`):
 
   | css-grid (livery) | files | S-only vs Stylo |
   |---|---:|---:|
   | 2026-07-24 baseline | 371 | 190 |
   | after the grammar slice | 375 | 169 |
-  | **after the blank-run fix** | **433** | **111** |
+  | **after the blank-run fix** | **434** | **114** |
 
-  Stylo is 470 on the same corpus, so the gap closes from 99 files to 37,
+  Stylo is 470 on the same corpus, so the gap closes from 99 files to 36,
   and the flagship reftest is pixel-identical (diff 0, maxδ 0). The plan's
   estimate of "41 files behind one feature" was right in shape; the feature
-  was grammar, and behind it sat an engine bug worth twice as much.
+  was grammar, and behind it sat an engine bug worth more.
+
+  **The blank-run fix was committed once in a wrong form, and the correction
+  is the more useful record.** It was landed on css-grid's number alone; a
+  refresh of the whole F3b set showed a net loss of 93 files (-128 CSS2, -18
+  css-tables, -6 css-position against grid's +62). Bisecting by reverting
+  only that hunk put CSS2 at 4263 against a 4264 baseline, which attributed
+  the loss precisely and cleared the color, specified-value, and
+  grid-grammar work of any part in it. Two defects were behind it:
+  `str::trim` treats U+00A0 as whitespace where css-text-3 does not, so
+  `&nbsp;` (the standard way a test forces a line box) was being deleted;
+  and the rule was applied to every container when css-flexbox section 4 and
+  css-grid section 6 state it for flex and grid, which is where it matters.
+  In block flow the extra boxes turn out to be load-bearing for the current
+  table and inline-formatting emulation. Scoped to those two containers, the
+  whole F3b set moves forward and nothing regresses. **The lesson worth
+  keeping: a single directory is not a receipt for a change to shared
+  layout code.**
 
   **32 regressions sit inside the churn**, 23 from the grammar slice and 9
   from the blank-run fix, all of them defects the phantom boxes had been
   hiding rather than new breakage. The two named groups:
 
-  - `grid-item-non-auto-height-stretch-001..004`: an item whose block-size
-    is not `auto` (`height: max-content`) is still stretched by the default
-    `align-items: stretch`, which css-align allows only when the size
-    computes to `auto`. `max-content` parses correctly, so this is
-    integration, not grammar.
+  - ~~`grid-item-non-auto-height-stretch-001..004`~~ **fixed 2026-07-26.**
+    Livery maps the content keywords onto `Dimension::auto()` because
+    taffy's safe `Dimension` constructors cannot express them and
+    genet-livery forbids unsafe, so taffy saw `auto` and applied the
+    container's stretch; css-align permits stretch only when the size
+    genuinely computes to `auto`. Suppressed at the alignment layer.
+    **Still open behind it:** content keywords reach taffy as `auto` for
+    *sizing*, so `min-content` does not size narrower than `max-content`.
   - `order/column-order-property-auto-placement-001..005`: the `order`
-    property's effect on auto-placement.
+    property's effect on auto-placement. Still open.
 - **`table-layout: fixed`** (about 69 files across CSS2/tables and
   css-tables, 38 of them one test family). The densest capability gap in
   CSS2, and one of the two subsystems D0 named as a lift candidate.
@@ -801,11 +850,11 @@ to that sequencing even though it is technically independent today.
   pattern) and the **replaced-element sizing family** in normal-flow (about
   26 files). The latter is D0's other named lift candidate, so measure
   before deciding whether to lift or fix in place.
-- **css-flexbox** was ranked last deliberately (196 files over 123 buckets,
-  none above 5.1%), but **re-measure before believing that**: the
-  2026-07-26 blank-run fix was in shared inline construction and moved
-  css-grid by 62 files, so flexbox's tail may already have shortened. A
-  read costs one reftest run and no code.
+- **css-flexbox** stays ranked last, now on measurement rather than
+  inference. The guess that the blank-run fix might shorten its tail (it
+  lives in shared inline construction) was tested on 2026-07-26 and came
+  back +8 files, 342 to 350, S-only 196 to 189. The 123-bucket long tail is
+  real and there is still no large lever in it.
 - **Grid self-alignment against non-auto sizes**, and **`order` with
   auto-placement**: the nine defects the blank-run fix exposed, named
   above.
