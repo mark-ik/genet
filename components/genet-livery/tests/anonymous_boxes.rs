@@ -185,3 +185,39 @@ fn table_cells_are_placed_on_a_grid() {
     assert!(bx > ax, "the second column sits right of the first");
     assert!(cy > ay, "the second row sits below the first");
 }
+
+/// CSS 2.1 section 17.5.2.1: fixed table layout sizes columns from the first
+/// row, not from content.
+///
+/// The case is WPT's `CSS2/tables/fixed-table-layout-003a01`: a 400px table
+/// of three columns whose middle first-row cell asks for `width: 80px` with
+/// `padding: 0 60px`. `width` is a content-box width, so that cell
+/// establishes a 200px column, and the two auto columns split the remaining
+/// 200px. Content never enters the calculation, which is what makes the
+/// fixed algorithm computable before layout.
+#[test]
+fn fixed_table_layout_sizes_columns_from_the_first_row() {
+    let html = "<html><body><table id=\"t\">        <tr><td id=\"a\"></td><td id=\"b\">A01</td><td id=\"c\"></td></tr>        </table></body></html>";
+    let css = "table { table-layout: fixed; width: 400px; border-spacing: 0; }                td { padding: 0 60px; border: none; }                td#b { width: 80px; }";
+    let cells = origins(html, css, &["a", "b", "c"]);
+    let (ax, _) = cells[0];
+    let (bx, _) = cells[1];
+    let (cx, _) = cells[2];
+    // Columns are 100 / 200 / 100 across the table's 400px content box.
+    assert_eq!(bx - ax, 100.0, "the first auto column takes half the slack");
+    assert_eq!(cx - bx, 200.0, "the sized cell establishes a 200px column");
+}
+
+/// `table-layout: auto` leaves the columns content-sized, so the same markup
+/// must not pick up the fixed algorithm's widths.
+#[test]
+fn auto_table_layout_does_not_use_the_fixed_algorithm() {
+    let html = "<html><body><table id=\"t\">        <tr><td id=\"a\"></td><td id=\"b\">A01</td><td id=\"c\"></td></tr>        </table></body></html>";
+    let css = "table { width: 400px; border-spacing: 0; }                td { padding: 0 60px; border: none; }                td#b { width: 80px; }";
+    let cells = origins(html, css, &["a", "b", "c"]);
+    assert_ne!(
+        cells[1].0 - cells[0].0,
+        100.0,
+        "auto tables must not take the fixed column widths",
+    );
+}

@@ -60,6 +60,33 @@ fn is_covered(name: &str) -> bool {
     PropertyId::from_css_name(name).is_some() || ShorthandId::from_css_name(name).is_some()
 }
 
+/// Properties the catalog admits are only partly built.
+///
+/// A partial property parses and honours a named subset of its
+/// specification. It is deliberately *not* counted as implemented: the
+/// point of this receipt is that recognising a value is not implementing
+/// its semantics, and a name count that ignores the difference is a
+/// conformance claim the catalog cannot support.
+fn partial_properties() -> Vec<(&'static str, &'static str)> {
+    PropertyId::ALL
+        .iter()
+        .filter_map(|id| {
+            let metadata = id.metadata();
+            metadata.partial.map(|note| (metadata.name, note))
+        })
+        .collect()
+}
+
+#[test]
+fn partial_properties_declare_the_subset_they_build() {
+    for (name, note) in partial_properties() {
+        assert!(
+            note.len() > 20,
+            "{name} is partial but its note does not say what is built",
+        );
+    }
+}
+
 #[test]
 fn the_consumed_set_is_the_audits_126_longhands() {
     let consumed = consumed_set();
@@ -126,6 +153,22 @@ fn f0_receipt_consumed_longhands_are_implemented() {
         consumed.len(),
         missing.len(),
     );
+    // Partials are counted as implemented by every name-based census,
+    // including the one above. Say so on the same line, or the number reads
+    // as a conformance claim the catalog cannot support.
+    let partial = partial_properties();
+    if !partial.is_empty() {
+        report.push_str("  PARTIAL (parsed, semantics only partly built):
+");
+        for (name, note) in &partial {
+            let consumed_here = consumed.iter().any(|entry| entry.name == *name);
+            report.push_str(&format!(
+                "    {name}{} - {note}
+",
+                if consumed_here { " [in the consumed set]" } else { "" },
+            ));
+        }
+    }
     let mut uncatalogued = Vec::new();
     for entry in &missing {
         match livery::unimplemented_longhand(&entry.name) {

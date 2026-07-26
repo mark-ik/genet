@@ -49,6 +49,17 @@ struct Property {
     seed_values: Vec<String>,
     animation: String,
     source: String,
+    /// The structural subset of the specification that is actually built,
+    /// when it is not the whole property. A property carrying this is
+    /// **partial**: the parser accepts the value and the engine honours the
+    /// named subset only.
+    ///
+    /// This exists because a catalog that can only say implemented or
+    /// unimplemented turns a property-name count into a conformance claim,
+    /// which it is not. Recognising a value is not implementing its
+    /// semantics.
+    #[serde(default)]
+    partial: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -119,6 +130,7 @@ fn value_type_path(value_type: &str) -> &'static str {
         "border-width" => "crate::values::BorderWidth",
         "box-shadow" => "crate::values::BoxShadow",
         "box-sizing" => "crate::values::BoxSizing",
+        "table-layout" => "crate::values::TableLayout",
         "container-name" => "crate::values::ContainerName",
         "container-type" => "crate::values::ContainerType",
         "color" => "crate::values::Color",
@@ -194,6 +206,7 @@ fn initial_expression(property: &Property) -> &'static str {
         ("border-width", "medium") => "crate::values::BorderWidth::Medium",
         ("box-shadow", "none") => "crate::values::BoxShadow::None",
         ("box-sizing", "content-box") => "crate::values::BoxSizing::ContentBox",
+        ("table-layout", "auto") => "crate::values::TableLayout::Auto",
         ("container-name", "none") => "crate::values::ContainerName::None",
         ("container-type", "normal") => "crate::values::ContainerType::Normal",
         ("color", "transparent") => "crate::values::Color::TRANSPARENT",
@@ -445,6 +458,9 @@ fn generate(db: &Database) -> String {
          \x20   pub value_type: ValueType,\n\
          \x20   pub inherited: bool,\n\
          \x20   pub initial: &'static str,\n\
+         \x20   /// The built subset when the property is partial, `None`\n\
+         \x20   /// when the whole specification is built.\n\
+         \x20   pub partial: Option<&'static str>,\n\
          \x20   pub grammar: &'static str,\n\
          \x20   pub seed_values: &'static [&'static str],\n\
          \x20   pub animation: AnimationClass,\n\
@@ -482,12 +498,16 @@ fn generate(db: &Database) -> String {
         };
         let source = &db.sources[&property.source].url;
         out.push_str(&format!(
-            "            Self::{variant} => PropertyMetadata {{ id: Self::{variant}, name: {name}, value_type: ValueType::{value_type}, inherited: {inherited}, initial: {initial}, grammar: {grammar}, seed_values: {seed_values}, animation: {animation}, source_url: {source} }},\n",
+            "            Self::{variant} => PropertyMetadata {{ id: Self::{variant}, name: {name}, value_type: ValueType::{value_type}, inherited: {inherited}, initial: {initial}, partial: {partial}, grammar: {grammar}, seed_values: {seed_values}, animation: {animation}, source_url: {source} }},\n",
             variant = rust_name(&property.name),
             name = literal(&property.name),
             value_type = rust_name(&property.value_type),
             inherited = property.inherited,
             initial = literal(&property.initial),
+            partial = match &property.partial {
+                Some(note) => format!("Some({})", literal(note)),
+                None => "None".to_owned(),
+            },
             grammar = literal(&property.grammar),
             seed_values = string_slice(&property.seed_values),
             source = literal(source),

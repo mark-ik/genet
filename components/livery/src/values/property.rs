@@ -841,6 +841,15 @@ keyword_value! {
 }
 
 keyword_value! {
+    /// `table-layout`: which of CSS 2.1 section 17.5.2's two column-width
+    /// algorithms a table uses.
+    pub enum TableLayout {
+        Auto => "auto",
+        Fixed => "fixed",
+    }
+}
+
+keyword_value! {
     /// Axes exposed as query-container size bases.
     pub enum ContainerType {
         Normal => "normal",

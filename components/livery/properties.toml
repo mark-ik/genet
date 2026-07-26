@@ -61,6 +61,9 @@ url = "https://www.w3.org/TR/css-flexbox-1/"
 [sources.css_grid_1]
 url = "https://www.w3.org/TR/css-grid-1/"
 
+[sources.css_tables_3]
+url = "https://www.w3.org/TR/css-tables-3/"
+
 [sources.css_conditional_5]
 url = "https://www.w3.org/TR/css-contain-3/"
 
@@ -439,6 +442,17 @@ grammar = "<line-width>"
 seed_values = ["px"]
 animation = "by-computed-value"
 source = "css_backgrounds_3"
+
+[[property]]
+name = "table-layout"
+value_type = "table-layout"
+inherited = false
+initial = "auto"
+grammar = "auto | fixed"
+seed_values = ["auto", "fixed"]
+animation = "discrete"
+source = "css_tables_3"
+partial = "fixed sizing from first-row cell widths only (CSS 2.1 17.5.2.1); no <col>/<colgroup> contribution, no row or column spans, no border-spacing in the width calculation, and the auto algorithm (17.5.2.2) is not built"
 
 [[property]]
 name = "box-sizing"
@@ -2282,13 +2296,6 @@ animation = "discrete"
 spec = "https://drafts.fxtf.org/css-masking-1/#propdef-mask-type"
 
 # group: table
-[[unimplemented]]
-name = "table-layout"
-group = "table"
-inherited = false
-animation = "discrete"
-spec = "https://drafts.csswg.org/css-tables/#propdef-table-layout"
-
 # group: text
 [[unimplemented]]
 name = "text-decoration-style"

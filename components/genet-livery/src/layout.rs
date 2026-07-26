@@ -9,7 +9,7 @@ use livery::{
         Alignment as CssAlignment, AspectRatio, BorderStyle, BorderWidth,
         BoxSizing as CssBoxSizing, ContainerType, Display as CssDisplay,
         FlexDirection as CssFlexDirection, FlexWrap as CssFlexWrap, Float as CssFloat, FontSize,
-        Gap as CssGap, GridAutoFlow as CssGridAutoFlow, GridPlacement as CssGridPlacement,
+        Gap as CssGap, TableLayout as CssTableLayout, GridAutoFlow as CssGridAutoFlow, GridPlacement as CssGridPlacement,
         GridTemplate as CssGridTemplate, GridTrack as CssGridTrack, Inset, Length,
         LengthPercentage as CssLengthPercentage, LineHeight, Margin, Overflow as CssOverflow,
         Position as CssPosition, RelativeLengthEnvironment, Size as CssSize, VerticalAlign,
@@ -1058,6 +1058,22 @@ where
                         .collect::<Result<Vec<_>, _>>()?
                 };
                 let mut taffy_style = to_taffy_style(&computed, font_size);
+                // CSS 2.1 section 17.5.2.1: a fixed table's columns are sized
+                // from the first row, so they can be pinned as explicit grid
+                // tracks before anything is measured.
+                if let Some(columns) = fixed_column_widths(
+                    self.dom,
+                    self.styles,
+                    id,
+                    &computed,
+                    font_size,
+                    containing_size.0,
+                ) {
+                    taffy_style.grid_template_columns = columns
+                        .into_iter()
+                        .map(length)
+                        .collect();
+                }
                 taffy_style.size.width =
                     dimension_with_basis(computed.width, font_size, containing_size.0);
                 taffy_style.size.height =
@@ -1313,6 +1329,107 @@ where
     }
 
     walk(dom, styles, table)
+}
+
+/// Column widths for a `table-layout: fixed` table, per CSS 2.1 section
+/// 17.5.2.1.
+///
+/// The fixed algorithm reads widths only from the first row (and from
+/// `<col>`, not yet modelled here), never from content, which is what makes
+/// it computable before layout. A cell's `width` is a content-box width, so
+/// the column it establishes is that width plus the cell's horizontal
+/// padding and border. Columns left auto share what remains of the table's
+/// content width equally.
+///
+/// Returns `None` when the algorithm does not apply, which leaves the table
+/// on auto-sized implicit tracks: no `table-layout: fixed`, no definite
+/// table width, or no cells to read.
+fn fixed_column_widths<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    table: D::NodeId,
+    computed: &ComputedValues,
+    font_size: f32,
+    containing_width: Option<f32>,
+) -> Option<Vec<f32>>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    if computed.table_layout != CssTableLayout::Fixed {
+        return None;
+    }
+    let cells = table_cells(dom, styles, table);
+    let columns = cells.iter().map(|(_, _, col)| *col + 1).max()? as usize;
+
+    // The table's own content width: its used width less its border and
+    // padding, since the column widths fill the content box.
+    let table_width = resolved_explicit_size(computed.width, font_size, containing_width)?;
+    let inner = match computed.box_sizing {
+        CssBoxSizing::BorderBox => table_width
+            - horizontal_edges(computed, font_size, containing_width),
+        CssBoxSizing::ContentBox => table_width,
+    };
+    if !inner.is_finite() || inner <= 0.0 {
+        return None;
+    }
+
+    // First-row cells set the columns; later rows are ignored by the
+    // algorithm, which is the point of it.
+    let mut widths: Vec<Option<f32>> = vec![None; columns];
+    for (cell, row, column) in &cells {
+        if *row != 0 {
+            continue;
+        }
+        let Some(cell_style) = styles.get(*cell) else {
+            continue;
+        };
+        let Some(width) = resolved_explicit_size(cell_style.width, font_size, Some(inner)) else {
+            continue;
+        };
+        let border_box = match cell_style.box_sizing {
+            CssBoxSizing::BorderBox => width,
+            CssBoxSizing::ContentBox => {
+                width + horizontal_edges(cell_style, font_size, Some(inner))
+            },
+        };
+        widths[*column as usize] = Some(border_box.max(0.0));
+    }
+
+    let fixed: f32 = widths.iter().flatten().sum();
+    let auto_columns = widths.iter().filter(|width| width.is_none()).count();
+    let share = if auto_columns > 0 {
+        ((inner - fixed) / auto_columns as f32).max(0.0)
+    } else {
+        0.0
+    };
+    Some(
+        widths
+            .into_iter()
+            .map(|width| width.unwrap_or(share))
+            .collect(),
+    )
+}
+
+/// A box's horizontal border plus padding.
+fn horizontal_edges(
+    computed: &ComputedValues,
+    font_size: f32,
+    basis: Option<f32>,
+) -> f32 {
+    let basis = basis.unwrap_or(0.0);
+    length_percentage_px(computed.padding_left.0, font_size, basis).max(0.0)
+        + length_percentage_px(computed.padding_right.0, font_size, basis).max(0.0)
+        + border_width_px(
+            computed.border_left_style,
+            computed.border_left_width,
+            font_size,
+        )
+        + border_width_px(
+            computed.border_right_style,
+            computed.border_right_width,
+            font_size,
+        )
 }
 
 /// Pin a cell's taffy style to its flattened grid position.
