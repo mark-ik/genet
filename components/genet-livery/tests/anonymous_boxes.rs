@@ -161,3 +161,27 @@ fn block_containers_are_out_of_scope_for_now() {
         "block flow stacks its children the same either way",
     );
 }
+
+/// A `display: table` box lays its cells out as a grid.
+///
+/// Neither lane implements real table layout: taffy has no table algorithm
+/// and `stylo_taffy` says so outright. The incumbent renders tables by
+/// flattening the row-group and row nesting and giving every cell an explicit
+/// grid position, and Livery now does the same. Before this a table mapped to
+/// a flex row with no row or column structure, so every cell landed on one
+/// line.
+#[test]
+fn table_cells_are_placed_on_a_grid() {
+    // The UA sheet supplies the table display values; author CSS only sizes
+    // the cells so the assertions can be exact.
+    let html = "<html><body><table id=\"t\">        <tr><td id=\"a\">a</td><td id=\"b\">b</td></tr>        <tr><td id=\"c\">c</td><td id=\"d\">d</td></tr>        </table></body></html>";
+    let css = "td { width: 40px; height: 20px; padding: 0; }";
+    let cells = origins(html, css, &["a", "b", "c", "d"]);
+    let [(ax, ay), (bx, by), (cx, cy), (dx, dy)] = [cells[0], cells[1], cells[2], cells[3]];
+    assert_eq!(ay, by, "the first row shares one y");
+    assert_eq!(cy, dy, "the second row shares one y");
+    assert_eq!(ax, cx, "the first column shares one x");
+    assert_eq!(bx, dx, "the second column shares one x");
+    assert!(bx > ax, "the second column sits right of the first");
+    assert!(cy > ay, "the second row sits below the first");
+}

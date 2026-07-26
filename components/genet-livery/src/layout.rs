@@ -812,6 +812,25 @@ where
         parent_style: &ComputedValues,
         parent_font_size: f32,
     ) -> Result<Vec<NodeId>, LayoutError> {
+        // A `display: table` box takes its flattened cells directly, matching
+        // the preliminary pass.
+        if parent_style.display == CssDisplay::Table
+            && table_is_flattenable(self.dom, self.styles, parent)
+        {
+            let cells = table_cells(self.dom, self.styles, parent);
+            let mut children = Vec::with_capacity(cells.len());
+            for (cell, row, column) in cells {
+                let Some(node) = self.build_node(cell, Some(parent_style), parent_font_size)?
+                else {
+                    continue;
+                };
+                let mut style = self.tree.style(node).map_err(taffy_error)?.clone();
+                place_table_cell(&mut style, row, column);
+                self.tree.set_style(node, style).map_err(taffy_error)?;
+                children.push(node);
+            }
+            return Ok(children);
+        }
         let child_ids = self.dom.dom_children(parent).collect::<Vec<_>>();
         let mut children = Vec::new();
         let mut inline_group = Vec::new();
@@ -1001,14 +1020,43 @@ where
                     // height is auto.
                     child_containing_size.1 = child_containing_size.1.or(containing_size.1);
                 }
-                let children = self
-                    .dom
-                    .dom_children(id)
-                    .filter_map(|child| {
-                        self.build_node(child, Some(&computed), font_size, child_containing_size)
+                // A `display: table` box takes its flattened cells directly,
+                // so the row-group and row boxes never enter the tree.
+                let children = if computed.display == CssDisplay::Table
+                    && table_is_flattenable(self.dom, self.styles, id)
+                {
+                    let cells = table_cells(self.dom, self.styles, id);
+                    let mut children = Vec::with_capacity(cells.len());
+                    for (cell, row, column) in cells {
+                        let Some(node) = self.build_node(
+                            cell,
+                            Some(&computed),
+                            font_size,
+                            child_containing_size,
+                        )?
+                        else {
+                            continue;
+                        };
+                        let mut style = self.tree.style(node).map_err(taffy_error)?.clone();
+                        place_table_cell(&mut style, row, column);
+                        self.tree.set_style(node, style).map_err(taffy_error)?;
+                        children.push(node);
+                    }
+                    children
+                } else {
+                    self.dom
+                        .dom_children(id)
+                        .filter_map(|child| {
+                            self.build_node(
+                                child,
+                                Some(&computed),
+                                font_size,
+                                child_containing_size,
+                            )
                             .transpose()
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
+                };
                 let mut taffy_style = to_taffy_style(&computed, font_size);
                 taffy_style.size.width =
                     dimension_with_basis(computed.width, font_size, containing_size.0);
@@ -1150,6 +1198,133 @@ where
         collect_inline_fragments(tree, sources, child, origin, fragments)?;
     }
     Ok(())
+}
+
+/// The cells of a `display: table` box, flattened to `(cell, row, column)`.
+///
+/// Livery lays a table out as a grid: the row-group and row nesting collapses
+/// away and every cell carries an explicit grid position. That is the same
+/// shape the incumbent lane uses (`genet-layout`'s `box_tree` builds the
+/// identical structure), which is why a table renders at all without a table
+/// algorithm in taffy.
+///
+/// Deferred here exactly as in the incumbent: `border-collapse`, caption
+/// placement, `colgroup`, row and column spans, and real fixed or auto table
+/// sizing. Tracks are implicit and auto-sized, so column widths come from
+/// content rather than from the first row.
+fn table_cells<D>(dom: &D, styles: &StylePlane<D::NodeId>, table: D::NodeId) -> Vec<(D::NodeId, u16, u16)>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    fn display_of<D>(styles: &StylePlane<D::NodeId>, id: D::NodeId) -> Option<CssDisplay>
+    where
+        D: LayoutDom,
+        D::NodeId: Copy + Eq + Hash,
+    {
+        styles.get(id).map(|style| style.display)
+    }
+
+    fn walk<D>(
+        dom: &D,
+        styles: &StylePlane<D::NodeId>,
+        container: D::NodeId,
+        row: &mut u16,
+        out: &mut Vec<(D::NodeId, u16, u16)>,
+    ) where
+        D: LayoutDom,
+        D::NodeId: Copy + Eq + Hash,
+    {
+        for child in dom.dom_children(container) {
+            match display_of::<D>(styles, child) {
+                Some(CssDisplay::TableRow) => {
+                    let mut column = 0u16;
+                    for cell in dom.dom_children(child) {
+                        if display_of::<D>(styles, cell) == Some(CssDisplay::TableCell) {
+                            out.push((cell, *row, column));
+                            column += 1;
+                        }
+                    }
+                    *row += 1;
+                },
+                Some(CssDisplay::TableRowGroup) => walk(dom, styles, child, row, out),
+                // Captions, colgroups, and stray content are not placed in
+                // the first-cut grid.
+                _ => {},
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut row = 0u16;
+    walk(dom, styles, table, &mut row, &mut out);
+    out
+}
+
+/// Whether a table's row-group and row boxes may be flattened away.
+///
+/// Flattening drops those boxes from the layout tree, which is fine while
+/// they only carry structure. A `position: relative` row or row group also
+/// carries an offset that its cells must inherit, and with the box gone there
+/// is nothing left to apply it. The incumbent lane keeps a side list of
+/// "cells owed a row-relative shift" for exactly this; Livery does not
+/// resolve those offsets yet, so a positioned row or group turns flattening
+/// off for that table and it falls back to the previous nesting.
+///
+/// Measured 2026-07-26: without this guard the sixteen
+/// `css-position/position-relative-table-*` files regress. Resolving the
+/// shift onto the cells is the real fix and is deferred, not unknown.
+fn table_is_flattenable<D>(dom: &D, styles: &StylePlane<D::NodeId>, table: D::NodeId) -> bool
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    fn positioned<D>(styles: &StylePlane<D::NodeId>, id: D::NodeId) -> bool
+    where
+        D: LayoutDom,
+        D::NodeId: Copy + Eq + Hash,
+    {
+        styles
+            .get(id)
+            .is_some_and(|style| style.position != CssPosition::Static)
+    }
+
+    fn walk<D>(dom: &D, styles: &StylePlane<D::NodeId>, container: D::NodeId) -> bool
+    where
+        D: LayoutDom,
+        D::NodeId: Copy + Eq + Hash,
+    {
+        for child in dom.dom_children(container) {
+            match styles.get(child).map(|style| style.display) {
+                Some(CssDisplay::TableRow) => {
+                    if positioned::<D>(styles, child) {
+                        return false;
+                    }
+                },
+                Some(CssDisplay::TableRowGroup) => {
+                    if positioned::<D>(styles, child) || !walk(dom, styles, child) {
+                        return false;
+                    }
+                },
+                _ => {},
+            }
+        }
+        true
+    }
+
+    walk(dom, styles, table)
+}
+
+/// Pin a cell's taffy style to its flattened grid position.
+fn place_table_cell(style: &mut Style, row: u16, column: u16) {
+    style.grid_row = Line {
+        start: line(row as i16 + 1),
+        end: GridPlacement::Auto,
+    };
+    style.grid_column = Line {
+        start: line(column as i16 + 1),
+        end: GridPlacement::Auto,
+    };
 }
 
 /// Whether every character is CSS collapsible white space.
@@ -1516,14 +1691,18 @@ fn collapsed_word_width(text: &str) -> usize {
 fn to_taffy_style(computed: &ComputedValues, font_size: f32) -> Style {
     let table = computed.display == CssDisplay::Table;
     let table_row = computed.display == CssDisplay::TableRow;
+    let _ = table_row;
     let display = match computed.display {
         CssDisplay::None => Display::None,
         CssDisplay::Flex => Display::Flex,
         CssDisplay::Grid => Display::Grid,
-        CssDisplay::Table | CssDisplay::TableRow => Display::Flex,
+        // A table box is laid out as a grid whose children are its
+        // flattened cells; see `table_cells`.
+        CssDisplay::Table => Display::Grid,
+        CssDisplay::TableRow => Display::Flex,
         _ => Display::Block,
     };
-    let flex_direction = if table || table_row {
+    let flex_direction = if table_row {
         FlexDirection::Row
     } else {
         match computed.flex_direction {
