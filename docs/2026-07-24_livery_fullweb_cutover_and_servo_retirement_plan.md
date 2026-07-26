@@ -66,7 +66,22 @@ written as "the incumbent does X, so X is on-target". That is a valid
 argument about the F4 bar, which is defined against Stylo, and an invalid
 one about the engine, which is defined against the specifications. Where
 the two diverge the specification wins and the gap is recorded, never
-emulated quietly. Deferrals are tracked in the register below.
+emulated quietly.
+
+**The deeper defect, named by Mark 2026-07-26.** Livery was designed as a
+bounded Cambium engine, and this plan has been promoting it to fullweb by
+adding property names and improving differential counts without replacing
+its bounded semantic models. Where the model cannot represent a CSS
+semantic, Genet collapses it onto the nearest Taffy or host primitive:
+tables become grid, rows become flex, most display values become block,
+`fixed` becomes absolute, `sticky` becomes relative, intrinsic sizes become
+auto. CSS defines those as distinct box roles, formatting contexts, and
+intrinsic sizes, not interchangeable backend modes. Every "the premise was
+wrong" finding in this plan is a symptom of that one defect. The structural
+answer is a spec-owned box tree between computed values and Taffy; see the
+[box-tree plan](./2026-07-26_livery_box_tree_and_formatting_contexts_plan.md).
+Deferrals are tracked in the register below, and the two ledgers are split
+in the section above.
 
 **Decision record:** Mark, 2026-07-24: "no more servo-*. we grow our own
 equivalents and obviate servo-* crates, or delete 'em," with the teardown
@@ -770,6 +785,58 @@ reviewed; the direction holds and the grind is accepted. Two riders:
   - Receipt: zero `servo-` prefixed workspace members (48 today); genet
     workspace green; product smokes green.
 
+## The two ledgers, permanently split
+
+**Ruled 2026-07-26 by Mark**, after the table work exposed the confusion. The
+plan had one ledger doing two jobs, and the acceptance gates rewarded the
+wrong one.
+
+- **The Stylo differential** answers *is it safe to replace the incumbent*.
+  Its measure is `S-only`, the files Stylo renders and Livery does not, and
+  it gates F4 and nothing else. It is a replacement-safety instrument. It
+  can reach zero while the engine is still far from the specifications,
+  because Stylo is not a specification.
+- **Absolute Livery conformance** answers *how much of the platform is
+  built*. Its measure is **absolute passing subtests over time**, counted
+  against the whole corpus and including failures, errors, and tests that
+  cannot run at all. It never mentions Stylo.
+
+The repository already ruled this once and the cutover drifted off it: the
+[grand audit](./2026-06-24_grand_audit.md) says "100% WPT is not a real
+target... serious engines steer by **absolute passing-subtest count over
+time**, not a percentage", and names harness runnability as the binding
+constraint because it gates whole directories before any engine work counts.
+That rule governs the conformance ledger.
+
+**Why the split has to be permanent.** A differential ledger silently
+accepts any bug the incumbent shares, and it rewards emulating the incumbent
+over implementing the specification. Both failure modes appeared in one day:
+tables were ranked by a differential that neither engine's behaviour
+satisfied, and a capability was filed as a spent lever because it closed the
+differential. Neither is visible from inside the differential; both are
+obvious from an absolute count.
+
+**Consequences for this plan.**
+
+- F4's bar is unchanged and stays differential. Replacing Stylo safely is a
+  real goal and `S-only` is the right instrument for it.
+- F4 is **no longer sufficient** for anything except the replacement. It is
+  not evidence of conformance and must not be quoted as such.
+- Every slice reports both numbers, or says plainly that it moved one and
+  not the other. A partial capability that moves no files is a legitimate
+  result, as fixed-table sizing was.
+- The conformance ledger counts what cannot run. Skipped and errored files
+  are the largest single unknown in the reftest lane (css-multicol skips 307
+  of 708, CSS2 skips 3,279 of 9,254) and a differential hides them entirely,
+  because both engines skip the same files.
+
+**Not yet built:** the conformance ledger itself. The reftest and
+testharness runs already emit per-file status, so the counting exists; what
+is missing is a run that reports absolute totals over the whole corpus
+rather than nine chosen directories, and a baseline to track it over time.
+That is the instrument the next slice needs, and until it exists this plan
+can only speak to replacement safety.
+
 ## Deferral register
 
 Every capability this plan has left unbuilt, in one place, because they were
@@ -789,9 +856,13 @@ the ones to take first, ahead of anything ranked purely by file count.
 | capability | state | new or inherited | compounds |
 |---|---|---|---|
 | multicol (`column-*`) | **recorded knockout**, ruled D0 | inherited | no |
-| table layout (fixed/auto sizing, spans, border-collapse, captions, colgroups) | **emulation**, ruling needed | inherited | no |
-| block-flow anonymous boxes | **wrong behaviour retained**, scoped away | **new** | **yes** |
-| `min-content` / `max-content` sizing | **wrong behaviour retained** | inherited | **yes** |
+| table layout: fixed sizing | **partial**, subset named in the catalog | inherited | no |
+| table layout: auto sizing, spans, border-collapse, captions, colgroups, fixup | not built (box-tree B3) | inherited | no |
+| `display` outer/inner roles, formatting contexts | **collapsed onto Taffy modes** (box-tree B1/B2) | inherited | **yes** |
+| `position: fixed` and `sticky` | collapsed onto absolute/relative (box-tree B5) | inherited | no |
+| CSSOM used values | handwritten per-property list (box-tree B6) | inherited | no |
+| block-flow anonymous boxes | **wrong behaviour retained**, scoped away (box-tree B1) | **new** | **yes** |
+| `min-content` / `max-content` sizing | **wrong behaviour retained** (box-tree B4) | inherited | **yes** |
 | gamut mapping (out-of-gamut colors clip per channel) | not built | inherited | no |
 | `color-layers()`, `alpha()`, `contrast-color()` | not built | inherited | no |
 | percentage `calc()` in color channels | rejected, not approximated | inherited | no |
