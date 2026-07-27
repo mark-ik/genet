@@ -962,6 +962,85 @@ auto block-size finalisation, positioning, independent-BFC baselines,
 intrinsic block queries, and the out-of-flow IFC participant protected by
 K3b's cache guard.
 
+#### K3g receipt - 2026-07-27
+
+K3g admits the first block-level independent formatting context beside active
+floats. It does not close every BFC or float-avoidance case.
+
+CSS2 requires the border box of an in-flow element that establishes a new BFC
+not to overlap float margin boxes in the same BFC. It permits the element to
+sit beside the floats when space is sufficient or move below them, and
+deliberately leaves the amount and timing of any border-box narrowing
+undefined. Buckram now owns an explicit policy for the admitted lane:
+
+- `width: auto` is solved inside the available float band while percentages
+  continue to resolve against the actual containing block;
+- a definite or minimum border-box width that cannot fit moves to the next
+  overlapping float boundary;
+- the available band is queried across the candidate's complete border-box
+  block span, not only at its top edge;
+- the isolated subtree is measured again when the candidate width changes,
+  and the query repeats with the measured block size until the width is
+  stable; and
+- the chosen logical placement is committed to normal block flow, including
+  any downward displacement and the resulting BFC auto height.
+
+This is an explicit scratch-tree capability. Livery opts in only a static,
+non-floating, non-replaced, horizontal block-level `flow` or `flow-root`
+principal box whose algorithm is block or leaf and whose inline margins are
+explicit zeroes. Flex, grid, tables, atomic inline boxes, orthogonal flow, and
+nonzero or automatic inline margins retain their named deferrals. That guard
+keeps CSS2's implementation-policy freedom from becoming an accidental
+backend behavior.
+
+Taffy's cache does not include the active float band. An earlier full-width
+root or intrinsic probe can therefore satisfy a later candidate-width query
+without re-entering the measured leaf. K3g clears the isolated BFC subtree's
+backend caches before each candidate measurement. Livery's retained inline
+cache remains width-keyed, so shaped content is then formatted at the actual
+candidate width.
+
+The pure fixture uses a 200px BFC and an 80x40 left float. An auto-width BFC
+becomes 120px wide at x=80 and y=0. A 150px definite-width BFC cannot fit in
+that band and moves to x=0 and y=40. The live HTML/Livery fixture proves the
+same two placements in one host, gives the host a 60px auto height, and
+reports zero Taffy block calls.
+
+This slice has no WPT status movement. That is recorded rather than promoted
+into a conformance claim:
+
+- the focused `css/CSS2/floats` repeat remains 44 passes, 57 failures, 43
+  skips, and zero errors across 144 files;
+- the complete CSS2 repeat remains 4,229 passes, 1,745 failures, 3,279 skips,
+  and one error across 9,254 files; and
+- every frozen all-nine K3f expectation guard returns `unexpected=0`, so the
+  total remains 5,735 with zero gains and zero regressions.
+
+The classic `floats-wrap-bfc-*` set is not evidence for this narrow lane yet.
+Its table-hosted variants enter through K4's table parent, while the
+margin-policy and other atomic variants remain outside K3g's explicit
+admission. The structural and live fixtures are therefore the acceptance
+receipt; WPT remains the unchanged regression guard.
+
+Verification:
+
+- `cargo test -p buckram -p livery -p genet-livery --offline`: passed with
+  42 Buckram tests, 131 genet-livery tests, 141 Livery tests, and all doc tests
+  green.
+- strict Clippy passed for Buckram and genet-livery with dependency linting
+  disabled. The workspace configuration still prints its existing
+  unreachable disallowed-type warning.
+- the feature-unified release `genet-wpt` build passed.
+- fresh focused and complete CSS2 expectations are at
+  `Code/testing/genet/wpt-ledger/2026-07-27_buckram_k3g`.
+
+Still open in K3: nonzero-inline-margin and non-block BFC avoidance beside
+floats, shrink-to-fit and intrinsic float widths, float state through ordinary
+nested blocks, nowrap and nested inline contexts beside floats,
+collapsed-empty-box clearance, vertical auto block-size finalisation,
+positioning, independent-BFC baselines, intrinsic block queries, and the
+out-of-flow IFC participant protected by K3b's cache guard.
+
 ### K4. CSS tables
 
 Implement anonymous table fixup, row and column structure, spans, fixed and

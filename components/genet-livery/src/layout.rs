@@ -1161,13 +1161,17 @@ where
                     font_size,
                 );
                 let block_style = to_block_style(self.boxes, box_id, &computed, font_size);
+                let kind = algorithm_kind(&self.boxes[box_id], children.is_empty());
                 let node = self.tree.new_with_children_and_block_style(
-                    algorithm_kind(&self.boxes[box_id], children.is_empty()),
+                    kind,
                     block_style,
                     taffy_style,
                     &children,
                     vec![box_id],
                 );
+                if supports_float_avoidance(&self.boxes[box_id], block_style, kind) {
+                    self.tree.enable_float_avoidance(node);
+                }
                 Ok(Some(node))
             },
             BoxOrigin::Text(_) => {
@@ -1436,13 +1440,17 @@ where
                     font_size,
                 );
                 let block_style = to_block_style(self.boxes, box_id, &computed, font_size);
+                let kind = algorithm_kind(&self.boxes[box_id], children.is_empty());
                 let node = self.tree.new_with_children_and_block_style(
-                    algorithm_kind(&self.boxes[box_id], children.is_empty()),
+                    kind,
                     block_style,
                     taffy_style,
                     &children,
                     Some(box_id),
                 );
+                if supports_float_avoidance(&self.boxes[box_id], block_style, kind) {
+                    self.tree.enable_float_avoidance(node);
+                }
                 Ok(Some(node))
             },
             BoxOrigin::Text(node) => {
@@ -1768,6 +1776,27 @@ fn block_style_has_nonlinear_lengths(computed: &ComputedValues) -> bool {
 
 fn length_has_math(value: CssLengthPercentage) -> bool {
     matches!(value, CssLengthPercentage::Math(_))
+}
+
+fn supports_float_avoidance<Id>(
+    css_box: &CssBox<Id>,
+    block_style: BlockStyle,
+    kind: AlgorithmKind,
+) -> bool {
+    matches!(kind, AlgorithmKind::Leaf | AlgorithmKind::Block)
+        && css_box.display.outside == Some(DisplayOutside::Block)
+        && matches!(
+            css_box.display.inside,
+            Some(DisplayInside::Flow | DisplayInside::FlowRoot) | None
+        )
+        && css_box.display.internal_table.is_none()
+        && block_style.establishes_bfc
+        && block_style.position == BuckramBlockPosition::Static
+        && block_style.float == FloatSide::None
+        && !block_style.replaced
+        && block_style.flow.is_horizontal()
+        && block_style.containing_flow.is_horizontal()
+        && block_style.has_zero_inline_margins()
 }
 
 fn algorithm_kind<Id>(css_box: &CssBox<Id>, leaf: bool) -> AlgorithmKind {
@@ -3521,6 +3550,73 @@ mod tests {
                 .all(|line| (line.x - host.x).abs() <= 0.5),
             "lines below the float must use the full content column"
         );
+        assert_eq!(algorithms.taffy, 0);
+    }
+
+    #[test]
+    fn live_block_bfcs_narrow_beside_a_float_or_move_below_it() {
+        fn by_id(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+            expected: &str,
+        ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+            if dom.attributes(node).any(|attribute| {
+                attribute.name.ns.as_ref().is_empty()
+                    && attribute.name.local.as_ref() == "id"
+                    && attribute.value == expected
+            }) {
+                return Some(node);
+            }
+            dom.dom_children(node)
+                .find_map(|child| by_id(dom, child, expected))
+        }
+
+        let dom = StaticDocument::parse(
+            "<html><body><div id=\"host\"><div id=\"float\"></div>\
+             <div id=\"adjacent\"></div><div id=\"lowered\"></div>\
+             </div></body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&["html, body, div { margin: 0; padding: 0; border: 0; }\
+                 #host { width: 200px; overflow-x: hidden; overflow-y: hidden; }\
+                 #float { float: left; width: 80px; height: 40px; }\
+                 #adjacent { height: 20px; overflow-x: hidden; overflow-y: hidden; }\
+                 #lowered { width: 150px; height: 20px;\
+                            overflow-x: hidden; overflow-y: hidden; }"]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let rect = |id| {
+            let node = by_id(&dom, dom.document(), id).expect(id);
+            layout.get(node).expect(id).physical_rect()
+        };
+
+        let host = rect("host");
+        let adjacent = rect("adjacent");
+        let lowered = rect("lowered");
+        let algorithms = layout.block_algorithm_counts();
+
+        assert_eq!(
+            (adjacent.x, adjacent.y, adjacent.width, adjacent.height),
+            (host.x + 80.0, host.y, 120.0, 20.0)
+        );
+        assert_eq!(
+            (lowered.x, lowered.y, lowered.width, lowered.height),
+            (host.x, host.y + 40.0, 150.0, 20.0)
+        );
+        assert_eq!(host.height, 60.0);
         assert_eq!(algorithms.taffy, 0);
     }
 }

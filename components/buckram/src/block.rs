@@ -252,6 +252,17 @@ impl BlockStyle {
         )
     }
 
+    /// Whether both inline-axis margins are explicit zeroes.
+    ///
+    /// The first float-avoiding BFC lane keeps nonzero and automatic inline
+    /// margins deferred because CSS2 leaves the amount of BFC narrowing
+    /// deliberately undefined and interoperable margin behavior needs its
+    /// own policy fixture.
+    pub fn has_zero_inline_margins(self) -> bool {
+        let margin = self.containing_flow.logical_sides(self.margin);
+        margin.inline_start == FlowLengthAuto::ZERO && margin.inline_end == FlowLengthAuto::ZERO
+    }
+
     pub fn logical_padding_border(self, containing_inline_size: f32) -> crate::LogicalSides<f32> {
         self.containing_flow.logical_sides(
             self.resolved_padding(containing_inline_size)
@@ -467,6 +478,18 @@ pub struct UsedInlineSize {
 
 /// Solve CSS 2.2 section 10.3.3's block-width equation in logical terms.
 pub fn solve_in_flow_inline_size(style: BlockStyle, containing_inline_size: f32) -> UsedInlineSize {
+    solve_in_flow_inline_size_for_available(style, containing_inline_size, containing_inline_size)
+}
+
+/// Solve the block-width equation inside a float-constrained interval.
+///
+/// Percentages still resolve against the actual containing block. Only the
+/// space distributed by `width: auto` and automatic margins is narrowed.
+pub fn solve_in_flow_inline_size_for_available(
+    style: BlockStyle,
+    containing_inline_size: f32,
+    available_inline_size: f32,
+) -> UsedInlineSize {
     let margins = style.logical_margin(containing_inline_size);
     let padding_border = style.logical_padding_border(containing_inline_size);
     let padding_border_sum = padding_border.inline_start + padding_border.inline_end;
@@ -488,13 +511,13 @@ pub fn solve_in_flow_inline_size(style: BlockStyle, containing_inline_size: f32)
     let start = margins.inline_start.unwrap_or(0.0);
     let end = margins.inline_end.unwrap_or(0.0);
     let mut border_box = preferred
-        .unwrap_or_else(|| (containing_inline_size - start - end).max(padding_border_sum))
+        .unwrap_or_else(|| (available_inline_size - start - end).max(padding_border_sum))
         .max(minimum);
     if let Some(maximum) = maximum {
         border_box = border_box.min(maximum.max(padding_border_sum));
     }
 
-    let remaining = containing_inline_size - border_box - start - end;
+    let remaining = available_inline_size - border_box - start - end;
     let (margin_start, margin_end) =
         match (margins.inline_start.is_none(), margins.inline_end.is_none()) {
             (true, true) if remaining >= 0.0 => (remaining / 2.0, remaining / 2.0),
@@ -594,6 +617,17 @@ pub struct BlockPlacement {
     pub rect: PhysicalRect,
     pub margin_inline_start: f32,
     pub margin_inline_end: f32,
+}
+
+/// Candidate placement for an in-flow BFC that must avoid active floats.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FloatAvoidingPlacement {
+    /// Border-box block start in the containing BFC's logical coordinates.
+    pub block_start: f32,
+    /// Border-box inline start in the containing BFC's logical coordinates.
+    pub inline_start: f32,
+    /// Used inline dimensions solved inside the selected float band.
+    pub inline_size: UsedInlineSize,
 }
 
 /// Inline interval left by floats for a line or atomic formatting context.
@@ -826,6 +860,73 @@ impl BlockFormattingContext {
         )
     }
 
+    /// Choose the highest float band in which an independent BFC's border
+    /// box fits without intersecting a float margin box.
+    ///
+    /// `width: auto` is resolved against the selected band. A definite or
+    /// minimum width that cannot fit moves to the next overlapping float
+    /// boundary. The caller may repeat this query with the measured block
+    /// size when layout at the candidate width changes the box's height.
+    pub fn float_avoiding_placement(
+        &self,
+        style: BlockStyle,
+        margin_state: BlockMarginState,
+        border_box_block_size: f32,
+    ) -> FloatAvoidingPlacement {
+        debug_assert!(style.establishes_bfc);
+        debug_assert_eq!(style.float, FloatSide::None);
+        let containing_inline = self
+            .containing_block
+            .flow
+            .logical_size(self.containing_block.content_box)
+            .inline;
+        let mut block_start = self.hypothetical_in_flow_block_start(style, margin_state);
+
+        loop {
+            if !self.float_exclusions_overlap(block_start, border_box_block_size) {
+                let inline_size = solve_in_flow_inline_size(style, containing_inline);
+                return FloatAvoidingPlacement {
+                    block_start,
+                    inline_start: inline_size.margin_start,
+                    inline_size,
+                };
+            }
+
+            let available = self.available_inline_space(block_start, border_box_block_size);
+            let inline_size = solve_in_flow_inline_size_for_available(
+                style,
+                containing_inline,
+                available.inline_size,
+            );
+            let inline_start = available.inline_start + inline_size.margin_start;
+            let available_end = available.inline_start + available.inline_size;
+            let border_end = inline_start + inline_size.border_box;
+            if inline_start + 0.01 >= available.inline_start && border_end <= available_end + 0.01 {
+                return FloatAvoidingPlacement {
+                    block_start,
+                    inline_start,
+                    inline_size,
+                };
+            }
+
+            let Some(next_block_start) =
+                self.next_float_block_end(block_start, border_box_block_size)
+            else {
+                let inline_size = solve_in_flow_inline_size(style, containing_inline);
+                return FloatAvoidingPlacement {
+                    block_start,
+                    inline_start: inline_size.margin_start,
+                    inline_size,
+                };
+            };
+            block_start = next_block_start;
+        }
+    }
+
+    pub fn float_exclusion_count(&self) -> usize {
+        self.float_exclusions.len()
+    }
+
     /// Snapshot active floats for line breaking whose local block-axis origin
     /// starts at `block_offset` in this BFC.
     pub fn float_line_constraints(&self, block_offset: f32) -> Option<FloatLineConstraints> {
@@ -895,14 +996,54 @@ impl BlockFormattingContext {
             .logical_size(self.containing_block.content_box)
             .inline;
         let used_inline = solve_in_flow_inline_size(style, containing_inline);
+        self.place_in_flow_at(
+            style,
+            border_box_size,
+            margin_state,
+            used_inline.margin_start,
+            used_inline,
+            None,
+        )
+    }
+
+    /// Commit a previously measured float-avoiding BFC placement to normal
+    /// flow. The candidate is produced by [`Self::float_avoiding_placement`].
+    pub fn place_float_avoiding_in_flow(
+        &mut self,
+        style: BlockStyle,
+        border_box_size: PhysicalSize,
+        margin_state: BlockMarginState,
+        placement: FloatAvoidingPlacement,
+    ) -> BlockPlacement {
+        self.place_in_flow_at(
+            style,
+            border_box_size,
+            margin_state,
+            placement.inline_start,
+            placement.inline_size,
+            Some(placement.block_start),
+        )
+    }
+
+    fn place_in_flow_at(
+        &mut self,
+        style: BlockStyle,
+        border_box_size: PhysicalSize,
+        margin_state: BlockMarginState,
+        inline_start: f32,
+        used_inline: UsedInlineSize,
+        minimum_block_start: Option<f32>,
+    ) -> BlockPlacement {
         let adjoining = self.active_margin.collapse_with(margin_state.block_start);
         let normal_block_start = self.normal_in_flow_block_start(margin_state);
         let clear_block_end = self.clearance_block_end(style.clear);
-        let has_clearance = clear_block_end > normal_block_start;
-        let block_start = normal_block_start.max(clear_block_end);
+        let block_start = normal_block_start
+            .max(clear_block_end)
+            .max(minimum_block_start.unwrap_or(normal_block_start));
+        let has_clearance = block_start > normal_block_start;
         let child_size = self.containing_block.flow.logical_size(border_box_size);
         let logical = LogicalRect {
-            inline_start: used_inline.margin_start,
+            inline_start,
             block_start,
             inline_size: child_size.inline,
             block_size: child_size.block,
@@ -1388,6 +1529,72 @@ mod tests {
         assert_eq!(in_flow.rect.y, 0.0);
         assert_eq!(context.used_block_size(), 10.0);
         assert_eq!(context.used_block_size_containing_floats(false), 40.0);
+    }
+
+    #[test]
+    fn independent_bfc_narrows_beside_a_float_or_moves_below_when_it_cannot_fit() {
+        let margin_state = BlockMarginState {
+            block_start: CollapsedMargin::ZERO,
+            block_end: CollapsedMargin::ZERO,
+            collapses_through: false,
+        };
+
+        let mut adjacent_context = horizontal_context(200.0);
+        adjacent_context.place_float(
+            fixed_float(FloatSide::Left, 80.0),
+            PhysicalSize {
+                width: 80.0,
+                height: 40.0,
+            },
+        );
+        let auto_bfc = BlockStyle {
+            establishes_bfc: true,
+            ..BlockStyle::default()
+        };
+        let adjacent = adjacent_context.float_avoiding_placement(auto_bfc, margin_state, 20.0);
+        assert_eq!(
+            adjacent,
+            FloatAvoidingPlacement {
+                block_start: 0.0,
+                inline_start: 80.0,
+                inline_size: UsedInlineSize {
+                    margin_start: 0.0,
+                    border_box: 120.0,
+                    margin_end: 0.0,
+                },
+            }
+        );
+        let committed = adjacent_context.place_float_avoiding_in_flow(
+            auto_bfc,
+            PhysicalSize {
+                width: 120.0,
+                height: 20.0,
+            },
+            margin_state,
+            adjacent,
+        );
+        assert_eq!((committed.rect.x, committed.rect.y), (80.0, 0.0));
+
+        let mut lowered_context = horizontal_context(200.0);
+        lowered_context.place_float(
+            fixed_float(FloatSide::Left, 80.0),
+            PhysicalSize {
+                width: 80.0,
+                height: 40.0,
+            },
+        );
+        let definite_bfc = BlockStyle {
+            size: BlockDimensions::new(
+                BlockSizeValue::Length(FlowLength::px(150.0)),
+                BlockSizeValue::Auto,
+            ),
+            establishes_bfc: true,
+            ..BlockStyle::default()
+        };
+        let lowered = lowered_context.float_avoiding_placement(definite_bfc, margin_state, 20.0);
+        assert_eq!(lowered.block_start, 40.0);
+        assert_eq!(lowered.inline_start, 0.0);
+        assert_eq!(lowered.inline_size.border_box, 150.0);
     }
 
     #[test]
