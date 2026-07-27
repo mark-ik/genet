@@ -367,7 +367,7 @@ fn expand_text(text: &str, out: &mut Vec<InlineSpan>, hashtags: Option<&mut Vec<
 
     while i < text.len() {
         // Wikilink: `[[...]]`
-        if i + 4 <= text.len() && &text[i..i + 2] == "[[" {
+        if text[i..].starts_with("[[") {
             if let Some(end) = text[i + 2..].find("]]") {
                 let inner = &text[i + 2..i + 2 + end];
                 if !inner.is_empty() && !inner.contains('\n') {
@@ -447,3 +447,23 @@ fn is_hashtag_char(byte: u8) -> bool {
 
 mod build;
 pub use build::{build_clip_knot, build_clip_knot_with_block_provenance};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inline_expansion_walks_unicode_on_character_boundaries() {
+        let mut out = Vec::new();
+        expand_text("First 仮名 [[Target]]", &mut out, None);
+
+        assert!(matches!(
+            out.as_slice(),
+            [
+                InlineSpan::Text(prefix),
+                InlineSpan::Link { spans, .. }
+            ] if prefix == "First 仮名 "
+                && matches!(spans.as_slice(), [InlineSpan::Text(label)] if label == "Target")
+        ));
+    }
+}

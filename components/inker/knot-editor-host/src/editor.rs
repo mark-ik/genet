@@ -12,7 +12,9 @@
 //! `DjotKnotEngine` the rest of the app renders knots through).
 
 use illume::{Fold, InjectionRegistry, OutlineItem, Span, folds, highlight, outline};
+#[cfg(feature = "preview")]
 use inker::{Engine, EngineDocument, EngineError, EngineInput};
+#[cfg(feature = "preview")]
 use nematic::DjotKnotEngine;
 
 /// Derives the editor's views of a knot. Holds the injection registry it highlights
@@ -21,6 +23,7 @@ use nematic::DjotKnotEngine;
 /// edits and across notes; re-derive on edit (cheap at note size).
 pub struct KnotReadout {
     registry: InjectionRegistry,
+    #[cfg(feature = "preview")]
     engine: DjotKnotEngine,
 }
 
@@ -30,6 +33,7 @@ impl KnotReadout {
     pub fn new() -> Self {
         Self {
             registry: crate::full_pack(),
+            #[cfg(feature = "preview")]
             engine: DjotKnotEngine::new(),
         }
     }
@@ -55,6 +59,7 @@ impl KnotReadout {
     /// node URL once that exists, or a placeholder for a scratch note): run through
     /// `DjotKnotEngine` into the portable block model the document-canvas pane draws.
     /// Errors only on engine failure (malformed input still yields a best-effort doc).
+    #[cfg(feature = "preview")]
     pub fn rendered(&self, address: &str, text: &str) -> Result<EngineDocument, EngineError> {
         self.engine
             .render(&EngineInput::new(address.to_string(), text.to_string()))
@@ -90,6 +95,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "preview")]
     fn renders_a_preview_document_through_the_engine() {
         let r = KnotReadout::new();
         let doc = r

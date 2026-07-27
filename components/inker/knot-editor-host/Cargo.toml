@@ -18,7 +18,12 @@ categories = ["text-processing"]
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = ["preview"]
+preview = ["dep:inker", "dep:nematic"]
+
 [dependencies]
+cambium = { version = "0.3.2", path = "../../cambium/cambium" }
 illume = { workspace = true }
 # A parser the workspace already ships (nematic uses it for CommonMark knots).
 # Its offset-iter event stream maps to highlight spans the same way jotdown
@@ -27,5 +32,5 @@ pulldown-cmark = { version = "0.13", default-features = false }
 # The editor model ties source text to the rendered preview through the same
 # engine path the rest of the family uses: inker's EngineDocument + nematic's
 # DjotKnotEngine.
-inker = { workspace = true }
-nematic = { workspace = true }
+inker = { workspace = true, optional = true }
+nematic = { workspace = true, optional = true }
