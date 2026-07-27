@@ -34,7 +34,10 @@ use paint::Paint;
 use paint_api::display_list::{AxesScrollSensitivity, PaintDisplayListInfo, ScrollType};
 use paint_api::wgpu_readback::read_texture_to_image;
 use paint_api::{PaintMessage, PipelineExitSource};
-use paint_list_api::{DeviceIntSize, IdNamespace, ImageKey, PaintCmd, PaintEnvelope};
+use paint_list_api::{
+    ColorF, CommonPlacement, DeviceIntSize, IdNamespace, ImageKey, LayoutPoint, LayoutRect,
+    PaintCmd, PaintEnvelope, RectItem,
+};
 use paint_types::PipelineId;
 use paint_types::units::{DeviceIntRect, LayoutSize};
 use servo_base::id::{PainterId, PipelineNamespace, PipelineNamespaceId, WebViewId};
@@ -105,7 +108,11 @@ impl Renderer {
     ) -> Image {
         let pipeline_id = self.next_pipeline_id();
         let envelope = isolate_image_keys(
-            html_to_envelope(html, base_dir, tests_root, width, height, is_xml),
+            with_reftest_backdrop(
+                html_to_envelope(html, base_dir, tests_root, width, height, is_xml),
+                width,
+                height,
+            ),
             pipeline_id,
         );
         let paint = self.paint.borrow();
@@ -184,7 +191,10 @@ impl Renderer {
         let list = session
             .frame(width, height)
             .expect("Livery WPT reftest layout");
-        let envelope = isolate_image_keys(PaintEnvelope::from_list(&list), pipeline_id);
+        let envelope = isolate_image_keys(
+            with_reftest_backdrop(PaintEnvelope::from_list(&list), width, height),
+            pipeline_id,
+        );
         let paint = self.paint.borrow();
         paint.handle_messages(vec![PaintMessage::SendPaintList {
             webview_id: self.webview_id,
@@ -248,6 +258,24 @@ fn isolate_image_keys(mut envelope: PaintEnvelope, pipeline_id: PipelineId) -> P
             _ => {},
         }
     }
+    envelope
+}
+
+/// WPT screenshots composite the document canvas over an opaque white
+/// browser backdrop. The CSS canvas background remains engine-owned and paints
+/// over this command; a transparent canvas exposes white instead of NetRender's
+/// implementation clear color.
+fn with_reftest_backdrop(mut envelope: PaintEnvelope, width: u32, height: u32) -> PaintEnvelope {
+    envelope.commands.insert(
+        0,
+        PaintCmd::DrawRect(RectItem {
+            placement: CommonPlacement::new(LayoutRect::new(
+                LayoutPoint::new(0.0, 0.0),
+                LayoutPoint::new(width as f32, height as f32),
+            )),
+            color: ColorF::WHITE,
+        }),
+    );
     envelope
 }
 
@@ -356,7 +384,10 @@ fn livery_dom_image_urls(document: &StaticDocument) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{isolate_image_keys, livery_dom_image_urls, livery_font_urls, livery_image_urls};
+    use super::{
+        isolate_image_keys, livery_dom_image_urls, livery_font_urls, livery_image_urls,
+        with_reftest_backdrop,
+    };
     use genet_static_dom::StaticDocument;
     use paint_list_api::{
         AlphaType, ColorF, CommonPlacement, DeviceIntSize, EngineId, IdNamespace, ImageItem,
@@ -432,6 +463,27 @@ mod tests {
             panic!("expected image command");
         };
         assert_eq!(item.image_key, new_key);
+    }
+
+    #[test]
+    fn reftest_backdrop_is_white_and_precedes_document_paint() {
+        let envelope = with_reftest_backdrop(
+            PaintEnvelope {
+                engine: EngineId::GENET,
+                viewport: DeviceIntSize::new(20, 10),
+                generation: 0,
+                commands: Vec::new(),
+                fonts: Vec::new(),
+                images: Vec::new(),
+            },
+            20,
+            10,
+        );
+        let PaintCmd::DrawRect(rect) = &envelope.commands[0] else {
+            panic!("backdrop is a rectangle");
+        };
+        assert_eq!(rect.color, ColorF::WHITE);
+        assert_eq!(rect.placement.bounds.max, LayoutPoint::new(20.0, 10.0));
     }
 }
 

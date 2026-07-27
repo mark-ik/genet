@@ -120,6 +120,7 @@ fn rust_field(css_name: &str) -> String {
 fn value_type_path(value_type: &str) -> &'static str {
     match value_type {
         "alignment" => "crate::values::Alignment",
+        "animation-delay" => "crate::values::AnimationDelay",
         "animation-name" => "crate::values::AnimationName",
         "timing-function" => "crate::values::TimingFunction",
         "aspect-ratio" => "crate::values::AspectRatio",
@@ -131,9 +132,12 @@ fn value_type_path(value_type: &str) -> &'static str {
         "box-shadow" => "crate::values::BoxShadow",
         "box-sizing" => "crate::values::BoxSizing",
         "table-layout" => "crate::values::TableLayout",
+        "clear" => "crate::values::Clear",
         "container-name" => "crate::values::ContainerName",
         "container-type" => "crate::values::ContainerType",
         "color" => "crate::values::Color",
+        "contain" => "crate::values::Contain",
+        "direction" => "crate::values::Direction",
         "display" => "crate::values::Display",
         "duration" => "crate::values::Duration",
         "font-family" => "crate::values::FontFamily",
@@ -196,6 +200,7 @@ fn initial_expression(property: &Property) -> &'static str {
         ("alignment", "auto") => "crate::values::Alignment::Auto",
         ("alignment", "start") => "crate::values::Alignment::Start",
         ("alignment", "stretch") => "crate::values::Alignment::Stretch",
+        ("animation-delay", "0s") => "crate::values::AnimationDelay::ZERO",
         ("animation-name", "none") => "crate::values::AnimationName::None",
         ("timing-function", "linear") => "crate::values::TimingFunction::Linear",
         ("aspect-ratio", "auto") => "crate::values::AspectRatio::Auto",
@@ -207,11 +212,14 @@ fn initial_expression(property: &Property) -> &'static str {
         ("box-shadow", "none") => "crate::values::BoxShadow::None",
         ("box-sizing", "content-box") => "crate::values::BoxSizing::ContentBox",
         ("table-layout", "auto") => "crate::values::TableLayout::Auto",
+        ("clear", "none") => "crate::values::Clear::None",
         ("container-name", "none") => "crate::values::ContainerName::None",
         ("container-type", "normal") => "crate::values::ContainerType::Normal",
         ("color", "transparent") => "crate::values::Color::TRANSPARENT",
         ("color", "currentcolor") => "crate::values::Color::CurrentColor",
         ("color", "CanvasText") => "crate::values::Color::CANVAS_TEXT",
+        ("contain", "none") => "crate::values::Contain::NONE",
+        ("direction", "ltr") => "crate::values::Direction::Ltr",
         ("display", "inline") => "crate::values::Display::Inline",
         ("duration", "0s") => "crate::values::Duration::ZERO",
         ("font-family", "depends-on-user-agent") => "crate::values::FontFamily::UserAgentDefault",
@@ -295,7 +303,7 @@ fn validate(db: &Database) {
         assert!(
             matches!(
                 property.animation.as_str(),
-                "by-computed-value" | "discrete"
+                "by-computed-value" | "discrete" | "none"
             ),
             "{} has unsupported animation class {}",
             property.name,
@@ -435,7 +443,7 @@ fn generate(db: &Database) -> String {
 
     out.push_str(
         "#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]\n\
-         pub enum AnimationClass {\n    ByComputedValue,\n    Discrete,\n}\n\n",
+         pub enum AnimationClass {\n    ByComputedValue,\n    Discrete,\n    None,\n}\n\n",
     );
     let value_types = db
         .property
@@ -494,6 +502,7 @@ fn generate(db: &Database) -> String {
         let animation = match property.animation.as_str() {
             "by-computed-value" => "AnimationClass::ByComputedValue",
             "discrete" => "AnimationClass::Discrete",
+            "none" => "AnimationClass::None",
             _ => unreachable!("validated animation class"),
         };
         let source = &db.sources[&property.source].url;

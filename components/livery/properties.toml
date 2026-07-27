@@ -70,6 +70,9 @@ url = "https://www.w3.org/TR/css-contain-3/"
 [sources.css_writing_modes_4]
 url = "https://www.w3.org/TR/css-writing-modes-4/"
 
+[sources.css2_2]
+url = "https://www.w3.org/TR/CSS22/visuren.html#flow-control"
+
 [shorthands.margin]
 longhands = ["margin-top", "margin-right", "margin-bottom", "margin-left"]
 grammar = "<length-percentage> | auto, one to four values"
@@ -228,9 +231,9 @@ seed_values = [
 source = "css_transitions_1"
 
 [shorthands.animation]
-longhands = ["animation-name", "animation-duration", "animation-timing-function"]
-grammar = "<single-animation-name> || <time> || <easing-function>"
-seed_values = ["fade 100ms linear"]
+longhands = ["animation-name", "animation-duration", "animation-timing-function", "animation-delay"]
+grammar = "<single-animation-name> || <time>{1,2} || <easing-function>"
+seed_values = ["fade 100ms linear", "fade 1s ease -500ms"]
 source = "css_animations_1"
 
 [[property]]
@@ -495,6 +498,28 @@ animation = "by-computed-value"
 source = "css_color_4"
 
 [[property]]
+name = "clear"
+value_type = "clear"
+inherited = false
+initial = "none"
+grammar = "none | left | right | both"
+seed_values = ["none", "left", "right", "both"]
+animation = "discrete"
+source = "css2_2"
+partial = "computed physical clear value; Buckram owns direct clearance and defers collapsed-through and cross-nesting cases"
+
+[[property]]
+name = "contain"
+value_type = "contain"
+inherited = false
+initial = "none"
+grammar = "none | strict | content | [ [ size | inline-size ] || layout || style || paint ]"
+seed_values = ["none", "paint", "layout paint", "content", "strict"]
+animation = "none"
+source = "css_conditional_5"
+partial = "computed containment flags and the HTML body canvas-background propagation rule; containment effects on layout, sizing, style scoping, and paint clipping remain deferred"
+
+[[property]]
 name = "container-name"
 value_type = "container-name"
 inherited = false
@@ -530,7 +555,7 @@ value_type = "display"
 inherited = false
 initial = "inline"
 grammar = "[ <display-outside> || <display-inside> ] | <display-listitem> | <display-internal> | <display-box> | <display-legacy>"
-seed_values = ["inline", "block", "inline-block", "none", "flex", "grid", "table", "table-row-group", "table-row", "table-cell", "table-caption"]
+seed_values = ["inline", "block", "list-item", "inline-block", "none", "contents", "flex", "grid", "table", "table-row-group", "table-row", "table-cell", "table-caption"]
 animation = "discrete"
 source = "css_display_3"
 
@@ -1155,6 +1180,17 @@ animation = "discrete"
 source = "css_transitions_1"
 
 [[property]]
+name = "animation-delay"
+value_type = "animation-delay"
+inherited = false
+initial = "0s"
+grammar = "<time>"
+seed_values = ["0s", "100ms", "-500ms"]
+animation = "none"
+source = "css_animations_1"
+partial = "one animation delay, including negative delays; comma-separated animation lists remain deferred"
+
+[[property]]
 name = "animation-duration"
 value_type = "duration"
 inherited = false
@@ -1179,8 +1215,8 @@ name = "animation-timing-function"
 value_type = "timing-function"
 inherited = false
 initial = "linear"
-grammar = "linear | ease | ease-in | ease-out | ease-in-out"
-seed_values = ["linear", "ease"]
+grammar = "<easing-function>"
+seed_values = ["linear", "ease", "cubic-bezier(0, 1, 1, 0)"]
 animation = "discrete"
 source = "css_animations_1"
 
@@ -1561,20 +1597,6 @@ animation = "discrete"
 spec = "https://drafts.csswg.org/css-inline-3/#baseline-source"
 
 [[unimplemented]]
-name = "clear"
-group = "box"
-inherited = false
-animation = "discrete"
-spec = "https://drafts.csswg.org/css2/#propdef-clear"
-
-[[unimplemented]]
-name = "contain"
-group = "box"
-inherited = false
-animation = "none"
-spec = "https://drafts.csswg.org/css-contain/#contain-property"
-
-[[unimplemented]]
 name = "isolation"
 group = "box"
 inherited = false
@@ -1819,12 +1841,16 @@ animation = "by-computed-value"
 spec = "https://drafts.csswg.org/css-fonts-4/#propdef-font-variation-settings"
 
 # group: inherited_box
-[[unimplemented]]
+[[property]]
 name = "direction"
+value_type = "direction"
+initial = "ltr"
 group = "inherited_box"
 inherited = true
+grammar = "ltr | rtl"
+seed_values = ["ltr", "rtl"]
 animation = "none"
-spec = "https://drafts.csswg.org/css-writing-modes/#propdef-direction"
+source = "css_writing_modes_4"
 
 [[unimplemented]]
 name = "image-rendering"
@@ -2325,13 +2351,6 @@ group = "ui"
 inherited = false
 animation = "none"
 spec = "https://drafts.csswg.org/css-animations-2/#animation-composition"
-
-[[unimplemented]]
-name = "animation-delay"
-group = "ui"
-inherited = false
-animation = "none"
-spec = "https://drafts.csswg.org/css-animations/#propdef-animation-delay"
 
 [[unimplemented]]
 name = "animation-direction"

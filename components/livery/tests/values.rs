@@ -2,16 +2,18 @@ use std::fmt::Debug;
 
 use livery::media::{ViewportSize, ViewportSizes};
 use livery::values::{
-    Alignment, AnimationName, AspectRatio, BackgroundImage, BackgroundPosition, BackgroundRepeat,
-    BorderStyle, BorderWidth, BoxShadow, BoxSizing, Color, CssValue, Display, Duration,
-    FlexDirection, FlexFactor, FlexWrap, Float, FontFamily, FontSize, FontStyle, FontWeight, Gap,
-    Inset, LengthPercentage, LengthUnit, LineHeight, ListStyleType, Margin, Opacity, Order,
-    Overflow, Padding, PointerEvents, Position, Radius, RelativeLengthEnvironment, ResolveViewport,
-    Rotate, Scale, Size, Spacing, TextAlign, TextDecorationLine, TextWrapMode, TimingFunction,
-    Transform, TransitionProperty, TreeCounts, VerticalAlign, Visibility, WhiteSpaceCollapse,
-    ZIndex,
+    Alignment, AnimationDelay, AnimationName, AspectRatio, BackgroundImage, BackgroundPosition,
+    BackgroundRepeat, BorderStyle, BorderWidth, BoxShadow, BoxSizing, Clear, Color, Contain,
+    CssValue, Direction, Display, Duration, FlexDirection, FlexFactor, FlexWrap, Float, FontFamily,
+    FontSize, FontStyle, FontWeight, Gap, Inset, LengthPercentage, LengthUnit, LineHeight,
+    ListStyleType, Margin, Opacity, Order, Overflow, Padding, PointerEvents, Position, Radius,
+    RelativeLengthEnvironment, ResolveViewport, Rotate, Scale, Size, Spacing, TextAlign,
+    TextDecorationLine, TextWrapMode, TimingFunction, Transform, TransitionProperty, TreeCounts,
+    VerticalAlign, Visibility, WhiteSpaceCollapse, ZIndex,
 };
-use livery::{canonicalize_specified_longhand, canonicalize_specified_value};
+use livery::{
+    AnimationClass, PropertyId, canonicalize_specified_longhand, canonicalize_specified_value,
+};
 
 fn assert_round_trip<T>(css: &str)
 where
@@ -118,7 +120,16 @@ fn color_values_round_trip() {
 
 #[test]
 fn catalog_property_values_round_trip() {
+    assert_round_trip::<AnimationDelay>("-500000s");
     assert_round_trip::<Display>("inline-block");
+    assert_round_trip::<Display>("contents");
+    assert_round_trip::<Display>("list-item");
+    assert_round_trip::<Contain>("none");
+    assert_round_trip::<Contain>("paint layout");
+    assert_round_trip::<Contain>("content");
+    assert_round_trip::<Contain>("strict");
+    assert_round_trip::<Clear>("both");
+    assert_round_trip::<Direction>("rtl");
     assert_round_trip::<AspectRatio>("16 / 9");
     assert_round_trip::<BoxSizing>("border-box");
     assert_round_trip::<BoxShadow>("0 2px 4px rgba(0, 0, 0, 0.5)");
@@ -129,6 +140,7 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<Duration>("100ms");
     assert_round_trip::<AnimationName>("fade");
     assert_round_trip::<TimingFunction>("ease-in-out");
+    assert_round_trip::<TimingFunction>("cubic-bezier(0, 1, 1, 0)");
     assert_round_trip::<TransitionProperty>("opacity");
     assert_round_trip::<TransitionProperty>("background-color");
     assert_round_trip::<TransitionProperty>("color");
@@ -195,6 +207,36 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<VerticalAlign>("-2px");
     assert_round_trip::<WhiteSpaceCollapse>("preserve");
     assert_round_trip::<ZIndex>("10");
+}
+
+#[test]
+fn contain_normalizes_aliases_and_rejects_invalid_combinations() {
+    assert_eq!(
+        "strict".parse::<Contain>().expect("strict").to_string(),
+        "size layout style paint"
+    );
+    assert_eq!(
+        "content".parse::<Contain>().expect("content").to_string(),
+        "layout style paint"
+    );
+    assert_eq!(
+        "paint inline-size layout"
+            .parse::<Contain>()
+            .expect("component keywords")
+            .to_string(),
+        "inline-size layout paint"
+    );
+    for invalid in ["", "none paint", "size inline-size", "paint paint"] {
+        assert!(invalid.parse::<Contain>().is_err(), "{invalid}");
+    }
+}
+
+#[test]
+fn direction_metadata_is_inherited_and_not_animatable() {
+    let metadata = PropertyId::Direction.metadata();
+
+    assert!(metadata.inherited);
+    assert_eq!(metadata.animation, AnimationClass::None);
 }
 
 #[test]
@@ -527,7 +569,10 @@ fn tree_counting_math_defers_until_an_element_context_supplies_the_counts() {
     }
 
     // Whitespace inside the empty argument list normalizes away.
-    for source in ["calc(1px * sibling-index())", "calc(1px * sibling-index( ))"] {
+    for source in [
+        "calc(1px * sibling-index())",
+        "calc(1px * sibling-index( ))",
+    ] {
         let value = source.parse::<LengthPercentage>().expect(source);
         assert_eq!(value.to_string(), "calc(1px * sibling-index())");
         assert_eq!(

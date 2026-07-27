@@ -295,6 +295,54 @@ impl fmt::Display for Duration {
     }
 }
 
+/// A single signed `animation-delay`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AnimationDelay(f32);
+
+impl AnimationDelay {
+    pub const ZERO: Self = Self(0.0);
+
+    pub const fn milliseconds(self) -> f32 {
+        self.0
+    }
+}
+
+impl FromStr for AnimationDelay {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let trimmed = input.trim();
+        let lowered = trimmed.to_ascii_lowercase();
+        let atomic = if let Some(value) = lowered.strip_suffix("ms") {
+            Some((value, 1.0))
+        } else if let Some(value) = lowered.strip_suffix('s') {
+            Some((value, 1_000.0))
+        } else if lowered == "0" {
+            Some(("0", 1.0))
+        } else {
+            None
+        };
+        let value = atomic
+            .and_then(|(number, multiplier)| {
+                number
+                    .trim()
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|value| value.is_finite())
+                    .map(|value| value * multiplier)
+            })
+            .or_else(|| super::calc::parse_time(trimmed).ok())
+            .ok_or_else(|| ParseError::expected("a CSS time"))?;
+        Ok(Self(value))
+    }
+}
+
+impl fmt::Display for AnimationDelay {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}ms", format_number(self.0))
+    }
+}
+
 /// A bounded CSS animation name. The first animation gate accepts one custom
 /// identifier or `none`; comma-separated animation lists remain outside the
 /// lane.
@@ -729,14 +777,80 @@ impl TransitionProperty {
     }
 }
 
-keyword_value! {
-    /// Timing functions used by the first keyframe animation gate.
-    pub enum TimingFunction {
-        Linear => "linear",
-        Ease => "ease",
-        EaseIn => "ease-in",
-        EaseOut => "ease-out",
-        EaseInOut => "ease-in-out",
+/// Timing functions used by the retained single-animation lane.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TimingFunction {
+    Linear,
+    Ease,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+    CubicBezier(f32, f32, f32, f32),
+}
+
+impl FromStr for TimingFunction {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let input = input.trim();
+        if input.eq_ignore_ascii_case("linear") {
+            return Ok(Self::Linear);
+        }
+        if input.eq_ignore_ascii_case("ease") {
+            return Ok(Self::Ease);
+        }
+        if input.eq_ignore_ascii_case("ease-in") {
+            return Ok(Self::EaseIn);
+        }
+        if input.eq_ignore_ascii_case("ease-out") {
+            return Ok(Self::EaseOut);
+        }
+        if input.eq_ignore_ascii_case("ease-in-out") {
+            return Ok(Self::EaseInOut);
+        }
+
+        let lowered = input.to_ascii_lowercase();
+        let arguments = lowered
+            .strip_prefix("cubic-bezier(")
+            .and_then(|value| value.strip_suffix(')'))
+            .ok_or_else(|| ParseError::expected("an easing keyword or cubic-bezier()"))?;
+        let values = arguments
+            .split(',')
+            .map(|value| value.trim().parse::<f32>())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| ParseError::expected("four cubic-bezier numbers"))?;
+        let [x1, y1, x2, y2] = values.as_slice() else {
+            return Err(ParseError::expected("four cubic-bezier numbers"));
+        };
+        if !values.iter().all(|value| value.is_finite())
+            || !(0.0..=1.0).contains(x1)
+            || !(0.0..=1.0).contains(x2)
+        {
+            return Err(ParseError::expected(
+                "finite cubic-bezier numbers with x coordinates from zero to one",
+            ));
+        }
+        Ok(Self::CubicBezier(*x1, *y1, *x2, *y2))
+    }
+}
+
+impl fmt::Display for TimingFunction {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::Linear => formatter.write_str("linear"),
+            Self::Ease => formatter.write_str("ease"),
+            Self::EaseIn => formatter.write_str("ease-in"),
+            Self::EaseOut => formatter.write_str("ease-out"),
+            Self::EaseInOut => formatter.write_str("ease-in-out"),
+            Self::CubicBezier(x1, y1, x2, y2) => write!(
+                formatter,
+                "cubic-bezier({}, {}, {}, {})",
+                format_number(x1),
+                format_number(y1),
+                format_number(x2),
+                format_number(y2)
+            ),
+        }
     }
 }
 
@@ -749,6 +863,7 @@ impl TimingFunction {
             Self::EaseIn => cubic_bezier(progress, 0.42, 0.0, 1.0, 1.0),
             Self::EaseOut => cubic_bezier(progress, 0.0, 0.0, 0.58, 1.0),
             Self::EaseInOut => cubic_bezier(progress, 0.42, 0.0, 0.58, 1.0),
+            Self::CubicBezier(x1, y1, x2, y2) => cubic_bezier(progress, x1, y1, x2, y2),
         }
     }
 }
@@ -810,8 +925,10 @@ keyword_value! {
     /// Display keywords required by the Cambium lane and baseline UA sheet.
     pub enum Display {
         None => "none",
+        Contents => "contents",
         Inline => "inline",
         Block => "block",
+        ListItem => "list-item",
         InlineBlock => "inline-block",
         Flex => "flex",
         Grid => "grid",
@@ -824,7 +941,7 @@ keyword_value! {
 }
 
 keyword_value! {
-    /// Floating directions consumed by Taffy's bounded block float lane.
+    /// Physical floating directions lowered into Buckram's block input.
     pub enum Float {
         None => "none",
         Left => "left",
@@ -837,6 +954,16 @@ keyword_value! {
     pub enum BoxSizing {
         ContentBox => "content-box",
         BorderBox => "border-box",
+    }
+}
+
+keyword_value! {
+    /// Physical sides which an in-flow block must clear.
+    pub enum Clear {
+        None => "none",
+        Left => "left",
+        Right => "right",
+        Both => "both",
     }
 }
 
@@ -855,6 +982,125 @@ keyword_value! {
         Normal => "normal",
         Size => "size",
         InlineSize => "inline-size",
+    }
+}
+
+/// The computed containment types activated by `contain`.
+///
+/// `strict` and `content` are normalized to their computed keyword sets, and
+/// the component-keyword form serializes in grammar order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Contain(u8);
+
+impl Contain {
+    const SIZE: u8 = 1 << 0;
+    const INLINE_SIZE: u8 = 1 << 1;
+    const LAYOUT: u8 = 1 << 2;
+    const STYLE: u8 = 1 << 3;
+    const PAINT: u8 = 1 << 4;
+
+    pub const NONE: Self = Self(0);
+    pub const CONTENT: Self = Self(Self::LAYOUT | Self::STYLE | Self::PAINT);
+    pub const STRICT: Self = Self(Self::SIZE | Self::LAYOUT | Self::STYLE | Self::PAINT);
+
+    /// Whether this value activates at least one containment type.
+    pub const fn is_active(self) -> bool {
+        self.0 != 0
+    }
+
+    pub const fn has_size(self) -> bool {
+        self.0 & Self::SIZE != 0
+    }
+
+    pub const fn has_inline_size(self) -> bool {
+        self.0 & Self::INLINE_SIZE != 0
+    }
+
+    pub const fn has_layout(self) -> bool {
+        self.0 & Self::LAYOUT != 0
+    }
+
+    pub const fn has_paint(self) -> bool {
+        self.0 & Self::PAINT != 0
+    }
+}
+
+impl FromStr for Contain {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let input = input.trim();
+        if input.eq_ignore_ascii_case("none") {
+            return Ok(Self::NONE);
+        }
+        if input.eq_ignore_ascii_case("strict") {
+            return Ok(Self::STRICT);
+        }
+        if input.eq_ignore_ascii_case("content") {
+            return Ok(Self::CONTENT);
+        }
+
+        let mut flags = 0_u8;
+        for keyword in input.split_ascii_whitespace() {
+            let bit = if keyword.eq_ignore_ascii_case("size") {
+                if flags & Self::INLINE_SIZE != 0 {
+                    return Err(ParseError::expected("at most one of size and inline-size"));
+                }
+                Self::SIZE
+            } else if keyword.eq_ignore_ascii_case("inline-size") {
+                if flags & Self::SIZE != 0 {
+                    return Err(ParseError::expected("at most one of size and inline-size"));
+                }
+                Self::INLINE_SIZE
+            } else if keyword.eq_ignore_ascii_case("layout") {
+                Self::LAYOUT
+            } else if keyword.eq_ignore_ascii_case("style") {
+                Self::STYLE
+            } else if keyword.eq_ignore_ascii_case("paint") {
+                Self::PAINT
+            } else {
+                return Err(ParseError::expected(
+                    "none, strict, content, or containment keywords",
+                ));
+            };
+            if flags & bit != 0 {
+                return Err(ParseError::expected(
+                    "each containment keyword at most once",
+                ));
+            }
+            flags |= bit;
+        }
+
+        (flags != 0)
+            .then_some(Self(flags))
+            .ok_or_else(|| ParseError::expected("a contain value"))
+    }
+}
+
+impl fmt::Display for Contain {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if !self.is_active() {
+            return formatter.write_str("none");
+        }
+
+        let mut first = true;
+        for (bit, keyword) in [
+            (Self::SIZE, "size"),
+            (Self::INLINE_SIZE, "inline-size"),
+            (Self::LAYOUT, "layout"),
+            (Self::STYLE, "style"),
+            (Self::PAINT, "paint"),
+        ] {
+            if self.0 & bit == 0 {
+                continue;
+            }
+            if !first {
+                formatter.write_str(" ")?;
+            }
+            formatter.write_str(keyword)?;
+            first = false;
+        }
+        Ok(())
     }
 }
 
@@ -930,6 +1176,14 @@ impl fmt::Display for ContainerName {
             Self::None => formatter.write_str("none"),
             Self::Names(names) => formatter.write_str(&names.join(" ")),
         }
+    }
+}
+
+keyword_value! {
+    /// Inline base direction used by logical layout and bidi.
+    pub enum Direction {
+        Ltr => "ltr",
+        Rtl => "rtl",
     }
 }
 
@@ -1842,7 +2096,9 @@ impl Rotate {
         match self {
             Self::Deferred(math) => {
                 let resolved = math.resolve_relative(environment);
-                resolved.resolved_px().map_or(Self::Deferred(resolved), Self::Angle)
+                resolved
+                    .resolved_px()
+                    .map_or(Self::Deferred(resolved), Self::Angle)
             },
             value => value,
         }

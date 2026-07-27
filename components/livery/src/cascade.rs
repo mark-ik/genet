@@ -6,8 +6,8 @@ use crate::custom::{
     CustomDeclaration, CustomDeclaredValue, CustomProperties, contains_var, substitute,
 };
 use crate::values::{
-    AnimationName, BorderStyle, BorderWidth, Color, Duration, FontFamily, FontSize, FontStyle,
-    FontWeight, LineHeight, Margin, Padding, Radius, TimingFunction, TransitionProperty,
+    AnimationDelay, AnimationName, BorderStyle, BorderWidth, Color, Duration, FontFamily, FontSize,
+    FontStyle, FontWeight, LineHeight, Margin, Padding, Radius, TimingFunction, TransitionProperty,
 };
 use crate::{ComputedValues, PropertyId, PropertyValue, ShorthandId};
 
@@ -392,8 +392,14 @@ fn expand_grid_template(
         return;
     };
     let mut values = vec![
-        (PropertyId::GridTemplateRows, PropertyValue::GridTemplate(rows)),
-        (PropertyId::GridTemplateColumns, PropertyValue::GridTemplate(columns)),
+        (
+            PropertyId::GridTemplateRows,
+            PropertyValue::GridTemplate(rows),
+        ),
+        (
+            PropertyId::GridTemplateColumns,
+            PropertyValue::GridTemplate(columns),
+        ),
     ];
     if shorthand == ShorthandId::Grid {
         values.push((
@@ -526,11 +532,16 @@ fn expand_animation(block: &mut DeclarationBlock, value: &str, important: bool) 
     let mut name = None;
     let mut duration = None;
     let mut timing = None;
+    let mut delay = None;
     for component in split_components(value) {
         if duration.is_none()
             && let Ok(parsed) = component.parse::<Duration>()
         {
             duration = Some(parsed);
+        } else if delay.is_none()
+            && let Ok(parsed) = component.parse::<AnimationDelay>()
+        {
+            delay = Some(parsed);
         } else if timing.is_none()
             && let Ok(parsed) = component.parse::<TimingFunction>()
         {
@@ -577,6 +588,11 @@ fn expand_animation(block: &mut DeclarationBlock, value: &str, important: bool) 
         block,
         PropertyId::AnimationTimingFunction,
         PropertyValue::TimingFunction(timing.unwrap_or(TimingFunction::Linear)),
+    );
+    push(
+        block,
+        PropertyId::AnimationDelay,
+        PropertyValue::AnimationDelay(delay.unwrap_or(AnimationDelay::ZERO)),
     );
 }
 
@@ -1134,11 +1150,8 @@ fn resolve_pending(
     match pending.from_shorthand {
         None => DeclaredValue::parse(property, &substituted).unwrap_or(DeclaredValue::Unset),
         Some(shorthand) => {
-            let reparsed = parse_declaration_block(&format!(
-                "{}: {}",
-                shorthand.metadata().name,
-                substituted
-            ));
+            let reparsed =
+                parse_declaration_block(&format!("{}: {}", shorthand.metadata().name, substituted));
             match reparsed
                 .declarations
                 .into_iter()

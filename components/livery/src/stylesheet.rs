@@ -400,9 +400,8 @@ impl Stylesheet {
     }
 }
 
-/// One named keyframe block. The first animation gate consumes the opacity
-/// declaration from these frames; other declarations remain available for
-/// later property ratchets.
+/// One named keyframe block. The retained animation clock samples direct
+/// longhand values from these frames through generated property dispatch.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Keyframes {
     name: Box<str>,

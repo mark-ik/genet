@@ -14,14 +14,15 @@ pub use length::{
     MathLengthPercentage, RelativeLengthEnvironment, TreeCounts,
 };
 pub use property::{
-    Alignment, AnimationName, AspectRatio, BackgroundImage, BackgroundPosition, BackgroundRepeat,
-    BorderStyle, BorderWidth, BoxShadow, BoxShadowValue, BoxSizing, ContainerName, ContainerType,
-    Display, Duration, FlexDirection, FlexFactor, FlexWrap, Float, FontFamily, FontSize, FontStyle,
-    FontWeight, Gap, GridAutoFlow, GridPlacement, GridTemplate, GridTrack, Inset, LineHeight,
-    ListStyleType, Margin, Opacity, Order, Overflow, Padding, PointerEvents, Position, Radius,
-    Rotate, Scale, Size, Spacing, TableLayout, TextAlign, TextDecorationColor, TextDecorationLine, TextWrapMode,
-    TimingFunction, Transform, TransformFunction, TransitionProperty, VerticalAlign, Visibility,
-    WhiteSpaceCollapse, WritingMode, ZIndex,
+    Alignment, AnimationDelay, AnimationName, AspectRatio, BackgroundImage, BackgroundPosition,
+    BackgroundRepeat, BorderStyle, BorderWidth, BoxShadow, BoxShadowValue, BoxSizing, Clear,
+    Contain, ContainerName, ContainerType, Direction, Display, Duration, FlexDirection, FlexFactor,
+    FlexWrap, Float, FontFamily, FontSize, FontStyle, FontWeight, Gap, GridAutoFlow, GridPlacement,
+    GridTemplate, GridTrack, Inset, LineHeight, ListStyleType, Margin, Opacity, Order, Overflow,
+    Padding, PointerEvents, Position, Radius, Rotate, Scale, Size, Spacing, TableLayout, TextAlign,
+    TextDecorationColor, TextDecorationLine, TextWrapMode, TimingFunction, Transform,
+    TransformFunction, TransitionProperty, VerticalAlign, Visibility, WhiteSpaceCollapse,
+    WritingMode, ZIndex,
 };
 pub use transform_matrix::Matrix2D;
 
@@ -85,15 +86,19 @@ macro_rules! unchanged_viewport_resolution {
 
 unchanged_viewport_resolution!(
     Alignment,
+    AnimationDelay,
     AnimationName,
     AspectRatio,
     BackgroundImage,
     BackgroundRepeat,
     BorderStyle,
     BoxSizing,
+    Clear,
+    Contain,
     ContainerName,
     ContainerType,
     Color,
+    Direction,
     Display,
     Duration,
     FlexDirection,
@@ -321,11 +326,15 @@ macro_rules! discrete_interpolation {
 
 discrete_interpolation!(
     Alignment,
+    AnimationDelay,
     AnimationName,
     AspectRatio,
     BoxSizing,
+    Clear,
+    Contain,
     ContainerName,
     ContainerType,
+    Direction,
     Display,
     Duration,
     FlexDirection,
