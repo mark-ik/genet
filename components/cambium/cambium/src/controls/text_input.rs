@@ -9,9 +9,9 @@
 //! ## Caret
 //!
 //! The field is a real insertion-point editor, not append-only: [`TextInput`]
-//! carries a `caret` (a *character* index, so editing is Unicode-correct), and
-//! the handler inserts at the caret, deletes before/after it (Backspace/Delete),
-//! and moves it (←/→ and Home/End). The field renders the **clean** buffer; the
+//! carries a `caret` (an extended grapheme-cluster index), and the handler
+//! inserts at the caret, deletes before/after it (Backspace/Delete), and moves
+//! it (←/→ and Home/End). The field renders the **clean** buffer; the
 //! host paints the caret as a thin bar at the cursor via
 //! `genet_layout::caret_rect` overlaid on the scene (see `pelt-desktop`'s render
 //! path). [`TextInput::display`] — the buffer with a `|` at the caret — is a
@@ -26,8 +26,11 @@
 //! within this module tree only) so the split files can edit them directly,
 //! exactly as the one original impl block did.
 
+mod command;
 mod core;
 mod multiline;
 mod word_motion;
 
-pub use core::TextInput;
+pub use command::{CaretMove, TextCommand, TextFieldMode, text_command_from_key};
+pub(crate) use core::TextSnapshot;
+pub use core::{CaretAffinity, CaretPosition, CaretSelection, Composition, TextInput};

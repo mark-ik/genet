@@ -14,12 +14,14 @@ pub mod inspect;
 pub mod render;
 
 pub use a11y::accesskit_tree;
+pub use genet_layout::{VisualAffinity, VisualCaret, VisualMovement, VisualSelection};
 pub use inspect::{ContentReport, OutlineEntry, content_report};
 pub use render::{
-    ExternalTextureDraw, RenderedFrame, TextCursor, caret_byte_at, caret_screen_rect,
-    fragments_from_scripted_dom, hit_test_node, paint_list_from_scripted_dom,
-    paint_list_from_session, scene_from_layout_dom, scene_from_scripted_dom, scene_from_session,
-    scene_from_session_dom, soft_wrap_caret_byte, translated_frame_from_session_dom,
+    ExternalTextureDraw, RenderedFrame, TextCursor, caret_byte_at, caret_position_at,
+    caret_screen_rect, caret_screen_rect_for_position, fragments_from_scripted_dom, hit_test_node,
+    paint_list_from_scripted_dom, paint_list_from_session, scene_from_layout_dom,
+    scene_from_scripted_dom, scene_from_session, scene_from_session_dom, soft_wrap_caret_byte,
+    translated_frame_from_session_dom,
 };
 
 #[cfg(test)]

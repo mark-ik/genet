@@ -20,7 +20,8 @@ pub mod scroll;
 
 pub use scroll::{ScrollbarFade, wheel_axes};
 
-use cambium::{Key, KeyEvent, Modifiers, NamedKey};
+use cambium::{CompositionEvent, Key, KeyEvent, Modifiers, NamedKey};
+use winit::event::Ime;
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey as WinitNamedKey};
 
 /// Map a winit logical key and modifiers into a Cambium event.
@@ -61,6 +62,22 @@ pub fn modifiers_from_winit(state: ModifiersState) -> Modifiers {
     }
 }
 
+/// Map a winit IME lifecycle event into the same focused Cambium event channel
+/// as keyboard input. A host sends the result to `runner.dispatch_key`; the
+/// focused text field consumes it while other controls ignore it.
+pub fn ime_event_from_winit(ime: &Ime) -> KeyEvent {
+    let composition = match ime {
+        Ime::Enabled => CompositionEvent::Enabled,
+        Ime::Preedit(text, selection) => CompositionEvent::Preedit {
+            text: text.clone(),
+            selection: *selection,
+        },
+        Ime::Commit(text) => CompositionEvent::Commit(text.clone()),
+        Ime::Disabled => CompositionEvent::Disabled,
+    };
+    KeyEvent::new(Key::Composition(composition))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +111,23 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn ime_preedit_and_commit_preserve_platform_payloads() {
+        let preedit = ime_event_from_winit(&Ime::Preedit("かな".to_owned(), Some((3, 6))));
+        assert!(matches!(
+            preedit.key,
+            Key::Composition(CompositionEvent::Preedit {
+                ref text,
+                selection: Some((3, 6)),
+            }) if text == "かな"
+        ));
+
+        let commit = ime_event_from_winit(&Ime::Commit("仮名".to_owned()));
+        assert!(matches!(
+            commit.key,
+            Key::Composition(CompositionEvent::Commit(ref text)) if text == "仮名"
+        ));
     }
 }

@@ -15,7 +15,7 @@
 
 use super::text_input::TextInput;
 use crate::pod::GenetElement;
-use crate::{El, GenetCtx, Key, KeyEvent, NamedKey, OnKey, View, el, on_key};
+use crate::{El, GenetCtx, KeyEvent, OnKey, TextFieldMode, View, el, on_key};
 
 /// The edit handler for [`text_field`]: apply one [`KeyEvent`] to the
 /// [`TextInput`].
@@ -42,28 +42,7 @@ use crate::{El, GenetCtx, Key, KeyEvent, NamedKey, OnKey, View, el, on_key};
 /// * [`NamedKey::Enter`], `Tab`, `Escape`, ↑/↓, and `Other` have no effect in a
 ///   single-line field (multi-line / commit are the [`textarea`] / host's job).
 pub(crate) fn edit(input: &mut TextInput, ev: KeyEvent) {
-    let extend = ev.mods.shift;
-    // Word motion on Ctrl (Win/Linux) or Alt/Option (macOS); `select_all` already
-    // takes Ctrl/Cmd. The `if word` arms sit before the plain ones so they win.
-    let word = ev.mods.ctrl || ev.mods.alt;
-    match ev.key {
-        Key::Character(ref s) if (ev.mods.ctrl || ev.mods.meta) && s.eq_ignore_ascii_case("a") => {
-            input.select_all()
-        }
-        Key::Character(s) => input.insert_str(&s),
-        Key::Named(NamedKey::Space) => input.insert_str(" "),
-        Key::Named(NamedKey::Backspace) if word => input.delete_word_left(),
-        Key::Named(NamedKey::Backspace) => input.backspace(),
-        Key::Named(NamedKey::Delete) if word => input.delete_word_right(),
-        Key::Named(NamedKey::Delete) => input.delete(),
-        Key::Named(NamedKey::ArrowLeft) if word => input.move_word_left(extend),
-        Key::Named(NamedKey::ArrowLeft) => input.move_left(extend),
-        Key::Named(NamedKey::ArrowRight) if word => input.move_word_right(extend),
-        Key::Named(NamedKey::ArrowRight) => input.move_right(extend),
-        Key::Named(NamedKey::Home) => input.home(extend),
-        Key::Named(NamedKey::End) => input.end(extend),
-        Key::Named(_) => {}
-    }
+    input.apply_key(&ev, TextFieldMode::SingleLine);
 }
 
 /// The edit handler for [`textarea`]: like [`edit`] but multi-line. `Enter`
@@ -73,37 +52,7 @@ pub(crate) fn edit(input: &mut TextInput, ev: KeyEvent) {
 /// (`Ctrl`/`Alt`+`←`/`→`, `Ctrl`/`Alt`+`Backspace`/`Delete`) and everything else
 /// (typing, Shift to extend) matches the single-line field.
 pub(crate) fn edit_multiline(input: &mut TextInput, ev: KeyEvent) {
-    let extend = ev.mods.shift;
-    // Word motion on Ctrl (Win/Linux) or Alt/Option (macOS); document motion (Ctrl/Cmd
-    // + Home/End → buffer start/end) on Ctrl or Cmd, while bare Home/End stay line-scoped.
-    // On Win/Linux a held Ctrl satisfies *both* flags, which is harmless: `word` gates only
-    // ←/→/Backspace/Delete and `doc` gates only Home/End (disjoint keys), and each guarded
-    // arm precedes its plain fallback, so the modified action always wins for its key.
-    let word = ev.mods.ctrl || ev.mods.alt;
-    let doc = ev.mods.ctrl || ev.mods.meta;
-    match ev.key {
-        Key::Character(ref s) if (ev.mods.ctrl || ev.mods.meta) && s.eq_ignore_ascii_case("a") => {
-            input.select_all()
-        }
-        Key::Character(s) => input.insert_str(&s),
-        Key::Named(NamedKey::Space) => input.insert_str(" "),
-        Key::Named(NamedKey::Enter) => input.insert_str("\n"),
-        Key::Named(NamedKey::Backspace) if word => input.delete_word_left(),
-        Key::Named(NamedKey::Backspace) => input.backspace(),
-        Key::Named(NamedKey::Delete) if word => input.delete_word_right(),
-        Key::Named(NamedKey::Delete) => input.delete(),
-        Key::Named(NamedKey::ArrowLeft) if word => input.move_word_left(extend),
-        Key::Named(NamedKey::ArrowLeft) => input.move_left(extend),
-        Key::Named(NamedKey::ArrowRight) if word => input.move_word_right(extend),
-        Key::Named(NamedKey::ArrowRight) => input.move_right(extend),
-        Key::Named(NamedKey::ArrowUp) => input.move_up(extend),
-        Key::Named(NamedKey::ArrowDown) => input.move_down(extend),
-        Key::Named(NamedKey::Home) if doc => input.home(extend),
-        Key::Named(NamedKey::Home) => input.home_line(extend),
-        Key::Named(NamedKey::End) if doc => input.end(extend),
-        Key::Named(NamedKey::End) => input.end_line(extend),
-        Key::Named(_) => {}
-    }
+    input.apply_key(&ev, TextFieldMode::Multiline);
 }
 
 /// The concrete view type the field produces.
@@ -258,5 +207,29 @@ mod tests {
         assert_eq!(t.caret(), 3); // word-right in the single-line field too
         edit(&mut t, named(NamedKey::Backspace, CTRL));
         assert_eq!(t.text(), " bar"); // Ctrl+Backspace kills "foo"
+    }
+
+    #[test]
+    fn field_shortcuts_drive_the_default_undo_journal() {
+        let mut input = TextInput::default();
+        edit(&mut input, KeyEvent::new(Key::Character("h".to_owned())));
+        edit(&mut input, KeyEvent::new(Key::Character("i".to_owned())));
+        edit(
+            &mut input,
+            KeyEvent::with_mods(Key::Character("z".to_owned()), CTRL),
+        );
+        assert_eq!(input.text(), "");
+
+        edit(
+            &mut input,
+            KeyEvent::with_mods(
+                Key::Character("z".to_owned()),
+                Modifiers {
+                    shift: true,
+                    ..CTRL
+                },
+            ),
+        );
+        assert_eq!(input.text(), "hi");
     }
 }

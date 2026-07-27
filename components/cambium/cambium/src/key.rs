@@ -44,15 +44,35 @@ const ON_KEY_ID: ViewId = ViewId::new(0x78C7_6F33);
 /// A keyboard key, decoupled from winit.
 ///
 /// The bin maps a winit `Key` to this later; the headless backend only needs the
-/// two cases text editing requires: a typed [`Character`](Key::Character) (the
-/// resolved string the key produced, e.g. `"h"`, `"H"`, `"é"`) and a
-/// [`Named`](Key::Named) non-character key.
+/// text cases editing requires: a typed [`Character`](Key::Character) (the
+/// resolved string the key produced, e.g. `"h"`, `"H"`, `"é"`), a
+/// [`Named`](Key::Named) non-character key, and a platform IME
+/// [`Composition`](Key::Composition) event.
 #[derive(Clone, Debug)]
 pub enum Key {
     /// A key that produced text: the resolved character string.
     Character(String),
     /// A named, non-text key (editing/navigation control).
     Named(NamedKey),
+    /// An IME composition lifecycle event routed to the focused field.
+    Composition(CompositionEvent),
+}
+
+/// Platform-neutral IME composition lifecycle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CompositionEvent {
+    /// The platform enabled its text-input context.
+    Enabled,
+    /// Uncommitted composing text and its byte selection/caret within the
+    /// preedit string.
+    Preedit {
+        text: String,
+        selection: Option<(usize, usize)>,
+    },
+    /// Text committed by the IME.
+    Commit(String),
+    /// The platform disabled/cancelled composition.
+    Disabled,
 }
 
 /// The named (non-character) keys the editing foundation needs.

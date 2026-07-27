@@ -40,6 +40,7 @@ mod event;
 mod focus;
 mod focus_request;
 mod focusable;
+mod frisket;
 mod graph_canvas;
 mod grid;
 #[cfg(feature = "highlight")]
@@ -59,15 +60,14 @@ mod propagation;
 mod radio;
 mod reorderable_list;
 mod runner;
+mod sectioned_list;
 mod select;
 mod selection_bar;
 mod slider;
 mod splice;
+mod split;
 mod styled_field;
 mod summary_body;
-mod sectioned_list;
-mod frisket;
-mod split;
 mod tabs;
 mod tags;
 mod text;
@@ -103,8 +103,9 @@ pub use menu::{MENU_CLASS, MENU_ROW_ACTIVE_CLASS, MENU_ROW_CLASS, menu};
 // needs no second direct `sprigging` dependency. The grid widget's home
 // is here; its column model rides along.
 pub use controls::{
-    Checkbox, TextField, TextInput, button, button_with, checkbox, checkbox_typed, text_field,
-    text_field_typed, textarea, textarea_typed, toggle,
+    CaretAffinity, CaretMove, CaretPosition, CaretSelection, Checkbox, Composition, TextCommand,
+    TextField, TextFieldMode, TextInput, button, button_with, checkbox, checkbox_typed,
+    text_command_from_key, text_field, text_field_typed, textarea, textarea_typed, toggle,
 };
 pub use element::{El, Element, ElementView, el};
 pub use event::{OnClick, OnClickState, PointerClick, clickable, on_click};
@@ -117,7 +118,7 @@ pub use highlight::{
     role_class, styles_for, syntax_css,
 };
 pub use hover::{HoverEvent, HoverPhase, OnHover, OnHoverState, on_hover};
-pub use key::{Key, KeyEvent, Modifiers, NamedKey, OnKey, OnKeyState, on_key};
+pub use key::{CompositionEvent, Key, KeyEvent, Modifiers, NamedKey, OnKey, OnKeyState, on_key};
 pub use keyed::Keyed;
 pub use multi::{GenetMultiRunner, ProjectionId};
 pub use optional_action::{Action, OptionalAction};
@@ -141,18 +142,17 @@ pub use slider::{Slider, slider};
 pub use splice::GenetChildrenSplice;
 pub use sprigging::{GraphCanvas, GraphViewport, GridColumn, GridSpec};
 pub use styled_field::{
-    FIELD_CARET_CLASS, FieldChild, StyleRange, caret_text_field, styled_text_field,
-    styled_textarea,
+    FIELD_CARET_CLASS, FieldChild, StyleRange, caret_text_field, styled_text_field, styled_textarea,
 };
 pub use summary_body::{SummaryBody, summary_body};
 // Per-tag element-view helpers: `div`, `span`, `p`, `input`, `label`, `a`,
 // `h1`/`h2`/`h3`, `ul`/`ol`/`li`. (No `button` here — `controls::button` is the
 // button view, with a handler.)
-pub use sectioned_list::{ListRow, ListRowKind, ListSection, sectioned_list};
 pub use frisket::{
     DividerTarget, FRISKET_CSS, FRISKET_TILE_ATTR, PaneView, decode_pane_path, divider_target,
     encode_pane_path, frisket, stack_target, tab_drop_index, tab_target,
 };
+pub use sectioned_list::{ListRow, ListRowKind, ListSection, sectioned_list};
 pub use split::{Split, SplitAxis, split};
 pub use tabs::{TabStrip, tab_strip};
 pub use tags::*;

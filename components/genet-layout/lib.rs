@@ -36,6 +36,7 @@ mod cell;
 mod computed_query;
 mod construct;
 mod font_metrics;
+mod forest;
 mod fragment;
 mod genet_lane;
 mod highlights;
@@ -53,7 +54,6 @@ mod paint_stacking;
 mod query;
 mod snapshot;
 mod style;
-mod forest;
 mod subtree;
 mod text_measure;
 mod transition_events;
@@ -69,8 +69,10 @@ pub use adapter_stylo::StyleNodeRef;
 pub use animation_events::{AnimationEventKind, AnimationEventRecord};
 pub use box_tree::{BoxTree, build_box_tree, layout_via_box_tree};
 pub use caret::{
-    CaretRect, TextRange, TextSelection, caret_byte_at_point, caret_byte_vertical, caret_color,
-    caret_rect, find_text_rects, range_rects, selection_rects, selection_style, text_selection,
+    CaretRect, TextRange, TextSelection, VisualAffinity, VisualCaret, VisualMovement,
+    VisualSelection, caret_byte_at_point, caret_byte_vertical, caret_color,
+    caret_position_at_point, caret_rect, caret_rect_for_position, find_text_rects, range_rects,
+    selection_rects, selection_style, selection_visual_move, text_selection,
 };
 pub use cascade::{
     MediaQueryEvaluator, RestyleOutcome, apply_interaction, evaluate_media_query,
@@ -78,6 +80,7 @@ pub use cascade::{
 };
 pub use cell::ArcRefCell;
 pub use engine_observables_api::{InteractionState, SourceNodeId};
+pub use forest::{ForestDom, WINDOW_ROOT_CLASS, WindowRootId};
 pub use fragment::FragmentPlane;
 pub use genet_lane::{
     GenetLaneView, absolute_origin, accumulate_origins, accumulate_painted_origins,
@@ -105,7 +108,6 @@ pub use paint_emit::{
 pub use query::{ElementQuery, Handle, NameMatch, Resolution};
 pub use snapshot::build_snapshot_map;
 pub use style::{StyleEntry, StylePlane};
-pub use forest::{ForestDom, WINDOW_ROOT_CLASS, WindowRootId};
 pub use subtree::{SubtreeView, layout_subtree, render_subtree};
 pub use text_measure::{
     FontFamilySpec, GenericFamilyKind, InlineContent, InlineRun, TextMeasureCtx,

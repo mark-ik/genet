@@ -6,7 +6,7 @@
 //! goal column across a run of vertical moves.
 //!
 //! Lines are `\n`-delimited in the buffer (Genet feeds the raw text to
-//! parley, which breaks at `\n`); a column is the char offset within a line.
+//! parley, which breaks at `\n`); a column is the grapheme offset within a line.
 //! Up/down keep a sticky goal column ([`TextInput::goal_col`](super::core::TextInput))
 //! across a run (Tier 2). These walk hard `\n` lines, not parley's soft-wrap visual
 //! rows — the soft-wrap caret (`genet_layout::caret_byte_vertical`) is a separate,
@@ -14,13 +14,14 @@
 //! not a column.
 
 use super::TextInput;
+use unicode_segmentation::UnicodeSegmentation;
 
 impl TextInput {
-    /// Char offsets where each line begins: 0, then one past each `\n`.
+    /// Grapheme offsets where each line begins: 0, then one past each `\n`.
     fn line_starts(&self) -> Vec<usize> {
         let mut starts = vec![0];
-        for (i, ch) in self.text.chars().enumerate() {
-            if ch == '\n' {
+        for (i, grapheme) in self.text.graphemes(true).enumerate() {
+            if grapheme == "\n" {
                 starts.push(i + 1);
             }
         }
@@ -28,14 +29,14 @@ impl TextInput {
     }
 
     /// The caret's `(line, column)`: `line` counts `\n`s before it, `column` is
-    /// the char offset since that line's start.
+    /// the grapheme offset since that line's start.
     fn line_col(&self) -> (usize, usize) {
         let starts = self.line_starts();
         let line = starts.iter().rposition(|&s| s <= self.caret).unwrap_or(0);
         (line, self.caret - starts[line])
     }
 
-    /// The caret char-offset at `(line, column)`, clamping the column to the
+    /// The caret grapheme offset at `(line, column)`, clamping the column to the
     /// line's length and the line to the last line.
     fn offset_at(&self, line: usize, column: usize) -> usize {
         let starts = self.line_starts();
@@ -46,7 +47,7 @@ impl TextInput {
         let end = starts
             .get(line + 1)
             .map(|&s| s - 1)
-            .unwrap_or(self.char_count());
+            .unwrap_or(self.grapheme_count());
         start.saturating_add(column).min(end)
     }
 
@@ -81,7 +82,7 @@ impl TextInput {
         self.goal_col = Some(goal);
         let last = self.line_starts().len() - 1;
         self.caret = if line == last {
-            self.char_count()
+            self.grapheme_count()
         } else {
             self.offset_at(line + 1, goal)
         };
@@ -161,5 +162,15 @@ mod tests {
         assert_eq!(t.caret(), 0);
         t.move_down(false); // the goal 3 (not the landed col 0) drives the descent
         assert_eq!(t.caret(), 8); // line "bb" clamps column 3 to its end (index 8)
+    }
+
+    #[test]
+    fn vertical_motion_counts_combining_sequences_as_one_column() {
+        let mut t = at("e\u{301}x\nz", 4);
+        assert_eq!(t.caret(), 2, "caret is after two graphemes");
+        t.move_down(false);
+        assert_eq!(t.caret(), 4, "short second line clamps at its end");
+        t.move_up(false);
+        assert_eq!(t.caret(), 2, "sticky column returns after the combining mark");
     }
 }

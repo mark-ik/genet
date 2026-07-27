@@ -21,5 +21,9 @@ mod toggle;
 pub use button::{button, button_with};
 pub use field::{TextField, text_field, text_field_typed, textarea, textarea_typed};
 pub(crate) use field::{edit, edit_multiline};
-pub use text_input::TextInput;
+pub(crate) use text_input::TextSnapshot;
+pub use text_input::{
+    CaretAffinity, CaretMove, CaretPosition, CaretSelection, Composition, TextCommand,
+    TextFieldMode, TextInput, text_command_from_key,
+};
 pub use toggle::{Checkbox, checkbox, checkbox_typed, toggle};

@@ -1688,6 +1688,29 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         )
     }
 
+    /// [`caret_rect`](Self::caret_rect) retaining visual affinity at bidi and
+    /// soft-wrap boundaries.
+    pub fn caret_rect_for_position<D>(
+        &self,
+        dom: &D,
+        node: Id,
+        caret: crate::caret::VisualCaret,
+        width: f32,
+    ) -> Option<crate::caret::CaretRect>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        crate::caret::caret_rect_for_position(
+            dom,
+            node,
+            caret,
+            &self.built,
+            &self.text_ctx,
+            &self.fragments,
+            width,
+        )
+    }
+
     /// The caret byte nearest the scene point `(x, y)` within `node`'s laid-out
     /// text, served from the session's **retained** layout (no re-cascade) — the
     /// inverse of [`caret_rect`](Self::caret_rect) and the point→caret primitive
@@ -1708,6 +1731,50 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             &self.built,
             &self.text_ctx,
             &self.fragments,
+        )
+    }
+
+    /// [`caret_byte_at_point`](Self::caret_byte_at_point) retaining the visual
+    /// affinity resolved by Parley.
+    pub fn caret_position_at_point<D>(
+        &self,
+        dom: &D,
+        node: Id,
+        x: f32,
+        y: f32,
+    ) -> Option<crate::caret::VisualCaret>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        crate::caret::caret_position_at_point(
+            dom,
+            node,
+            x,
+            y,
+            &self.built,
+            &self.text_ctx,
+            &self.fragments,
+        )
+    }
+
+    /// Move a selection through Parley's shaped visual layout.
+    pub fn selection_visual_move<D>(
+        &self,
+        node: Id,
+        selection: crate::caret::VisualSelection,
+        movement: crate::caret::VisualMovement,
+        extend: bool,
+    ) -> Option<crate::caret::VisualSelection>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        crate::caret::selection_visual_move::<D>(
+            node,
+            selection,
+            movement,
+            extend,
+            &self.built,
+            &self.text_ctx,
         )
     }
 
@@ -5841,17 +5908,28 @@ mod tests {
 
         use paint_list_api::PaintList as _;
         let count_thumbs = |alpha_of: &dyn Fn(ScrollTarget<_>) -> f32| -> usize {
-            let mut plist =
-                layout.emit_paint_list(&dom, &ScrollOffsets::default(), DeviceIntSize::new(800, 600));
+            let mut plist = layout.emit_paint_list(
+                &dom,
+                &ScrollOffsets::default(),
+                DeviceIntSize::new(800, 600),
+            );
             let before = plist.commands().len();
             layout.append_scrollbars(&dom, &mut plist, alpha_of);
             plist.commands().len() - before
         };
         // Element pane: vertical + horizontal thumbs; document: vertical thumb.
-        assert_eq!(count_thumbs(&|_| 1.0), 3, "two pane thumbs + one document thumb");
+        assert_eq!(
+            count_thumbs(&|_| 1.0),
+            3,
+            "two pane thumbs + one document thumb"
+        );
         // The fade seam: a target at alpha 0 emits nothing.
         assert_eq!(
-            count_thumbs(&|t| if t == ScrollTarget::Document { 1.0 } else { 0.0 }),
+            count_thumbs(&|t| if t == ScrollTarget::Document {
+                1.0
+            } else {
+                0.0
+            }),
             1,
             "faded-out pane emits no thumbs; the document bar remains",
         );

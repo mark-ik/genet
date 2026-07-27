@@ -1191,8 +1191,8 @@ mod keyboard {
             Key::Character(c) => s.text.push_str(&c),
             Key::Named(NamedKey::Backspace) => {
                 s.text.pop();
-            }
-            Key::Named(_) => {}
+            },
+            Key::Named(_) | Key::Composition(_) => {},
         }
     }
 

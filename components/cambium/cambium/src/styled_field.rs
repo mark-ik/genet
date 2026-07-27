@@ -117,15 +117,25 @@ fn field_children_impl(
     show_caret: bool,
 ) -> Vec<FieldChild> {
     let text = input.text();
-    let (before, preedit, _after) = input.render_parts();
-    let at = before.len();
+    let (before, preedit, after) = input.render_parts();
+    let start = before.len();
+    let end = text.len() - after.len();
     let runs = flatten(text.len(), styles);
 
     let mut kids: Vec<FieldChild> = Vec::new();
-    emit(&mut kids, text, &runs, 0, at);
-    if !preedit.is_empty() {
+    emit(&mut kids, text, &runs, 0, start);
+    let preedit_caret = input
+        .composition()
+        .and_then(|composition| composition.selection.map(|(_, focus)| focus))
+        .unwrap_or(preedit.len())
+        .min(preedit.len());
+    let preedit_caret = (0..=preedit_caret)
+        .rev()
+        .find(|&byte| preedit.is_char_boundary(byte))
+        .unwrap_or(0);
+    if !preedit[..preedit_caret].is_empty() {
         kids.push(Box::new(
-            el::<_, TextInput, ()>("span", preedit)
+            el::<_, TextInput, ()>("span", preedit[..preedit_caret].to_owned())
                 .attr("style", "text-decoration-line: underline;"),
         ));
     }
@@ -134,7 +144,13 @@ fn field_children_impl(
             el::<_, TextInput, ()>("span", "▍").attr("class", FIELD_CARET_CLASS),
         ));
     }
-    emit(&mut kids, text, &runs, at, text.len());
+    if !preedit[preedit_caret..].is_empty() {
+        kids.push(Box::new(
+            el::<_, TextInput, ()>("span", preedit[preedit_caret..].to_owned())
+                .attr("style", "text-decoration-line: underline;"),
+        ));
+    }
+    emit(&mut kids, text, &runs, end, text.len());
     let ghost = input.ghost();
     if !ghost.is_empty() {
         kids.push(Box::new(

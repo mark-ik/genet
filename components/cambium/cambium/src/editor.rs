@@ -10,23 +10,16 @@
 //! container tree) stays with the host that knows the grammar.
 
 use crate::controls::TextInput;
+use crate::controls::TextSnapshot;
 
-/// The byte offset of char index `ci` in `text` (the buffer end when past the last
-/// char), bridging [`TextInput`]'s char-index caret to its byte-offset selection setters.
-fn byte_of_char(text: &str, ci: usize) -> usize {
-    text.char_indices()
-        .nth(ci)
-        .map(|(b, _)| b)
-        .unwrap_or(text.len())
-}
-
-/// Undo/redo history for a [`TextInput`]: a bounded stack of whole-buffer snapshots
-/// (`TextInput` is `Clone`, so a snapshot captures text + caret + selection). A run of
-/// consecutive character inserts coalesces into one entry — so a burst of typing undoes
-/// as a unit — while a delete, a newline, or a caret move starts a fresh group.
+/// Undo/redo history for a [`TextInput`]: a bounded stack of committed text,
+/// caret, and selection snapshots. Composition and completion text are transient
+/// and are cleared when a snapshot is restored. A run of consecutive character
+/// inserts coalesces into one entry, while a delete, newline, or caret move
+/// starts a fresh group.
 ///
-/// The history lives *beside* the buffer, not wrapping it, so a host keeps its
-/// `TextInput` field for rendering and drives undo through this companion:
+/// This companion is for hosts that need transaction-level grouping and do not
+/// use [`TextInput::apply`](crate::TextInput::apply)'s built-in journal:
 ///
 /// ```ignore
 /// // before a mutating edit:
@@ -36,14 +29,20 @@ fn byte_of_char(text: &str, ci: usize) -> usize {
 /// history.undo(&mut field);
 /// history.redo(&mut field);
 /// ```
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EditHistory {
-    undo: Vec<TextInput>,
-    redo: Vec<TextInput>,
+    undo: Vec<TextSnapshot>,
+    redo: Vec<TextSnapshot>,
     /// Whether the current run of character inserts is coalescing into one entry.
     coalescing: bool,
     /// Depth cap; the oldest entry is dropped past it. `0` means unbounded.
     cap: usize,
+}
+
+impl Default for EditHistory {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EditHistory {
@@ -68,10 +67,14 @@ impl EditHistory {
     /// push is skipped while already coalescing). A non-insert edit (delete, newline) passes
     /// `false`, so it is its own step and ends the run. Any push clears the redo stack.
     pub fn snapshot(&mut self, input: &TextInput, coalesce_insert: bool) {
+        self.record_snapshot(input.snapshot(), coalesce_insert);
+    }
+
+    pub(crate) fn record_snapshot(&mut self, snapshot: TextSnapshot, coalesce_insert: bool) {
         if coalesce_insert && self.coalescing {
             return;
         }
-        self.undo.push(input.clone());
+        self.undo.push(snapshot);
         if self.cap != 0 && self.undo.len() > self.cap {
             self.undo.remove(0);
         }
@@ -88,27 +91,43 @@ impl EditHistory {
     /// Undo the last edit: restore the top undo snapshot into `input`, moving the current
     /// buffer onto the redo stack. Returns whether anything was undone.
     pub fn undo(&mut self, input: &mut TextInput) -> bool {
-        match self.undo.pop() {
-            Some(prev) => {
-                self.redo.push(std::mem::replace(input, prev));
+        let current = input.snapshot();
+        match self.undo_snapshot(current) {
+            Some(previous) => {
+                input.restore(previous);
                 self.coalescing = false;
                 true
-            }
+            },
             None => false,
         }
+    }
+
+    pub(crate) fn undo_snapshot(&mut self, current: TextSnapshot) -> Option<TextSnapshot> {
+        let previous = self.undo.pop()?;
+        self.redo.push(current);
+        self.coalescing = false;
+        Some(previous)
     }
 
     /// Redo the last undone edit: restore the top redo snapshot into `input`, moving the
     /// current buffer back onto the undo stack. Returns whether anything was redone.
     pub fn redo(&mut self, input: &mut TextInput) -> bool {
-        match self.redo.pop() {
+        let current = input.snapshot();
+        match self.redo_snapshot(current) {
             Some(next) => {
-                self.undo.push(std::mem::replace(input, next));
+                input.restore(next);
                 self.coalescing = false;
                 true
-            }
+            },
             None => false,
         }
+    }
+
+    pub(crate) fn redo_snapshot(&mut self, current: TextSnapshot) -> Option<TextSnapshot> {
+        let next = self.redo.pop()?;
+        self.undo.push(current);
+        self.coalescing = false;
+        Some(next)
     }
 
     /// Drop all history (on a field reset, so a fresh document never undoes into a prior one).
@@ -159,13 +178,12 @@ pub fn wrap_selection(input: &mut TextInput, open: char) -> bool {
     if !input.has_selection() {
         return false;
     }
-    let (lo, hi) = input.selection();
-    let inner: String = input.text().chars().skip(lo).take(hi - lo).collect();
+    let (lo, hi) = input.selection_bytes();
+    let inner = input.selected_text().to_owned();
     input.insert_str(&format!("{open}{inner}{close}"));
     // Re-select the inner text (between the new delimiters), so a repeat wrap nests.
-    let text = input.text().to_string();
-    let start = byte_of_char(&text, lo + 1);
-    let end = byte_of_char(&text, lo + 1 + (hi - lo));
+    let start = lo + open.len_utf8();
+    let end = start + (hi - lo);
     input.set_caret_byte(start, false);
     input.set_caret_byte(end, true);
     true

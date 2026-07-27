@@ -1,10 +1,9 @@
 # Text-Editing Primitive Plan
 
 **Date:** 2026-07-25
-**Status:** founded as the owner of the 2026-07-24 ruling; scoping only, no
-code task yet. Queued behind livery focus per the
-[cutover plan](2026-07-24_livery_fullweb_cutover_and_servo_retirement_plan.md)'s
-sequencing; T0 is cheap and can run whenever a gap in that cadence opens.
+**Status:** T0 through T4 complete 2026-07-27. The shared primitive, platform
+translation, shaped-layout seam, and first real app routes are live. T5 forms
+and T6 contenteditable remain downstream consumers; they do not gate knot.
 **Companions:** the
 [pelt and knot direction](2026-07-24_pelt_knot_direction.md) (the ruling this
 plan owns), mere's `2026-07-25_knot_port_plan.md` (K7 is the third consumer),
@@ -23,56 +22,47 @@ folds, and preview from a buffer the host owns; it holds no buffer itself).
 This plan exists so the ruled item has an owner. Until it was founded, text
 editing was the one ruled capability no plan carried.
 
+## Settled ownership
+
+- Cambium's `TextInput` owns committed text, directed selection, transient
+  composition, ghost text, and a bounded undo journal. Its stored caret unit is
+  an extended grapheme cluster.
+- `TextCommand` is the one platform-neutral mutation vocabulary. DOM controls
+  and hosts with their own action spine lower keys and IME events into the same
+  commands.
+- The Cambium/Genet boundary is byte offset plus visual affinity. Genet and
+  Parley own shaped visual movement, bidi order, soft-wrap lines, point
+  hit-testing, selection rectangles, and caret geometry.
+- `cambium-winit` translates winit key and IME payloads. The host still decides
+  which app shortcuts it owns before dispatching the remainder.
+
 ## Phases
 
-- **T0. Inventory and the home ruling.** Verify what actually exists before
-  designing: what cambium's `text_input` does today; what parley ships for
-  editing (its editor support, grown for masonry's text input, is the
-  candidate floor — evaluate rather than assume); what IME events
-  genet-winit-host already delivers per platform; what selection machinery
-  the fullweb lane has. Then rule the home: one core crate or module (the
-  buffer, selection model, edit ops, undo journal, IME composition state)
-  with cambium and the document lane as its two direct consumers, and where
-  precisely it lives. Done when the inventory is written into this plan and
-  the home is ruled with Mark.
-- **T1. Selection and caret model.** Grapheme-correct movement, affinity,
-  bidi-aware ranges, word and line units, over parley shaping. Done when a
-  fixture wall covers movement and selection invariants without any widget
-  attached.
-- **T2. Edit operations and undo.** Splice, insert, delete by unit, an undo
-  journal with coalescing rules. Done when property tests hold
-  (undo of any op sequence restores the prior buffer byte-exactly).
-- **T3. IME composition.** Preedit range, commit, cancel, over the host's
-  IME events. Done when composition round-trips on the primary desktop
-  (Windows) and degrades cleanly where events are absent.
-- **T4. First consumer: cambium `text_input`.** The control rides the core;
-  selection, IME, and undo work in a cambium view. This is the consumer that
-  makes the toolkit credible.
-
-  **A constraint from a real app, recorded 2026-07-26.** Isometry tried to adopt
-  `caret_text_field` and could not, for a reason T4 should design against rather
-  than discover: its winit host handles every key itself and calls
-  `runner.dispatch_key` nowhere, so no key reaches a DOM key handler at all. A
-  control whose mechanism is `on_key` on an element is therefore inert in that
-  host, and Isometry carries three bespoke key-capture lanes (a `>` command
-  line, a whisper composer, a compendium filter) precisely because of it. So
-  "the control rides the core" is not sufficient for an app consumer; there is a
-  host-side routing question (who owns a keystroke when a field is focused, and
-  how an app's own shortcuts keep working) that T4 either answers or explicitly
-  leaves to hosts. Isometry is downstream of T4 rather than a fourth direct
-  consumer of the core, since it consumes cambium — but it is the case that shows
-  T4's seam is not only inside the view tree. Its blocker is recorded in
-  `repos/isometry/design_docs/2026-07-20_perf_and_cambification_plan.md`.
-
-  ~~Second-order: the natural translation helper, `cambium-winit`'s
-  `key_event_from_winit`, sits in a crate cargo cannot publish.~~ **Resolved
-  2026-07-26.** Only the a11y host needed the unpublishable genet crates, so it
-  moved to `cambium-winit-a11y` and the thin `cambium-winit` (key translation +
-  wheel axes) depends on `cambium` + `winit` alone; `cargo publish --dry-run`
-  passes. Mark also ruled git-first for the whole family the same day, so the
-  reachability question is moot either way: a consumer takes it from genet.git.
-  What remains for T4 is only the routing question above, which is the
-  interesting half.
+- **T0. Inventory and home ruling. Complete.** The existing `TextInput`,
+  `EditHistory`, winit key translation, Parley selection API, Genet retained
+  layout, Woodshed routing, Isometry capture lanes, and Mere document selection
+  were checked live. The ownership split above is the result.
+- **T1. Selection and caret model. Complete.** Logical editing is
+  grapheme-correct. The layout boundary retains byte offsets and affinity.
+  Parley supplies visual cluster, word, line, Home/End, bidi, and point
+  movement. Mixed-direction and soft-wrap fixtures exercise the layout without
+  a widget.
+- **T2. Edit operations and undo. Complete.** All mutation enters through
+  `TextCommand`; the bounded journal coalesces typing and preserves redo rules.
+  An exhaustive four-operation wall over seven edit operations proves undo
+  restores the original bytes for every sequence.
+- **T3. IME composition. Complete at the code-path level.** Preedit text and
+  its byte selection, commit, cancel, selection replacement, inline rendering,
+  and retained-layout candidate geometry are wired. `cambium-winit` tests the
+  exact winit payload translation on Windows. A physical IME interaction remains
+  a headed receipt, not an implementation dependency.
+- **T4. First consumers. Complete.** Cambium fields use the shared command path
+  for selection, IME, and undo. Woodshed routes search and card rename through
+  it with visual-order keys, click-drag selection, overlays, and candidate
+  placement. Isometry's command lane now focuses a Cambium field, preserves
+  Escape/Enter as app commands, and dispatches remaining keys and IME events.
+  This resolves the host-routing question recorded 2026-07-26 without requiring
+  every host to surrender its shortcut policy.
 - **T5. Fullweb forms.** `input` and `textarea` route through the same core
   in the document lane. Sequenced with the cutover's needs, not ahead of
   them.
@@ -110,3 +100,14 @@ work lives in the knot port plan, not here.
   shortcuts decline (`woodshed-genet/src/main.rs`). That is the seam Isometry
   lacks, already built and in use, so T3/T4 can start from a real
   implementation rather than a design.
+- **2026-07-27.** T0 through T4 landed. Cambium now has a grapheme-indexed
+  `TextInput`, byte-plus-affinity layout adapters, `TextCommand`, composition
+  state, and bounded built-in history. Genet retained layout exposes Parley's
+  visual cluster, word, line, Home/End, bidi, point, caret, and selection
+  geometry. `cambium-winit` preserves IME preedit ranges. Woodshed is the
+  layout-aware consumer and Isometry's command line is the host-capture
+  consumer. Verification: Cambium 159 tests, cambium-winit 5, genet-layout 326,
+  genet-render 10; Isometry 57 tests plus the desktop binary target; Woodshed
+  20 tests plus the desktop binary target. The full Genet workspace check is
+  clean with the live Buckram and Livery work present. Warnings were
+  pre-existing.

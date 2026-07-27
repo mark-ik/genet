@@ -28,8 +28,9 @@ use engine_observables_api::{FragmentQuery, Point};
 use genet_layout::{
     BackgroundImagePlane, BoxTree, FragmentPlane, GenetLaneView, GenetPaintList, ImageLoader,
     ImagePlane, IncrementalLayout, ScrollOffsets, StylePlane, TextMeasureCtx, TextRange,
-    accumulate_painted_origins, accumulated_translate, caret_byte_at_point, caret_byte_vertical,
-    caret_color, caret_rect, emit_paint_list_with_layouts, layout, paint_list_from_layout_dom,
+    VisualAffinity, VisualCaret, accumulate_painted_origins, accumulated_translate,
+    caret_byte_at_point, caret_byte_vertical, caret_color, caret_position_at_point, caret_rect,
+    caret_rect_for_position, emit_paint_list_with_layouts, layout, paint_list_from_layout_dom,
     push_scrollbars, range_rects, run_cascade, selection_rects, selection_style,
 };
 use genet_scripted_dom::{NodeId, ScriptedDom};
@@ -73,6 +74,7 @@ const FOCUS_RING_WIDTH: f32 = 2.0;
 pub struct TextCursor {
     pub node: NodeId,
     pub caret: usize,
+    pub affinity: VisualAffinity,
     pub selection: Option<(usize, usize)>,
     /// Whether the focused node is an editable text field — gates the caret + selection
     /// paint. `false` for a focused non-text control (a button), which still rings.
@@ -241,10 +243,13 @@ pub fn paint_list_from_scripted_dom(
                     .unwrap_or(SELECTION_COLOR);
                 plist.push_selection(&rects, highlight);
             }
-            if let Some(rect) = caret_rect(
+            if let Some(rect) = caret_rect_for_position(
                 dom,
                 c.node,
-                c.caret,
+                VisualCaret {
+                    byte: c.caret,
+                    affinity: c.affinity,
+                },
                 &built,
                 &text_ctx,
                 &fragments,
@@ -375,7 +380,15 @@ pub fn paint_list_from_session(
                     .unwrap_or(SELECTION_COLOR);
                 plist.push_selection(&rects, highlight);
             }
-            if let Some(rect) = session.caret_rect(dom, c.node, c.caret, CARET_WIDTH) {
+            if let Some(rect) = session.caret_rect_for_position(
+                dom,
+                c.node,
+                VisualCaret {
+                    byte: c.caret,
+                    affinity: c.affinity,
+                },
+                CARET_WIDTH,
+            ) {
                 // `caret-color: auto` (see the static path above): track the field's text colour.
                 let caret = session
                     .caret_color(dom, c.node)
@@ -441,6 +454,20 @@ pub fn caret_screen_rect(
     LaidOutDocument::compute(dom, stylesheets, width, height).caret_screen_rect(node, caret_byte)
 }
 
+/// [`caret_screen_rect`] retaining visual affinity at bidi and soft-wrap
+/// boundaries.
+pub fn caret_screen_rect_for_position(
+    dom: &ScriptedDom,
+    stylesheets: &[&str],
+    width: u32,
+    height: u32,
+    node: NodeId,
+    caret: VisualCaret,
+) -> Option<(f32, f32, f32, f32)> {
+    LaidOutDocument::compute(dom, stylesheets, width, height)
+        .caret_screen_rect_for_position(node, caret)
+}
+
 /// The caret byte after moving one visual line — `delta` is `-1` (up) or `+1`
 /// (down) — from `caret_byte` within `node`'s laid-out text, keeping a sticky goal
 /// column. Runs cascade → layout, then [`caret_byte_vertical`], so ArrowUp / ArrowDown
@@ -476,6 +503,19 @@ pub fn caret_byte_at(
     y: f32,
 ) -> Option<usize> {
     LaidOutDocument::compute(dom, stylesheets, width, height).caret_byte_at(node, x, y)
+}
+
+/// [`caret_byte_at`] retaining the affinity resolved at the clicked edge.
+pub fn caret_position_at(
+    dom: &ScriptedDom,
+    stylesheets: &[&str],
+    width: u32,
+    height: u32,
+    node: NodeId,
+    x: f32,
+    y: f32,
+) -> Option<VisualCaret> {
+    LaidOutDocument::compute(dom, stylesheets, width, height).caret_position_at(node, x, y)
 }
 
 /// Highlight rects `(x, y, w, h)` for a multi-leaf selection `range` over `dom`
@@ -611,6 +651,24 @@ impl<'a> LaidOutDocument<'a> {
         Some((r.x, r.y, r.width, r.height))
     }
 
+    /// [`caret_screen_rect`](Self::caret_screen_rect) with explicit affinity.
+    pub fn caret_screen_rect_for_position(
+        &self,
+        node: NodeId,
+        caret: VisualCaret,
+    ) -> Option<(f32, f32, f32, f32)> {
+        let r = caret_rect_for_position(
+            self.dom,
+            node,
+            caret,
+            &self.built,
+            &self.text_ctx,
+            &self.fragments,
+            CARET_WIDTH,
+        )?;
+        Some((r.x, r.y, r.width, r.height))
+    }
+
     /// Caret byte one soft-wrapped line `delta` (up `-1` / down `+1`) from `caret_byte`
     /// within `node`, keeping a sticky goal column: pass `goal_x` `None` to seed it from
     /// the caret, or the previous call's returned value to hold the column across a run.
@@ -635,6 +693,19 @@ impl<'a> LaidOutDocument<'a> {
     /// Caret byte nearest scene point `(x, y)` within `node`'s laid-out text.
     pub fn caret_byte_at(&self, node: NodeId, x: f32, y: f32) -> Option<usize> {
         caret_byte_at_point(
+            self.dom,
+            node,
+            x,
+            y,
+            &self.built,
+            &self.text_ctx,
+            &self.fragments,
+        )
+    }
+
+    /// [`caret_byte_at`](Self::caret_byte_at) retaining visual affinity.
+    pub fn caret_position_at(&self, node: NodeId, x: f32, y: f32) -> Option<VisualCaret> {
+        caret_position_at_point(
             self.dom,
             node,
             x,
@@ -823,6 +894,7 @@ mod tests {
             c.map(|(caret, selection)| TextCursor {
                 node: field,
                 caret,
+                affinity: VisualAffinity::Downstream,
                 selection,
                 editable: true,
             })
@@ -862,12 +934,14 @@ mod tests {
         let editable = ops(Some(TextCursor {
             node: field,
             caret: 5,
+            affinity: VisualAffinity::Downstream,
             selection: None,
             editable: true,
         }));
         let button = ops(Some(TextCursor {
             node: field,
             caret: 0,
+            affinity: VisualAffinity::Downstream,
             selection: None,
             editable: false,
         }));

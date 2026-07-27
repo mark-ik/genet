@@ -100,6 +100,63 @@ pub struct CaretRect {
     pub height: f32,
 }
 
+/// Which side of a shaped cluster owns a caret at a shared byte boundary.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VisualAffinity {
+    #[default]
+    Downstream,
+    Upstream,
+}
+
+/// A caret in Parley's byte space, including the affinity required to paint it
+/// correctly at bidi and soft-wrap boundaries.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VisualCaret {
+    pub byte: usize,
+    pub affinity: VisualAffinity,
+}
+
+/// A directed selection in Parley's byte space.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VisualSelection {
+    pub anchor: VisualCaret,
+    pub focus: VisualCaret,
+}
+
+/// A keyboard movement interpreted against the shaped visual layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VisualMovement {
+    PreviousCluster,
+    NextCluster,
+    PreviousWord,
+    NextWord,
+    PreviousLine,
+    NextLine,
+    LineStart,
+    LineEnd,
+}
+
+fn to_parley_affinity(affinity: VisualAffinity) -> Affinity {
+    match affinity {
+        VisualAffinity::Downstream => Affinity::Downstream,
+        VisualAffinity::Upstream => Affinity::Upstream,
+    }
+}
+
+fn from_cursor(cursor: Cursor) -> VisualCaret {
+    VisualCaret {
+        byte: cursor.index(),
+        affinity: match cursor.affinity() {
+            Affinity::Downstream => VisualAffinity::Downstream,
+            Affinity::Upstream => VisualAffinity::Upstream,
+        },
+    }
+}
+
+fn to_cursor(layout: &Layout<ColorBrush>, caret: VisualCaret) -> Cursor {
+    Cursor::from_byte_index(layout, caret.byte, to_parley_affinity(caret.affinity))
+}
+
 /// The caret rectangle for `byte_offset` within `node`'s laid-out text, or `None`
 /// if `node` has no cached text layout (not a text-bearing leaf, or not laid
 /// out) or no fragment.
@@ -121,12 +178,40 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    caret_rect_for_position(
+        dom,
+        node,
+        VisualCaret {
+            byte: byte_offset,
+            affinity: VisualAffinity::Downstream,
+        },
+        built,
+        text_ctx,
+        fragments,
+        width,
+    )
+}
+
+/// [`caret_rect`] with an explicit visual affinity.
+pub fn caret_rect_for_position<D>(
+    dom: &D,
+    node: D::NodeId,
+    caret: VisualCaret,
+    built: &BoxTree<D::NodeId>,
+    text_ctx: &TextMeasureCtx,
+    fragments: &FragmentPlane<D::NodeId>,
+    width: f32,
+) -> Option<CaretRect>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
     // DOM node -> taffy id -> the cached parley layout (the glyph-run path).
     let taffy_id = built.node_map.get(&node)?;
     let layout = text_ctx.layouts.get(taffy_id)?;
 
     // parley's caret geometry within the text layout's local space.
-    let cursor = Cursor::from_byte_index(layout, byte_offset, Affinity::default());
+    let cursor = to_cursor(layout, caret);
     let bb = cursor.geometry(layout, width);
 
     // Absolute content-box origin: accumulated border-box origin, inset by this
@@ -140,12 +225,50 @@ where
     // the snug glyph band — `bb`'s height is the full line box (leading included,
     // and the font's tall ascent above), which paints a caret bar towering over
     // low-x-height words.
-    let (top, height) = caret_band(layout, byte_offset);
+    let (top, height) = caret_band(layout, caret.byte);
     Some(CaretRect {
         x: content_x + bb.x0 as f32,
         y: content_y + top,
         width: (bb.x1 - bb.x0) as f32,
         height,
+    })
+}
+
+/// Move a directed selection through the shaped visual layout. Parley owns bidi
+/// resolution, word boundaries, soft-wrap lines, and affinity; the returned
+/// byte/affinity pair can be stored by a toolkit model without retaining the
+/// layout.
+pub fn selection_visual_move<D>(
+    node: D::NodeId,
+    selection: VisualSelection,
+    movement: VisualMovement,
+    extend: bool,
+    built: &BoxTree<D::NodeId>,
+    text_ctx: &TextMeasureCtx,
+) -> Option<VisualSelection>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let taffy_id = built.node_map.get(&node)?;
+    let layout = text_ctx.layouts.get(taffy_id)?;
+    let selection = Selection::new(
+        to_cursor(layout, selection.anchor),
+        to_cursor(layout, selection.focus),
+    );
+    let moved = match movement {
+        VisualMovement::PreviousCluster => selection.previous_visual(layout, extend),
+        VisualMovement::NextCluster => selection.next_visual(layout, extend),
+        VisualMovement::PreviousWord => selection.previous_visual_word(layout, extend),
+        VisualMovement::NextWord => selection.next_visual_word(layout, extend),
+        VisualMovement::PreviousLine => selection.previous_line(layout, extend),
+        VisualMovement::NextLine => selection.next_line(layout, extend),
+        VisualMovement::LineStart => selection.line_start(layout, extend),
+        VisualMovement::LineEnd => selection.line_end(layout, extend),
+    };
+    Some(VisualSelection {
+        anchor: from_cursor(moved.anchor()),
+        focus: from_cursor(moved.focus()),
     })
 }
 
@@ -616,13 +739,31 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    caret_position_at_point(dom, node, x, y, built, text_ctx, fragments).map(|caret| caret.byte)
+}
+
+/// [`caret_byte_at_point`] retaining the affinity Parley resolved at the
+/// clicked cluster edge.
+pub fn caret_position_at_point<D>(
+    dom: &D,
+    node: D::NodeId,
+    x: f32,
+    y: f32,
+    built: &BoxTree<D::NodeId>,
+    text_ctx: &TextMeasureCtx,
+    fragments: &FragmentPlane<D::NodeId>,
+) -> Option<VisualCaret>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
     let taffy_id = built.node_map.get(&node)?;
     let layout = text_ctx.layouts.get(taffy_id)?;
     let (ox, oy) = absolute_origin(dom, fragments, node)?;
     let frame = fragments.rect_of(node)?;
     let local_x = x - (ox + frame.border.left + frame.padding.left);
     let local_y = y - (oy + frame.border.top + frame.padding.top);
-    Some(Cursor::from_point(layout, local_x, local_y).index())
+    Some(from_cursor(Cursor::from_point(layout, local_x, local_y)))
 }
 
 /// The caret bar's vertical extent `(top, height)` in layout space: from the
@@ -2164,12 +2305,177 @@ mod tests {
             "click maps to the clicked row"
         );
 
+        let origin = VisualSelection {
+            anchor: VisualCaret::default(),
+            focus: VisualCaret::default(),
+        };
+        let next_line = selection_visual_move::<StaticDocument>(
+            p,
+            origin,
+            VisualMovement::NextLine,
+            false,
+            &built,
+            &text_ctx,
+        )
+        .unwrap();
+        assert!(
+            rect_at(next_line.focus.byte).y > start.y,
+            "selection movement uses Parley's visual rows"
+        );
+        let first_line = selection_visual_move::<StaticDocument>(
+            p,
+            next_line,
+            VisualMovement::PreviousLine,
+            false,
+            &built,
+            &text_ctx,
+        )
+        .unwrap();
+        assert!(
+            (rect_at(first_line.focus.byte).y - start.y).abs() < 0.5,
+            "visual line movement reverses"
+        );
+
         // A node with no cached text layout yields None for both.
         let root = doc.document();
         assert!(
             caret_byte_vertical::<StaticDocument>(root, 0, &built, &text_ctx, 1, None).is_none()
         );
         assert!(caret_byte_at_point(&doc, root, 1.0, 1.0, &built, &text_ctx, &fragments).is_none());
+    }
+
+    /// Horizontal movement follows shaped visual order across a bidi run and
+    /// retains the affinity needed to reverse the walk exactly.
+    #[test]
+    fn caret_moves_in_visual_bidi_order() {
+        let doc = StaticDocument::parse("<html><body><p>abc אבג</p></body></html>");
+        let sheet = &["html, body, p { display: block; margin: 0; font-size: 20px; }"];
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        run_cascade(
+            &doc,
+            &mut styles,
+            euclid::Size2D::new(800.0, 600.0),
+            sheet,
+            None,
+        );
+        let images = ImagePlane::new();
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(800.0),
+            height: taffy::AvailableSpace::Definite(600.0),
+        };
+        let (_fragments, built, text_ctx) = layout(&doc, &styles, &images, viewport);
+        let p = find_p(&doc);
+
+        let origin = VisualSelection {
+            anchor: VisualCaret {
+                byte: 0,
+                affinity: VisualAffinity::Downstream,
+            },
+            focus: VisualCaret {
+                byte: 0,
+                affinity: VisualAffinity::Downstream,
+            },
+        };
+        let mut selection = origin;
+        let mut walked = vec![selection.focus];
+        for _ in 0..16 {
+            let next = selection_visual_move::<StaticDocument>(
+                p,
+                selection,
+                VisualMovement::NextCluster,
+                false,
+                &built,
+                &text_ctx,
+            )
+            .unwrap();
+            if next == selection {
+                break;
+            }
+            selection = next;
+            walked.push(selection.focus);
+        }
+
+        assert!(
+            walked.windows(2).any(|pair| pair[1].byte < pair[0].byte),
+            "a visual walk through the RTL run is not byte-monotonic: {walked:?}"
+        );
+        assert!(
+            walked
+                .iter()
+                .any(|caret| caret.affinity == VisualAffinity::Upstream),
+            "the walk retains upstream affinity at a bidi boundary: {walked:?}"
+        );
+
+        for _ in 0..16 {
+            let previous = selection_visual_move::<StaticDocument>(
+                p,
+                selection,
+                VisualMovement::PreviousCluster,
+                false,
+                &built,
+                &text_ctx,
+            )
+            .unwrap();
+            if previous == selection {
+                break;
+            }
+            selection = previous;
+        }
+        assert_eq!(selection, origin, "reversing the visual walk returns home");
+
+        let extended = selection_visual_move::<StaticDocument>(
+            p,
+            origin,
+            VisualMovement::NextCluster,
+            true,
+            &built,
+            &text_ctx,
+        )
+        .unwrap();
+        assert_eq!(extended.anchor, origin.anchor);
+        assert_ne!(extended.focus, origin.focus);
+
+        let word = selection_visual_move::<StaticDocument>(
+            p,
+            origin,
+            VisualMovement::NextWord,
+            false,
+            &built,
+            &text_ctx,
+        )
+        .unwrap();
+        assert_ne!(word.focus, origin.focus);
+        let word_back = selection_visual_move::<StaticDocument>(
+            p,
+            word,
+            VisualMovement::PreviousWord,
+            false,
+            &built,
+            &text_ctx,
+        )
+        .unwrap();
+        assert_eq!(word_back, origin);
+
+        let line_end = selection_visual_move::<StaticDocument>(
+            p,
+            origin,
+            VisualMovement::LineEnd,
+            false,
+            &built,
+            &text_ctx,
+        )
+        .unwrap();
+        assert_ne!(line_end.focus, origin.focus);
+        let line_start = selection_visual_move::<StaticDocument>(
+            p,
+            line_end,
+            VisualMovement::LineStart,
+            false,
+            &built,
+            &text_ctx,
+        )
+        .unwrap();
+        assert_eq!(line_start, origin);
     }
 
     /// The sticky goal column (Tier 2): moving the caret down from a long visual row

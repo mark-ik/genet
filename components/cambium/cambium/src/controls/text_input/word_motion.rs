@@ -14,12 +14,11 @@ use unicode_segmentation::UnicodeSegmentation;
 use super::TextInput;
 
 impl TextInput {
-    /// The char index at byte offset `byte` (clamped) — inverse of
+    /// The grapheme index at byte offset `byte` (clamped) — inverse of
     /// [`byte_of`](super::core::TextInput::byte_of), mapping a word boundary back
-    /// to the char model.
-    fn char_of_byte(&self, byte: usize) -> usize {
-        let byte = byte.min(self.text.len());
-        self.text[..byte].chars().count()
+    /// to the editing model.
+    fn word_grapheme_of_byte(&self, byte: usize) -> usize {
+        self.grapheme_of_byte(byte)
     }
 
     /// Byte offset one word right of byte `from`: skip whitespace at/after `from`, then
@@ -53,7 +52,7 @@ impl TextInput {
     /// Move the caret one word left (Ctrl/Alt+←). `extend` grows the selection.
     pub fn move_word_left(&mut self, extend: bool) {
         self.reset_goal();
-        self.caret = self.char_of_byte(self.word_boundary_left(self.byte_of(self.caret)));
+        self.caret = self.word_grapheme_of_byte(self.word_boundary_left(self.byte_of(self.caret)));
         if !extend {
             self.anchor = self.caret;
         }
@@ -62,7 +61,7 @@ impl TextInput {
     /// Move the caret one word right (Ctrl/Alt+→). `extend` grows the selection.
     pub fn move_word_right(&mut self, extend: bool) {
         self.reset_goal();
-        self.caret = self.char_of_byte(self.word_boundary_right(self.byte_of(self.caret)));
+        self.caret = self.word_grapheme_of_byte(self.word_boundary_right(self.byte_of(self.caret)));
         if !extend {
             self.anchor = self.caret;
         }
@@ -80,7 +79,7 @@ impl TextInput {
         let target = self.word_boundary_left(from);
         if target < from {
             self.text.replace_range(target..from, "");
-            self.caret = self.char_of_byte(target);
+            self.caret = self.word_grapheme_of_byte(target);
             self.anchor = self.caret;
         }
     }
@@ -165,7 +164,7 @@ mod tests {
     #[test]
     fn word_motion_handles_multibyte_utf8() {
         // "héllo wörld": multi-byte é/ö, so byte offsets != char indices. Word motion must
-        // return CHAR indices and never split a codepoint.
+        // return grapheme indices and never split a codepoint.
         let mut t = at("héllo wörld", 0);
         t.move_word_right(false);
         assert_eq!(t.caret(), 5); // end of "héllo" (5 chars), past the 2-byte é
@@ -173,6 +172,15 @@ mod tests {
         assert_eq!(t.caret(), 11); // end of "wörld" (11 chars total)
         t.move_word_left(false);
         assert_eq!(t.caret(), 6); // back to the start of "wörld"
+    }
+
+    #[test]
+    fn word_motion_counts_a_combining_sequence_as_one_grapheme() {
+        let mut t = at("e\u{301}lan fin", 0);
+        t.move_word_right(false);
+        assert_eq!(t.caret(), 4, "e + combining acute is one caret stop");
+        t.move_word_left(false);
+        assert_eq!(t.caret(), 0);
     }
 
     #[test]
