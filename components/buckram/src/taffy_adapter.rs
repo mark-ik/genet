@@ -17,8 +17,8 @@ use taffy::{
 use crate::{
     BlockBoxSizing, BlockContainingBlock, BlockDeferral, BlockFormattingContext, BlockMarginState,
     BlockSizeValue, BlockStyle, ClearSide, CollapsedMargin, FloatLineConstraints, FloatSide,
-    FlowAxes, LogicalSides, PhysicalSides, PhysicalSize, solve_float_inline_size,
-    solve_in_flow_inline_size,
+    FlowAxes, IntrinsicSizeKind, IntrinsicSizes, LogicalSides, PhysicalSides, PhysicalSize,
+    solve_float_inline_size, solve_float_shrink_to_fit_inline_size, solve_in_flow_inline_size,
 };
 
 /// Formatting role selected by Buckram before entering a backend algorithm.
@@ -117,6 +117,7 @@ struct AlgorithmNode<S, Context, Source> {
     block_margins: Option<BlockMarginState>,
     float_line_constraints_enabled: bool,
     float_avoidance_enabled: bool,
+    float_shrink_to_fit_enabled: bool,
     style: S,
     context: Option<Context>,
     source: Source,
@@ -216,6 +217,7 @@ impl<S, Context, Source> AlgorithmTree<S, Context, Source> {
             block_margins: None,
             float_line_constraints_enabled: false,
             float_avoidance_enabled: false,
+            float_shrink_to_fit_enabled: false,
             style,
             context,
             source,
@@ -306,6 +308,32 @@ impl<S, Context, Source> AlgorithmTree<S, Context, Source> {
         node.float_avoidance_enabled = true;
     }
 
+    /// Admit an auto-width float whose content is one measured inline
+    /// formatting context to Buckram's intrinsic shrink-to-fit lane.
+    pub fn enable_float_shrink_to_fit(&mut self, id: AlgorithmNodeId) {
+        let node = &self.nodes[id.index()];
+        assert_eq!(
+            node.kind,
+            AlgorithmKind::Block,
+            "the first auto-float lane accepts a block with one inline context"
+        );
+        assert!(
+            node.block_style.float != FloatSide::None && node.block_style.shrink_to_fit,
+            "float shrink-to-fit requires an auto-width float"
+        );
+        assert_eq!(
+            node.children.len(),
+            1,
+            "the first auto-float lane accepts one inline context"
+        );
+        let inline = node.children[0];
+        assert!(
+            self.nodes[inline.index()].context.is_some(),
+            "float shrink-to-fit requires a measured inline context"
+        );
+        self.nodes[id.index()].float_shrink_to_fit_enabled = true;
+    }
+
     pub fn children(&self, id: AlgorithmNodeId) -> &[AlgorithmNodeId] {
         &self.nodes[id.index()].children
     }
@@ -351,6 +379,7 @@ where
             tree: self,
             measure,
             line_constraints: None,
+            resolved_shrink_to_fit: None,
             marker: PhantomData,
         };
         compute_root_layout(&mut run, root.into_taffy(), available);
@@ -495,6 +524,7 @@ struct AlgorithmRun<'a, S, Context, Source, Measure> {
     tree: &'a mut AlgorithmTree<S, Context, Source>,
     measure: Measure,
     line_constraints: Option<FloatLineConstraints>,
+    resolved_shrink_to_fit: Option<AlgorithmNodeId>,
     marker: PhantomData<&'a mut Context>,
 }
 
@@ -531,7 +561,14 @@ where
             let child_node = &self.tree.nodes[child.index()];
             let child_style = child_node.block_style;
             if let Some(deferral) = child_style.deferral() {
-                return Some(deferral);
+                let admitted_float_width = child_node.float_shrink_to_fit_enabled
+                    && matches!(
+                        deferral,
+                        BlockDeferral::ShrinkToFit | BlockDeferral::FloatShrinkToFit
+                    );
+                if !admitted_float_width {
+                    return Some(deferral);
+                }
             }
             if child_style.establishes_bfc
                 && child_style.float == FloatSide::None
@@ -641,6 +678,11 @@ where
         }
         let previous_line_constraints =
             std::mem::replace(&mut self.line_constraints, line_constraints);
+        let resolved_shrink_to_fit = self.tree.nodes[child.index()].float_shrink_to_fit_enabled;
+        let previous_resolved_shrink_to_fit = std::mem::replace(
+            &mut self.resolved_shrink_to_fit,
+            resolved_shrink_to_fit.then_some(child),
+        );
         let output = self.compute_node(
             child.into_taffy(),
             LayoutInput {
@@ -666,7 +708,54 @@ where
             None,
         );
         self.line_constraints = previous_line_constraints;
+        self.resolved_shrink_to_fit = previous_resolved_shrink_to_fit;
         output
+    }
+
+    fn measure_inline_intrinsic(
+        &mut self,
+        node: AlgorithmNodeId,
+        kind: IntrinsicSizeKind,
+    ) -> Option<f32> {
+        let available_width = match kind {
+            IntrinsicSizeKind::MinContent => AlgorithmAvailableSpace::MinContent,
+            IntrinsicSizeKind::MaxContent => AlgorithmAvailableSpace::MaxContent,
+        };
+        let context = self.tree.nodes[node.index()].context.as_mut()?;
+        let measured = (self.measure)(
+            AlgorithmSize::new(None, None),
+            AlgorithmSize::new(available_width, AlgorithmAvailableSpace::MaxContent),
+            node,
+            Some(context),
+            None,
+        );
+        Some(measured.width)
+    }
+
+    fn resolve_float_shrink_to_fit(
+        &mut self,
+        node: AlgorithmNodeId,
+        style: BlockStyle,
+        containing_inline_size: f32,
+    ) -> Result<crate::UsedInlineSize, BlockDeferral> {
+        let inline = self.tree.nodes[node.index()]
+            .children
+            .first()
+            .copied()
+            .ok_or(BlockDeferral::IntrinsicSize)?;
+        let min_content = self
+            .measure_inline_intrinsic(inline, IntrinsicSizeKind::MinContent)
+            .ok_or(BlockDeferral::IntrinsicSize)?;
+        let max_content = self
+            .measure_inline_intrinsic(inline, IntrinsicSizeKind::MaxContent)
+            .ok_or(BlockDeferral::IntrinsicSize)?;
+        let intrinsic =
+            IntrinsicSizes::new(min_content, max_content).ok_or(BlockDeferral::IntrinsicSize)?;
+        Ok(solve_float_shrink_to_fit_inline_size(
+            style,
+            containing_inline_size,
+            intrinsic,
+        ))
     }
 
     fn clear_subtree_cache(&mut self, node: AlgorithmNodeId) {
@@ -700,7 +789,14 @@ where
 
         let style = self.tree.nodes[node_index].block_style;
         if let Some(deferral) = style.deferral() {
-            return Err(deferral);
+            let resolved_float_width = self.resolved_shrink_to_fit == Some(node)
+                && matches!(
+                    deferral,
+                    BlockDeferral::ShrinkToFit | BlockDeferral::FloatShrinkToFit
+                );
+            if !resolved_float_width {
+                return Err(deferral);
+            }
         }
         // The logical engine supports a definite vertical containing block,
         // but auto block-size finalisation for vertical flow needs a deferred
@@ -782,7 +878,9 @@ where
         let children = self.tree.nodes[node_index].children.clone();
         for (order, child) in children.into_iter().enumerate() {
             let child_style = self.tree.nodes[child.index()].block_style;
-            let inline = if child_style.float == FloatSide::None {
+            let inline = if self.tree.nodes[child.index()].float_shrink_to_fit_enabled {
+                self.resolve_float_shrink_to_fit(child, child_style, content_width)?
+            } else if child_style.float == FloatSide::None {
                 solve_in_flow_inline_size(child_style, content_width)
             } else {
                 solve_float_inline_size(child_style, content_width)
@@ -1650,6 +1748,86 @@ mod tests {
         assert_eq!((tree.layout(right).x, tree.layout(right).y), (140.0, 0.0));
         assert_eq!((tree.layout(clear).x, tree.layout(clear).y), (0.0, 70.0));
         assert_eq!(tree.layout(root).height, 80.0);
+        assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Buckram));
+    }
+
+    #[test]
+    fn buckram_sizes_an_auto_float_from_inline_intrinsic_queries() {
+        let mut tree = AlgorithmTree::<Style, Vec<AlgorithmAvailableSpace>, u8>::new();
+        let lines = tree.new_leaf_with_context_and_block_style(
+            BlockStyle::anonymous(FlowAxes::HORIZONTAL_LTR, FlowAxes::HORIZONTAL_LTR),
+            Style::default(),
+            Vec::new(),
+            2,
+        );
+        let float = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                float: FloatSide::Left,
+                establishes_bfc: true,
+                shrink_to_fit: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                ..Style::default()
+            },
+            &[lines],
+            1,
+        );
+        tree.enable_float_shrink_to_fit(float);
+        let root = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                size: taffy::Size {
+                    width: Dimension::length(100.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            &[float],
+            0,
+        );
+
+        tree.compute_layout_with_measure(
+            root,
+            available(100.0, 200.0),
+            |known, available, _, context, _| {
+                if let Some(context) = context {
+                    context.push(available.width);
+                }
+                let measured_width = match available.width {
+                    AlgorithmAvailableSpace::Definite(width) => width,
+                    AlgorithmAvailableSpace::MinContent => 40.0,
+                    AlgorithmAvailableSpace::MaxContent => 120.0,
+                };
+                AlgorithmSize::new(
+                    known.width.unwrap_or(measured_width),
+                    known.height.unwrap_or(20.0),
+                )
+            },
+        );
+
+        assert_eq!(
+            tree.layout(float),
+            AlgorithmLayout {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 20.0,
+            }
+        );
+        let queries = tree.context(lines).expect("inline queries");
+        assert!(queries.contains(&AlgorithmAvailableSpace::MinContent));
+        assert!(queries.contains(&AlgorithmAvailableSpace::MaxContent));
+        assert!(queries.contains(&AlgorithmAvailableSpace::Definite(100.0)));
+        assert_eq!(tree.layout(root).height, 20.0);
+        assert_eq!(tree.block_algorithm(float), Some(BlockAlgorithm::Buckram));
         assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Buckram));
     }
 

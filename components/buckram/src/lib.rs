@@ -18,7 +18,8 @@ pub use block::{
     BlockMarginCollapse, BlockMarginState, BlockPlacement, BlockPosition, BlockSizeValue,
     BlockStyle, ClearSide, CollapsedMargin, FloatAvailableSpace, FloatAvoidingPlacement,
     FloatLineConstraints, FloatSide, FlowLength, FlowLengthAuto, UsedInlineSize,
-    solve_float_inline_size, solve_in_flow_inline_size, solve_in_flow_inline_size_for_available,
+    solve_float_inline_size, solve_float_shrink_to_fit_inline_size, solve_in_flow_inline_size,
+    solve_in_flow_inline_size_for_available,
 };
 pub use box_tree::{
     AnonymousBoxKind, BoxGeneration, BoxId, BoxOrigin, BoxTreeInput, ContainingBlock,

@@ -1172,6 +1172,15 @@ where
                 if supports_float_avoidance(&self.boxes[box_id], block_style, kind) {
                     self.tree.enable_float_avoidance(node);
                 }
+                if supports_float_shrink_to_fit(
+                    &self.tree,
+                    node,
+                    &self.boxes[box_id],
+                    block_style,
+                    kind,
+                ) {
+                    self.tree.enable_float_shrink_to_fit(node);
+                }
                 Ok(Some(node))
             },
             BoxOrigin::Text(_) => {
@@ -1450,6 +1459,15 @@ where
                 );
                 if supports_float_avoidance(&self.boxes[box_id], block_style, kind) {
                     self.tree.enable_float_avoidance(node);
+                }
+                if supports_float_shrink_to_fit(
+                    &self.tree,
+                    node,
+                    &self.boxes[box_id],
+                    block_style,
+                    kind,
+                ) {
+                    self.tree.enable_float_shrink_to_fit(node);
                 }
                 Ok(Some(node))
             },
@@ -1797,6 +1815,30 @@ fn supports_float_avoidance<Id>(
         && block_style.flow.is_horizontal()
         && block_style.containing_flow.is_horizontal()
         && block_style.has_zero_inline_margins()
+}
+
+fn supports_float_shrink_to_fit<Id, Context, Source>(
+    tree: &AlgorithmTree<Style, Context, Source>,
+    node: AlgorithmNodeId,
+    css_box: &CssBox<Id>,
+    block_style: BlockStyle,
+    kind: AlgorithmKind,
+) -> bool {
+    kind == AlgorithmKind::Block
+        && css_box.display.outside == Some(DisplayOutside::Block)
+        && matches!(
+            css_box.display.inside,
+            Some(DisplayInside::Flow | DisplayInside::FlowRoot)
+        )
+        && css_box.display.internal_table.is_none()
+        && block_style.position == BuckramBlockPosition::Static
+        && block_style.float != FloatSide::None
+        && block_style.shrink_to_fit
+        && !block_style.replaced
+        && block_style.flow.is_horizontal()
+        && block_style.containing_flow.is_horizontal()
+        && tree.children(node).len() == 1
+        && tree.context(tree.children(node)[0]).is_some()
 }
 
 fn algorithm_kind<Id>(css_box: &CssBox<Id>, leaf: bool) -> AlgorithmKind {
@@ -3617,6 +3659,77 @@ mod tests {
             (host.x, host.y + 40.0, 150.0, 20.0)
         );
         assert_eq!(host.height, 60.0);
+        assert_eq!(algorithms.taffy, 0);
+    }
+
+    #[test]
+    fn live_auto_float_width_clamps_retained_inline_intrinsics() {
+        fn by_id(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+            expected: &str,
+        ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+            if dom.attributes(node).any(|attribute| {
+                attribute.name.ns.as_ref().is_empty()
+                    && attribute.name.local.as_ref() == "id"
+                    && attribute.value == expected
+            }) {
+                return Some(node);
+            }
+            dom.dom_children(node)
+                .find_map(|child| by_id(dom, child, expected))
+        }
+
+        let dom = StaticDocument::parse(
+            "<html><body>\
+             <div id=\"narrow\" class=\"host\"><span id=\"narrow-float\" class=\"float\">\
+             aaaa aaaa aaaa aaaa</span><div class=\"clear\"></div></div>\
+             <div id=\"wide\" class=\"host\"><span id=\"wide-float\" class=\"float\">\
+             aaaa aaaa aaaa aaaa</span><div class=\"clear\"></div></div>\
+             </body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "html, body, div, span { margin: 0; padding: 0; border: 0; }\
+                 .host { overflow-x: hidden; overflow-y: hidden; }\
+                 #narrow { width: 80px; } #wide { width: 200px; }\
+                 .float { float: left; font-family: monospace; font-size: 10px;\
+                          line-height: 20px; }\
+                 .clear { clear: both; height: 1px; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let rect = |id| {
+            let node = by_id(&dom, dom.document(), id).expect(id);
+            layout.get(node).expect(id).physical_rect()
+        };
+
+        let narrow_host = rect("narrow");
+        let narrow_float = rect("narrow-float");
+        let wide_host = rect("wide");
+        let wide_float = rect("wide-float");
+        let algorithms = layout.block_algorithm_counts();
+
+        assert!((narrow_float.width - narrow_host.width).abs() <= 0.5);
+        assert!(
+            wide_float.width > narrow_float.width + 10.0
+                && wide_float.width < wide_host.width - 10.0,
+            "narrow={narrow_float:?}, wide={wide_float:?}"
+        );
+        assert!(narrow_float.height > wide_float.height);
         assert_eq!(algorithms.taffy, 0);
     }
 }

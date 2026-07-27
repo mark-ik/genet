@@ -4,7 +4,7 @@
 //! these values at an adapter edge; they do not choose or define the block
 //! algorithm.
 
-use crate::{FlowAxes, LogicalRect, PhysicalRect, PhysicalSides, PhysicalSize};
+use crate::{FlowAxes, IntrinsicSizes, LogicalRect, PhysicalRect, PhysicalSides, PhysicalSize};
 
 /// A linear used-value expression: an absolute component plus a percentage
 /// of the containing block's inline size.
@@ -571,6 +571,52 @@ pub fn solve_float_inline_size(style: BlockStyle, containing_inline_size: f32) -
         margin_start: margins.inline_start.unwrap_or(0.0),
         border_box,
         margin_end: margins.inline_end.unwrap_or(0.0),
+    }
+}
+
+/// Resolve an auto-width float using CSS2's shrink-to-fit equation.
+///
+/// The intrinsic pair describes the float's content box. Padding and border
+/// are added after `min(max(min-content, available), max-content)`, then the
+/// box's definite minimum and maximum constraints are applied.
+pub fn solve_float_shrink_to_fit_inline_size(
+    style: BlockStyle,
+    containing_inline_size: f32,
+    intrinsic: IntrinsicSizes,
+) -> UsedInlineSize {
+    debug_assert_ne!(style.float, FloatSide::None);
+    debug_assert!(style.shrink_to_fit);
+    let margins = style.logical_margin(containing_inline_size);
+    let padding_border = style.logical_padding_border(containing_inline_size);
+    let padding_border_sum = padding_border.inline_start + padding_border.inline_end;
+    let margin_start = margins.inline_start.unwrap_or(0.0);
+    let margin_end = margins.inline_end.unwrap_or(0.0);
+    let available_content =
+        (containing_inline_size - margin_start - margin_end - padding_border_sum).max(0.0);
+    let shrink_to_fit = intrinsic
+        .min_content
+        .max(available_content)
+        .min(intrinsic.max_content);
+    let minimum = logical_dimension(style.containing_flow, style.min_size)
+        .inline
+        .resolve_definite(Some(containing_inline_size))
+        .map_or(padding_border_sum, |size| {
+            border_box_size(style.box_sizing, size, padding_border_sum)
+        });
+    let maximum = logical_dimension(style.containing_flow, style.max_size)
+        .inline
+        .resolve_definite(Some(containing_inline_size))
+        .map(|size| border_box_size(style.box_sizing, size, padding_border_sum));
+    let tentative = shrink_to_fit + padding_border_sum;
+    let maximum_constrained = maximum.map_or(tentative, |maximum| {
+        tentative.min(maximum.max(padding_border_sum))
+    });
+    let border_box = maximum_constrained.max(minimum);
+
+    UsedInlineSize {
+        margin_start,
+        border_box,
+        margin_end,
     }
 }
 
@@ -1468,6 +1514,53 @@ mod tests {
                 border_box: 80.0,
                 margin_end: 0.0,
             }
+        );
+    }
+
+    #[test]
+    fn auto_float_width_clamps_available_space_between_intrinsic_sizes() {
+        let style = BlockStyle {
+            padding: PhysicalSides {
+                top: FlowLength::ZERO,
+                right: FlowLength::px(5.0),
+                bottom: FlowLength::ZERO,
+                left: FlowLength::px(5.0),
+            },
+            float: FloatSide::Left,
+            establishes_bfc: true,
+            shrink_to_fit: true,
+            ..BlockStyle::default()
+        };
+        let intrinsic = IntrinsicSizes::new(40.0, 120.0).expect("valid intrinsic pair");
+
+        assert_eq!(
+            solve_float_shrink_to_fit_inline_size(style, 100.0, intrinsic).border_box,
+            100.0
+        );
+        assert_eq!(
+            solve_float_shrink_to_fit_inline_size(style, 200.0, intrinsic).border_box,
+            130.0
+        );
+        assert_eq!(
+            solve_float_shrink_to_fit_inline_size(style, 30.0, intrinsic).border_box,
+            50.0
+        );
+
+        let conflicting_constraints = BlockStyle {
+            min_size: BlockDimensions::new(
+                BlockSizeValue::Length(FlowLength::px(90.0)),
+                BlockSizeValue::Auto,
+            ),
+            max_size: BlockDimensions::new(
+                BlockSizeValue::Length(FlowLength::px(60.0)),
+                BlockSizeValue::None,
+            ),
+            ..style
+        };
+        assert_eq!(
+            solve_float_shrink_to_fit_inline_size(conflicting_constraints, 200.0, intrinsic)
+                .border_box,
+            100.0
         );
     }
 

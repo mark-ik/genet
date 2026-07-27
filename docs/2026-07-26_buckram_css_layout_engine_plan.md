@@ -1041,6 +1041,78 @@ collapsed-empty-box clearance, vertical auto block-size finalisation,
 positioning, independent-BFC baselines, intrinsic block queries, and the
 out-of-flow IFC participant protected by K3b's cache guard.
 
+#### K3h receipt - 2026-07-27
+
+K3h admits the first intrinsic shrink-to-fit float shape. The admitted box is
+a static, horizontal, non-replaced block-level `flow` or `flow-root` float
+with exactly one measured inline formatting context. Livery marks that shape
+explicitly; `BlockStyle::shrink_to_fit` alone does not silently route a node
+through the new path.
+
+Buckram now asks the inline formatting context for min-content and max-content
+widths through the existing measure boundary. Livery answers those requests
+through its owner-and-axis `IntrinsicSizeCache`, so one intrinsic pair is
+retained independently of any definite-width line layout. Buckram then owns
+the CSS2 section 10.3.5 calculation:
+
+`min(max(min-content, available), max-content)`
+
+Available width is the containing block's inline size after the float's used
+margins, border, and padding. Automatic inline margins resolve to zero.
+Padding and border are added to the selected content width, after which
+section 10.4's constraint order is applied: `max-width` first, then
+`min-width`. The latter therefore wins when an author supplies conflicting
+constraints. Taffy receives the resolved width; it does not infer the
+intrinsic pair or choose the float sizing rule.
+
+The admission is deliberately narrower than the formula's eventual use.
+Multi-child block content, replaced floats, inline-block shrink-to-fit,
+tables, positioned floats, orthogonal flow, and boxes without a retained
+inline measure context keep their existing named deferrals.
+
+The pure solver fixture uses min-content 40px, max-content 120px, and 10px of
+inline padding. It resolves to 100px in a 100px containing block, 130px in a
+200px containing block, and the 50px minimum outer size in a 30px containing
+block. A conflicting 90px `min-width` and 60px `max-width` resolves to the
+100px minimum border box. The adapter fixture records min-content,
+max-content, and definite-width measure requests and keeps both the float and
+its root in Buckram. The live Livery fixture proves that an auto float fills
+an 80px host and wraps, while the same content stops at max-content in a
+200px host; the receipt reports zero Taffy block calls.
+
+This slice has no WPT status movement:
+
+- the focused `css/CSS2/floats` repeat remains 44 passes, 57 failures, 43
+  skips, and zero errors across 144 files;
+- the complete CSS2 ledger is byte-identical to K3g at 4,229 passes, 1,745
+  failures, 3,279 skips, and one error across 9,254 files; and
+- every frozen all-nine K3f expectation guard returns `unexpected=0`, so the
+  total remains 5,735 with zero gains and zero regressions.
+
+The structural and live fixtures are the capability receipt. The unchanged
+WPT ledger is a regression guard, not evidence that the remaining float
+families are implemented.
+
+Verification:
+
+- `cargo test -p buckram -p livery -p genet-livery --offline`: passed with
+  44 Buckram tests, 132 genet-livery tests, 141 Livery tests, and all doc tests
+  green.
+- strict Clippy passed for Buckram and genet-livery with dependency linting
+  disabled. The workspace configuration still prints its existing
+  unreachable disallowed-type warning.
+- the feature-unified release `genet-wpt` build passed.
+- fresh focused and complete CSS2 expectations are at
+  `Code/testing/genet/wpt-ledger/2026-07-27_buckram_k3h`.
+
+Still open in K3: multi-child and block-content auto floats, inline-block
+shrink-to-fit, nonzero-inline-margin and non-block BFC avoidance beside
+floats, float state through ordinary nested blocks, nowrap and nested inline
+contexts beside floats, collapsed-empty-box clearance, vertical auto
+block-size finalisation, positioning, independent-BFC baselines, intrinsic
+block queries, and the out-of-flow IFC participant protected by K3b's cache
+guard.
+
 ### K4. CSS tables
 
 Implement anonymous table fixup, row and column structure, spans, fixed and
