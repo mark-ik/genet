@@ -1,29 +1,31 @@
-//! Livery computed-value and DOM adapter for Buckram's CSS box tree.
+//! Livery computed-value and DOM adapter for Buckram's CSS box generator.
 //!
-//! Buckram owns box identity, roles, provenance, and tree relationships. This
-//! module translates Livery values and preserves the two B0-only lowering
-//! boundaries needed for an exact geometry migration.
+//! Livery resolves computed values into box-generation input. Buckram owns
+//! suppression, flattening, anonymous fixup, inline splitting, roles,
+//! provenance, and tree relationships.
 
 use std::{hash::Hash, ops::Deref};
 
 use buckram::{
-    BoxGeneration, BoxId, BoxOrigin, ContainingBlock, ContainingBlockRule, CssBox, CssBoxTree,
-    DisplayInside, DisplayOutside, DisplayRole, FormattingContextKind, InternalTableRole,
-    PositioningScheme,
+    BoxGeneration, BoxOrigin, BoxTreeInput, CssBoxTree, Direction, DisplayInside, DisplayOutside,
+    DisplayRole, FloatSide, FlowAxes, InternalTableRole, PositioningScheme, WritingMode,
+    generate_box_tree,
 };
 use layout_dom_api::{LayoutDom, NodeKind};
-use livery::values::{Display as ComputedDisplay, Position as ComputedPosition};
+use livery::{
+    ComputedValues,
+    values::{
+        Direction as ComputedDirection, Display as ComputedDisplay, Float as ComputedFloat,
+        Position as ComputedPosition, WhiteSpaceCollapse, WritingMode as ComputedWritingMode,
+    },
+};
 
 use crate::StylePlane;
 
-/// Livery-generated Buckram boxes plus private behavior-preserving lowering
-/// metadata.
+/// Livery-generated, Buckram-normalized CSS boxes.
 #[derive(Clone, Debug)]
 pub(crate) struct GeneratedBoxTree<Id> {
     tree: CssBoxTree<Id>,
-    suppressed: Vec<SuppressedNode<Id>>,
-    lowering_roots: Vec<LoweringSource>,
-    lowering_children: std::collections::HashMap<BoxId, Vec<LoweringSource>>,
 }
 
 impl<Id> Deref for GeneratedBoxTree<Id> {
@@ -34,47 +36,21 @@ impl<Id> Deref for GeneratedBoxTree<Id> {
     }
 }
 
-/// B0-only traversal metadata for behavior-preserving Taffy lowering.
-///
-/// A `display: none` subtree generates no CSS boxes, but the old builder
-/// inserted a suppressed node and treated it as an inline-run boundary. K2
-/// removes this compatibility source under the actual box-generation rules.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum LoweringSource {
-    Box(BoxId),
-    Suppressed(SuppressedId),
-    /// A DOM node that generated no backend node but split an inline run in
-    /// the pre-B0 builder, notably a comment.
-    Boundary,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct SuppressedId(u32);
-
-#[derive(Clone, Debug)]
-pub(crate) struct SuppressedNode<Id> {
-    pub node: Id,
-    pub children: Vec<LoweringSource>,
-}
-
 impl<Id> GeneratedBoxTree<Id>
 where
     Id: Copy + Eq + Hash,
 {
-    /// Generate Buckram boxes from Livery computed values.
-    ///
-    /// K0 preserves DOM order and the current element/text structure. K2
-    /// replaces this adapter's direct traversal with CSS Display fixup.
+    /// Resolve the host DOM into Buckram box-generation input.
     pub(crate) fn from_dom<D>(dom: &D, styles: &StylePlane<Id>) -> Self
     where
         D: LayoutDom<NodeId = Id>,
     {
-        fn generate<D>(
-            generated: &mut GeneratedBoxTree<D::NodeId>,
+        fn collect<D>(
             dom: &D,
             styles: &StylePlane<D::NodeId>,
             node: D::NodeId,
-            parent: Option<BoxId>,
+            inherited: Option<&ComputedValues>,
+            output: &mut Vec<BoxTreeInput<D::NodeId>>,
         ) where
             D: LayoutDom,
             D::NodeId: Copy + Eq + Hash,
@@ -82,141 +58,58 @@ where
             match dom.kind(node) {
                 NodeKind::Document | NodeKind::DocumentFragment => {
                     for child in dom.dom_children(node) {
-                        generate(generated, dom, styles, child, parent);
+                        collect(dom, styles, child, inherited, output);
                     }
                 },
                 NodeKind::Element => {
                     let computed = styles.get(node).cloned().unwrap_or_default();
-                    let display = display_role(computed.display);
-                    if display.generation == BoxGeneration::None {
-                        let suppressed = generated.capture_suppressed(dom, node);
-                        generated
-                            .push_lowering_source(parent, LoweringSource::Suppressed(suppressed));
-                        return;
-                    }
-                    let positioning = positioning_scheme(computed.position);
-                    let containing_block = match parent {
-                        None => ContainingBlock::Initial,
-                        Some(_) => match positioning {
-                            PositioningScheme::Absolute => {
-                                ContainingBlock::Pending(ContainingBlockRule::AbsolutePositioned)
-                            },
-                            PositioningScheme::Fixed => {
-                                ContainingBlock::Pending(ContainingBlockRule::FixedPositioned)
-                            },
-                            _ => ContainingBlock::Pending(ContainingBlockRule::NormalFlow),
-                        },
-                    };
-                    let formatting_context = match display.inside {
-                        Some(DisplayInside::Flex) => Some(FormattingContextKind::Flex),
-                        Some(DisplayInside::Grid) => Some(FormattingContextKind::Grid),
-                        Some(DisplayInside::Table) => Some(FormattingContextKind::Table),
-                        _ => None,
-                    };
-                    let box_id = generated.tree.push(
-                        CssBox::new(
-                            BoxOrigin::Element(node),
-                            display,
-                            positioning,
-                            is_replaced_element(dom, node),
-                            formatting_context,
-                            containing_block,
-                        ),
-                        parent,
-                        true,
-                    );
-                    generated.push_lowering_source(parent, LoweringSource::Box(box_id));
+                    let mut children = Vec::new();
                     for child in dom.dom_children(node) {
-                        generate(generated, dom, styles, child, Some(box_id));
+                        collect(dom, styles, child, Some(&computed), &mut children);
                     }
+                    output.push(
+                        BoxTreeInput::new(
+                            BoxOrigin::Element(node),
+                            display_role(computed.display),
+                            flow_axes(&computed),
+                            positioning_scheme(computed.position),
+                            is_replaced_element(dom, node),
+                            children,
+                        )
+                        .with_float(float_side(computed.float)),
+                    );
                 },
                 NodeKind::Text => {
-                    let box_id = generated.tree.push(
-                        CssBox::new(
-                            BoxOrigin::Text(node),
-                            DisplayRole::INLINE_FLOW,
-                            PositioningScheme::Static,
-                            false,
-                            None,
-                            parent.map_or(ContainingBlock::Initial, |_| {
-                                ContainingBlock::Pending(ContainingBlockRule::NormalFlow)
-                            }),
-                        ),
-                        parent,
-                        false,
-                    );
-                    generated.push_lowering_source(parent, LoweringSource::Box(box_id));
+                    let preserves_whitespace = inherited.is_some_and(|style| {
+                        matches!(
+                            style.white_space_collapse,
+                            WhiteSpaceCollapse::Preserve | WhiteSpaceCollapse::BreakSpaces
+                        )
+                    });
+                    let collapsible_whitespace = !preserves_whitespace
+                        && dom.text(node).is_none_or(|text| {
+                            text.chars()
+                                .all(|ch| matches!(ch, ' ' | '\t' | '\n' | '\r' | '\u{c}'))
+                        });
+                    output.push(BoxTreeInput::text(
+                        BoxOrigin::Text(node),
+                        inherited.map(flow_axes).unwrap_or_default(),
+                        collapsible_whitespace,
+                    ));
                 },
-                _ => generated.push_lowering_source(parent, LoweringSource::Boundary),
+                _ => {},
             }
         }
 
-        let mut generated = Self {
-            tree: CssBoxTree::default(),
-            suppressed: Vec::new(),
-            lowering_roots: Vec::new(),
-            lowering_children: std::collections::HashMap::new(),
-        };
-        generate(&mut generated, dom, styles, dom.document(), None);
-        generated
+        let mut roots = Vec::new();
+        collect(dom, styles, dom.document(), None, &mut roots);
+        Self {
+            tree: generate_box_tree(roots),
+        }
     }
 
     pub(crate) fn into_tree(self) -> CssBoxTree<Id> {
         self.tree
-    }
-
-    pub(crate) fn lowering_roots(&self) -> &[LoweringSource] {
-        &self.lowering_roots
-    }
-
-    pub(crate) fn lowering_children(&self, parent: BoxId) -> &[LoweringSource] {
-        self.lowering_children
-            .get(&parent)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
-    }
-
-    pub(crate) fn suppressed(&self, id: SuppressedId) -> &SuppressedNode<Id> {
-        &self.suppressed[id.0 as usize]
-    }
-
-    fn capture_suppressed<D>(&mut self, dom: &D, node: Id) -> SuppressedId
-    where
-        D: LayoutDom<NodeId = Id>,
-    {
-        let id = SuppressedId(
-            self.suppressed
-                .len()
-                .try_into()
-                .expect("a suppressed source tree exceeded u32::MAX nodes"),
-        );
-        self.suppressed.push(SuppressedNode {
-            node,
-            children: Vec::new(),
-        });
-        let children = dom
-            .dom_children(node)
-            .map(|child| match dom.kind(child) {
-                NodeKind::Document
-                | NodeKind::DocumentFragment
-                | NodeKind::Element
-                | NodeKind::Text => LoweringSource::Suppressed(self.capture_suppressed(dom, child)),
-                _ => LoweringSource::Boundary,
-            })
-            .collect();
-        self.suppressed[id.0 as usize].children = children;
-        id
-    }
-
-    fn push_lowering_source(&mut self, parent: Option<BoxId>, source: LoweringSource) {
-        if let Some(parent) = parent {
-            self.lowering_children
-                .entry(parent)
-                .or_default()
-                .push(source);
-        } else {
-            self.lowering_roots.push(source);
-        }
     }
 }
 
@@ -237,8 +130,13 @@ fn display_role(display: ComputedDisplay) -> DisplayRole {
     };
     match display {
         ComputedDisplay::None => DisplayRole::NONE,
+        ComputedDisplay::Contents => DisplayRole::CONTENTS,
         ComputedDisplay::Inline => DisplayRole::INLINE_FLOW,
         ComputedDisplay::Block => DisplayRole::BLOCK_FLOW,
+        ComputedDisplay::ListItem => DisplayRole {
+            list_item: true,
+            ..DisplayRole::BLOCK_FLOW
+        },
         ComputedDisplay::InlineBlock => {
             normal(Some(DisplayOutside::Inline), Some(DisplayInside::FlowRoot))
         },
@@ -262,12 +160,37 @@ fn positioning_scheme(position: ComputedPosition) -> PositioningScheme {
     }
 }
 
+fn float_side(float: ComputedFloat) -> FloatSide {
+    match float {
+        ComputedFloat::None => FloatSide::None,
+        ComputedFloat::Left => FloatSide::Left,
+        ComputedFloat::Right => FloatSide::Right,
+    }
+}
+
+fn flow_axes(computed: &ComputedValues) -> FlowAxes {
+    let writing_mode = match computed.writing_mode {
+        ComputedWritingMode::HorizontalTb => WritingMode::HorizontalTb,
+        ComputedWritingMode::VerticalRl => WritingMode::VerticalRl,
+        ComputedWritingMode::VerticalLr => WritingMode::VerticalLr,
+        ComputedWritingMode::SidewaysRl => WritingMode::SidewaysRl,
+        ComputedWritingMode::SidewaysLr => WritingMode::SidewaysLr,
+    };
+    let direction = match computed.direction {
+        ComputedDirection::Ltr => Direction::Ltr,
+        ComputedDirection::Rtl => Direction::Rtl,
+    };
+    FlowAxes::new(writing_mode, direction)
+}
+
 fn is_replaced_element<D>(dom: &D, node: D::NodeId) -> bool
 where
     D: LayoutDom,
 {
-    dom.element_name(node)
-        .is_some_and(|name| name.local.as_ref().eq_ignore_ascii_case("img"))
+    dom.element_name(node).is_some_and(|name| {
+        name.local.as_ref().eq_ignore_ascii_case("img")
+            || name.local.as_ref().eq_ignore_ascii_case("canvas")
+    })
 }
 
 #[cfg(test)]
@@ -278,7 +201,7 @@ mod tests {
     use layout_dom_api::{LocalName, Namespace};
 
     #[test]
-    fn generated_tree_keeps_b0_boundaries_outside_box_identity() {
+    fn generated_tree_applies_suppression_contents_and_comment_rules() {
         fn find(
             dom: &StaticDocument,
             node: <StaticDocument as LayoutDom>::NodeId,
@@ -295,11 +218,12 @@ mod tests {
 
         let dom = StaticDocument::parse(
             "<html><body id=\"body\">before<!-- boundary --><span id=\"shown\">after</span>\
-             <span id=\"hidden\">hidden</span></body></html>",
+             <span id=\"hidden\">hidden</span><span id=\"contents\">\
+             <b id=\"inside\">inside</b></span></body></html>",
         );
         let styles = resolve_styles(
             &dom,
-            &StyleSet::cambium(&["#hidden { display: none; }"]),
+            &StyleSet::cambium(&["#hidden { display: none; } #contents { display: contents; }"]),
             &Device::screen(800.0, 600.0),
             &InteractionStates::default(),
         );
@@ -307,23 +231,68 @@ mod tests {
         let body = find(&dom, dom.document(), "body").expect("body");
         let shown = find(&dom, dom.document(), "shown").expect("shown");
         let hidden = find(&dom, dom.document(), "hidden").expect("hidden");
+        let contents = find(&dom, dom.document(), "contents").expect("contents");
+        let inside = find(&dom, dom.document(), "inside").expect("inside");
         let body_box = generated.principal_box(body).expect("body principal box");
+        let inside_box = generated
+            .principal_box(inside)
+            .expect("inside principal box");
 
         assert!(generated.principal_box(shown).is_some());
         assert_eq!(generated.principal_box(hidden), None);
         assert!(generated.boxes_for_node(hidden).is_empty());
-        assert!(
-            generated
-                .lowering_children(body_box)
-                .contains(&LoweringSource::Boundary),
-            "an ignored comment remains a B0 inline-run boundary"
+        assert_eq!(generated.principal_box(contents), None);
+        assert!(generated.boxes_for_node(contents).is_empty());
+        assert_eq!(generated[inside_box].parent(), Some(body_box));
+    }
+
+    #[test]
+    fn generated_boxes_carry_inherited_writing_mode_and_direction() {
+        fn find(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+            needle: &str,
+        ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+            if dom.kind(node) == NodeKind::Element
+                && dom.attribute(node, &Namespace::from(""), &LocalName::from("id")) == Some(needle)
+            {
+                return Some(node);
+            }
+            dom.dom_children(node)
+                .find_map(|child| find(dom, child, needle))
+        }
+
+        let dom = StaticDocument::parse(
+            "<html><body id=\"body\"><span id=\"child\">word</span></body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&["#body { writing-mode: sideways-lr; direction: rtl; }"]),
+            &Device::screen(800.0, 600.0),
+            &InteractionStates::default(),
+        );
+        let generated = GeneratedBoxTree::from_dom(&dom, &styles);
+        let body = find(&dom, dom.document(), "body").expect("body");
+        let child = find(&dom, dom.document(), "child").expect("child");
+        let text = dom
+            .dom_children(child)
+            .find(|node| dom.kind(*node) == NodeKind::Text)
+            .expect("text");
+        let expected = FlowAxes::new(WritingMode::SidewaysLr, Direction::Rtl);
+
+        assert_eq!(
+            generated[generated.principal_box(body).expect("body box")].flow,
+            expected
+        );
+        assert_eq!(
+            generated[generated.principal_box(child).expect("child box")].flow,
+            expected
         );
         assert!(
             generated
-                .lowering_children(body_box)
+                .boxes_for_node(text)
                 .iter()
-                .any(|source| matches!(source, LoweringSource::Suppressed(_))),
-            "display:none remains private lowering metadata, not a CSS box"
+                .all(|box_id| generated[*box_id].flow == expected)
         );
     }
 }

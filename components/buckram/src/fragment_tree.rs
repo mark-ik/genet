@@ -2,39 +2,7 @@
 
 use std::{collections::HashMap, hash::Hash, ops::Deref};
 
-use crate::{BoxId, CssBoxTree};
-
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct PhysicalRect {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-/// Geometry in the fragment's inline and block axes.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct LogicalRect {
-    pub inline_start: f32,
-    pub block_start: f32,
-    pub inline_size: f32,
-    pub block_size: f32,
-}
-
-impl LogicalRect {
-    /// K0 migration from the lane's current horizontal physical geometry.
-    ///
-    /// K3 replaces this compatibility constructor with writing-mode-aware
-    /// logical layout at the algorithm boundary.
-    pub fn from_horizontal_physical(rect: PhysicalRect) -> Self {
-        Self {
-            inline_start: rect.x,
-            block_start: rect.y,
-            inline_size: rect.width,
-            block_size: rect.height,
-        }
-    }
-}
+use crate::{BoxId, CssBoxTree, FlowAxes, LogicalRect, PhysicalRect, PhysicalSize};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct FragmentId(u32);
@@ -77,6 +45,7 @@ pub struct Fragment {
     pub continuation: Option<BreakToken>,
     pub baselines: Baselines,
     pub overflow: LogicalRect,
+    flow: FlowAxes,
     physical_rect: PhysicalRect,
 }
 
@@ -94,7 +63,30 @@ impl Fragment {
             continuation: None,
             baselines: Baselines::default(),
             overflow: logical_rect,
+            flow: FlowAxes::HORIZONTAL_LTR,
             physical_rect: rect,
+        }
+    }
+
+    /// Construct a fragment from standards-owned logical geometry.
+    pub fn from_logical(
+        box_id: BoxId,
+        logical_rect: LogicalRect,
+        containing_block: PhysicalSize,
+        flow: FlowAxes,
+    ) -> Self {
+        Self {
+            id: FragmentId(u32::MAX),
+            box_id,
+            parent: None,
+            containing_fragment: None,
+            fragmentation_context: FragmentationContextId::INITIAL,
+            logical_rect,
+            continuation: None,
+            baselines: Baselines::default(),
+            overflow: logical_rect,
+            flow,
+            physical_rect: flow.physical_rect(logical_rect, containing_block),
         }
     }
 
@@ -116,6 +108,10 @@ impl Fragment {
 
     pub fn fragmentation_context(&self) -> FragmentationContextId {
         self.fragmentation_context
+    }
+
+    pub fn flow(&self) -> FlowAxes {
+        self.flow
     }
 
     pub fn physical_rect(&self) -> PhysicalRect {
@@ -262,6 +258,7 @@ mod tests {
             CssBox::new(
                 BoxOrigin::Element(1u8),
                 DisplayRole::INLINE_FLOW,
+                FlowAxes::HORIZONTAL_LTR,
                 PositioningScheme::Static,
                 false,
                 None,
@@ -310,6 +307,7 @@ mod tests {
             CssBox::new(
                 BoxOrigin::Element(1u8),
                 DisplayRole::BLOCK_FLOW,
+                FlowAxes::HORIZONTAL_LTR,
                 PositioningScheme::Static,
                 false,
                 None,
@@ -322,6 +320,7 @@ mod tests {
             CssBox::new(
                 BoxOrigin::Element(2u8),
                 DisplayRole::BLOCK_FLOW,
+                FlowAxes::HORIZONTAL_LTR,
                 PositioningScheme::Static,
                 false,
                 None,
@@ -351,5 +350,51 @@ mod tests {
             Some(parent)
         );
         assert_eq!(fragments.roots(), &[parent]);
+    }
+
+    #[test]
+    fn logical_fragment_geometry_derives_physical_geometry_at_the_edge() {
+        let mut boxes = CssBoxTree::default();
+        let flow = FlowAxes::new(crate::WritingMode::VerticalRl, crate::Direction::Ltr);
+        let box_id = boxes.push(
+            CssBox::new(
+                BoxOrigin::Element(1u8),
+                DisplayRole::BLOCK_FLOW,
+                flow,
+                PositioningScheme::Static,
+                false,
+                None,
+                ContainingBlock::Initial,
+            ),
+            None,
+            true,
+        );
+        let logical = LogicalRect {
+            inline_start: 20.0,
+            block_start: 30.0,
+            inline_size: 40.0,
+            block_size: 70.0,
+        };
+        let fragment = Fragment::from_logical(
+            box_id,
+            logical,
+            PhysicalSize {
+                width: 300.0,
+                height: 200.0,
+            },
+            flow,
+        );
+
+        assert_eq!(fragment.logical_rect, logical);
+        assert_eq!(fragment.flow(), flow);
+        assert_eq!(
+            fragment.physical_rect(),
+            PhysicalRect {
+                x: 200.0,
+                y: 20.0,
+                width: 70.0,
+                height: 40.0,
+            }
+        );
     }
 }

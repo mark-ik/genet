@@ -9,3 +9,5 @@ description = "Standards-owned CSS box and fragment models for Genet."
 [lib]
 path = "src/lib.rs"
 
+[dependencies]
+taffy = { version = "0.12.1", default-features = false, features = ["std", "block_layout", "float_layout", "flexbox", "grid", "calc"] }

@@ -7,7 +7,9 @@
 //! every following item by one. Found 2026-07-26 as the cause of the
 //! css-grid abspos cluster's residual paint delta.
 
-use genet_livery::{Device, InteractionStates, StyleSet, layout, resolve_styles};
+use genet_livery::{
+    BoxOrigin, Device, InteractionStates, PseudoElement, StyleSet, layout, resolve_styles,
+};
 use genet_static_dom::StaticDocument;
 use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
 
@@ -87,6 +89,74 @@ fn live_layout_exposes_buckram_box_and_fragment_identity() {
     assert_eq!(
         layout.fragments().fragment_ids_for_box(child_box),
         &[child_fragment.id()]
+    );
+}
+
+#[test]
+fn display_contents_has_no_principal_box_and_promotes_its_child() {
+    let document = StaticDocument::parse(
+        "<html><body id=\"body\"><div id=\"contents\"><span id=\"child\">child</span></div></body></html>",
+    );
+    let styles = resolve_styles(
+        &document,
+        &StyleSet::cambium(&["#contents { display: contents; }"]),
+        &Device::screen(800.0, 600.0),
+        &InteractionStates::default(),
+    );
+    let layout = layout(&document, &styles, 800.0, 600.0).expect("layout");
+    let body = find(&document, document.document(), "body").expect("body");
+    let contents = find(&document, document.document(), "contents").expect("contents");
+    let child = find(&document, document.document(), "child").expect("child");
+    let body_box = layout.boxes().principal_box(body).expect("body box");
+    let child_box = layout.boxes().principal_box(child).expect("child box");
+
+    assert_eq!(layout.boxes().principal_box(contents), None);
+    assert!(layout.boxes().boxes_for_node(contents).is_empty());
+    assert_eq!(layout.boxes()[child_box].parent(), Some(body_box));
+}
+
+#[test]
+fn list_item_generates_a_marker_box_with_owner_provenance() {
+    let document =
+        StaticDocument::parse("<html><body><ul><li id=\"item\">item</li></ul></body></html>");
+    let styles = resolve_styles(
+        &document,
+        &StyleSet::cambium(&[]),
+        &Device::screen(800.0, 600.0),
+        &InteractionStates::default(),
+    );
+    let layout = layout(&document, &styles, 800.0, 600.0).expect("layout");
+    let item = find(&document, document.document(), "item").expect("item");
+
+    assert!(layout.boxes().boxes_for_node(item).iter().any(|box_id| {
+        layout.boxes()[*box_id].origin
+            == BoxOrigin::Pseudo {
+                owner: item,
+                pseudo: PseudoElement::Marker,
+            }
+    }));
+}
+
+#[test]
+fn inline_split_around_block_produces_continuation_boxes_and_fragments() {
+    let document = StaticDocument::parse(
+        "<html><body><div><span id=\"split\">before<div id=\"block\">block</div>after</span></div></body></html>",
+    );
+    let styles = resolve_styles(
+        &document,
+        &StyleSet::cambium(&["#split { display: inline; } #block { display: block; }"]),
+        &Device::screen(800.0, 600.0),
+        &InteractionStates::default(),
+    );
+    let layout = layout(&document, &styles, 800.0, 600.0).expect("layout");
+    let split = find(&document, document.document(), "split").expect("split");
+    let boxes = layout.boxes().boxes_for_node(split);
+
+    assert_eq!(boxes.len(), 2);
+    assert_eq!(layout.boxes().principal_box(split), Some(boxes[0]));
+    assert!(
+        layout.fragments_for_node(split).count() >= 2,
+        "both inline continuation boxes must produce fragments"
     );
 }
 
@@ -194,15 +264,8 @@ fn a_no_break_space_still_generates_a_line_box() {
     );
 }
 
-/// Block containers keep their current anonymous boxes.
-///
-/// The blank-run rule is scoped to flex and grid on purpose: the same change
-/// in block flow measured -131 files on CSS2 (2026-07-26), because the extra
-/// boxes are load-bearing for the current table and inline-formatting
-/// emulation. This pins the scope so widening it is a deliberate act with a
-/// measurement behind it, not an accident.
 #[test]
-fn block_containers_are_out_of_scope_for_now() {
+fn block_flow_whitespace_does_not_change_sibling_placement() {
     let css = "#box { display: block; width: 200px; }";
     let spaced = origins(SPACED, css, &IDS);
     let tight = origins(TIGHT, css, &IDS);

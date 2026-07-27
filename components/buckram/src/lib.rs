@@ -6,15 +6,33 @@
 
 #![forbid(unsafe_code)]
 
+mod block;
 mod box_tree;
+mod flow;
 mod fragment_tree;
+mod intrinsic;
+mod taffy_adapter;
 
+pub use block::{
+    BlockBoxSizing, BlockContainingBlock, BlockDeferral, BlockDimensions, BlockFormattingContext,
+    BlockMarginCollapse, BlockMarginState, BlockPlacement, BlockPosition, BlockSizeValue,
+    BlockStyle, ClearSide, CollapsedMargin, FloatAvailableSpace, FloatLineConstraints, FloatSide,
+    FlowLength, FlowLengthAuto, UsedInlineSize, solve_float_inline_size, solve_in_flow_inline_size,
+};
 pub use box_tree::{
-    AnonymousBoxKind, BoxGeneration, BoxId, BoxOrigin, ContainingBlock, ContainingBlockRule,
-    CssBox, CssBoxTree, DisplayInside, DisplayOutside, DisplayRole, FormattingContextKind,
-    InternalTableRole, PositioningScheme, PseudoElement,
+    AnonymousBoxKind, BoxGeneration, BoxId, BoxOrigin, BoxTreeInput, ContainingBlock,
+    ContainingBlockRule, CssBox, CssBoxTree, DisplayInside, DisplayOutside, DisplayRole,
+    FormattingContextKind, InternalTableRole, PositioningScheme, PseudoElement, generate_box_tree,
+};
+pub use flow::{
+    Direction, FlowAxes, LogicalAxis, LogicalRect, LogicalSides, LogicalSize, PhysicalRect,
+    PhysicalSide, PhysicalSides, PhysicalSize, WritingMode,
 };
 pub use fragment_tree::{
-    Baselines, BreakToken, Fragment, FragmentId, FragmentTree, FragmentationContextId,
-    LayoutResult, LogicalRect, PhysicalRect,
+    Baselines, BreakToken, Fragment, FragmentId, FragmentTree, FragmentationContextId, LayoutResult,
+};
+pub use intrinsic::{IntrinsicSizeCache, IntrinsicSizeKind, IntrinsicSizeQuery, IntrinsicSizes};
+pub use taffy_adapter::{
+    AlgorithmAvailableSpace, AlgorithmKind, AlgorithmLayout, AlgorithmNodeId, AlgorithmSize,
+    AlgorithmStyle, AlgorithmTree, BlockAlgorithm,
 };

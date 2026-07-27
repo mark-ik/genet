@@ -25,8 +25,8 @@ use paint_list_api::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Fragment, FragmentPlane, StylePlane,
-    layout::border_width_px,
+    LiveryLayout, StylePlane,
+    layout::{Fragment, border_width_px},
     text::{TextFrame, TextSystem},
 };
 
@@ -141,7 +141,7 @@ impl PaintList for LiveryPaintList {
 pub fn emit_paint_list<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
     viewport: DeviceIntSize,
     generation: u64,
 ) -> LiveryPaintList
@@ -164,7 +164,7 @@ where
 pub fn emit_paint_list_with_text_system<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
     viewport: DeviceIntSize,
     generation: u64,
     text: &mut TextSystem,
@@ -190,7 +190,7 @@ where
 pub(crate) fn emit_paint_list_with_text_system_scrolled<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
     viewport: DeviceIntSize,
     generation: u64,
     text: &mut TextSystem,
@@ -216,7 +216,7 @@ where
 pub(crate) fn emit_paint_list_with_text_system_scrolled_with_images<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
     viewport: DeviceIntSize,
     generation: u64,
     text: &mut TextSystem,
@@ -228,11 +228,15 @@ where
     D::NodeId: Copy + Eq + Hash,
 {
     let mut list = LiveryPaintList::with_image_sources(viewport, generation, image_sources);
-    let mut text_frame = text.begin_frame();
+    let mut text_frame = fragments
+        .text_frame()
+        .cloned()
+        .unwrap_or_else(|| text.begin_frame());
     let mut text_state = PaintText {
         system: text,
         frame: &mut text_frame,
     };
+    let canvas_background_source = emit_canvas_background(dom, styles, fragments, &mut list);
     emit_node(
         dom,
         styles,
@@ -242,6 +246,7 @@ where
         &mut text_state,
         &mut list,
         scroll_offsets,
+        canvas_background_source,
     );
     list.fonts = text.fonts_for(&text_frame);
     list
@@ -256,12 +261,13 @@ struct PaintText<'a, Id> {
 fn emit_node<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
     id: D::NodeId,
     inherited: Option<&ComputedValues>,
     text: &mut PaintText<'_, D::NodeId>,
     list: &mut LiveryPaintList,
     scroll_offsets: &HashMap<D::NodeId, (f32, f32)>,
+    canvas_background_source: Option<D::NodeId>,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -298,6 +304,7 @@ fn emit_node<D>(
             inherited,
             stacking_roots: None,
             inline_owner: None,
+            canvas_background_source,
         },
         text,
         list,
@@ -318,6 +325,7 @@ fn emit_node<D>(
         text,
         list,
         scroll_offsets,
+        canvas_background_source,
     );
     if scroll_transform.is_some() {
         list.commands.push(PaintCmd::PopTransform);
@@ -336,7 +344,7 @@ fn emit_node<D>(
 fn begin_node<'a, D>(
     dom: &D,
     styles: &'a StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
     id: D::NodeId,
     scope: PaintScope<'a, D::NodeId>,
     text: &mut PaintText<'_, D::NodeId>,
@@ -355,15 +363,20 @@ where
             }
             text.system
                 .prepare_inline_children(text.frame, dom, styles, fragments, id, style);
+            let background_propagated = scope.canvas_background_source == Some(id);
             if matches!(style.display, Display::Inline | Display::InlineBlock) {
-                emit_inline_element_decoration(text.frame, fragments, id, style, list);
+                if !background_propagated {
+                    emit_inline_element_decoration(text.frame, fragments, id, style, list);
+                }
                 emit_inline_replaced_image(dom, text.frame, fragments, id, list);
             } else if let Some(fragment) = fragments
                 .get(id)
                 .filter(|fragment| paintable_fragment(fragment))
             {
                 emit_shadow(list, style, fragment);
-                emit_background(list, style, fragment);
+                if !background_propagated {
+                    emit_background(list, style, fragment);
+                }
                 emit_replaced_image(dom, list, id, style, fragment);
                 emit_border(list, style, fragment);
             }
@@ -410,18 +423,20 @@ struct PaintScope<'a, Id> {
     inherited: Option<&'a ComputedValues>,
     stacking_roots: Option<&'a HashSet<Id>>,
     inline_owner: Option<Id>,
+    canvas_background_source: Option<Id>,
 }
 
 #[allow(clippy::too_many_arguments)]
 fn emit_children_in_stacking_order<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
     parent: D::NodeId,
     inherited: Option<&ComputedValues>,
     text: &mut PaintText<'_, D::NodeId>,
     list: &mut LiveryPaintList,
     scroll_offsets: &HashMap<D::NodeId, (f32, f32)>,
+    canvas_background_source: Option<D::NodeId>,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -440,7 +455,16 @@ fn emit_children_in_stacking_order<D>(
     let roots = items.iter().map(|item| item.id).collect::<HashSet<_>>();
 
     for item in items.iter().filter(|item| item.level < 0) {
-        emit_stacking_item(dom, styles, fragments, item, text, list, scroll_offsets);
+        emit_stacking_item(
+            dom,
+            styles,
+            fragments,
+            item,
+            text,
+            list,
+            scroll_offsets,
+            canvas_background_source,
+        );
     }
 
     emit_normal_children(
@@ -455,6 +479,7 @@ fn emit_children_in_stacking_order<D>(
                 .get(parent)
                 .filter(|style| style.display == Display::Inline)
                 .map(|_| parent),
+            canvas_background_source,
         },
         text,
         list,
@@ -462,14 +487,23 @@ fn emit_children_in_stacking_order<D>(
     );
 
     for item in items.iter().filter(|item| item.level >= 0) {
-        emit_stacking_item(dom, styles, fragments, item, text, list, scroll_offsets);
+        emit_stacking_item(
+            dom,
+            styles,
+            fragments,
+            item,
+            text,
+            list,
+            scroll_offsets,
+            canvas_background_source,
+        );
     }
 }
 
 fn collect_stacking_items<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
     parent: D::NodeId,
     viewport: DeviceIntSize,
     ancestor_clips: &mut Vec<ClipSpec>,
@@ -528,14 +562,16 @@ fn collect_stacking_items<D>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_stacking_item<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
     item: &StackingItem<D::NodeId>,
     text: &mut PaintText<'_, D::NodeId>,
     list: &mut LiveryPaintList,
     scroll_offsets: &HashMap<D::NodeId, (f32, f32)>,
+    canvas_background_source: Option<D::NodeId>,
 ) where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -552,6 +588,7 @@ fn emit_stacking_item<D>(
         text,
         list,
         scroll_offsets,
+        canvas_background_source,
     );
     for _ in &item.ancestor_clips {
         list.commands.push(PaintCmd::PopClip);
@@ -562,7 +599,7 @@ fn emit_stacking_item<D>(
 fn emit_normal_node<'a, D>(
     dom: &D,
     styles: &'a StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
     id: D::NodeId,
     scope: PaintScope<'a, D::NodeId>,
     text: &mut PaintText<'_, D::NodeId>,
@@ -610,7 +647,7 @@ fn emit_normal_node<'a, D>(
 fn emit_normal_children<'a, D>(
     dom: &D,
     styles: &'a StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
     parent: D::NodeId,
     scope: PaintScope<'a, D::NodeId>,
     text: &mut PaintText<'_, D::NodeId>,
@@ -674,7 +711,7 @@ fn emit_normal_children<'a, D>(
 fn positioned_inline_overlay_is_covered<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
     siblings: &[D::NodeId],
     index: usize,
     child: D::NodeId,
@@ -841,7 +878,7 @@ fn clips_overflow(overflow: CssOverflow) -> bool {
 fn emit_inline_group<'a, D>(
     dom: &D,
     styles: &'a StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
     roots: &[D::NodeId],
     scope: PaintScope<'a, D::NodeId>,
     text: &mut PaintText<'_, D::NodeId>,
@@ -890,7 +927,7 @@ fn emit_inline_group<'a, D>(
 fn emit_inline_descendant_decorations<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
     id: D::NodeId,
     stacking_roots: Option<&HashSet<D::NodeId>>,
     first_line: f32,
@@ -937,7 +974,7 @@ fn emit_inline_descendant_decorations<D>(
 
 fn emit_inline_element_decoration<Id>(
     frame: &mut TextFrame<Id>,
-    fragments: &FragmentPlane<Id>,
+    fragments: &LiveryLayout<Id>,
     id: Id,
     style: &ComputedValues,
     list: &mut LiveryPaintList,
@@ -979,7 +1016,7 @@ fn emit_inline_element_decoration<Id>(
 fn emit_inline_replaced_image<D>(
     dom: &D,
     frame: &TextFrame<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
     id: D::NodeId,
     list: &mut LiveryPaintList,
 ) where
@@ -1108,6 +1145,95 @@ pub(crate) fn bounds(fragment: &Fragment) -> LayoutRect {
     )
 }
 
+/// Paint the CSS canvas background before the document tree and return the
+/// element whose used background becomes transparent.
+///
+/// CSS Backgrounds 3 section 2.11 selects the document element, except that
+/// an HTML document with a transparent, image-free `html` background takes the
+/// first `body` child's background instead. The painting area is the viewport;
+/// image sizing and positioning still use the root element's box.
+fn emit_canvas_background<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
+    list: &mut LiveryPaintList,
+) -> Option<D::NodeId>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let mut elements = dom
+        .dom_children(dom.document())
+        .filter(|child| dom.kind(*child) == NodeKind::Element);
+    let root = elements.next()?;
+    if elements.next().is_some() {
+        return None;
+    }
+
+    let root_style = styles.get(root)?;
+    // CSS Backgrounds 3 section 2.11: if the element selected as the
+    // canvas-background source has `display: none`, the canvas background is
+    // transparent. There is no generated box whose absence may be replaced by
+    // the viewport here.
+    if root_style.display == Display::None {
+        return None;
+    }
+    let root_is_html = dom
+        .element_name(root)
+        .is_some_and(|name| name.local.as_ref().eq_ignore_ascii_case("html"));
+    let (source, source_style) = if has_background(root_style) {
+        (root, root_style)
+    } else if root_is_html {
+        let body = dom.dom_children(root).find(|child| {
+            dom.kind(*child) == NodeKind::Element
+                && dom
+                    .element_name(*child)
+                    .is_some_and(|name| name.local.as_ref().eq_ignore_ascii_case("body"))
+        })?;
+        let body_style = styles.get(body)?;
+        if root_style.contain.is_active()
+            || body_style.contain.is_active()
+            || !generates_visible_box(body_style)
+            || !has_background(body_style)
+        {
+            return None;
+        }
+        (body, body_style)
+    } else {
+        return None;
+    };
+
+    let canvas = Fragment {
+        x: 0.0,
+        y: 0.0,
+        width: list.viewport.width.max(0) as f32,
+        height: list.viewport.height.max(0) as f32,
+    };
+    let positioning = fragments
+        .get(root)
+        .map(|fragment| fragment.physical_rect())
+        .unwrap_or(canvas);
+    let color = resolve_color(source_style.background_color, used_text_color(source_style));
+    if color.a > 0.0 {
+        list.commands.push(PaintCmd::DrawRect(RectItem {
+            placement: CommonPlacement::new(bounds(&canvas)),
+            color,
+        }));
+    }
+    emit_background_image_in(list, source_style, bounds(&positioning), bounds(&canvas));
+    Some(source)
+}
+
+fn generates_visible_box(style: &ComputedValues) -> bool {
+    !matches!(style.display, Display::None | Display::Contents)
+        && style.visibility == Visibility::Visible
+}
+
+fn has_background(style: &ComputedValues) -> bool {
+    !matches!(style.background_image, BackgroundImage::None)
+        || resolve_color(style.background_color, used_text_color(style)).a > 0.0
+}
+
 fn emit_background(list: &mut LiveryPaintList, style: &ComputedValues, fragment: &Fragment) {
     let color = resolve_color(style.background_color, used_text_color(style));
     let radius = border_radius(style, fragment);
@@ -1138,14 +1264,29 @@ fn emit_background(list: &mut LiveryPaintList, style: &ComputedValues, fragment:
 
 fn emit_background_image(list: &mut LiveryPaintList, style: &ComputedValues, fragment: &Fragment) {
     let rect = bounds(fragment);
+    emit_background_image_in(list, style, rect, rect);
+}
+
+fn emit_background_image_in(
+    list: &mut LiveryPaintList,
+    style: &ComputedValues,
+    positioning_rect: LayoutRect,
+    painting_rect: LayoutRect,
+) {
     match &style.background_image {
         BackgroundImage::None => {},
         BackgroundImage::LinearGradient { from, to } => {
-            let start_point = LayoutPoint::new((rect.min.x + rect.max.x) * 0.5, rect.min.y);
-            let end_point = LayoutPoint::new((rect.min.x + rect.max.x) * 0.5, rect.max.y);
+            let start_point = LayoutPoint::new(
+                (positioning_rect.min.x + positioning_rect.max.x) * 0.5,
+                positioning_rect.min.y,
+            );
+            let end_point = LayoutPoint::new(
+                (positioning_rect.min.x + positioning_rect.max.x) * 0.5,
+                positioning_rect.max.y,
+            );
             list.commands
                 .push(PaintCmd::DrawLinearGradient(LinearGradientItem {
-                    placement: CommonPlacement::new(rect),
+                    placement: CommonPlacement::new(painting_rect),
                     gradient: LinearGradientPayload {
                         start_point,
                         end_point,
@@ -1161,7 +1302,7 @@ fn emit_background_image(list: &mut LiveryPaintList, style: &ComputedValues, fra
                             },
                         ],
                     },
-                    tile_size: LayoutSize::new(fragment.width, fragment.height),
+                    tile_size: positioning_rect.size(),
                     tile_spacing: LayoutSize::zero(),
                 }));
         },
@@ -1175,12 +1316,12 @@ fn emit_background_image(list: &mut LiveryPaintList, style: &ComputedValues, fra
             let em = used_font_size(style);
             let offset_x = resolve_length_percentage(
                 style.background_position.x,
-                rect.size().width - image_width,
+                positioning_rect.size().width - image_width,
                 em,
             );
             let offset_y = resolve_length_percentage(
                 style.background_position.y,
-                rect.size().height - image_height,
+                positioning_rect.size().height - image_height,
                 em,
             );
             let repeat_x = matches!(
@@ -1191,13 +1332,23 @@ fn emit_background_image(list: &mut LiveryPaintList, style: &ComputedValues, fra
                 style.background_repeat,
                 BackgroundRepeat::Repeat | BackgroundRepeat::RepeatY
             );
-            let first_x = tile_origin(rect.min.x, offset_x, image_width, repeat_x);
-            let first_y = tile_origin(rect.min.y, offset_y, image_height, repeat_y);
-            let x_count = tile_count(first_x, rect.max.x, image_width, repeat_x);
-            let y_count = tile_count(first_y, rect.max.y, image_height, repeat_y);
+            let first_x = tile_origin(
+                positioning_rect.min.x + offset_x,
+                painting_rect.min.x,
+                image_width,
+                repeat_x,
+            );
+            let first_y = tile_origin(
+                positioning_rect.min.y + offset_y,
+                painting_rect.min.y,
+                image_height,
+                repeat_y,
+            );
+            let x_count = tile_count(first_x, painting_rect.max.x, image_width, repeat_x);
+            let y_count = tile_count(first_y, painting_rect.max.y, image_height, repeat_y);
             if repeat_x || repeat_y {
                 list.commands.push(PaintCmd::PushClip(ClipSpec {
-                    kind: ClipKind::Rect(rect),
+                    kind: ClipKind::Rect(painting_rect),
                 }));
             }
             for x_index in 0..x_count {
@@ -1236,10 +1387,9 @@ fn resolve_length_percentage(value: LengthPercentage, basis: f32, em: f32) -> f3
     }
 }
 
-fn tile_origin(min: f32, offset: f32, tile: f32, repeated: bool) -> f32 {
-    let origin = min + offset;
+fn tile_origin(origin: f32, painting_min: f32, tile: f32, repeated: bool) -> f32 {
     if repeated && tile > 0.0 {
-        origin - (offset / tile).ceil() * tile
+        origin - ((origin - painting_min) / tile).ceil() * tile
     } else {
         origin
     }

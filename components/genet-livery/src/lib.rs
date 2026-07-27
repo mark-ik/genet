@@ -18,16 +18,15 @@ mod text;
 pub use buckram::{
     AnonymousBoxKind, Baselines, BoxGeneration, BoxId, BoxOrigin, BreakToken, ContainingBlock,
     ContainingBlockRule, CssBox, CssBoxTree, DisplayInside, DisplayOutside, DisplayRole,
-    FormattingContextKind, Fragment as LayoutFragment, FragmentId, FragmentTree,
-    FragmentationContextId, InternalTableRole, LayoutResult, LogicalRect, PhysicalRect,
-    PositioningScheme, PseudoElement,
+    FormattingContextKind, Fragment, FragmentId, FragmentTree, FragmentationContextId,
+    InternalTableRole, LayoutResult, LogicalRect, PhysicalRect, PositioningScheme, PseudoElement,
 };
 pub use document::{ClickOutcome, LinkTarget, LiveryDocument};
 pub use dom::{ElementRef, InteractionStates, SelectorTree};
 pub use invalidation::{AttributeSnapshot, ElementSnapshot, IncrementalStyle, RestyleStats};
 pub(crate) use layout::hit_test_with_scroll;
 pub use layout::{
-    Fragment, FragmentPlane, LayoutError, LiveryLayout, content_box_size, hit_test, layout,
+    BlockAlgorithmCounts, LayoutError, LiveryLayout, content_box_size, hit_test, layout,
     resolve_container_query_styles, resolve_container_relative_styles, used_value_context,
 };
 pub use livery::media::{Device, ViewportSize, ViewportSizes};
@@ -44,9 +43,10 @@ pub use text::TextSystem;
 /// `genet-layout`'s larger Stylo-oriented sheet.
 pub const CAMBIUM_UA_DEFAULTS: &str = r#"
 html, body, main, section, article, header, footer, nav, aside,
-div, h1, h2, h3, h4, h5, h6, p, ul, ol, li, pre {
+div, blockquote, h1, h2, h3, h4, h5, h6, p, ul, ol, pre {
     display: block;
 }
+li { display: list-item; }
 
 table { display: table; }
 thead, tbody, tfoot { display: table-row-group; }
@@ -72,6 +72,7 @@ h1 { font-size: 2em; margin: 0.67em 0; font-weight: bold; }
 h2 { font-size: 1.5em; margin: 0.83em 0; font-weight: bold; }
 h3 { font-size: 1.17em; margin: 1em 0; font-weight: bold; }
 p, ul, ol, pre { margin: 1em 0; }
+blockquote { margin: 1em 40px; }
 ul, ol { padding-left: 40px; }
 ul { list-style-type: disc; }
 ol { list-style-type: decimal; }

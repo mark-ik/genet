@@ -8,6 +8,10 @@ use std::{
     sync::Arc,
 };
 
+use buckram::{
+    BoxId, BoxOrigin, CssBoxTree, DisplayInside, DisplayOutside, FloatLineConstraints,
+    FormattingContextKind,
+};
 use layout_dom_api::{LayoutDom, NodeKind};
 use livery::{
     ComputedValues,
@@ -24,9 +28,10 @@ use paint_list_api::{
 use parley::{
     Alignment, AlignmentOptions, FontContext, FontFamily, FontStyle, FontWeight, GenericFamily,
     InlineBox, InlineBoxKind, LayoutContext, PositionedLayoutItem, StyleProperty,
+    layout::YieldData,
 };
 
-use crate::{Fragment, FragmentPlane, StylePlane, paint::resolve_color};
+use crate::{LiveryLayout, StylePlane, layout::Fragment, paint::resolve_color};
 
 pub(crate) trait FragmentLookup<Id> {
     fn rect(&self, id: Id) -> Option<&Fragment>;
@@ -34,18 +39,18 @@ pub(crate) trait FragmentLookup<Id> {
     fn atomic_rect(&self, id: Id) -> Option<&Fragment> {
         self.rect(id)
     }
+
+    fn atomic_box_rect(&self, _box_id: BoxId) -> Option<&Fragment> {
+        None
+    }
 }
 
-impl<Id> FragmentLookup<Id> for FragmentPlane<Id>
+impl<Id> FragmentLookup<Id> for LiveryLayout<Id>
 where
     Id: Copy + Eq + Hash,
 {
     fn rect(&self, id: Id) -> Option<&Fragment> {
         self.get(id).map(|fragment| &**fragment)
-    }
-
-    fn atomic_rect(&self, id: Id) -> Option<&Fragment> {
-        self.atomic(id).or_else(|| self.rect(id))
     }
 }
 
@@ -53,6 +58,70 @@ where
 struct Brush {
     color: [f32; 4],
     source_index: usize,
+}
+
+fn break_inline_lines(
+    layout: &mut parley::Layout<Brush>,
+    wrap_width: Option<f32>,
+    constraints: Option<&FloatLineConstraints>,
+) {
+    let Some(content_width) = wrap_width else {
+        layout.break_all_lines(None);
+        return;
+    };
+    let Some(constraints) = constraints else {
+        layout.break_all_lines(Some(content_width));
+        return;
+    };
+
+    {
+        let mut breaker = layout.break_lines();
+        breaker.state_mut().set_layout_max_advance(content_width);
+        'lines: loop {
+            let mut line_top = breaker.committed_y() as f32;
+            let mut available = constraints.horizontal_physical_space(line_top, 0.0);
+            for _ in 0..32 {
+                {
+                    let state = breaker.state_mut();
+                    state.set_line_x(available.inline_start);
+                    state.set_line_y(f64::from(line_top));
+                    state.set_line_max_advance(available.inline_size);
+                }
+                let Some(yielded) = breaker.break_next() else {
+                    break 'lines;
+                };
+                let YieldData::LineBreak(line) = yielded else {
+                    debug_assert!(false, "in-flow inline layout yielded a non-line break");
+                    break 'lines;
+                };
+
+                let spanning =
+                    constraints.horizontal_physical_space(line_top, line.line_height.max(0.0));
+                if ((spanning.inline_start - available.inline_start).abs() > 0.01
+                    || (spanning.inline_size - available.inline_size).abs() > 0.01)
+                    && breaker.revert()
+                {
+                    available = spanning;
+                    continue;
+                }
+
+                if line.advance > available.inline_size + 0.01
+                    && let Some(next_top) = constraints.next_wider_block_start(
+                        line_top,
+                        line.line_height.max(0.0),
+                        available.inline_size,
+                    )
+                    && breaker.revert()
+                {
+                    line_top = next_top;
+                    available =
+                        constraints.horizontal_physical_space(line_top, line.line_height.max(0.0));
+                    continue;
+                }
+                break;
+            }
+        }
+    }
 }
 
 /// Retained font discovery, shaping scratch space, and font resources for one
@@ -96,41 +165,39 @@ impl TextSystem {
             .register_fonts(parley::fontique::Blob::new(Arc::new(bytes)), None);
     }
 
-    /// Measure one consecutive inline group with the same collection, styles,
-    /// atomic boxes, and line breaking used by paint.
-    pub(crate) fn measure_inline_group<D, F>(
+    /// Format one consecutive inline group for both layout and paint.
+    pub(crate) fn format_inline_group<D, F>(
         &mut self,
         dom: &D,
         styles: &StylePlane<D::NodeId>,
+        boxes: &CssBoxTree<D::NodeId>,
         fragments: &F,
-        roots: &[D::NodeId],
-        parent_style: &ComputedValues,
-        width: f32,
-    ) -> Option<(f32, f32)>
+        request: InlineRequest<'_>,
+    ) -> Option<InlineLayout<BoxId>>
     where
         D: LayoutDom,
         D::NodeId: Copy + Eq + Hash,
         F: FragmentLookup<D::NodeId>,
     {
+        let parent_style = request.parent_style;
         let mut text = String::new();
         let mut spans = Vec::new();
         let mut inline_boxes = Vec::new();
         let mut owners = Vec::new();
-        let already_prepared = HashSet::new();
         {
-            let mut collector = InlineCollector {
+            let mut collector = BoxInlineCollector {
                 dom,
                 styles,
+                boxes,
                 fragments,
-                already_prepared: &already_prepared,
                 owners: &mut owners,
                 text: &mut text,
                 spans: &mut spans,
                 inline_boxes: &mut inline_boxes,
                 negative_margin_offset: 0.0,
-                percentage_basis: width,
+                percentage_basis: request.width,
             };
-            for root in roots {
+            for root in request.roots {
                 collector.collect(*root, parent_style);
             }
         }
@@ -138,7 +205,14 @@ impl TextSystem {
             return None;
         }
 
-        let items = self.shape(&text, &mut spans, &inline_boxes, width, parent_style);
+        let items = self.shape(
+            &text,
+            &mut spans,
+            &inline_boxes,
+            request.width,
+            parent_style,
+            request.line_constraints,
+        );
         let zero_line_strut = text.is_empty()
             && spans.is_empty()
             && !inline_boxes.is_empty()
@@ -158,8 +232,14 @@ impl TextSystem {
             });
         let strut_center_height = if zero_line_strut {
             let mut strut_spans = Vec::<SourceSpan<()>>::new();
-            let strut_items =
-                self.shape::<()>("\u{200b}", &mut strut_spans, &[], width, parent_style);
+            let strut_items = self.shape::<()>(
+                "\u{200b}",
+                &mut strut_spans,
+                &[],
+                request.width,
+                parent_style,
+                None,
+            );
             strut_items.into_iter().find_map(|item| match item {
                 ShapedItem::Text(run) => Some(
                     (run.line_baseline - (run.line_block_min + run.line_block_max) * 0.5).abs(),
@@ -183,10 +263,10 @@ impl TextSystem {
             &parent_style.line_height,
             super::paint::used_font_size(parent_style),
         );
-        for item in items {
+        for item in &items {
             let fragment = match item {
                 ShapedItem::Text(run) => run.line_fragment,
-                ShapedItem::InlineBox { line_fragment, .. } => line_fragment,
+                ShapedItem::InlineBox { line_fragment, .. } => *line_fragment,
             };
             right = right.max(fragment.x + fragment.width);
             top = top.min(fragment.y);
@@ -194,18 +274,23 @@ impl TextSystem {
         }
         if top.is_finite() && bottom.is_finite() {
             let measured_height = (bottom - top).max(strut_center_height.unwrap_or(0.0));
-            Some((
-                right.max(0.0),
-                if zero_line_minimal_alignment {
+            Some(InlineLayout {
+                width: right.max(0.0),
+                height: if zero_line_minimal_alignment {
                     0.0
                 } else if let Some(empty_line_height) = empty_line_height {
                     empty_line_height.max(parent_line_height)
                 } else {
                     measured_height
                 },
-            ))
+                items,
+            })
         } else {
-            Some((0.0, 0.0))
+            Some(InlineLayout {
+                width: 0.0,
+                height: 0.0,
+                items,
+            })
         }
     }
 
@@ -234,13 +319,19 @@ impl TextSystem {
         frame: &mut TextFrame<D::NodeId>,
         dom: &D,
         styles: &StylePlane<D::NodeId>,
-        fragments: &FragmentPlane<D::NodeId>,
+        fragments: &LiveryLayout<D::NodeId>,
         parent: D::NodeId,
         parent_style: &ComputedValues,
     ) where
         D: LayoutDom,
         D::NodeId: Copy + Eq + Hash,
     {
+        let Some(parent_box) = fragments.boxes().principal_box(parent) else {
+            return;
+        };
+        if fragments.boxes()[parent_box].formatting_context != Some(FormattingContextKind::Inline) {
+            return;
+        }
         let Some(parent_fragment) = frame
             .inline_fragments(parent)
             .and_then(|fragments| fragments.first())
@@ -302,7 +393,7 @@ impl TextSystem {
             range: 0..text.len(),
             negative_margin_offset: 0.0,
         }];
-        for item in self.shape(text.as_ref(), &mut spans, &[], fragment.width, style) {
+        for item in self.shape(text.as_ref(), &mut spans, &[], fragment.width, style, None) {
             let ShapedItem::Text(mut run) = item else {
                 continue;
             };
@@ -328,7 +419,7 @@ impl TextSystem {
         frame: &mut TextFrame<D::NodeId>,
         dom: &D,
         styles: &StylePlane<D::NodeId>,
-        fragments: &FragmentPlane<D::NodeId>,
+        fragments: &LiveryLayout<D::NodeId>,
         roots: &[D::NodeId],
         parent: (&Fragment, &ComputedValues),
         owner: D::NodeId,
@@ -381,6 +472,7 @@ impl TextSystem {
             &inline_boxes,
             parent_fragment.width,
             parent_style,
+            None,
         ) {
             match item {
                 ShapedItem::Text(mut run) => {
@@ -475,6 +567,7 @@ impl TextSystem {
         inline_boxes: &[InlineAtom<Id>],
         width: f32,
         root_style: &ComputedValues,
+        line_constraints: Option<&FloatLineConstraints>,
     ) -> Vec<ShapedItem<Id>>
     where
         Id: Copy,
@@ -507,7 +600,7 @@ impl TextSystem {
         let wrap_width = (root_style.text_wrap_mode == TextWrapMode::Wrap)
             .then_some(width)
             .filter(|width| width.is_finite() && *width > 0.0);
-        layout.break_all_lines(wrap_width);
+        break_inline_lines(&mut layout, wrap_width, line_constraints);
         layout.align(
             text_alignment(root_style.text_align),
             AlignmentOptions::default(),
@@ -773,6 +866,187 @@ impl TextSystem {
     }
 }
 
+pub(crate) struct InlineRequest<'a> {
+    pub(crate) roots: &'a [BoxId],
+    pub(crate) parent_style: &'a ComputedValues,
+    pub(crate) width: f32,
+    pub(crate) line_constraints: Option<&'a FloatLineConstraints>,
+}
+
+pub(crate) struct InlineLayout<Source> {
+    width: f32,
+    height: f32,
+    items: Vec<ShapedItem<Source>>,
+}
+
+pub(crate) struct InlinePlacement<Source> {
+    pub(crate) fragments: HashMap<Source, Vec<Fragment>>,
+    line_keys: HashMap<Source, Vec<f32>>,
+}
+
+impl<Source> Default for InlinePlacement<Source> {
+    fn default() -> Self {
+        Self {
+            fragments: HashMap::new(),
+            line_keys: HashMap::new(),
+        }
+    }
+}
+
+impl<Source> InlinePlacement<Source>
+where
+    Source: Copy + Eq + Hash,
+{
+    fn record(&mut self, source: Source, fragment: Fragment, line_y: f32) {
+        let fragments = self.fragments.entry(source).or_default();
+        let line_keys = self.line_keys.entry(source).or_default();
+        if let Some(previous) = fragments.last_mut()
+            && line_keys
+                .last()
+                .is_some_and(|previous_line| (previous_line - line_y).abs() <= 0.5)
+            && fragment.x <= previous.x + previous.width + 0.5
+        {
+            let right = (previous.x + previous.width).max(fragment.x + fragment.width);
+            let bottom = (previous.y + previous.height).max(fragment.y + fragment.height);
+            previous.x = previous.x.min(fragment.x);
+            previous.width = right - previous.x;
+            previous.y = previous.y.min(fragment.y);
+            previous.height = bottom - previous.y;
+            return;
+        }
+        fragments.push(fragment);
+        line_keys.push(line_y);
+    }
+}
+
+impl<Source> InlineLayout<Source>
+where
+    Source: Copy + Eq + Hash,
+{
+    pub(crate) fn size(&self) -> (f32, f32) {
+        (self.width, self.height)
+    }
+
+    pub(crate) fn place<Id, Resolve>(
+        &self,
+        frame: &mut TextFrame<Id>,
+        styles: &StylePlane<Id>,
+        mut node_for: Resolve,
+        origin: (f32, f32),
+        percentage_basis: f32,
+    ) -> InlinePlacement<Source>
+    where
+        Id: Copy + Eq + Hash,
+        Resolve: FnMut(Source) -> Option<Id>,
+    {
+        let container = Fragment {
+            x: origin.0,
+            y: origin.1,
+            width: percentage_basis,
+            height: self.height,
+        };
+        let mut visual_commands = Vec::new();
+        let mut prepared_sources = Vec::new();
+        let mut placement = InlinePlacement::default();
+
+        for item in &self.items {
+            match item {
+                ShapedItem::Text(run) => {
+                    let Some(source) = run.source else {
+                        continue;
+                    };
+                    let mut fragment = run.fragment;
+                    translate_fragment(&mut fragment, origin);
+                    let line_y = run.line_y + origin.1;
+                    let mut glyphs = run.glyphs.clone();
+                    for glyph in &mut glyphs {
+                        glyph.point.x += origin.0;
+                        glyph.point.y += origin.1;
+                    }
+                    placement.record(source, fragment, line_y);
+                    let Some(source_node) = node_for(source) else {
+                        continue;
+                    };
+                    frame.record_inline_fragment(source_node, fragment, line_y);
+                    let mut command_owners = Vec::new();
+                    for owner in &run.owners {
+                        let Some(owner_node) = node_for(*owner) else {
+                            continue;
+                        };
+                        let decorated = decorated_inline_fragment(
+                            styles,
+                            owner_node,
+                            fragment,
+                            percentage_basis,
+                        );
+                        placement.record(*owner, decorated, line_y);
+                        frame.record_inline_fragment(owner_node, decorated, line_y);
+                        command_owners.push(owner_node);
+                    }
+                    frame.used_fonts.insert(run.font_instance);
+                    if frame.prepared_sources.insert(source_node) {
+                        prepared_sources.push(source_node);
+                    }
+                    visual_commands.push(PreparedCommand {
+                        owners: command_owners,
+                        command: PaintCmd::DrawText(TextRunItem {
+                            placement: CommonPlacement::new(super::paint::bounds(&container)),
+                            font_instance: run.font_instance,
+                            font_size: run.font_size,
+                            color: run.color,
+                            glyphs,
+                            options: TextOptions::default(),
+                        }),
+                    });
+                },
+                ShapedItem::InlineBox {
+                    source,
+                    owners,
+                    fragment,
+                    edge,
+                    paint,
+                    line_y,
+                    ..
+                } => {
+                    let mut fragment = *fragment;
+                    translate_fragment(&mut fragment, origin);
+                    let line_y = *line_y + origin.1;
+                    let source_node = node_for(*source);
+                    if *paint {
+                        let source_fragment = if *edge {
+                            source_node.map_or(fragment, |node| {
+                                decorated_inline_fragment(styles, node, fragment, percentage_basis)
+                            })
+                        } else {
+                            fragment
+                        };
+                        placement.record(*source, source_fragment, line_y);
+                        if let Some(node) = source_node {
+                            frame.record_inline_fragment(node, source_fragment, line_y);
+                        }
+                    }
+                    for owner in owners {
+                        let Some(owner_node) = node_for(*owner) else {
+                            continue;
+                        };
+                        let decorated = decorated_inline_fragment(
+                            styles,
+                            owner_node,
+                            fragment,
+                            percentage_basis,
+                        );
+                        placement.record(*owner, decorated, line_y);
+                        frame.record_inline_fragment(owner_node, decorated, line_y);
+                    }
+                },
+            }
+        }
+        frame.record_prepared_group(prepared_sources, visual_commands);
+        placement
+    }
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct TextFrame<Id> {
     prepared_groups: Vec<Vec<PreparedCommand<Id>>>,
     source_groups: HashMap<Id, usize>,
@@ -874,6 +1148,7 @@ where
     }
 }
 
+#[derive(Clone, Debug)]
 struct PreparedCommand<Id> {
     owners: Vec<Id>,
     command: PaintCmd,
@@ -964,9 +1239,195 @@ where
     D::NodeId: Copy,
 {
     dom.kind(id) == NodeKind::Element
-        && dom
-            .element_name(id)
-            .is_some_and(|name| name.local.as_ref().eq_ignore_ascii_case("img"))
+        && dom.element_name(id).is_some_and(|name| {
+            name.local.as_ref().eq_ignore_ascii_case("img")
+                || name.local.as_ref().eq_ignore_ascii_case("canvas")
+        })
+}
+
+struct BoxInlineCollector<'a, D, F>
+where
+    D: LayoutDom,
+    F: FragmentLookup<D::NodeId>,
+{
+    dom: &'a D,
+    styles: &'a StylePlane<D::NodeId>,
+    boxes: &'a CssBoxTree<D::NodeId>,
+    fragments: &'a F,
+    owners: &'a mut Vec<BoxId>,
+    text: &'a mut String,
+    spans: &'a mut Vec<SourceSpan<BoxId>>,
+    inline_boxes: &'a mut Vec<InlineAtom<BoxId>>,
+    negative_margin_offset: f32,
+    percentage_basis: f32,
+}
+
+impl<D, F> BoxInlineCollector<'_, D, F>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+    F: FragmentLookup<D::NodeId>,
+{
+    fn collect(&mut self, box_id: BoxId, inherited: &ComputedValues) {
+        let css_box = &self.boxes[box_id];
+        match css_box.origin {
+            BoxOrigin::Text(node) => {
+                let start = self.text.len();
+                append_inline_text(self.text, self.dom.text(node).unwrap_or(""), inherited);
+                if self.text.len() == start {
+                    return;
+                }
+                self.spans.push(SourceSpan {
+                    source: Some(box_id),
+                    owners: self.owners.clone(),
+                    style: inherited.clone(),
+                    range: start..self.text.len(),
+                    negative_margin_offset: self.negative_margin_offset,
+                });
+            },
+            BoxOrigin::Element(node) => {
+                let Some(style) = self.styles.get(node).cloned() else {
+                    return;
+                };
+                let atomic = css_box.replaced
+                    || (css_box.display.outside == Some(DisplayOutside::Inline)
+                        && css_box.display.inside == Some(DisplayInside::FlowRoot));
+                if atomic {
+                    if let Some(fragment) = self.fragments.atomic_box_rect(box_id).copied() {
+                        let font_size = super::paint::used_font_size(&style);
+                        let (line_width, line_box_height, margin_left, margin_top) =
+                            inline_margin_box(&style, fragment, font_size, self.percentage_basis);
+                        self.inline_boxes.push(InlineAtom {
+                            source: box_id,
+                            owners: self.owners.clone(),
+                            index: self.text.len(),
+                            fragment,
+                            line_width,
+                            line_box_height,
+                            margin_left,
+                            margin_top,
+                            edge: false,
+                            paint: true,
+                            vertical_align: style.vertical_align,
+                            font_size,
+                            line_height: super::layout::line_height_px(
+                                &style.line_height,
+                                font_size,
+                            ),
+                        });
+                    }
+                    return;
+                }
+
+                let ancestor_owners = self.owners.clone();
+                let text_start = self.text.len();
+                self.push_edge(box_id, &style, &ancestor_owners, true);
+                let content_start = self.inline_boxes.len();
+                let previous_negative_margin = self.negative_margin_offset;
+                let leading_negative_margin = inline_margin_px(
+                    style.margin_left,
+                    super::paint::used_font_size(&style),
+                    self.percentage_basis,
+                )
+                .min(0.0);
+                self.negative_margin_offset += leading_negative_margin;
+                let trailing_negative_margin = inline_margin_px(
+                    style.margin_right,
+                    super::paint::used_font_size(&style),
+                    self.percentage_basis,
+                )
+                .min(0.0);
+                self.owners.push(box_id);
+                for child in css_box.children() {
+                    self.collect(*child, &style);
+                }
+                self.owners.pop();
+                self.negative_margin_offset =
+                    previous_negative_margin + leading_negative_margin + trailing_negative_margin;
+                let has_inline_content = self.inline_boxes.len() > content_start;
+                self.push_edge(box_id, &style, &ancestor_owners, false);
+                if self.text.len() == text_start && !has_inline_content {
+                    self.push_empty_line_box(box_id, &style, &ancestor_owners);
+                }
+            },
+            BoxOrigin::Anonymous { .. } => {
+                for child in css_box.children() {
+                    self.collect(*child, inherited);
+                }
+            },
+            BoxOrigin::Pseudo { .. } => {},
+        }
+    }
+
+    fn push_edge(&mut self, source: BoxId, style: &ComputedValues, owners: &[BoxId], start: bool) {
+        let edges = inline_decoration_edges(style, self.percentage_basis);
+        let em = super::paint::used_font_size(style);
+        let margin = if start {
+            inline_margin_px(style.margin_left, em, self.percentage_basis)
+        } else {
+            inline_margin_px(style.margin_right, em, self.percentage_basis)
+        };
+        let decoration = if start { edges.left } else { edges.right };
+        let mut push = |width: f32, paint: bool| {
+            if width.is_finite() && width.abs() > f32::EPSILON {
+                self.inline_boxes.push(InlineAtom {
+                    source,
+                    owners: owners.to_vec(),
+                    index: self.text.len(),
+                    fragment: Fragment {
+                        width,
+                        ..Fragment::default()
+                    },
+                    line_width: width,
+                    line_box_height: 0.0,
+                    margin_left: 0.0,
+                    margin_top: 0.0,
+                    edge: true,
+                    paint,
+                    vertical_align: style.vertical_align,
+                    font_size: em,
+                    line_height: super::layout::line_height_px(&style.line_height, em),
+                });
+            }
+        };
+        if start {
+            push(margin, false);
+        }
+        push(decoration, true);
+        if !start {
+            push(margin, false);
+        }
+    }
+
+    fn push_empty_line_box(&mut self, source: BoxId, style: &ComputedValues, owners: &[BoxId]) {
+        if matches!(style.line_height, CssLineHeight::Normal) {
+            return;
+        }
+        let font_size = super::paint::used_font_size(style);
+        let height = super::layout::line_height_px(&style.line_height, font_size);
+        if height <= 0.0 {
+            return;
+        }
+        self.inline_boxes.push(InlineAtom {
+            source,
+            owners: owners.to_vec(),
+            index: self.text.len(),
+            fragment: Fragment {
+                width: 0.0,
+                height,
+                ..Fragment::default()
+            },
+            line_width: 0.0,
+            line_box_height: height,
+            margin_left: 0.0,
+            margin_top: 0.0,
+            edge: false,
+            paint: false,
+            vertical_align: style.vertical_align,
+            font_size,
+            line_height: height,
+        });
+    }
 }
 
 struct InlineCollector<'a, D, F>

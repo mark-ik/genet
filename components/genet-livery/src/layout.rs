@@ -1,8 +1,13 @@
 use std::{collections::HashMap, error::Error, fmt, hash::Hash};
 
 use buckram::{
-    BoxId, BoxOrigin, Fragment as TreeFragment, FragmentId, FragmentTree, LayoutResult,
-    PhysicalRect,
+    AlgorithmAvailableSpace, AlgorithmKind, AlgorithmNodeId, AlgorithmSize, AlgorithmTree,
+    BlockBoxSizing, BlockDimensions, BlockPosition as BuckramBlockPosition, BlockSizeValue,
+    BlockStyle, BoxId, BoxOrigin, ClearSide, CssBox, DisplayInside, DisplayOutside,
+    FloatLineConstraints, FloatSide, FlowAxes, FlowLength, FlowLengthAuto, FormattingContextKind,
+    Fragment as TreeFragment, FragmentId, FragmentTree, InternalTableRole, IntrinsicSizeCache,
+    IntrinsicSizeKind, IntrinsicSizeQuery, IntrinsicSizes, LayoutResult, LogicalAxis, PhysicalRect,
+    PhysicalSides, PositioningScheme,
 };
 use layout_dom_api::{LayoutDom, NodeKind};
 use livery::{
@@ -11,7 +16,7 @@ use livery::{
     stylesheet::ContainerSnapshot,
     values::{
         Alignment as CssAlignment, AspectRatio, BorderStyle, BorderWidth,
-        BoxSizing as CssBoxSizing, ContainerType, Display as CssDisplay,
+        BoxSizing as CssBoxSizing, Clear as CssClear, ContainerType, Display as CssDisplay,
         FlexDirection as CssFlexDirection, FlexWrap as CssFlexWrap, Float as CssFloat, FontSize,
         Gap as CssGap, GridAutoFlow as CssGridAutoFlow, GridPlacement as CssGridPlacement,
         GridTemplate as CssGridTemplate, GridTrack as CssGridTrack, Inset, Length,
@@ -21,11 +26,10 @@ use livery::{
     },
 };
 use taffy::{
-    TaffyTree,
     geometry::{Line, Point, Rect, Size},
     prelude::{
-        AvailableSpace, Dimension, LengthPercentage, LengthPercentageAuto, NodeId, auto, fr,
-        length, line, max_content, min_content, percent, span,
+        Dimension, LengthPercentage, LengthPercentageAuto, auto, fr, length, line, max_content,
+        min_content, percent, span,
     },
     style::{
         AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyword, BoxSizing, Display,
@@ -38,69 +42,72 @@ type ImageSources = HashMap<String, Vec<u8>>;
 
 use crate::{
     InteractionStates, StylePlane, StyleSet, TextSystem,
-    box_tree::{GeneratedBoxTree, LoweringSource, SuppressedId},
+    box_tree::GeneratedBoxTree,
     style::resolve_styles_with_containers,
+    text::{InlineLayout, InlineRequest, TextFrame},
 };
 
-/// Physical geometry retained for text shaping and the K0 compatibility pass.
-pub type Fragment = PhysicalRect;
+/// Physical geometry used at the DOM compatibility edge and by inline atoms.
+pub(crate) type Fragment = PhysicalRect;
 
 #[derive(Clone, Debug)]
-pub(crate) struct LegacyFragmentPlane<Id> {
-    fragments: HashMap<Id, Fragment>,
-    atomic_fragments: HashMap<Id, Fragment>,
+struct AtomicSubtree {
+    root: BoxId,
+    fragments: Vec<(BoxId, Fragment)>,
 }
 
-impl<Id> Default for LegacyFragmentPlane<Id> {
-    fn default() -> Self {
-        Self {
-            fragments: HashMap::new(),
-            atomic_fragments: HashMap::new(),
-        }
+#[derive(Clone, Debug, Default)]
+struct AtomicLayoutPlane {
+    fragments: HashMap<BoxId, Fragment>,
+    subtrees: Vec<AtomicSubtree>,
+}
+
+impl AtomicLayoutPlane {
+    pub fn get(&self, box_id: BoxId) -> Option<&Fragment> {
+        self.fragments.get(&box_id)
     }
 }
 
-impl<Id: Eq + Hash> LegacyFragmentPlane<Id> {
-    pub fn get(&self, id: Id) -> Option<&Fragment> {
-        self.fragments.get(&id)
-    }
-
-    pub(crate) fn atomic(&self, id: Id) -> Option<&Fragment> {
-        self.atomic_fragments.get(&id)
-    }
-}
-
-impl<Id> crate::text::FragmentLookup<Id> for LegacyFragmentPlane<Id>
+impl<Id> crate::text::FragmentLookup<Id> for AtomicLayoutPlane
 where
     Id: Copy + Eq + Hash,
 {
-    fn rect(&self, id: Id) -> Option<&Fragment> {
-        self.get(id)
+    fn rect(&self, _id: Id) -> Option<&Fragment> {
+        None
     }
 
-    fn atomic_rect(&self, id: Id) -> Option<&Fragment> {
-        self.atomic(id).or_else(|| self.get(id))
+    fn atomic_box_rect(&self, box_id: BoxId) -> Option<&Fragment> {
+        self.get(box_id)
     }
 }
 
 /// Livery's retained wrapper around Buckram's standards-owned layout result.
-///
-/// The atomic map is the named K0 compatibility seam for the current two-pass
-/// inline formatter. Browser-facing boxes and fragments come from `buckram`.
 #[derive(Clone, Debug)]
 pub struct LiveryLayout<Id> {
     buckram: LayoutResult<Id>,
-    atomic_fragments: HashMap<Id, Fragment>,
+    text_frame: Option<TextFrame<Id>>,
+    block_algorithms: BlockAlgorithmCounts,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BlockAlgorithmCounts {
+    pub buckram: usize,
+    pub taffy: usize,
 }
 
 impl<Id> LiveryLayout<Id>
 where
     Id: Copy + Eq + Hash,
 {
-    fn new(buckram: LayoutResult<Id>, atomic_fragments: HashMap<Id, Fragment>) -> Self {
+    fn new(
+        buckram: LayoutResult<Id>,
+        text_frame: Option<TextFrame<Id>>,
+        block_algorithms: BlockAlgorithmCounts,
+    ) -> Self {
         Self {
             buckram,
-            atomic_fragments,
+            text_frame,
+            block_algorithms,
         }
     }
 
@@ -132,13 +139,14 @@ where
         self.buckram.is_empty()
     }
 
-    pub(crate) fn atomic(&self, node: Id) -> Option<&Fragment> {
-        self.atomic_fragments.get(&node)
+    pub fn block_algorithm_counts(&self) -> BlockAlgorithmCounts {
+        self.block_algorithms
+    }
+
+    pub(crate) fn text_frame(&self) -> Option<&TextFrame<Id>> {
+        self.text_frame.as_ref()
     }
 }
-
-/// Historical source name for the retained Livery layout wrapper.
-pub type FragmentPlane<Id> = LiveryLayout<Id>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LayoutError(String);
@@ -161,35 +169,123 @@ struct BuildState<'a, D: LayoutDom> {
     dom: &'a D,
     styles: &'a StylePlane<D::NodeId>,
     boxes: &'a GeneratedBoxTree<D::NodeId>,
-    tree: TaffyTree<TextMeasure>,
-    sources: HashMap<NodeId, LoweringSource>,
+    tree: AlgorithmTree<Style, TextMeasure, Option<BoxId>>,
     image_sources: &'a ImageSources,
 }
 
-#[derive(Clone, Debug)]
 struct InlineMeasure {
-    roots: Vec<LoweringSource>,
+    owner: Option<BoxId>,
+    roots: Vec<BoxId>,
     style: ComputedValues,
     width: f32,
     height: f32,
+    layouts: Vec<InlineLayoutEntry>,
+    placement_constraints: Option<FloatLineConstraints>,
+}
+
+struct InlineLayoutEntry {
+    width: f32,
+    constraints: Option<FloatLineConstraints>,
+    layout: InlineLayout<BoxId>,
+}
+
+#[derive(Clone, Copy)]
+struct InlineMeasureGeometry<'a> {
+    width: f32,
+    line_constraints: Option<&'a FloatLineConstraints>,
+}
+
+impl InlineMeasure {
+    fn cached_size(
+        &self,
+        width: f32,
+        constraints: Option<&FloatLineConstraints>,
+    ) -> Option<(f32, f32)> {
+        self.layouts
+            .iter()
+            .find(|entry| {
+                (entry.width - width).abs() <= 0.01 && entry.constraints.as_ref() == constraints
+            })
+            .map(|entry| entry.layout.size())
+    }
+
+    fn remember(
+        &mut self,
+        width: f32,
+        constraints: Option<&FloatLineConstraints>,
+        layout: InlineLayout<BoxId>,
+    ) -> (f32, f32) {
+        let size = layout.size();
+        self.layouts.push(InlineLayoutEntry {
+            width,
+            constraints: constraints.cloned(),
+            layout,
+        });
+        size
+    }
+
+    fn layout_for_width(&self, width: f32) -> Option<&InlineLayout<BoxId>> {
+        self.layouts
+            .iter()
+            .filter(|entry| entry.constraints.as_ref() == self.placement_constraints.as_ref())
+            .min_by(|left, right| {
+                (left.width - width)
+                    .abs()
+                    .total_cmp(&(right.width - width).abs())
+            })
+            .map(|entry| &entry.layout)
+    }
+}
+
+fn measure_inline_context<D>(
+    text: &mut TextSystem,
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    boxes: &GeneratedBoxTree<D::NodeId>,
+    atomic: &AtomicLayoutPlane,
+    context: &mut InlineMeasure,
+    geometry: InlineMeasureGeometry<'_>,
+) -> (f32, f32)
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let InlineMeasureGeometry {
+        width,
+        line_constraints: constraints,
+    } = geometry;
+    if let Some(constraints) = constraints {
+        context.placement_constraints = Some(constraints.clone());
+    }
+    context.cached_size(width, constraints).unwrap_or_else(|| {
+        let formatted = text.format_inline_group(
+            dom,
+            styles,
+            boxes,
+            atomic,
+            InlineRequest {
+                roots: &context.roots,
+                parent_style: &context.style,
+                width,
+                line_constraints: constraints,
+            },
+        );
+        formatted.map_or((context.width, context.height), |layout| {
+            context.remember(width, constraints, layout)
+        })
+    })
 }
 
 struct InlineBuildState<'a, D: LayoutDom> {
     dom: &'a D,
     styles: &'a StylePlane<D::NodeId>,
     boxes: &'a GeneratedBoxTree<D::NodeId>,
-    preliminary: &'a LegacyFragmentPlane<D::NodeId>,
-    tree: TaffyTree<InlineMeasure>,
-    sources: HashMap<NodeId, Vec<LoweringSource>>,
+    atomic: &'a AtomicLayoutPlane,
+    tree: AlgorithmTree<Style, InlineMeasure, Vec<BoxId>>,
     image_sources: &'a ImageSources,
 }
 
 type ResolvedLayout<Id> = (StylePlane<Id>, LiveryLayout<Id>);
-
-struct LayoutPass<Id> {
-    layout: LiveryLayout<Id>,
-    legacy: LegacyFragmentPlane<Id>,
-}
 
 #[derive(Clone, Copy, Debug, Default)]
 struct ContainerBases {
@@ -199,7 +295,7 @@ struct ContainerBases {
     block: Option<f32>,
 }
 
-/// Lay out a Livery style plane through a standalone Taffy tree.
+/// Lay out a Livery style plane through Buckram's scratch algorithm tree.
 ///
 /// This stateless entry point uses deterministic text estimates. Retained
 /// Livery sessions call [`layout_with_text_system`] so Parley's shaped line
@@ -209,7 +305,7 @@ pub fn layout<D>(
     styles: &StylePlane<D::NodeId>,
     viewport_width: f32,
     viewport_height: f32,
-) -> Result<FragmentPlane<D::NodeId>, LayoutError>
+) -> Result<LiveryLayout<D::NodeId>, LayoutError>
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -225,7 +321,6 @@ where
         viewport_height,
         &image_sources,
     )
-    .map(|pass| pass.layout)
 }
 
 /// Produce the layout bases needed by resolved-value CSSOM reads without
@@ -282,17 +377,25 @@ where
 {
     let styles =
         resolve_container_relative_styles_with_images(dom, styles, viewport, image_sources)?;
-    let preliminary = layout_impl(dom, &styles, viewport_width, viewport_height, image_sources)?;
+    let boxes = GeneratedBoxTree::from_dom(dom, &styles);
+    let atomic = layout_atomic_subtrees(
+        dom,
+        &styles,
+        &boxes,
+        viewport_width,
+        viewport_height,
+        image_sources,
+    )?;
     let fragments = layout_inline_groups(
         dom,
         &styles,
-        viewport_width,
-        viewport_height,
+        boxes,
+        (viewport_width, viewport_height),
         text,
-        &preliminary.legacy,
+        &atomic,
         image_sources,
     )?;
-    Ok((styles, fragments.layout))
+    Ok((styles, fragments))
 }
 
 /// Resolve deferred container-relative units from the nearest eligible
@@ -369,7 +472,7 @@ where
             device.viewport_height,
             image_sources,
         )?;
-        let containers = container_snapshots(dom, &resolved, &fragments.layout);
+        let containers = container_snapshots(dom, &resolved, &fragments);
         let next =
             resolve_styles_with_containers(dom, style_set, device, interactions, &containers);
         if next == current {
@@ -388,7 +491,7 @@ where
 fn container_snapshots<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
 ) -> HashMap<D::NodeId, Vec<ContainerSnapshot>>
 where
     D: LayoutDom,
@@ -403,7 +506,7 @@ fn collect_container_snapshots<D>(
     dom: &D,
     id: D::NodeId,
     styles: &StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
     ancestors: &[ContainerSnapshot],
     snapshots: &mut HashMap<D::NodeId, Vec<ContainerSnapshot>>,
 ) where
@@ -474,7 +577,7 @@ where
         dom,
         dom.document(),
         &mut resolved,
-        &fragments.layout,
+        &fragments,
         viewport,
         ContainerBases::default(),
     );
@@ -506,7 +609,7 @@ fn resolve_container_subtree<D>(
     dom: &D,
     id: D::NodeId,
     styles: &mut StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
     viewport: ViewportSizes,
     bases: ContainerBases,
 ) where
@@ -563,7 +666,7 @@ fn resolve_container_subtree<D>(
 
 /// Return a fragment's physical content-box size after its computed padding
 /// and borders are removed.
-pub fn content_box_size(style: &ComputedValues, fragment: &Fragment) -> (f32, f32) {
+pub fn content_box_size(style: &ComputedValues, fragment: &TreeFragment) -> (f32, f32) {
     let em = match style.font_size {
         FontSize::Value(CssLengthPercentage::Length(Length {
             value,
@@ -591,7 +694,7 @@ fn layout_impl<D>(
     viewport_width: f32,
     viewport_height: f32,
     image_sources: &ImageSources,
-) -> Result<LayoutPass<D::NodeId>, LayoutError>
+) -> Result<LiveryLayout<D::NodeId>, LayoutError>
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -601,17 +704,16 @@ where
         dom,
         styles,
         boxes: &boxes,
-        tree: TaffyTree::new(),
-        sources: HashMap::new(),
+        tree: AlgorithmTree::new(),
         image_sources,
     };
     let children = boxes
-        .lowering_roots()
+        .roots()
         .iter()
-        .filter_map(|source| {
+        .filter_map(|box_id| {
             state
-                .build_source(
-                    *source,
+                .build_box(
+                    *box_id,
                     None,
                     16.0,
                     (Some(viewport_width), Some(viewport_height)),
@@ -619,228 +721,408 @@ where
                 .transpose()
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let root = state
-        .tree
-        .new_with_children(
-            Style {
-                display: Display::Block,
-                size: Size {
-                    width: Dimension::length(viewport_width),
-                    height: Dimension::auto(),
-                },
-                ..Style::default()
+    // This synthetic box is the initial containing block, not an ordinary
+    // auto-height document box. Its definite viewport dimensions are the
+    // percentage basis for the root element and its definite-height chain.
+    let initial_containing_block = BlockStyle {
+        size: BlockDimensions::new(
+            BlockSizeValue::Length(FlowLength::px(viewport_width)),
+            BlockSizeValue::Length(FlowLength::px(viewport_height)),
+        ),
+        ..BlockStyle::default()
+    };
+    let root = state.tree.new_with_children_and_block_style(
+        AlgorithmKind::Block,
+        initial_containing_block,
+        Style {
+            display: Display::Block,
+            size: Size {
+                width: Dimension::length(viewport_width),
+                height: Dimension::length(viewport_height),
             },
-            &children,
-        )
-        .map_err(taffy_error)?;
+            ..Style::default()
+        },
+        &children,
+        None,
+    );
 
-    state
-        .tree
-        .compute_layout_with_measure(
-            root,
-            Size {
-                width: AvailableSpace::Definite(viewport_width),
-                height: AvailableSpace::Definite(viewport_height),
-            },
-            |known, available, _, context, _| {
-                let Some(context) = context else {
-                    return Size::ZERO;
-                };
-                let available_width = match available.width {
-                    AvailableSpace::Definite(width) => width,
-                    AvailableSpace::MinContent => 0.0,
-                    AvailableSpace::MaxContent => context.width,
-                };
-                Size {
-                    width: known
-                        .width
-                        .unwrap_or(context.width.min(available_width.max(0.0))),
-                    height: known.height.unwrap_or(context.height),
-                }
-            },
-        )
-        .map_err(taffy_error)?;
+    state.tree.compute_layout_with_measure(
+        root,
+        AlgorithmSize::new(
+            AlgorithmAvailableSpace::Definite(viewport_width),
+            AlgorithmAvailableSpace::Definite(viewport_height),
+        ),
+        |known, available, _, context, _| {
+            let Some(context) = context else {
+                return AlgorithmSize::new(0.0, 0.0);
+            };
+            let available_width = match available.width {
+                AlgorithmAvailableSpace::Definite(width) => width,
+                AlgorithmAvailableSpace::MinContent => 0.0,
+                AlgorithmAvailableSpace::MaxContent => context.width,
+            };
+            AlgorithmSize::new(
+                known
+                    .width
+                    .unwrap_or(context.width.min(available_width.max(0.0))),
+                known.height.unwrap_or(context.height),
+            )
+        },
+    );
+    let (buckram_blocks, taffy_blocks) = state.tree.block_algorithm_counts();
 
-    let mut legacy = LegacyFragmentPlane::default();
     let mut fragments = FragmentTree::default();
+    let mut output = FragmentOutput {
+        fragments: &mut fragments,
+    };
     collect_fragments(
         &state.tree,
-        &state.sources,
         &boxes,
         root,
         Point { x: 0.0, y: 0.0 },
         None,
-        &mut legacy,
-        &mut fragments,
+        &mut output,
     )?;
     drop(state);
-    Ok(LayoutPass {
-        layout: LiveryLayout::new(
-            LayoutResult::new(boxes.into_tree(), fragments),
-            HashMap::new(),
-        ),
-        legacy,
-    })
+    Ok(LiveryLayout::new(
+        LayoutResult::new(boxes.into_tree(), fragments),
+        None,
+        BlockAlgorithmCounts {
+            buckram: buckram_blocks,
+            taffy: taffy_blocks,
+        },
+    ))
+}
+
+fn layout_atomic_subtrees<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    boxes: &GeneratedBoxTree<D::NodeId>,
+    viewport_width: f32,
+    viewport_height: f32,
+    image_sources: &ImageSources,
+) -> Result<AtomicLayoutPlane, LayoutError>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    let roots = boxes
+        .iter()
+        .filter_map(|(box_id, css_box)| {
+            let BoxOrigin::Element(node) = css_box.origin else {
+                return None;
+            };
+            if boxes.principal_box(node) != Some(box_id)
+                || css_box.display.outside != Some(DisplayOutside::Inline)
+                || !is_atomic_inline_box(dom, styles, node)
+            {
+                return None;
+            }
+            (!has_atomic_inline_ancestor(dom, styles, boxes, node)).then_some(box_id)
+        })
+        .collect::<Vec<_>>();
+    let mut plane = AtomicLayoutPlane::default();
+
+    for box_id in roots {
+        let mut state = BuildState {
+            dom,
+            styles,
+            boxes,
+            tree: AlgorithmTree::new(),
+            image_sources,
+        };
+        let Some(root) = state.build_box(
+            box_id,
+            None,
+            16.0,
+            (Some(viewport_width), Some(viewport_height)),
+        )?
+        else {
+            continue;
+        };
+        state.tree.compute_layout_with_measure(
+            root,
+            AlgorithmSize::new(
+                AlgorithmAvailableSpace::Definite(viewport_width),
+                AlgorithmAvailableSpace::Definite(viewport_height),
+            ),
+            |known, available, _, context, _| {
+                let Some(context) = context else {
+                    return AlgorithmSize::new(0.0, 0.0);
+                };
+                let available_width = match available.width {
+                    AlgorithmAvailableSpace::Definite(width) => width,
+                    AlgorithmAvailableSpace::MinContent => 0.0,
+                    AlgorithmAvailableSpace::MaxContent => context.width,
+                };
+                AlgorithmSize::new(
+                    known
+                        .width
+                        .unwrap_or(context.width.min(available_width.max(0.0))),
+                    known.height.unwrap_or(context.height),
+                )
+            },
+        );
+
+        let mut fragments = Vec::new();
+        collect_atomic_fragments(&state.tree, root, Point { x: 0.0, y: 0.0 }, &mut fragments);
+        let Some(root_rect) = fragments
+            .iter()
+            .find_map(|(candidate, rect)| (*candidate == box_id).then_some(*rect))
+        else {
+            continue;
+        };
+        for (candidate, rect) in &mut fragments {
+            rect.x -= root_rect.x;
+            rect.y -= root_rect.y;
+            plane.fragments.insert(*candidate, *rect);
+        }
+        plane.subtrees.push(AtomicSubtree {
+            root: box_id,
+            fragments,
+        });
+    }
+    Ok(plane)
+}
+
+fn collect_atomic_fragments(
+    tree: &AlgorithmTree<Style, TextMeasure, Option<BoxId>>,
+    node: AlgorithmNodeId,
+    parent_origin: Point<f32>,
+    output: &mut Vec<(BoxId, Fragment)>,
+) {
+    let computed = tree.layout(node);
+    let origin = Point {
+        x: parent_origin.x + computed.x,
+        y: parent_origin.y + computed.y,
+    };
+    if let Some(box_id) = *tree.source(node) {
+        output.push((
+            box_id,
+            Fragment {
+                x: origin.x,
+                y: origin.y,
+                width: computed.width,
+                height: computed.height,
+            },
+        ));
+    }
+    for child in tree.children(node) {
+        collect_atomic_fragments(tree, *child, origin, output);
+    }
+}
+
+fn merge_atomic_subtrees<Id>(
+    atomic: &AtomicLayoutPlane,
+    boxes: &GeneratedBoxTree<Id>,
+    fragments: &mut FragmentTree,
+) where
+    Id: Copy + Eq + Hash,
+{
+    for subtree in &atomic.subtrees {
+        let Some(root_id) = fragments
+            .fragment_ids_for_box(subtree.root)
+            .first()
+            .copied()
+        else {
+            continue;
+        };
+        let Some(root_fragment) = fragments.get(root_id) else {
+            continue;
+        };
+        let final_root = root_fragment.physical_rect();
+        let local_root = subtree
+            .fragments
+            .iter()
+            .find_map(|(box_id, rect)| (*box_id == subtree.root).then_some(*rect))
+            .unwrap_or_default();
+        let offset = (final_root.x - local_root.x, final_root.y - local_root.y);
+
+        for (box_id, local) in &subtree.fragments {
+            if *box_id == subtree.root || !fragments.fragment_ids_for_box(*box_id).is_empty() {
+                continue;
+            }
+            let rect = Fragment {
+                x: local.x + offset.0,
+                y: local.y + offset.1,
+                width: local.width,
+                height: local.height,
+            };
+            let parent = boxes[*box_id]
+                .parent()
+                .and_then(|parent_box| fragments.fragment_ids_for_box(parent_box).last().copied())
+                .or(Some(root_id));
+            fragments.push(
+                TreeFragment::from_horizontal_physical(*box_id, rect),
+                parent,
+                parent,
+            );
+        }
+    }
 }
 
 fn layout_inline_groups<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
-    viewport_width: f32,
-    viewport_height: f32,
+    boxes: GeneratedBoxTree<D::NodeId>,
+    viewport: (f32, f32),
     text: &mut TextSystem,
-    preliminary: &LegacyFragmentPlane<D::NodeId>,
+    atomic: &AtomicLayoutPlane,
     image_sources: &ImageSources,
-) -> Result<LayoutPass<D::NodeId>, LayoutError>
+) -> Result<LiveryLayout<D::NodeId>, LayoutError>
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    let boxes = GeneratedBoxTree::from_dom(dom, styles);
+    let (viewport_width, viewport_height) = viewport;
     let mut state = InlineBuildState {
         dom,
         styles,
         boxes: &boxes,
-        preliminary,
-        tree: TaffyTree::new(),
-        sources: HashMap::new(),
+        atomic,
+        tree: AlgorithmTree::new(),
         image_sources,
     };
     let children = boxes
-        .lowering_roots()
+        .roots()
         .iter()
-        .filter_map(|source| state.build_source(*source, None, 16.0).transpose())
+        .filter_map(|box_id| state.build_box(*box_id, None, 16.0).transpose())
         .collect::<Result<Vec<_>, _>>()?;
-    let root = state
-        .tree
-        .new_with_children(
-            Style {
-                display: Display::Block,
-                size: Size {
-                    width: Dimension::length(viewport_width),
-                    height: Dimension::auto(),
+    let root = state.tree.new_with_children_and_block_style(
+        AlgorithmKind::Block,
+        BlockStyle {
+            size: BlockDimensions::new(
+                BlockSizeValue::Length(FlowLength::px(viewport_width)),
+                BlockSizeValue::Length(FlowLength::px(viewport_height)),
+            ),
+            ..BlockStyle::default()
+        },
+        Style {
+            display: Display::Block,
+            size: Size {
+                width: Dimension::length(viewport_width),
+                height: Dimension::length(viewport_height),
+            },
+            ..Style::default()
+        },
+        &children,
+        Vec::new(),
+    );
+
+    let mut intrinsic_sizes = IntrinsicSizeCache::default();
+    state.tree.compute_layout_with_measure(
+        root,
+        AlgorithmSize::new(
+            AlgorithmAvailableSpace::Definite(viewport_width),
+            AlgorithmAvailableSpace::Definite(viewport_height),
+        ),
+        |known, available, _, context, line_constraints| {
+            let Some(context) = context else {
+                return AlgorithmSize::new(0.0, 0.0);
+            };
+            let (query_width, definite_cap, intrinsic_kind) = match available.width {
+                AlgorithmAvailableSpace::Definite(width) => (width, Some(width), None),
+                // A nearly-zero line asks Parley to break at every legal
+                // opportunity while retaining each unbreakable item's width.
+                AlgorithmAvailableSpace::MinContent => {
+                    (0.01, None, Some(IntrinsicSizeKind::MinContent))
                 },
-                ..Style::default()
-            },
-            &children,
-        )
-        .map_err(taffy_error)?;
+                // An infinite line suppresses wrapping and yields max-content.
+                AlgorithmAvailableSpace::MaxContent => {
+                    (f32::INFINITY, None, Some(IntrinsicSizeKind::MaxContent))
+                },
+            };
+            let intrinsic_width = intrinsic_kind.and_then(|kind| {
+                let owner = context.owner?;
+                let query = IntrinsicSizeQuery::new(owner, LogicalAxis::Inline, kind);
+                intrinsic_sizes.get(query).or_else(|| {
+                    let min_content = measure_inline_context(
+                        text,
+                        dom,
+                        styles,
+                        &boxes,
+                        atomic,
+                        context,
+                        InlineMeasureGeometry {
+                            width: 0.01,
+                            line_constraints: None,
+                        },
+                    )
+                    .0;
+                    let max_content = measure_inline_context(
+                        text,
+                        dom,
+                        styles,
+                        &boxes,
+                        atomic,
+                        context,
+                        InlineMeasureGeometry {
+                            width: f32::INFINITY,
+                            line_constraints: None,
+                        },
+                    )
+                    .0;
+                    let sizes = IntrinsicSizes::new(min_content, max_content)?;
+                    let result = sizes.get(kind);
+                    intrinsic_sizes.insert(owner, LogicalAxis::Inline, sizes);
+                    Some(result)
+                })
+            });
+            let requested_width = known.width.or(intrinsic_width).unwrap_or(query_width);
+            let (measured_width, measured_height) = measure_inline_context(
+                text,
+                dom,
+                styles,
+                &boxes,
+                atomic,
+                context,
+                InlineMeasureGeometry {
+                    width: requested_width,
+                    line_constraints: intrinsic_kind
+                        .is_none()
+                        .then_some(line_constraints)
+                        .flatten(),
+                },
+            );
+            AlgorithmSize::new(
+                known.width.unwrap_or_else(|| {
+                    intrinsic_width.unwrap_or_else(|| {
+                        definite_cap.map_or(measured_width, |cap| measured_width.min(cap.max(0.0)))
+                    })
+                }),
+                known.height.unwrap_or(measured_height),
+            )
+        },
+    );
+    let (buckram_blocks, taffy_blocks) = state.tree.block_algorithm_counts();
 
-    state
-        .tree
-        .compute_layout_with_measure(
-            root,
-            Size {
-                width: AvailableSpace::Definite(viewport_width),
-                height: AvailableSpace::Definite(viewport_height),
-            },
-            |known, available, _, context, _| {
-                let Some(context) = context else {
-                    return Size::ZERO;
-                };
-                let available_width = match available.width {
-                    AvailableSpace::Definite(width) => width,
-                    AvailableSpace::MinContent => 0.0,
-                    // The preliminary pass supplies a scalar estimate in
-                    // `context.width`; using it for max-content would freeze
-                    // the second pass at that estimate instead of asking
-                    // Parley for the shaped intrinsic width.
-                    AvailableSpace::MaxContent => viewport_width,
-                };
-                let measured = text.measure_inline_group(
-                    dom,
-                    styles,
-                    preliminary,
-                    &context
-                        .roots
-                        .iter()
-                        .map(|source| match source {
-                            LoweringSource::Box(box_id) => boxes.origin_node(*box_id),
-                            LoweringSource::Suppressed(id) => Some(boxes.suppressed(*id).node),
-                            LoweringSource::Boundary => None,
-                        })
-                        .flatten()
-                        .collect::<Vec<_>>(),
-                    &context.style,
-                    known.width.unwrap_or(available_width),
-                );
-                let (measured_width, measured_height) =
-                    measured.unwrap_or((context.width, context.height));
-                Size {
-                    width: known
-                        .width
-                        .unwrap_or(measured_width.min(available_width.max(0.0))),
-                    height: known.height.unwrap_or(measured_height),
-                }
-            },
-        )
-        .map_err(taffy_error)?;
-
-    let mut legacy = LegacyFragmentPlane::default();
+    let mut text_frame = TextFrame::default();
     let mut fragments = FragmentTree::default();
+    let mut output = FragmentOutput {
+        fragments: &mut fragments,
+    };
     collect_inline_fragments(
         &state.tree,
-        &state.sources,
         &boxes,
         root,
-        Point { x: 0.0, y: 0.0 },
-        None,
-        &mut legacy,
-        &mut fragments,
+        FragmentCursor {
+            origin: Point { x: 0.0, y: 0.0 },
+            parent: None,
+        },
+        &mut output,
+        &mut text_frame,
+        styles,
     )?;
-    for (id, fragment) in &preliminary.fragments {
-        let Some(style) = styles.get(*id) else {
-            continue;
-        };
-        if style.display == CssDisplay::InlineBlock
-            || (style.display == CssDisplay::Inline && is_replaced_element(dom, *id))
-        {
-            legacy.atomic_fragments.insert(*id, *fragment);
-        }
-    }
-    for (id, fragment) in &preliminary.fragments {
-        let Some(style) = styles.get(*id) else {
-            continue;
-        };
-        if style.display != CssDisplay::Inline && has_inline_block_ancestor(dom, styles, *id) {
-            // The inline formatting pass treats an inline-block as atomic,
-            // so retain its nested block descendants from the preliminary
-            // tree for the paint walk.
-            let mut retained = *fragment;
-            if let Some(ancestor) = dom.parent(*id).filter(|parent| {
-                styles
-                    .get(*parent)
-                    .is_some_and(|style| style.display == CssDisplay::InlineBlock)
-            }) && first_flow_child(dom, styles, ancestor) == Some(*id)
-                && let Some(parent_fragment) = legacy.atomic_fragments.get(&ancestor)
-            {
-                retained.x = parent_fragment.x;
-                retained.y = parent_fragment.y;
-            }
-            legacy.fragments.insert(*id, retained);
-            if let Some(box_id) = boxes.principal_box(*id)
-                && fragments.fragment_ids_for_box(box_id).is_empty()
-            {
-                let parent = boxes[box_id].parent().and_then(|parent_box| {
-                    fragments.fragment_ids_for_box(parent_box).last().copied()
-                });
-                fragments.push(
-                    TreeFragment::from_horizontal_physical(box_id, retained),
-                    parent,
-                    parent,
-                );
-            }
-        }
-    }
     drop(state);
-    let atomic_fragments = legacy.atomic_fragments.clone();
-    Ok(LayoutPass {
-        layout: LiveryLayout::new(
-            LayoutResult::new(boxes.into_tree(), fragments),
-            atomic_fragments,
-        ),
-        legacy,
-    })
+    merge_atomic_subtrees(atomic, &boxes, &mut fragments);
+    Ok(LiveryLayout::new(
+        LayoutResult::new(boxes.into_tree(), fragments),
+        Some(text_frame),
+        BlockAlgorithmCounts {
+            buckram: buckram_blocks,
+            taffy: taffy_blocks,
+        },
+    ))
 }
 
 impl<D> InlineBuildState<'_, D>
@@ -848,92 +1130,12 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    fn build_source(
-        &mut self,
-        source: LoweringSource,
-        inherited: Option<&ComputedValues>,
-        parent_font_size: f32,
-    ) -> Result<Option<NodeId>, LayoutError> {
-        match source {
-            LoweringSource::Box(box_id) => self.build_box(box_id, inherited, parent_font_size),
-            LoweringSource::Suppressed(id) => {
-                self.build_suppressed(id, inherited, parent_font_size)
-            },
-            LoweringSource::Boundary => Ok(None),
-        }
-    }
-
-    fn build_suppressed(
-        &mut self,
-        id: SuppressedId,
-        inherited: Option<&ComputedValues>,
-        parent_font_size: f32,
-    ) -> Result<Option<NodeId>, LayoutError> {
-        let source = self.boxes.suppressed(id);
-        let node = source.node;
-        let child_sources = source.children.clone();
-        match self.dom.kind(node) {
-            NodeKind::Document | NodeKind::DocumentFragment => {
-                let children = child_sources
-                    .into_iter()
-                    .filter_map(|child| {
-                        self.build_source(child, inherited, parent_font_size)
-                            .transpose()
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                if children.is_empty() {
-                    Ok(None)
-                } else if children.len() == 1 {
-                    Ok(children.into_iter().next())
-                } else {
-                    self.tree
-                        .new_with_children(
-                            Style {
-                                display: Display::Block,
-                                ..Style::default()
-                            },
-                            &children,
-                        )
-                        .map(Some)
-                        .map_err(taffy_error)
-                }
-            },
-            NodeKind::Element => {
-                let computed = self.styles.get(node).cloned().unwrap_or_default();
-                let font_size = font_size_px(&computed.font_size, parent_font_size);
-                let children = self.build_flow_children(child_sources, &computed, font_size)?;
-                let mut taffy_style = to_taffy_style(&computed, font_size);
-                apply_replaced_image_size(
-                    &mut taffy_style,
-                    self.dom,
-                    node,
-                    &computed,
-                    self.image_sources,
-                    font_size,
-                );
-                let taffy_node = self
-                    .tree
-                    .new_with_children(taffy_style, &children)
-                    .map_err(taffy_error)?;
-                self.sources
-                    .insert(taffy_node, vec![LoweringSource::Suppressed(id)]);
-                Ok(Some(taffy_node))
-            },
-            NodeKind::Text => {
-                let style = inherited.cloned().unwrap_or_default();
-                self.build_inline_group(&[LoweringSource::Suppressed(id)], &style, parent_font_size)
-                    .map(Some)
-            },
-            _ => Ok(None),
-        }
-    }
-
     fn build_box(
         &mut self,
         box_id: BoxId,
         inherited: Option<&ComputedValues>,
         parent_font_size: f32,
-    ) -> Result<Option<NodeId>, LayoutError> {
+    ) -> Result<Option<AlgorithmNodeId>, LayoutError> {
         match self.boxes[box_id].origin {
             BoxOrigin::Element(node) => {
                 let computed = self.styles.get(node).cloned().unwrap_or_default();
@@ -950,24 +1152,6 @@ where
                 }
                 let children = self.build_children(box_id, &inline_container_style, font_size)?;
                 let mut taffy_style = to_taffy_style(&computed, font_size);
-                // An inline box that contains a block box is split around the
-                // block in CSS's anonymous-block construction.  The wrapper's
-                // border is retained by the paint walk, but it must not enter
-                // the block child's flow geometry here.
-                if computed.display == CssDisplay::Inline
-                    && self.boxes[box_id].children().iter().any(|child| {
-                        let Some(child_node) = self.boxes.origin_node(*child) else {
-                            return false;
-                        };
-                        !is_inline(self.dom, self.styles, child_node)
-                            && !self
-                                .styles
-                                .get(child_node)
-                                .is_some_and(|child_style| child_style.display == CssDisplay::None)
-                    })
-                {
-                    taffy_style.border = Rect::zero();
-                }
                 apply_replaced_image_size(
                     &mut taffy_style,
                     self.dom,
@@ -976,19 +1160,33 @@ where
                     self.image_sources,
                     font_size,
                 );
-                let node = self
-                    .tree
-                    .new_with_children(taffy_style, &children)
-                    .map_err(taffy_error)?;
-                self.sources.insert(node, vec![LoweringSource::Box(box_id)]);
+                let block_style = to_block_style(self.boxes, box_id, &computed, font_size);
+                let node = self.tree.new_with_children_and_block_style(
+                    algorithm_kind(&self.boxes[box_id], children.is_empty()),
+                    block_style,
+                    taffy_style,
+                    &children,
+                    vec![box_id],
+                );
                 Ok(Some(node))
             },
             BoxOrigin::Text(_) => {
                 let style = inherited.cloned().unwrap_or_default();
-                self.build_inline_group(&[LoweringSource::Box(box_id)], &style, parent_font_size)
+                self.build_inline_group(Some(box_id), &[box_id], &style, parent_font_size)
                     .map(Some)
             },
-            BoxOrigin::Pseudo { .. } | BoxOrigin::Anonymous { .. } => Ok(None),
+            BoxOrigin::Pseudo { .. } | BoxOrigin::Anonymous { .. } => {
+                let computed = inherited.cloned().unwrap_or_default();
+                let children = self.build_children(box_id, &computed, parent_font_size)?;
+                let node = self.tree.new_with_children_and_block_style(
+                    algorithm_kind(&self.boxes[box_id], children.is_empty()),
+                    anonymous_block_style(self.boxes, box_id),
+                    anonymous_taffy_style(&self.boxes[box_id]),
+                    &children,
+                    vec![box_id],
+                );
+                Ok(Some(node))
+            },
         }
     }
 
@@ -997,9 +1195,9 @@ where
         parent: BoxId,
         parent_style: &ComputedValues,
         parent_font_size: f32,
-    ) -> Result<Vec<NodeId>, LayoutError> {
+    ) -> Result<Vec<AlgorithmNodeId>, LayoutError> {
         // A `display: table` box takes its flattened cells directly, matching
-        // the preliminary pass.
+        // the precomputed atomic subtree.
         if parent_style.display == CssDisplay::Table
             && self
                 .boxes
@@ -1019,15 +1217,14 @@ where
                 let Some(node) = self.build_box(cell, Some(parent_style), parent_font_size)? else {
                     continue;
                 };
-                let mut style = self.tree.style(node).map_err(taffy_error)?.clone();
-                place_table_cell(&mut style, row, column);
-                self.tree.set_style(node, style).map_err(taffy_error)?;
+                place_table_cell(self.tree.style_mut(node), row, column);
                 children.push(node);
             }
             return Ok(children);
         }
         self.build_flow_children(
-            self.boxes.lowering_children(parent).to_vec(),
+            parent,
+            self.boxes[parent].children().to_vec(),
             parent_style,
             parent_font_size,
         )
@@ -1035,34 +1232,35 @@ where
 
     fn build_flow_children(
         &mut self,
-        child_ids: Vec<LoweringSource>,
+        parent: BoxId,
+        child_ids: Vec<BoxId>,
         parent_style: &ComputedValues,
         parent_font_size: f32,
-    ) -> Result<Vec<NodeId>, LayoutError> {
+    ) -> Result<Vec<AlgorithmNodeId>, LayoutError> {
+        let intrinsic_owner = intrinsic_owner_for_flow_children(self.boxes, parent, &child_ids);
         let mut children = Vec::new();
         let mut inline_group = Vec::new();
         for child in child_ids {
-            if self
-                .source_node(child)
-                .is_some_and(|node| is_inline(self.dom, self.styles, node))
-            {
+            if box_is_inline(self.boxes, child) {
                 inline_group.push(child);
                 continue;
             }
             if !self.inline_group_is_blank(&inline_group, parent_style) {
                 children.push(self.build_inline_group(
+                    intrinsic_owner,
                     &inline_group,
                     parent_style,
                     parent_font_size,
                 )?);
             }
             inline_group.clear();
-            if let Some(node) = self.build_source(child, Some(parent_style), parent_font_size)? {
+            if let Some(node) = self.build_box(child, Some(parent_style), parent_font_size)? {
                 children.push(node);
             }
         }
         if !self.inline_group_is_blank(&inline_group, parent_style) {
             children.push(self.build_inline_group(
+                intrinsic_owner,
                 &inline_group,
                 parent_style,
                 parent_font_size,
@@ -1081,107 +1279,57 @@ where
     /// one position.
     ///
     /// **Deliberately scoped to those two container types.** White-space
-    /// processing removes the run in block flow too, and the preliminary pass
-    /// already drops it there, but the text-measuring pass's extra boxes are
-    /// load-bearing for the current table and inline-formatting emulation:
-    /// removing them there measured -131 files on CSS2 and -18 on css-tables
-    /// against +62 on css-grid (2026-07-26). Widening this predicate is the
-    /// right end state, and it is gated on that emulation being fixed first,
-    /// not on the rule being wrong.
-    fn inline_group_is_blank(
-        &self,
-        roots: &[LoweringSource],
-        parent_style: &ComputedValues,
-    ) -> bool {
-        if !matches!(parent_style.display, CssDisplay::Flex | CssDisplay::Grid) {
-            return roots.is_empty();
-        }
-        if matches!(
-            parent_style.white_space_collapse,
-            WhiteSpaceCollapse::Preserve | WhiteSpaceCollapse::BreakSpaces
-        ) {
-            return roots.is_empty();
-        }
-        roots.iter().all(|root| {
-            self.source_node(*root).is_some_and(|node| {
-                self.dom.kind(node) == NodeKind::Text
-                    && self.dom.text(node).is_some_and(is_collapsible_whitespace)
-            })
-        })
+    /// Buckram has already removed whitespace-only anonymous items before
+    /// this lowering step.
+    fn inline_group_is_blank(&self, roots: &[BoxId], _parent_style: &ComputedValues) -> bool {
+        roots.is_empty()
     }
 
     fn build_inline_group(
         &mut self,
-        roots: &[LoweringSource],
+        owner: Option<BoxId>,
+        roots: &[BoxId],
         parent_style: &ComputedValues,
-        parent_font_size: f32,
-    ) -> Result<NodeId, LayoutError> {
-        let mixed_inline_root = roots.iter().copied().find(|root| {
-            self.source_node(*root).is_some_and(|node| {
-                self.dom.kind(node) == NodeKind::Element
-                    && self
-                        .styles
-                        .get(node)
-                        .is_some_and(|style| style.display == CssDisplay::Inline)
-                    && self
-                        .dom
-                        .dom_children(node)
-                        .any(|child| !is_inline(self.dom, self.styles, child))
-            })
-        });
-        if let Some(root) = mixed_inline_root
-            && roots.iter().all(|candidate| {
-                *candidate == root
-                    || self.source_node(*candidate).is_some_and(|node| {
-                        self.dom.kind(node) == NodeKind::Text
-                            && self
-                                .dom
-                                .text(node)
-                                .is_some_and(|text| text.trim().is_empty())
-                    })
-            })
-        {
-            return self
-                .build_source(root, Some(parent_style), parent_font_size)?
-                .ok_or_else(|| LayoutError("inline block child disappeared".into()));
-        }
+        _parent_font_size: f32,
+    ) -> Result<AlgorithmNodeId, LayoutError> {
         let width = roots
             .iter()
-            .filter_map(|source| self.source_node(*source))
-            .filter_map(|node| self.preliminary.get(node))
+            .filter_map(|box_id| self.atomic.get(*box_id))
             .map(|fragment| fragment.width)
             .sum();
         let height = roots
             .iter()
-            .filter_map(|source| self.source_node(*source))
-            .filter_map(|node| self.preliminary.get(node))
+            .filter_map(|box_id| self.atomic.get(*box_id))
             .map(|fragment| fragment.height)
             .fold(0.0_f32, f32::max);
-        let node = self
-            .tree
-            .new_leaf_with_context(
-                Style {
-                    display: Display::Block,
-                    ..Style::default()
-                },
-                InlineMeasure {
-                    roots: roots.to_vec(),
-                    style: parent_style.clone(),
-                    width,
-                    height,
-                },
-            )
-            .map_err(taffy_error)?;
-        self.sources.insert(node, roots.to_vec());
-        Ok(node)
-    }
-
-    fn source_node(&self, source: LoweringSource) -> Option<D::NodeId> {
-        match source {
-            LoweringSource::Box(box_id) => self.boxes.origin_node(box_id),
-            LoweringSource::Suppressed(id) => Some(self.boxes.suppressed(id).node),
-            LoweringSource::Boundary => None,
+        let flow = roots
+            .first()
+            .map_or(FlowAxes::HORIZONTAL_LTR, |root| self.boxes[*root].flow);
+        let containing_flow = roots
+            .first()
+            .and_then(|root| self.boxes[*root].parent())
+            .map_or(flow, |parent| self.boxes[parent].flow);
+        let node = self.tree.new_leaf_with_context_and_block_style(
+            BlockStyle::anonymous(flow, containing_flow),
+            Style {
+                display: Display::Block,
+                ..Style::default()
+            },
+            InlineMeasure {
+                owner,
+                roots: roots.to_vec(),
+                style: parent_style.clone(),
+                width,
+                height,
+                layouts: Vec::new(),
+                placement_constraints: None,
+            },
+            roots.to_vec(),
+        );
+        if parent_style.text_wrap_mode == livery::values::TextWrapMode::Wrap {
+            self.tree.enable_float_line_constraints(node);
         }
+        Ok(node)
     }
 }
 
@@ -1190,156 +1338,13 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    fn build_source(
-        &mut self,
-        source: LoweringSource,
-        inherited: Option<&ComputedValues>,
-        parent_font_size: f32,
-        containing_size: (Option<f32>, Option<f32>),
-    ) -> Result<Option<NodeId>, LayoutError> {
-        match source {
-            LoweringSource::Box(box_id) => {
-                self.build_box(box_id, inherited, parent_font_size, containing_size)
-            },
-            LoweringSource::Suppressed(id) => {
-                self.build_suppressed(id, inherited, parent_font_size, containing_size)
-            },
-            LoweringSource::Boundary => Ok(None),
-        }
-    }
-
-    fn build_suppressed(
-        &mut self,
-        id: SuppressedId,
-        inherited: Option<&ComputedValues>,
-        parent_font_size: f32,
-        containing_size: (Option<f32>, Option<f32>),
-    ) -> Result<Option<NodeId>, LayoutError> {
-        let source = self.boxes.suppressed(id);
-        let node = source.node;
-        let child_sources = source.children.clone();
-        match self.dom.kind(node) {
-            NodeKind::Document | NodeKind::DocumentFragment => {
-                let children = child_sources
-                    .into_iter()
-                    .filter_map(|child| {
-                        self.build_source(child, inherited, parent_font_size, containing_size)
-                            .transpose()
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                if children.is_empty() {
-                    Ok(None)
-                } else if children.len() == 1 {
-                    Ok(children.into_iter().next())
-                } else {
-                    self.tree
-                        .new_with_children(
-                            Style {
-                                display: Display::Block,
-                                ..Style::default()
-                            },
-                            &children,
-                        )
-                        .map(Some)
-                        .map_err(taffy_error)
-                }
-            },
-            NodeKind::Element => {
-                let computed = self.styles.get(node).cloned().unwrap_or_default();
-                let font_size = font_size_px(&computed.font_size, parent_font_size);
-                let child_containing_size =
-                    resolved_child_containing_size(&computed, font_size, containing_size);
-                let children = child_sources
-                    .into_iter()
-                    .filter_map(|child| {
-                        self.build_source(child, Some(&computed), font_size, child_containing_size)
-                            .transpose()
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                let mut taffy_style = to_taffy_style(&computed, font_size);
-                taffy_style.size.width =
-                    dimension_with_basis(computed.width, font_size, containing_size.0);
-                taffy_style.size.height =
-                    dimension_with_basis(computed.height, font_size, containing_size.1);
-                taffy_style.min_size.width =
-                    dimension_with_basis(computed.min_width, font_size, containing_size.0);
-                taffy_style.min_size.height =
-                    dimension_with_basis(computed.min_height, font_size, containing_size.1);
-                taffy_style.max_size.width =
-                    dimension_with_basis(computed.max_width, font_size, containing_size.0);
-                taffy_style.max_size.height =
-                    dimension_with_basis(computed.max_height, font_size, containing_size.1);
-                apply_replaced_image_size(
-                    &mut taffy_style,
-                    self.dom,
-                    node,
-                    &computed,
-                    self.image_sources,
-                    font_size,
-                );
-                let taffy_node = self
-                    .tree
-                    .new_with_children(taffy_style, &children)
-                    .map_err(taffy_error)?;
-                self.sources
-                    .insert(taffy_node, LoweringSource::Suppressed(id));
-                Ok(Some(taffy_node))
-            },
-            NodeKind::Text => {
-                let text = self.dom.text(node).unwrap_or("");
-                let preserves_whitespace = inherited.is_some_and(|style| {
-                    matches!(
-                        style.white_space_collapse,
-                        WhiteSpaceCollapse::Preserve | WhiteSpaceCollapse::BreakSpaces
-                    )
-                });
-                if text.is_empty() || (!preserves_whitespace && is_collapsible_whitespace(text)) {
-                    return Ok(None);
-                }
-                let line_height = inherited
-                    .map(|style| line_height_px(&style.line_height, parent_font_size))
-                    .unwrap_or(parent_font_size * 1.2);
-                let width = if preserves_whitespace {
-                    text.lines()
-                        .map(|line| line.chars().count())
-                        .max()
-                        .unwrap_or(0)
-                } else {
-                    collapsed_word_width(text)
-                } as f32
-                    * parent_font_size
-                    * 0.6;
-                let line_count = if preserves_whitespace {
-                    text.lines().count().max(1)
-                } else {
-                    1
-                };
-                let height = line_count as f32 * line_height;
-                let taffy_node = self
-                    .tree
-                    .new_leaf_with_context(
-                        Style {
-                            display: Display::Block,
-                            ..Style::default()
-                        },
-                        TextMeasure { width, height },
-                    )
-                    .map_err(taffy_error)?;
-                self.sources
-                    .insert(taffy_node, LoweringSource::Suppressed(id));
-                Ok(Some(taffy_node))
-            },
-            _ => Ok(None),
-        }
-    }
-
     fn build_box(
         &mut self,
         box_id: BoxId,
         inherited: Option<&ComputedValues>,
         parent_font_size: f32,
         containing_size: (Option<f32>, Option<f32>),
-    ) -> Result<Option<NodeId>, LayoutError> {
+    ) -> Result<Option<AlgorithmNodeId>, LayoutError> {
         match self.boxes[box_id].origin {
             BoxOrigin::Element(node) => {
                 let computed = self.styles.get(node).cloned().unwrap_or_default();
@@ -1377,20 +1382,16 @@ where
                         else {
                             continue;
                         };
-                        let mut style = self.tree.style(taffy_node).map_err(taffy_error)?.clone();
-                        place_table_cell(&mut style, row, column);
-                        self.tree
-                            .set_style(taffy_node, style)
-                            .map_err(taffy_error)?;
+                        place_table_cell(self.tree.style_mut(taffy_node), row, column);
                         children.push(taffy_node);
                     }
                     children
                 } else {
-                    self.boxes
-                        .lowering_children(box_id)
+                    self.boxes[box_id]
+                        .children()
                         .iter()
                         .filter_map(|child| {
-                            self.build_source(
+                            self.build_box(
                                 *child,
                                 Some(&computed),
                                 font_size,
@@ -1434,11 +1435,14 @@ where
                     self.image_sources,
                     font_size,
                 );
-                let node = self
-                    .tree
-                    .new_with_children(taffy_style, &children)
-                    .map_err(taffy_error)?;
-                self.sources.insert(node, LoweringSource::Box(box_id));
+                let block_style = to_block_style(self.boxes, box_id, &computed, font_size);
+                let node = self.tree.new_with_children_and_block_style(
+                    algorithm_kind(&self.boxes[box_id], children.is_empty()),
+                    block_style,
+                    taffy_style,
+                    &children,
+                    Some(box_id),
+                );
                 Ok(Some(node))
             },
             BoxOrigin::Text(node) => {
@@ -1472,144 +1476,478 @@ where
                     1
                 };
                 let height = line_count as f32 * line_height;
-                let node = self
-                    .tree
-                    .new_leaf_with_context(
-                        Style {
-                            display: Display::Block,
-                            ..Style::default()
-                        },
-                        TextMeasure { width, height },
-                    )
-                    .map_err(taffy_error)?;
-                self.sources.insert(node, LoweringSource::Box(box_id));
+                let node = self.tree.new_leaf_with_context_and_block_style(
+                    anonymous_block_style(self.boxes, box_id),
+                    Style {
+                        display: Display::Block,
+                        ..Style::default()
+                    },
+                    TextMeasure { width, height },
+                    Some(box_id),
+                );
                 Ok(Some(node))
             },
-            BoxOrigin::Pseudo { .. } | BoxOrigin::Anonymous { .. } => Ok(None),
+            BoxOrigin::Pseudo { .. } | BoxOrigin::Anonymous { .. } => {
+                let computed = inherited.cloned().unwrap_or_default();
+                let children = self.boxes[box_id]
+                    .children()
+                    .iter()
+                    .filter_map(|child| {
+                        self.build_box(*child, Some(&computed), parent_font_size, containing_size)
+                            .transpose()
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let node = self.tree.new_with_children_and_block_style(
+                    algorithm_kind(&self.boxes[box_id], children.is_empty()),
+                    anonymous_block_style(self.boxes, box_id),
+                    anonymous_taffy_style(&self.boxes[box_id]),
+                    &children,
+                    Some(box_id),
+                );
+                Ok(Some(node))
+            },
         }
     }
 }
 
-fn collect_fragments<Id>(
-    tree: &TaffyTree<TextMeasure>,
-    sources: &HashMap<NodeId, LoweringSource>,
+struct FragmentOutput<'a> {
+    fragments: &'a mut FragmentTree,
+}
+
+#[derive(Clone, Copy)]
+struct FragmentCursor {
+    origin: Point<f32>,
+    parent: Option<FragmentId>,
+}
+
+fn intrinsic_owner_for_flow_children<Id>(
     boxes: &GeneratedBoxTree<Id>,
-    node: NodeId,
+    parent: BoxId,
+    children: &[BoxId],
+) -> Option<BoxId>
+where
+    Id: Copy + Eq + Hash,
+{
+    let mut groups = 0;
+    let mut inside_group = false;
+    for child in children {
+        if box_is_inline(boxes, *child) {
+            if !inside_group {
+                groups += 1;
+                inside_group = true;
+            }
+        } else {
+            inside_group = false;
+        }
+    }
+    (groups == 1).then_some(parent)
+}
+
+fn box_is_inline<Id>(boxes: &GeneratedBoxTree<Id>, box_id: BoxId) -> bool
+where
+    Id: Copy + Eq + Hash,
+{
+    let css_box = &boxes[box_id];
+    css_box.display.outside == Some(DisplayOutside::Inline)
+        && css_box.float == FloatSide::None
+        && matches!(
+            css_box.positioning,
+            PositioningScheme::Static | PositioningScheme::Relative | PositioningScheme::Sticky
+        )
+}
+
+fn anonymous_block_style<Id>(boxes: &GeneratedBoxTree<Id>, box_id: BoxId) -> BlockStyle
+where
+    Id: Copy + Eq + Hash,
+{
+    let flow = boxes[box_id].flow;
+    let containing_flow = boxes[box_id]
+        .parent()
+        .map_or(flow, |parent| boxes[parent].flow);
+    BlockStyle::anonymous(flow, containing_flow)
+}
+
+fn to_block_style<Id>(
+    boxes: &GeneratedBoxTree<Id>,
+    box_id: BoxId,
+    computed: &ComputedValues,
+    font_size: f32,
+) -> BlockStyle
+where
+    Id: Copy + Eq + Hash,
+{
+    let css_box = &boxes[box_id];
+    let containing_flow = css_box
+        .parent()
+        .map_or(FlowAxes::HORIZONTAL_LTR, |parent| boxes[parent].flow);
+    let mut size_containment = match computed.container_type {
+        ContainerType::Normal => BlockDimensions::new(false, false),
+        ContainerType::InlineSize if computed.writing_mode.is_vertical() => {
+            BlockDimensions::new(false, true)
+        },
+        ContainerType::InlineSize => BlockDimensions::new(true, false),
+        ContainerType::Size => BlockDimensions::new(true, true),
+    };
+    if computed.contain.has_size() {
+        size_containment = BlockDimensions::new(true, true);
+    } else if computed.contain.has_inline_size() {
+        if computed.writing_mode.is_vertical() {
+            size_containment.height = true;
+        } else {
+            size_containment.width = true;
+        }
+    }
+    let establishes_bfc = matches!(
+        css_box.display.inside,
+        Some(DisplayInside::FlowRoot | DisplayInside::Flex | DisplayInside::Grid)
+    ) || matches!(
+        computed.display,
+        CssDisplay::InlineBlock
+            | CssDisplay::Table
+            | CssDisplay::TableCell
+            | CssDisplay::TableCaption
+    ) || matches!(
+        computed.position,
+        CssPosition::Absolute | CssPosition::Fixed
+    ) || computed.float != CssFloat::None
+        || computed.overflow_x != CssOverflow::Visible
+        || computed.overflow_y != CssOverflow::Visible
+        || computed.contain.has_layout()
+        || computed.contain.has_paint();
+
+    BlockStyle {
+        flow: css_box.flow,
+        containing_flow,
+        size: BlockDimensions::new(
+            block_size_value(computed.width, font_size),
+            block_size_value(computed.height, font_size),
+        ),
+        min_size: BlockDimensions::new(
+            block_size_value(computed.min_width, font_size),
+            block_size_value(computed.min_height, font_size),
+        ),
+        max_size: BlockDimensions::new(
+            block_size_value(computed.max_width, font_size),
+            block_size_value(computed.max_height, font_size),
+        ),
+        margin: PhysicalSides {
+            top: block_margin(computed.margin_top, font_size),
+            right: block_margin(computed.margin_right, font_size),
+            bottom: block_margin(computed.margin_bottom, font_size),
+            left: block_margin(computed.margin_left, font_size),
+        },
+        padding: PhysicalSides {
+            top: flow_length(computed.padding_top.0, font_size),
+            right: flow_length(computed.padding_right.0, font_size),
+            bottom: flow_length(computed.padding_bottom.0, font_size),
+            left: flow_length(computed.padding_left.0, font_size),
+        },
+        border: PhysicalSides {
+            top: border_width_px(
+                computed.border_top_style,
+                computed.border_top_width,
+                font_size,
+            ),
+            right: border_width_px(
+                computed.border_right_style,
+                computed.border_right_width,
+                font_size,
+            ),
+            bottom: border_width_px(
+                computed.border_bottom_style,
+                computed.border_bottom_width,
+                font_size,
+            ),
+            left: border_width_px(
+                computed.border_left_style,
+                computed.border_left_width,
+                font_size,
+            ),
+        },
+        box_sizing: match computed.box_sizing {
+            CssBoxSizing::ContentBox => BlockBoxSizing::ContentBox,
+            CssBoxSizing::BorderBox => BlockBoxSizing::BorderBox,
+        },
+        position: match computed.position {
+            CssPosition::Static => BuckramBlockPosition::Static,
+            CssPosition::Relative => BuckramBlockPosition::Relative,
+            CssPosition::Absolute => BuckramBlockPosition::Absolute,
+            CssPosition::Fixed => BuckramBlockPosition::Fixed,
+            CssPosition::Sticky => BuckramBlockPosition::Sticky,
+        },
+        float: match computed.float {
+            CssFloat::None => FloatSide::None,
+            CssFloat::Left => FloatSide::Left,
+            CssFloat::Right => FloatSide::Right,
+        },
+        clear: match computed.clear {
+            CssClear::None => ClearSide::None,
+            CssClear::Left => ClearSide::Left,
+            CssClear::Right => ClearSide::Right,
+            CssClear::Both => ClearSide::Both,
+        },
+        establishes_bfc,
+        shrink_to_fit: matches!(computed.width, CssSize::Auto)
+            && (computed.display == CssDisplay::InlineBlock || computed.float != CssFloat::None),
+        replaced: css_box.replaced,
+        aspect_ratio: match computed.aspect_ratio {
+            AspectRatio::Auto => None,
+            AspectRatio::Ratio(value) => Some(value),
+        },
+        size_containment,
+        has_nonlinear_lengths: block_style_has_nonlinear_lengths(computed),
+        is_root_element: css_box.parent().is_none()
+            && matches!(css_box.origin, BoxOrigin::Element(_)),
+    }
+}
+
+fn block_size_value(value: CssSize, em: f32) -> BlockSizeValue {
+    match value {
+        CssSize::Auto => BlockSizeValue::Auto,
+        CssSize::None => BlockSizeValue::None,
+        CssSize::MinContent => BlockSizeValue::MinContent,
+        CssSize::MaxContent => BlockSizeValue::MaxContent,
+        CssSize::FitContent(value) => BlockSizeValue::FitContent(flow_length(value, em)),
+        CssSize::Value(value) => BlockSizeValue::Length(flow_length(value, em)),
+    }
+}
+
+fn block_margin(value: Margin, em: f32) -> FlowLengthAuto {
+    match value {
+        Margin::Auto => FlowLengthAuto::Auto,
+        Margin::Value(value) => FlowLengthAuto::Value(flow_length(value, em)),
+    }
+}
+
+fn flow_length(value: CssLengthPercentage, em: f32) -> FlowLength {
+    let px = absolute_length_percentage(value, em, 16.0, 0.0);
+    let with_unit_basis = absolute_length_percentage(value, em, 16.0, 1.0);
+    FlowLength {
+        px,
+        percentage: with_unit_basis - px,
+    }
+}
+
+fn block_style_has_nonlinear_lengths(computed: &ComputedValues) -> bool {
+    let size_has_math = |size| match size {
+        CssSize::FitContent(value) | CssSize::Value(value) => length_has_math(value),
+        CssSize::Auto | CssSize::None | CssSize::MinContent | CssSize::MaxContent => false,
+    };
+    let margin_has_math = |margin| match margin {
+        Margin::Value(value) => length_has_math(value),
+        Margin::Auto => false,
+    };
+
+    [
+        computed.width,
+        computed.height,
+        computed.min_width,
+        computed.min_height,
+        computed.max_width,
+        computed.max_height,
+    ]
+    .into_iter()
+    .any(size_has_math)
+        || [
+            computed.margin_top,
+            computed.margin_right,
+            computed.margin_bottom,
+            computed.margin_left,
+        ]
+        .into_iter()
+        .any(margin_has_math)
+        || [
+            computed.padding_top.0,
+            computed.padding_right.0,
+            computed.padding_bottom.0,
+            computed.padding_left.0,
+        ]
+        .into_iter()
+        .any(length_has_math)
+}
+
+fn length_has_math(value: CssLengthPercentage) -> bool {
+    matches!(value, CssLengthPercentage::Math(_))
+}
+
+fn algorithm_kind<Id>(css_box: &CssBox<Id>, leaf: bool) -> AlgorithmKind {
+    if leaf {
+        return AlgorithmKind::Leaf;
+    }
+    match (css_box.formatting_context, css_box.display.internal_table) {
+        (_, Some(InternalTableRole::Row)) => AlgorithmKind::Flex,
+        (Some(FormattingContextKind::Flex), _) => AlgorithmKind::Flex,
+        (Some(FormattingContextKind::Grid | FormattingContextKind::Table), _) => {
+            AlgorithmKind::Grid
+        },
+        _ => AlgorithmKind::Block,
+    }
+}
+
+fn anonymous_taffy_style<Id>(css_box: &CssBox<Id>) -> Style {
+    let display = match (css_box.formatting_context, css_box.display.internal_table) {
+        (_, Some(InternalTableRole::Row)) => Display::Flex,
+        (Some(FormattingContextKind::Flex), _) => Display::Flex,
+        (Some(FormattingContextKind::Grid | FormattingContextKind::Table), _) => Display::Grid,
+        _ => Display::Block,
+    };
+    Style {
+        display,
+        ..Style::default()
+    }
+}
+
+fn legacy_origin_node<Id>(boxes: &GeneratedBoxTree<Id>, box_id: BoxId) -> Option<Id>
+where
+    Id: Copy + Eq + Hash,
+{
+    match boxes[box_id].origin {
+        BoxOrigin::Element(node) if boxes.principal_box(node) == Some(box_id) => Some(node),
+        BoxOrigin::Text(node) => Some(node),
+        BoxOrigin::Element(_) | BoxOrigin::Pseudo { .. } | BoxOrigin::Anonymous { .. } => None,
+    }
+}
+
+fn collect_fragments<Id>(
+    tree: &AlgorithmTree<Style, TextMeasure, Option<BoxId>>,
+    boxes: &GeneratedBoxTree<Id>,
+    node: AlgorithmNodeId,
     parent_origin: Point<f32>,
     parent_fragment: Option<FragmentId>,
-    legacy: &mut LegacyFragmentPlane<Id>,
-    fragments: &mut FragmentTree,
+    output: &mut FragmentOutput<'_>,
 ) -> Result<(), LayoutError>
 where
     Id: Copy + Eq + Hash,
 {
-    let computed = tree.layout(node).map_err(taffy_error)?;
+    let computed = tree.layout(node);
     let origin = Point {
-        x: parent_origin.x + computed.location.x,
-        y: parent_origin.y + computed.location.y,
+        x: parent_origin.x + computed.x,
+        y: parent_origin.y + computed.y,
     };
     let mut child_parent = parent_fragment;
-    if let Some(source) = sources.get(&node) {
+    {
+        let source = *tree.source(node);
         let rect = Fragment {
             x: origin.x,
             y: origin.y,
-            width: computed.size.width,
-            height: computed.size.height,
+            width: computed.width,
+            height: computed.height,
         };
         let origin_node = match source {
-            LoweringSource::Box(box_id) => {
-                let structural_parent = boxes[*box_id].parent().and_then(|parent_box| {
-                    fragments.fragment_ids_for_box(parent_box).last().copied()
+            Some(box_id) => {
+                let structural_parent = boxes[box_id].parent().and_then(|parent_box| {
+                    output
+                        .fragments
+                        .fragment_ids_for_box(parent_box)
+                        .last()
+                        .copied()
                 });
                 let parent = structural_parent.or(parent_fragment);
-                child_parent = Some(fragments.push(
-                    TreeFragment::from_horizontal_physical(*box_id, rect),
+                child_parent = Some(output.fragments.push(
+                    TreeFragment::from_horizontal_physical(box_id, rect),
                     parent,
                     parent,
                 ));
-                boxes.origin_node(*box_id)
+                legacy_origin_node(boxes, box_id)
             },
-            LoweringSource::Suppressed(id) => Some(boxes.suppressed(*id).node),
-            LoweringSource::Boundary => None,
+            None => None,
         };
-        if let Some(origin_node) = origin_node {
-            legacy.fragments.insert(origin_node, rect);
-        }
+        let _ = origin_node;
     }
-    for child in tree.children(node).map_err(taffy_error)? {
-        collect_fragments(
-            tree,
-            sources,
-            boxes,
-            child,
-            origin,
-            child_parent,
-            legacy,
-            fragments,
-        )?;
+    for child in tree.children(node) {
+        collect_fragments(tree, boxes, *child, origin, child_parent, output)?;
     }
     Ok(())
 }
 
 fn collect_inline_fragments<Id>(
-    tree: &TaffyTree<InlineMeasure>,
-    sources: &HashMap<NodeId, Vec<LoweringSource>>,
+    tree: &AlgorithmTree<Style, InlineMeasure, Vec<BoxId>>,
     boxes: &GeneratedBoxTree<Id>,
-    node: NodeId,
-    parent_origin: Point<f32>,
-    parent_fragment: Option<FragmentId>,
-    legacy: &mut LegacyFragmentPlane<Id>,
-    fragments: &mut FragmentTree,
+    node: AlgorithmNodeId,
+    cursor: FragmentCursor,
+    output: &mut FragmentOutput<'_>,
+    text_frame: &mut TextFrame<Id>,
+    styles: &StylePlane<Id>,
 ) -> Result<(), LayoutError>
 where
     Id: Copy + Eq + Hash,
 {
-    let computed = tree.layout(node).map_err(taffy_error)?;
+    let computed = tree.layout(node);
     let origin = Point {
-        x: parent_origin.x + computed.location.x,
-        y: parent_origin.y + computed.location.y,
+        x: cursor.origin.x + computed.x,
+        y: cursor.origin.y + computed.y,
     };
-    let mut child_parent = parent_fragment;
-    if let Some(source_ids) = sources.get(&node) {
+    let placement = if let Some(context) = tree.context(node)
+        && let Some(layout) = context.layout_for_width(computed.width)
+    {
+        Some(layout.place(
+            text_frame,
+            styles,
+            |box_id| boxes.origin_node(box_id),
+            (origin.x, origin.y),
+            computed.width,
+        ))
+    } else {
+        None
+    };
+    let mut child_parent = cursor.parent;
+    {
+        let mut source_ids = tree.source(node).clone();
+        if let Some(placement) = &placement {
+            source_ids.extend(placement.fragments.keys().copied());
+        }
+        source_ids.sort_unstable();
+        source_ids.dedup();
         let rect = Fragment {
             x: origin.x,
             y: origin.y,
-            width: computed.size.width,
-            height: computed.size.height,
+            width: computed.width,
+            height: computed.height,
         };
-        for source in source_ids {
-            let origin_node = match source {
-                LoweringSource::Box(box_id) => {
-                    let structural_parent = boxes[*box_id].parent().and_then(|parent_box| {
-                        fragments.fragment_ids_for_box(parent_box).last().copied()
-                    });
-                    let parent = structural_parent.or(parent_fragment);
-                    let fragment_id = fragments.push(
-                        TreeFragment::from_horizontal_physical(*box_id, rect),
+        for box_id in source_ids {
+            let structural_parent = boxes[box_id].parent().and_then(|parent_box| {
+                output
+                    .fragments
+                    .fragment_ids_for_box(parent_box)
+                    .last()
+                    .copied()
+            });
+            let parent = structural_parent.or(cursor.parent);
+            let line_fragments = placement
+                .as_ref()
+                .and_then(|placement| placement.fragments.get(&box_id))
+                .filter(|fragments| !fragments.is_empty());
+            if let Some(line_fragments) = line_fragments {
+                for line_fragment in line_fragments {
+                    let fragment_id = output.fragments.push(
+                        TreeFragment::from_horizontal_physical(box_id, *line_fragment),
                         parent,
                         parent,
                     );
                     child_parent.get_or_insert(fragment_id);
-                    boxes.origin_node(*box_id)
-                },
-                LoweringSource::Suppressed(id) => Some(boxes.suppressed(*id).node),
-                LoweringSource::Boundary => None,
-            };
-            if let Some(origin_node) = origin_node {
-                legacy.fragments.insert(origin_node, rect);
+                }
+            } else {
+                let fragment_id = output.fragments.push(
+                    TreeFragment::from_horizontal_physical(box_id, rect),
+                    parent,
+                    parent,
+                );
+                child_parent.get_or_insert(fragment_id);
             }
         }
     }
-    for child in tree.children(node).map_err(taffy_error)? {
+    for child in tree.children(node) {
         collect_inline_fragments(
             tree,
-            sources,
             boxes,
-            child,
-            origin,
-            child_parent,
-            legacy,
-            fragments,
+            *child,
+            FragmentCursor {
+                origin,
+                parent: child_parent,
+            },
+            output,
+            text_frame,
+            styles,
         )?;
     }
     Ok(())
@@ -1720,10 +2058,10 @@ where
                         return false;
                     }
                 },
-                Some(CssDisplay::TableRowGroup) => {
-                    if positioned::<D>(styles, child) || !walk(dom, styles, child) {
-                        return false;
-                    }
+                Some(CssDisplay::TableRowGroup)
+                    if positioned::<D>(styles, child) || !walk(dom, styles, child) =>
+                {
+                    return false;
                 },
                 _ => {},
             }
@@ -1857,38 +2195,33 @@ fn is_collapsible_whitespace(text: &str) -> bool {
         .all(|ch| matches!(ch, ' ' | '\t' | '\n' | '\r' | '\u{c}'))
 }
 
-fn is_inline<D>(dom: &D, styles: &StylePlane<D::NodeId>, id: D::NodeId) -> bool
+fn is_atomic_inline_box<D>(dom: &D, styles: &StylePlane<D::NodeId>, id: D::NodeId) -> bool
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    match dom.kind(id) {
-        NodeKind::Text => true,
-        NodeKind::Element => styles.get(id).is_some_and(|style| {
-            matches!(style.display, CssDisplay::Inline | CssDisplay::InlineBlock)
-                && !matches!(style.position, CssPosition::Absolute | CssPosition::Fixed)
-                && !(style.display == CssDisplay::Inline
-                    && dom.dom_children(id).any(|child| {
-                        !is_inline(dom, styles, child)
-                            && !styles
-                                .get(child)
-                                .is_some_and(|child_style| child_style.display == CssDisplay::None)
-                    }))
-        }),
-        _ => false,
-    }
+    styles.get(id).is_some_and(|style| {
+        style.display == CssDisplay::InlineBlock
+            || (style.display == CssDisplay::Inline && is_replaced_element(dom, id))
+    })
 }
 
-fn has_inline_block_ancestor<D>(dom: &D, styles: &StylePlane<D::NodeId>, id: D::NodeId) -> bool
+fn has_atomic_inline_ancestor<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    boxes: &GeneratedBoxTree<D::NodeId>,
+    id: D::NodeId,
+) -> bool
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
     let mut ancestor = dom.parent(id);
     while let Some(candidate) = ancestor {
-        if styles
-            .get(candidate)
-            .is_some_and(|style| style.display == CssDisplay::InlineBlock)
+        if boxes
+            .principal_box(candidate)
+            .is_some_and(|box_id| boxes[box_id].display.outside == Some(DisplayOutside::Inline))
+            && is_atomic_inline_box(dom, styles, candidate)
         {
             return true;
         }
@@ -1897,32 +2230,13 @@ where
     false
 }
 
-fn first_flow_child<D>(
-    dom: &D,
-    styles: &StylePlane<D::NodeId>,
-    parent: D::NodeId,
-) -> Option<D::NodeId>
-where
-    D: LayoutDom,
-    D::NodeId: Copy + Eq + Hash,
-{
-    dom.dom_children(parent)
-        .find(|child| match dom.kind(*child) {
-            NodeKind::Text => dom.text(*child).is_some_and(|text| !text.trim().is_empty()),
-            NodeKind::Element => styles
-                .get(*child)
-                .is_some_and(|style| style.display != CssDisplay::None),
-            _ => false,
-        })
-}
-
 /// Return the topmost pointer-events-enabled element whose layout fragment
 /// contains a scene point. The walk mirrors the lane's DOM paint order for the
 /// bounded stacking subset: numeric z-index first, then source order.
 pub fn hit_test<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
     x: f32,
     y: f32,
 ) -> Option<D::NodeId>
@@ -1939,7 +2253,7 @@ where
 pub(crate) fn hit_test_with_scroll<D>(
     dom: &D,
     styles: &StylePlane<D::NodeId>,
-    fragments: &FragmentPlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
     scroll_offsets: &HashMap<D::NodeId, (f32, f32)>,
     x: f32,
     y: f32,
@@ -1980,7 +2294,7 @@ where
 {
     dom: &'a D,
     styles: &'a StylePlane<D::NodeId>,
-    fragments: &'a FragmentPlane<D::NodeId>,
+    fragments: &'a LiveryLayout<D::NodeId>,
     scroll_offsets: &'a HashMap<D::NodeId, (f32, f32)>,
     x: f32,
     y: f32,
@@ -2070,9 +2384,10 @@ where
     D::NodeId: Copy,
 {
     dom.kind(id) == NodeKind::Element
-        && dom
-            .element_name(id)
-            .is_some_and(|name| name.local.as_ref().eq_ignore_ascii_case("img"))
+        && dom.element_name(id).is_some_and(|name| {
+            name.local.as_ref().eq_ignore_ascii_case("img")
+                || name.local.as_ref().eq_ignore_ascii_case("canvas")
+        })
 }
 
 fn apply_replaced_image_size<D>(
@@ -2089,49 +2404,74 @@ fn apply_replaced_image_size<D>(
     let intrinsic = image_intrinsic_size(dom, id, image_sources)
         .filter(|(width, height)| *width > 0.0 && *height > 0.0);
 
-    // HTML width/height attributes are presentational hints for replaced
-    // elements.  A definite CSS declaration wins, while an attribute fills
-    // an otherwise-auto dimension before the intrinsic ratio is applied.
+    // HTML width/height attributes are presentational hints. A CSS value wins
+    // even when it is percentage-based; only an auto CSS dimension accepts
+    // the attribute. Legacy percentage attributes remain percentages so they
+    // resolve against the eventual containing block rather than against zero.
+    let width_hint = matches!(computed.width, CssSize::Auto)
+        .then(|| image_attribute_size(dom, id, "width"))
+        .flatten();
+    let height_hint = matches!(computed.height, CssSize::Auto)
+        .then(|| image_attribute_size(dom, id, "height"))
+        .flatten();
+    if let Some(width) = width_hint {
+        style.size.width = width.dimension();
+    }
+    if let Some(height) = height_hint {
+        style.size.height = height.dimension();
+    }
+    let width_specified = !matches!(computed.width, CssSize::Auto) || width_hint.is_some();
+    let height_specified = !matches!(computed.height, CssSize::Auto) || height_hint.is_some();
     let width =
-        definite_size(computed.width, font_size).or_else(|| image_attribute_size(dom, id, "width"));
+        definite_size(computed.width, font_size).or_else(|| width_hint.and_then(|hint| hint.px()));
     let height = definite_size(computed.height, font_size)
-        .or_else(|| image_attribute_size(dom, id, "height"));
-    let width = width.filter(|value| *value > 0.0);
-    let height = height.filter(|value| *value > 0.0);
+        .or_else(|| height_hint.and_then(|hint| hint.px()));
     if let Some((intrinsic_width, intrinsic_height)) = intrinsic
         && style.aspect_ratio.is_none()
         && !(width.is_some() && height.is_some())
     {
         style.aspect_ratio = Some(intrinsic_width / intrinsic_height);
     }
-    match (width, height, intrinsic) {
-        (Some(width), Some(height), _) => {
-            style.size.width = Dimension::length(width);
-            style.size.height = Dimension::length(height);
-        },
-        (Some(width), None, Some((intrinsic_width, intrinsic_height))) => {
+    match (width, height, width_specified, height_specified, intrinsic) {
+        (Some(width), _, true, false, Some((intrinsic_width, intrinsic_height))) => {
             style.size.width = Dimension::length(width);
             style.size.height = Dimension::length(width * intrinsic_height / intrinsic_width);
         },
-        (Some(width), None, None) => {
-            style.size.width = Dimension::length(width);
-        },
-        (None, Some(height), Some((intrinsic_width, intrinsic_height))) => {
+        (_, Some(height), false, true, Some((intrinsic_width, intrinsic_height))) => {
             style.size.width = Dimension::length(height * intrinsic_width / intrinsic_height);
             style.size.height = Dimension::length(height);
         },
-        (None, Some(height), None) => {
-            style.size.height = Dimension::length(height);
-        },
-        (None, None, Some((intrinsic_width, intrinsic_height))) => {
+        (None, None, false, false, Some((intrinsic_width, intrinsic_height))) => {
             style.size.width = Dimension::length(intrinsic_width);
             style.size.height = Dimension::length(intrinsic_height);
         },
-        (None, None, None) => {},
+        _ => {},
     }
 }
 
-fn image_attribute_size<D>(dom: &D, id: D::NodeId, name: &str) -> Option<f32>
+#[derive(Clone, Copy)]
+enum ImageAttributeSize {
+    Length(f32),
+    Percentage(f32),
+}
+
+impl ImageAttributeSize {
+    fn dimension(self) -> Dimension {
+        match self {
+            Self::Length(value) => Dimension::length(value),
+            Self::Percentage(value) => Dimension::percent(value),
+        }
+    }
+
+    fn px(self) -> Option<f32> {
+        match self {
+            Self::Length(value) => Some(value),
+            Self::Percentage(_) => None,
+        }
+    }
+}
+
+fn image_attribute_size<D>(dom: &D, id: D::NodeId, name: &str) -> Option<ImageAttributeSize>
 where
     D: LayoutDom,
     D::NodeId: Copy,
@@ -2139,9 +2479,24 @@ where
     dom.attributes(id).find_map(|attribute| {
         (attribute.name.ns.as_ref().is_empty()
             && attribute.name.local.as_ref().eq_ignore_ascii_case(name))
-        .then(|| attribute.value.trim().parse::<f32>().ok())
+        .then(|| {
+            let value = attribute.value.trim();
+            if let Some(percentage) = value.strip_suffix('%') {
+                percentage
+                    .trim()
+                    .parse::<f32>()
+                    .ok()
+                    .map(|value| ImageAttributeSize::Percentage(value / 100.0))
+            } else {
+                value.parse::<f32>().ok().map(ImageAttributeSize::Length)
+            }
+        })
         .flatten()
-        .filter(|value| value.is_finite() && *value > 0.0)
+        .filter(|value| match value {
+            ImageAttributeSize::Length(value) | ImageAttributeSize::Percentage(value) => {
+                value.is_finite() && *value > 0.0
+            },
+        })
     })
 }
 
@@ -2636,6 +2991,536 @@ fn overflow(value: CssOverflow) -> Overflow {
     }
 }
 
-fn taffy_error(error: impl fmt::Debug) -> LayoutError {
-    LayoutError(format!("Taffy layout error: {error:?}"))
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        Device, InteractionStates, StyleSet, emit_paint_list_with_text_system, resolve_styles,
+    };
+    use genet_static_dom::StaticDocument;
+    use paint_list_api::DeviceIntSize;
+
+    #[test]
+    fn retained_inline_format_is_not_shaped_again_for_paint() {
+        let dom = StaticDocument::parse(
+            "<html><body><div class=\"label\"><span id=\"split\">one two three four</span></div></body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[".label { width: 80px; }"]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (styles, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let after_layout = text.shape_count();
+        let split = {
+            fn find(
+                dom: &StaticDocument,
+                node: <StaticDocument as LayoutDom>::NodeId,
+            ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+                if dom
+                    .element_name(node)
+                    .is_some_and(|name| name.local.as_ref() == "span")
+                {
+                    return Some(node);
+                }
+                dom.dom_children(node).find_map(|child| find(dom, child))
+            }
+            find(&dom, dom.document()).expect("split span")
+        };
+
+        assert!(after_layout > 0);
+        assert!(
+            layout.fragments_for_node(split).count() >= 2,
+            "one inline box must own one fragment per wrapped line"
+        );
+        let _ = emit_paint_list_with_text_system(
+            &dom,
+            &styles,
+            &layout,
+            DeviceIntSize::new(320, 240),
+            1,
+            &mut text,
+        );
+        assert_eq!(
+            text.shape_count(),
+            after_layout,
+            "paint must consume the retained inline result"
+        );
+    }
+
+    #[test]
+    fn split_inline_continuations_format_their_own_box_children() {
+        let dom = StaticDocument::parse(
+            "<html><body><div class=\"host\"><span>before<div class=\"block\">block</div>after</span></div></body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                ".host { width: 120px; } .block { display: block; height: 20px; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let split = {
+            fn find(
+                dom: &StaticDocument,
+                node: <StaticDocument as LayoutDom>::NodeId,
+            ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+                if dom
+                    .element_name(node)
+                    .is_some_and(|name| name.local.as_ref() == "span")
+                {
+                    return Some(node);
+                }
+                dom.dom_children(node).find_map(|child| find(dom, child))
+            }
+            find(&dom, dom.document()).expect("split span")
+        };
+        let boxes = layout.boxes().boxes_for_node(split);
+        let first = layout
+            .fragments()
+            .fragments_for_box(boxes[0])
+            .next()
+            .expect("first continuation")
+            .physical_rect();
+        let second = layout
+            .fragments()
+            .fragments_for_box(boxes[1])
+            .next()
+            .expect("second continuation")
+            .physical_rect();
+
+        assert_eq!(boxes.len(), 2);
+        assert!(
+            second.y > first.y,
+            "the block between continuation boxes must advance block flow"
+        );
+    }
+
+    #[test]
+    fn partial_inline_groups_do_not_share_one_box_intrinsic_cache_entry() {
+        fn find(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+        ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+            if dom
+                .element_name(node)
+                .is_some_and(|name| name.local.as_ref() == "div")
+            {
+                return Some(node);
+            }
+            dom.dom_children(node).find_map(|child| find(dom, child))
+        }
+
+        let dom = StaticDocument::parse(
+            "<html><body><div>before<span class=\"out\">out</span>after</div></body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[".out { position: absolute; }"]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let boxes = GeneratedBoxTree::from_dom(&dom, &styles);
+        let host = find(&dom, dom.document()).expect("host");
+        let host_box = boxes.principal_box(host).expect("host box");
+
+        assert_eq!(
+            intrinsic_owner_for_flow_children(&boxes, host_box, boxes[host_box].children()),
+            None,
+            "two partial inline groups must not alias the parent box query"
+        );
+    }
+
+    #[test]
+    fn ordinary_live_block_flow_uses_buckram_without_backend_dispatch() {
+        fn collect_divs(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+            output: &mut Vec<<StaticDocument as LayoutDom>::NodeId>,
+        ) {
+            if dom
+                .element_name(node)
+                .is_some_and(|name| name.local.as_ref() == "div")
+            {
+                output.push(node);
+            }
+            for child in dom.dom_children(node) {
+                collect_divs(dom, child, output);
+            }
+        }
+
+        let dom = StaticDocument::parse(
+            "<html><body><div class=\"host\"><div></div><div></div></div></body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "html, body, div { margin: 0; padding: 0; border: 0; } .host > div { height: 20px; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let mut divs = Vec::new();
+        collect_divs(&dom, dom.document(), &mut divs);
+        let first = layout.get(divs[1]).expect("first child").physical_rect();
+        let second = layout.get(divs[2]).expect("second child").physical_rect();
+        let algorithms = layout.block_algorithm_counts();
+
+        assert!(
+            algorithms.buckram >= 4,
+            "the root, html, body, and host block contexts should use Buckram"
+        );
+        assert_eq!(algorithms.taffy, 0);
+        assert_eq!(second.y, first.y + 20.0);
+    }
+
+    #[test]
+    fn replaced_html_dimension_hints_keep_percentage_and_canvas_width() {
+        fn find_by_name(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+            name: &str,
+        ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+            if dom
+                .element_name(node)
+                .is_some_and(|element| element.local.as_ref() == name)
+            {
+                return Some(node);
+            }
+            dom.dom_children(node)
+                .find_map(|child| find_by_name(dom, child, name))
+        }
+
+        let dom = StaticDocument::parse(
+            "<html><body><div><img width=\"100%\" height=\"3\">\
+             <canvas width=\"100\" height=\"100\"></canvas></div></body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "html, body { margin: 0; } div { position: relative; width: 200px; }\
+                 img { position: absolute; left: 0; top: 0; } canvas { display: block; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+
+        let image = find_by_name(&dom, dom.document(), "img").expect("img");
+        let image = layout.get(image).expect("image fragment").physical_rect();
+        assert_eq!(
+            (image.width, image.height),
+            (200.0, 3.0),
+            "the percentage hint resolves against the positioned containing block"
+        );
+
+        let canvas = find_by_name(&dom, dom.document(), "canvas").expect("canvas");
+        let canvas = layout.get(canvas).expect("canvas fragment").physical_rect();
+        assert_eq!((canvas.width, canvas.height), (100.0, 100.0));
+    }
+
+    #[test]
+    fn percentage_height_chain_uses_initial_containing_block_height() {
+        fn find_by_name(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+            name: &str,
+        ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+            if dom
+                .element_name(node)
+                .is_some_and(|element| element.local.as_ref() == name)
+            {
+                return Some(node);
+            }
+            dom.dom_children(node)
+                .find_map(|child| find_by_name(dom, child, name))
+        }
+
+        let dom = StaticDocument::parse("<html><body><p>viewport</p></body></html>");
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "html, body, p { height: 100%; margin: 0; padding: 0; border: 0; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+
+        for name in ["html", "body", "p"] {
+            let node = find_by_name(&dom, dom.document(), name).expect(name);
+            assert_eq!(
+                layout.get(node).expect(name).physical_rect().height,
+                240.0,
+                "{name} should resolve 100% against a definite containing block"
+            );
+        }
+        assert_eq!(layout.block_algorithm_counts().taffy, 0);
+    }
+
+    #[test]
+    fn live_block_flow_keeps_collapsed_margin_chains_in_buckram() {
+        fn collect_divs(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+            output: &mut Vec<<StaticDocument as LayoutDom>::NodeId>,
+        ) {
+            if dom
+                .element_name(node)
+                .is_some_and(|name| name.local.as_ref() == "div")
+            {
+                output.push(node);
+            }
+            for child in dom.dom_children(node) {
+                collect_divs(dom, child, output);
+            }
+        }
+
+        let dom = StaticDocument::parse(
+            "<html><body><div class=\"host\">\
+             <div class=\"parent\"><div class=\"child\"></div></div>\
+             <div class=\"after\"></div>\
+             <div class=\"chain\"><div class=\"first\"></div><div class=\"empty\"></div>\
+             <div class=\"last\"></div></div>\
+             </div></body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "html, body, .host, .chain { margin: 0; padding: 0; border: 0; }\
+                 .parent { margin: 10px 0 15px; }\
+                 .child { height: 20px; margin: 30px 0 40px; }\
+                 .after { height: 10px; margin: 12px 0 0; }\
+                 .first { height: 10px; margin: 0 0 20px; }\
+                 .empty { margin: -7px 0 12px; }\
+                 .last { height: 10px; margin: -15px 0 0; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let mut divs = Vec::new();
+        collect_divs(&dom, dom.document(), &mut divs);
+        let parent = layout.get(divs[1]).expect("parent").physical_rect();
+        let child = layout.get(divs[2]).expect("child").physical_rect();
+        let after = layout.get(divs[3]).expect("after").physical_rect();
+        let first = layout.get(divs[5]).expect("first").physical_rect();
+        let empty = layout.get(divs[6]).expect("empty").physical_rect();
+        let last = layout.get(divs[7]).expect("last").physical_rect();
+        let algorithms = layout.block_algorithm_counts();
+
+        assert_eq!(child.y, parent.y);
+        assert_eq!(after.y, parent.y + 60.0);
+        assert_eq!(empty.y, first.y + 23.0);
+        assert_eq!(last.y, first.y + 15.0);
+        assert!(algorithms.buckram >= 6);
+        assert_eq!(algorithms.taffy, 0);
+    }
+
+    #[test]
+    fn live_bfc_places_blockified_floats_and_direct_clearance_in_buckram() {
+        fn by_class(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+            expected: &str,
+        ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+            if dom.attributes(node).any(|attribute| {
+                attribute.name.ns.as_ref().is_empty()
+                    && attribute.name.local.as_ref() == "class"
+                    && attribute.value == expected
+            }) {
+                return Some(node);
+            }
+            dom.dom_children(node)
+                .find_map(|child| by_class(dom, child, expected))
+        }
+
+        let dom = StaticDocument::parse(
+            "<html><body><div class=\"host\">\
+             <span class=\"left\"></span><div class=\"right\"></div>\
+             <div class=\"clear\"></div></div></body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "html, body, div, span { margin: 0; padding: 0; border: 0; }\
+                 .host { width: 200px; overflow-x: hidden; overflow-y: hidden; }\
+                 .left { float: left; width: 80px; height: 40px; }\
+                 .right { float: right; width: 60px; height: 70px; }\
+                 .clear { clear: both; height: 10px; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let rect = |class| {
+            let node = by_class(&dom, dom.document(), class).expect(class);
+            layout.get(node).expect(class).physical_rect()
+        };
+
+        let host = rect("host");
+        let left = rect("left");
+        let right = rect("right");
+        let clear = rect("clear");
+        let algorithms = layout.block_algorithm_counts();
+
+        assert_eq!((left.x, left.y), (host.x, host.y));
+        assert_eq!((right.x, right.y), (host.x + 140.0, host.y));
+        assert_eq!((clear.x, clear.y), (host.x, host.y + 70.0));
+        assert_eq!(host.height, 80.0);
+        assert!(algorithms.buckram >= 4);
+        assert_eq!(algorithms.taffy, 0);
+    }
+
+    #[test]
+    fn live_inline_lines_wrap_beside_a_float_then_reclaim_the_column() {
+        fn by_id(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+            expected: &str,
+        ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+            if dom.attributes(node).any(|attribute| {
+                attribute.name.ns.as_ref().is_empty()
+                    && attribute.name.local.as_ref() == "id"
+                    && attribute.value == expected
+            }) {
+                return Some(node);
+            }
+            dom.dom_children(node)
+                .find_map(|child| by_id(dom, child, expected))
+        }
+
+        let dom = StaticDocument::parse(
+            "<html><body><div id=\"host\"><div id=\"float\"></div>\
+             <span id=\"copy\">aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa \
+             aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa</span>\
+             </div></body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "html, body, div, span { margin: 0; padding: 0; border: 0; }\
+                 #host { width: 200px; overflow-x: hidden; overflow-y: hidden;\
+                         font-family: monospace; font-size: 10px; line-height: 20px; }\
+                 #float { float: left; width: 80px; height: 40px; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let host = by_id(&dom, dom.document(), "host").expect("host");
+        let copy = by_id(&dom, dom.document(), "copy").expect("copy");
+        let host = layout.get(host).expect("host fragment").physical_rect();
+        let algorithms = layout.block_algorithm_counts();
+        let mut lines = layout
+            .fragments_for_node(copy)
+            .map(|fragment| fragment.physical_rect())
+            .collect::<Vec<_>>();
+        lines.sort_by(|left, right| left.y.total_cmp(&right.y));
+
+        assert!(
+            lines.len() >= 4,
+            "fixture must produce several line fragments"
+        );
+        assert!(
+            (lines[0].x - (host.x + 80.0)).abs() <= 0.5,
+            "host={host:?}, lines={lines:?}, algorithms={algorithms:?}"
+        );
+        assert!(
+            (lines[1].x - (host.x + 80.0)).abs() <= 0.5,
+            "host={host:?}, lines={lines:?}, algorithms={algorithms:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .filter(|line| line.y >= host.y + 40.0)
+                .all(|line| (line.x - host.x).abs() <= 0.5),
+            "lines below the float must use the full content column"
+        );
+        assert_eq!(algorithms.taffy, 0);
+    }
 }

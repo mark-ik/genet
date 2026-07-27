@@ -208,6 +208,63 @@ fragmentation exists.
 **Removal receipt:** browser-facing fragment types are Buckram types; the
 single-rect maps remain private compatibility code with named consumers.
 
+#### K0 receipt - 2026-07-26
+
+`components/buckram` now owns `CssBoxTree`, `FragmentTree`, `BoxId`,
+`FragmentId`, logical fragment geometry, parent and containing-fragment
+relationships, fragmentation-context identity, and one-to-many box and node
+lookups. Its six structural tests cover split-inline provenance, anonymous
+table ownership, `none` versus `contents`, pseudo and replaced origins, a box
+with two fragments, and fragment parentage.
+
+`genet-livery` is now an adapter at this boundary. Its generated-box pass
+supplies Livery values to Buckram's box roles, and each current Taffy pass
+builds a Buckram `LayoutResult` rather than returning a node-to-rectangle
+plane. The public `Fragment` is Buckram's identity-bearing fragment.
+Paint, hit testing, the retained document, and CSSOM read `LiveryLayout`;
+the old public `FragmentPlane` name is gone.
+
+The remaining rectangle maps are private and named:
+
+- `LegacyFragmentPlane` carries preliminary-pass geometry into the second
+  inline pass.
+- `LiveryLayout::atomic_fragments` carries inline-block and replaced-element
+  geometry required by that same two-pass workaround.
+
+Both are K2 deletion targets. They do not supply browser-facing fragment
+identity.
+
+Verification:
+
+- `cargo test -p buckram`: 6 passed.
+- `cargo test -p genet-livery`: 112 passed.
+- `cargo clippy -p buckram --all-targets -- -D warnings`: passed.
+- `cargo clippy -p genet-livery --all-targets --no-deps -- -D warnings`:
+  passed. Dependency linting remains blocked by 147 existing warnings in the
+  separate `livery` value crate.
+- live-DOM structure: a generated child box resolves to its Buckram `BoxId`,
+  and its fragment records the expected parent and containing fragment.
+
+Exact reftest status diff, frozen B0 baseline
+`Code/testing/genet/wpt-ledger/2026-07-26_boxtree_b0_final` against
+`Code/testing/genet/wpt-ledger/2026-07-26_buckram_k0`:
+
+| directory | before pass | after pass | moved files |
+|---|---:|---:|---:|
+| css-backgrounds | 218 | 218 | 0 |
+| css-borders | 28 | 28 | 0 |
+| css-flexbox | 348 | 348 | 0 |
+| css-grid | 433 | 433 | 0 |
+| css-multicol | 105 | 105 | 0 |
+| css-position | 40 | 40 | 0 |
+| css-tables | 59 | 59 | 0 |
+| css-writing-modes | 224 | 224 | 0 |
+| CSS2 | 4,289 | 4,289 | 0 |
+| **total** | **5,744** | **5,744** | **0** |
+
+Each current JSON has the same test-file cardinality as its frozen baseline.
+This closes K0 without claiming a fragmentation algorithm.
+
 ### K1. Low-level Taffy adapter
 
 **Files:**
@@ -226,6 +283,46 @@ a Taffy type.
 **Removal receipt:** `genet-livery` has no `TaffyTree`, and DOM-node-to-Taffy
 maps are gone.
 
+#### K1 receipt - 2026-07-26
+
+`components/buckram/src/taffy_adapter.rs` now owns a dense algorithm-node
+arena and implements Taffy's low-level block, flex, grid, cache, traversal,
+and rounding traits. Each node carries its Buckram source identity directly;
+Livery's two source side maps are deleted. The adapter dispatches algorithms
+explicitly and returns backend-neutral scratch geometry for fragment
+construction.
+
+No public Buckram API exposes a Taffy type. `genet-livery` contains neither
+`TaffyTree` nor a bare Taffy `NodeId`, and Buckram's selected Taffy feature
+graph does not contain `taffy_tree`. Livery still lowers CSS into Taffy's
+private `Style`; K3 owns that input-model deletion.
+
+Verification:
+
+- `cargo test -p buckram`: 8 passed, including exact flex and 2-by-2 grid
+  placement fixtures.
+- `cargo test -p genet-livery`: 112 passed.
+- strict Clippy passed for Buckram and genet-livery.
+
+The frozen K0 corpus and K1 corpus each contain 16,375 tests. Every recorded
+test kept the same status:
+
+| directory | K0 pass | K1 pass | moved statuses |
+|---|---:|---:|---:|
+| css-backgrounds | 218 | 218 | 0 |
+| css-borders | 28 | 28 | 0 |
+| css-flexbox | 348 | 348 | 0 |
+| css-grid | 433 | 433 | 0 |
+| css-multicol | 105 | 105 | 0 |
+| css-position | 40 | 40 | 0 |
+| css-tables | 59 | 59 | 0 |
+| css-writing-modes | 224 | 224 | 0 |
+| CSS2 | 4,289 | 4,289 | 0 |
+| **total** | **5,744** | **5,744** | **0** |
+
+This closes K1: Buckram owns the algorithm tree and Taffy is an implementation
+backend, with no observed layout movement.
+
 ### K2. Box generation and one inline pass
 
 Implement outer and inner display roles, anonymous block and table fixup,
@@ -242,6 +339,110 @@ families, bidi and baseline fixtures, and at least one inline box producing
 two fragments. Delete the B0 suppressed/comment compatibility boundaries when
 their proper box-generation rule replaces them.
 
+#### K2 receipt - 2026-07-27
+
+K2 is structurally complete. It is not a conformance-ratchet win.
+
+Buckram now generates its own box tree from `BoxTreeInput`. The generator owns
+outer and inner display roles, `none` versus `contents`, out-of-flow and
+flex/grid-item blockification, anonymous block wrappers, table repair,
+list-item markers, and inline continuations split around in-flow blocks.
+Flex/grid blockification is parent-sensitive: each element child becomes its
+own item, while only a text run may become an anonymous item. Tests preserve
+`::before`, `::after`, and `::marker` origins through normalization.
+
+Livery builds that input once from computed values and traverses the resulting
+`BoxId` tree for layout. The old `LoweringSource`, `SuppressedId`, suppressed
+subtree, and comment-boundary models are deleted. `display: none`,
+`display: contents`, comments, anonymous boxes, and continuations now have box
+generation rules instead of lowering exceptions.
+
+The retained layout path now has one inline formatting context. Parley owns
+whitespace processing, shaping, bidi, line breaking, inline atoms, and
+baselines; Buckram receives the resulting per-line fragments. The retained
+`TextFrame` is reused by paint, so paint does not shape that context again.
+Paint also checks Buckram's formatting-context role before preparing a nested
+inline group. This fixed a concrete disagreement where paint read a flex
+item's DOM `display: inline-block`, re-entered inline layout, and applied its
+margin twice.
+
+The whole-document preliminary pass is deleted. `LegacyFragmentPlane`,
+`LayoutPass`, and `LiveryLayout::atomic_fragments` are gone. Inline-block and
+replaced subtrees still need isolated size measurements, but those measurements
+are keyed by `BoxId`, retain their Buckram subtree fragments, and merge into
+the final `FragmentTree`. There is no DOM-node-to-rectangle result map at that
+boundary.
+
+One source box producing multiple fragments is now executable behavior:
+`retained_inline_format_is_not_shaped_again_for_paint` asserts a wrapped inline
+owns at least two Buckram fragments, while
+`split_inline_continuations_format_their_own_box_children` proves two generated
+continuations retain distinct child runs around the intervening block.
+
+General `::before` and `::after` box origins are accepted by the generator.
+The live Livery integration currently emits `::marker`; generated content for
+`::before` and `::after` still depends on the separate `content` longhand and
+is not claimed here.
+
+Verification:
+
+- `cargo test -p buckram`: 15 passed.
+- `cargo test -p livery -p genet-livery`: passed, including 3 retained-layout
+  unit tests, 12 box-generation integration tests, and 48 paint tests.
+- strict Clippy passed for Buckram and genet-livery. The workspace Clippy
+  configuration still prints its existing unreachable-disallowed-type warning.
+- exact-file `rustfmt --check` and `git diff --check`: passed.
+- `cargo check -p genet-scripted -p genet-wpt`: passed.
+- release `genet-wpt` expectation guards over the final source returned
+  `unexpected=0` in all nine directories. One broad CSS2 run transiently moved
+  `first-letter-punctuation-100.xht`; it passed immediately in isolation and
+  the full CSS2 tie-breaker returned `unexpected=0`.
+
+Exact reftest diff, frozen K1 baseline
+`Code/testing/genet/wpt-ledger/2026-07-26_buckram_k1` against
+`Code/testing/genet/wpt-ledger/2026-07-27_buckram_k2`:
+
+| directory | K1 pass | K2 pass | delta | gains | regressions |
+|---|---:|---:|---:|---:|---:|
+| css-backgrounds | 218 | 218 | 0 | 0 | 0 |
+| css-borders | 28 | 28 | 0 | 0 | 0 |
+| css-flexbox | 348 | 369 | +21 | 38 | 17 |
+| css-grid | 433 | 427 | -6 | 4 | 10 |
+| css-multicol | 105 | 98 | -7 | 1 | 8 |
+| css-position | 40 | 40 | 0 | 2 | 2 |
+| css-tables | 59 | 50 | -9 | 2 | 11 |
+| css-writing-modes | 224 | 225 | +1 | 6 | 5 |
+| CSS2 | 4,289 | 4,159 | -130 | 28 | 158 |
+| **total** | **5,744** | **5,614** | **-130** | **81** | **211** |
+
+All 16,375 test URLs retain their K1 cardinality. One grid URL remains
+`fail` but no longer crashes. The 81 gains include 38 flexbox files, both
+`bidi-008` variants, and the 14 `block-in-inline-insert-*` reference files.
+
+The losses are real and remain open:
+
+- CSS2 contributes 158 regressions, concentrated in floats/clearance,
+  normal flow, line boxes, margin/padding, tables, positioning, and borders.
+  The K1 code had already measured a 131-file CSS2 loss when fake
+  whitespace-only flow boxes were removed from the old emulation. K2's net
+  CSS2 loss of 130 is consistent with that dependency, but is not treated as
+  proof for every URL. K3 must replace the missing flow, margin-collapse,
+  float, and line-box algorithms rather than restore boxes CSS says do not
+  exist.
+- The 11 table regressions are height distribution, collapsed-border paint
+  order, baseline/static position, and percentage sizing. They stay with K4.
+- The 17 flex regressions are named baseline, intrinsic/flex-basis, replaced
+  aspect-ratio, percentage anonymous-item, and stacking/paint-order families.
+  They stay with K3 and K5.
+- Grid's 10 regressions are lanes, subgrid, intrinsic track sizing, baseline,
+  and orthogonal/scrollbar cases. Multicol's 8 regressions remain non-evidence
+  until K6 supplies fragmentation. Position's 2 and writing-mode's 5
+  regressions remain K5 and K3 work.
+
+The frozen K1 ledger therefore remains the conformance ratchet. K2's ledger is
+an architectural receipt and an explicit debt map; it must not be relabelled
+as an improved baseline.
+
 ### K3. Logical flow and intrinsic queries
 
 Make inline and block axes primary. Implement intrinsic-size queries, BFC/IFC
@@ -255,6 +456,511 @@ without hiding required state.
 **Receipt:** named css-writing-modes, css-sizing, CSS2 float/BFC, and
 margin-collapse families; min-content and max-content differ in structural
 fixtures; zero unexplained corpus regressions.
+
+#### K3a receipt - 2026-07-27
+
+K3a establishes the logical-axis and intrinsic-query contracts. It does not
+close K3.
+
+Buckram now owns `WritingMode`, `Direction`, `FlowAxes`, logical and physical
+sizes, and the abstract-to-physical side mapping from CSS Writing Modes Level
+4 section 6.4. All five writing modes accepted by Livery are represented,
+including the distinct inline directions of `sideways-lr`. Every generated
+`CssBox` carries its inherited flow axes, including text, pseudo, marker, and
+anonymous fixup boxes.
+
+Livery's `direction` longhand moved from the known-unimplemented catalog into
+the computed-value model. It inherits independently of `writing-mode` and
+crosses the Livery-to-Buckram adapter as `Direction`, rather than becoming a
+backend flag.
+
+`Fragment::from_logical` derives physical geometry from a logical rectangle,
+its containing-block size, and its flow axes. The live Taffy migration path
+still uses `from_horizontal_physical`; replacing that compatibility
+constructor requires Buckram's block algorithm later in K3.
+
+Intrinsic sizing is now an explicit query:
+
+```rust
+IntrinsicSizeQuery::new(box_id, LogicalAxis::Inline, IntrinsicSizeKind::MinContent)
+```
+
+`IntrinsicSizeCache` is keyed by `BoxId` and logical axis. One provider
+measurement supplies a validated min-content/max-content pair, so the two
+queries stay distinct without duplicating shaping. Backend node ids are not
+part of the contract.
+
+Still open in K3:
+
+- wire the cache to Buckram-owned inline and block formatting contexts;
+- replace the remaining Taffy block dispatch;
+- implement margin collapsing, floats, clearance, shrink-to-fit, and BFC
+  establishment;
+- construct live vertical fragments from logical geometry.
+
+Verification:
+
+- `cargo test -p buckram`: 21 passed.
+- `cargo test -p livery -p genet-livery`: passed.
+- strict Clippy passed for Buckram and for genet-livery with dependency
+  linting disabled. The separate Livery value crate still has its 147
+  previously recorded warnings.
+- exact-file `rustfmt --check` and `git diff --check`: passed.
+- the release `css/css-writing-modes` reftest run remained at 225 passes and
+  returned `unexpected=0` against the frozen K2 expectations.
+
+#### K3b receipt - 2026-07-27
+
+K3b wires the first intrinsic queries into the live formatting path and moves
+formatting-context dispatch out of Taffy's input model. It does not close K3.
+
+Every scratch node now carries a Buckram `AlgorithmKind`: hidden, leaf, block,
+flex, or grid. `AlgorithmRun::compute_node` dispatches from that role instead
+of reading `taffy::Style::display`. Livery selects the role from the generated
+`CssBox` formatting context and table-internal role before it constructs the
+private backend style. A structural test deliberately pairs
+`AlgorithmKind::Flex` with `taffy::Display::Block` and still gets flex
+placement, proving the backend enum no longer chooses the algorithm.
+
+A retained inline leaf now has an owning `BoxId` when it represents that box's
+whole IFC. When Taffy asks the leaf for min-content or max-content inline
+size, Livery forms an `IntrinsicSizeQuery` for that box and logical axis. The
+first query formats the minimum and maximum cases through Parley, validates
+the pair, and stores it in Buckram's `IntrinsicSizeCache`; the other query
+reuses the pair. The final line layout is formatted at the returned intrinsic
+width, so fragment construction does not confuse the probe width with the
+used width.
+
+The current workaround can produce two partial inline leaves around an
+out-of-flow child. Those leaves deliberately bypass the box-keyed cache rather
+than aliasing two partial measurements under one parent `BoxId`. A structural
+test freezes that guard. It remains until Buckram's owned IFC handles
+out-of-flow static-position participants directly.
+
+The remaining boundary is explicit: `AlgorithmKind::Block` still calls
+Taffy's block algorithm, and Livery still constructs private Taffy styles.
+K3c begins replacing that block call with Buckram's BFC implementation and
+gives it logical margins, float and clearance inputs, and containing-block
+state. Later K3 slices widen admission only as each shared BFC rule lands.
+
+Verification:
+
+- `cargo test -p buckram`: 22 passed.
+- `cargo test -p genet-livery`: passed.
+- strict Clippy passed for Buckram and for genet-livery with dependency
+  linting disabled.
+- the release all-nine expectation guard retained K2's 5,614 passes and
+  returned `unexpected=0` in every directory:
+- after the partial-inline cache guard landed, the release runner was rebuilt
+  and the affected `css-position` and CSS2 ledgers were repeated.
+  `css-position` remained at 40 passes with `unexpected=0`. The first CSS2 run
+  reproduced the existing transient failure in
+  `first-letter-punctuation-100.xht`; that file passed alone, and the full
+  tie-breaker returned 4,159 passes with `unexpected=0`.
+
+| directory | passes | unexpected |
+|---|---:|---:|
+| css-backgrounds | 218 | 0 |
+| css-borders | 28 | 0 |
+| css-flexbox | 369 | 0 |
+| css-grid | 427 | 0 |
+| css-multicol | 98 | 0 |
+| css-position | 40 | 0 |
+| css-tables | 50 | 0 |
+| css-writing-modes | 225 | 0 |
+| CSS2 | 4,159 | 0 |
+| **total** | **5,614** | **0** |
+
+#### K3c receipt - 2026-07-27
+
+K3c proves a live Buckram-owned normal block-flow lane. It does not close K3,
+and it does not claim that Taffy's block algorithm has disappeared.
+
+Buckram now owns a CSS-facing `BlockStyle` beside the private backend style.
+It carries the box's flow axes and its containing block's axes, preferred,
+minimum and maximum sizes, physical margins, padding and borders, box sizing,
+positioning, float and clearance, independent-BFC establishment, replaced and
+aspect-ratio state, size containment, and a nonlinear-length marker. The
+adapter therefore does not infer CSS roles from Taffy's style enum.
+
+`BlockFormattingContext` performs logical block stacking. Its pure structural
+fixtures cover:
+
+- CSS 2.2 section 10.3.3's block-width equation, including two auto inline
+  margins;
+- adjoining positive and negative margin collapse as separate extrema;
+- `vertical-rl` block progression from the physical right edge.
+
+The live algorithm admits a context only when its inline size is definite, it
+is horizontal normal flow, and the whole shared block subtree is static,
+non-floating, margin-safe, non-replaced, and free of intrinsic keywords,
+independent BFCs, aspect-ratio sizing, containment, and nonlinear math. Every
+rejection is a named `BlockDeferral`. This is deliberately a whole-subtree
+test: consuming the size returned by a deferred child is not enough when that
+child also returns margin or float state shared with its ancestors.
+
+Two receipts prove that this is not Taffy under a new name:
+
+- a Buckram adapter fixture gives a child `width: 80px` while the private
+  Taffy style says `10px`; the result is 80px and reports
+  `BlockAlgorithm::Buckram`;
+- a live HTML/Livery fixture lays out the root, `html`, `body`, and a nested
+  block container with four Buckram block calls, zero Taffy block calls, and
+  two children stacked at the expected 20px interval.
+
+The first broad guard found one real regression,
+`background-color-body-propagation-002.html`. A Buckram parent had consumed a
+Taffy child's size while dropping the descendant margin-collapse state, so
+the red body background extended behind a paragraph's collapsed margins.
+Deferral now propagates through the shared block subtree. The isolated test
+passed after that correction, and both the full backgrounds and CSS2 guards
+returned to their frozen results.
+
+Still open in K3:
+
+- admit nonzero margins only after parent/child collapse-through and empty
+  block rules are live in Buckram;
+- model Livery's `clear` longhand, then own float exclusion and clearance;
+- finalise auto block size before physical conversion in vertical flow;
+- own relative/absolute/static-position state, shrink-to-fit, independent
+  BFC baselines, intrinsic block queries, and the out-of-flow IFC participant
+  currently protected by K3b's cache guard.
+
+Verification:
+
+- `cargo test -p buckram -p genet-livery`: passed; Buckram has 26 unit tests,
+  and the complete genet-livery unit/integration/doc-test suite is green.
+- strict Clippy passed for both crates with dependency linting disabled. The
+  workspace configuration still prints its existing unreachable
+  disallowed-type warning.
+- the feature-unified release `genet-wpt` build passed.
+- the frozen K2 expectation guard passed on the final source:
+
+| directory | passes | unexpected |
+|---|---:|---:|
+| css-backgrounds | 218 | 0 |
+| css-borders | 28 | 0 |
+| css-flexbox | 369 | 0 |
+| css-grid | 427 | 0 |
+| css-multicol | 98 | 0 |
+| css-position | 40 | 0 |
+| css-tables | 50 | 0 |
+| css-writing-modes | 225 | 0 |
+| CSS2 | 4,159 | 0 |
+| **total** | **5,614** | **0** |
+
+#### K3d receipt - 2026-07-27
+
+K3d admits collapsing margins into the live Buckram block lane. It does not
+close K3.
+
+Buckram now carries collapsed block margins as output state rather than
+recovering them from a backend rectangle. Positive and negative margins keep
+separate extrema. The owned BFC collapses adjoining siblings, a first or last
+child with its parent when the CSS separators permit it, and an empty block's
+start and end margins through to the surrounding chain. Borders, padding,
+non-auto block size, positive minimum block size, a root box, and an
+independent BFC stop the corresponding collapse. The root element's own
+margins never collapse.
+
+The block-width solver also implements CSS 2.2 section 10.3.3's negative
+overconstraint rule: when `margin-inline-start` is the sole auto margin and
+the remaining width is negative, its used value is zero and the inline-end
+margin absorbs the excess. These rules come from CSS 2.2's
+[collapsing-margin model](https://www.w3.org/TR/CSS22/box.html#collapsing-margins)
+and [normal-flow block-width equation](https://www.w3.org/TR/CSS22/visudet.html#blockwidth),
+not from Taffy's output.
+
+Margin state propagates recursively through `AlgorithmTree`. A deferred child
+still defers the whole shared margin subtree; Buckram does not consume its
+rectangle and discard its unresolved float, clearance, positioning, or
+intrinsic state. The live fixture exercises parent/child collapse, sibling
+collapse, a negative empty-block chain, and reports at least six Buckram block
+calls with zero Taffy block calls.
+
+The slice also corrected four evidence boundaries exposed by the broad run:
+
+- both synthetic layout roots now represent the definite initial containing
+  block, so an `html` -> `body` -> descendant `height: 100%` chain resolves
+  against the viewport while remaining entirely in Buckram;
+- HTML `width` and `height` hints retain percentage values, CSS dimensions
+  take precedence, and `canvas` joins `img` as replaced content;
+- the isolated atomic-inline prepass admits only a generated box whose outer
+  display role is inline, so blockified flex/grid items and positioned
+  replaced boxes are not measured against the viewport as inline leaves;
+- the WPT renderer now composites a transparent CSS canvas over an opaque
+  white browser backdrop. Canvas-background propagation remains engine-owned,
+  including CSS Backgrounds 3 section 2.11's rule that a selected
+  `display: none` source leaves the canvas transparent. The UA sheet also
+  restores `blockquote`'s block role and conventional margins.
+
+The same Livery cleanup added the computed `contain` model needed to suppress
+HTML body-background propagation and completed the retained single-animation
+lane for keyframe properties and negative delays. Those changes explain some
+corpus gains below; they are not Buckram layout claims.
+
+The backdrop correction means K2 is not a valid per-file ratchet for
+canvas-sensitive cases. The following K2-to-K3d diff is an exact debt map, not
+a claim that all gains came from the block algorithm or that K3d should replace
+the frozen conformance baseline:
+
+| directory | K2 pass | K3d pass | delta | gains | regressions |
+|---|---:|---:|---:|---:|---:|
+| css-backgrounds | 218 | 241 | +23 | 24 | 1 |
+| css-borders | 28 | 32 | +4 | 4 | 0 |
+| css-flexbox | 369 | 380 | +11 | 17 | 6 |
+| css-grid | 427 | 433 | +6 | 7 | 1 |
+| css-multicol | 98 | 98 | 0 | 1 | 1 |
+| css-position | 40 | 41 | +1 | 1 | 0 |
+| css-tables | 50 | 50 | 0 | 0 | 0 |
+| css-writing-modes | 225 | 225 | 0 | 0 | 0 |
+| CSS2 | 4,159 | 4,230 | +71 | 93 | 22 |
+| **total** | **5,614** | **5,730** | **+116** | **147** | **31** |
+
+The 31 losses are named and remain assigned:
+
+- `css3-background-size-001` remains a background-image percentage-sizing
+  discrepancy;
+- the six flex losses are the two vertical-canvas files, the two
+  `flex-basis: content` files, the whitespace `001b` file, and
+  `flexbox_quirks_body`. The last requires the WHATWG
+  [body-fills-html quirk](https://quirks.spec.whatwg.org/#the-body-element-fills-the-html-element-quirk);
+- `grid-baseline-align-cycles-001` requires an `inline-grid` outer/inner
+  display distinction plus cyclic baseline sizing;
+- `multicol-height-002-print` remains K6 fragmentation work;
+- CSS2's two `abspos-containing-block-initial-009*` files and
+  `height-percentage-003` now lay out the test side correctly but still have
+  positioned percentage references, which remain K5 work;
+- `line-height-oof-descendants-001` is K3b's named out-of-flow IFC
+  participant gap, while `height-percentage-005` is the remaining percentage
+  replaced-height case inside an auto-height containing block;
+- CSS2's four border files and twelve explicit or inherited
+  `height`/`min-height`/`max-height` files were false passes against the old
+  black backdrop. White exposes their existing geometry differences;
+- CSS2's legacy `root-box-003` expects a green background from a
+  `display: none` root. The current CSS Backgrounds rule requires a transparent
+  canvas, so this is an intentional standards correction rather than a
+  conformance regression.
+
+`clear` is now a computed Livery longhand and a Buckram `ClearSide` input.
+Non-`none` values produce the named `Clearance` deferral. Float exclusion and
+clearance are not claimed.
+
+Verification:
+
+- `cargo test -p buckram -p genet-livery`: 32 Buckram tests and 128
+  genet-livery tests passed.
+- strict Clippy passed for both crates with dependency linting disabled. The
+  workspace configuration still prints its existing unreachable
+  disallowed-type warning.
+- exact-file `rustfmt --check` and `git diff --check`: passed.
+- the feature-unified release `genet-wpt` build passed. Fresh expectations
+  for all 16,375 URLs are at
+  `Code/testing/genet/wpt-ledger/2026-07-27_buckram_k3d`.
+
+Still open in K3: float exclusion and clearance, vertical auto block-size
+finalisation, positioning and shrink-to-fit, independent-BFC baselines,
+intrinsic block queries, and the out-of-flow IFC participant protected by
+K3b's cache guard.
+
+#### K3e receipt - 2026-07-27
+
+K3e lands the first standards-owned float and clearance lane. It does not
+close floats or K3.
+
+Float is now a box-generation input. A floated inline-level principal box is
+blockified before anonymous-box construction, retains its physical left or
+right role, and is excluded from both the in-flow block and in-flow inline
+runs. Livery therefore cannot swallow a float into the text leaf merely
+because its computed outer display was inline.
+
+`BlockFormattingContext` now owns float margin-box exclusions. For a
+definite-width direct float it:
+
+- resolves automatic margins to zero under CSS 2.2 section 10.3.5;
+- starts at the hypothetical normal-flow position without advancing the
+  normal block cursor;
+- places the margin box at the highest available position, then at the
+  requested physical left or right side;
+- lowers it to the next overlapping float bottom when the available interval
+  is too narrow;
+- applies physical `clear: left | right | both` against the corresponding
+  lowest float margin edge;
+- inhibits parent-start margin collapse when clearance is actually
+  introduced; and
+- includes the lowest float margin edge in the auto height of the BFC that
+  contains it.
+
+These are implementations of CSS 2.2's
+[float placement and clearance rules](https://www.w3.org/TR/CSS22/visuren.html#floats)
+and [float width equation](https://www.w3.org/TR/CSS22/visudet.html#float-width),
+not a reconstruction of Taffy's result. `FloatAvailableSpace` exposes the
+remaining flow-relative interval for a future line breaker. It is not yet
+fed to Parley.
+
+Admission is intentionally narrower than the data model. Buckram accepts an
+independent BFC only when it directly owns this float lane. Auto-width floats,
+float-affected line boxes, an atomic BFC that must avoid an active float,
+float or clearance state crossing an ordinary nested block, and clearance
+through a collapsed empty box have separate `BlockDeferral` values. Other
+independent BFCs retain K3d dispatch.
+
+That last guard was learned from evidence. A preliminary build admitted every
+independent BFC and moved 153 all-nine statuses, including 40 losses. That
+build was rejected. The accepted build admits only a direct definite-float
+scenario. Its live fixture has a 200px overflow BFC, a blockified 80x40 left
+float, a 60x70 right float, and a 10px `clear: both` block. The two floats
+share the first row at x=0 and x=140, the clear block starts at y=70, the BFC
+has an 80px auto height, and the document reports four Buckram block calls
+with zero Taffy block calls.
+
+The final K3d-to-K3e all-nine diff is exact across all 16,375 URLs:
+
+| directory | K3d pass | K3e pass | delta | gains | regressions |
+|---|---:|---:|---:|---:|---:|
+| css-backgrounds | 241 | 241 | 0 | 0 | 0 |
+| css-borders | 32 | 32 | 0 | 0 | 0 |
+| css-flexbox | 380 | 384 | +4 | 4 | 0 |
+| css-grid | 433 | 435 | +2 | 2 | 0 |
+| css-multicol | 98 | 97 | -1 | 0 | 1 |
+| css-position | 41 | 41 | 0 | 0 | 0 |
+| css-tables | 50 | 50 | 0 | 0 | 0 |
+| css-writing-modes | 225 | 226 | +1 | 1 | 0 |
+| CSS2 | 4,230 | 4,227 | -3 | 8 | 11 |
+| **total** | **5,730** | **5,733** | **+3** | **15** | **12** |
+
+The losses are not hidden by the positive total. Nine directly touch float
+structure that K3e now represents correctly while later algorithms remain
+deferred:
+
+- `multicol-span-float-003`;
+- `c414-flt-wrap-001`;
+- `float-after-block-with-collapsed-margin-inside-inline`;
+- `float-in-inline-anonymous-block-with-overflow-hidden`;
+- `float-nowrap-4` and `float-nowrap-8`;
+- `floats-placement-vertical-001a`;
+- `positioning-float-001`; and
+- `white-space-processing-048`.
+
+They require line-box exclusion, nested anonymous-block float propagation,
+vertical float placement, positioning, or multicol fragmentation. Restoring
+the old inline grouping would recover false passes by undoing CSS Display's
+float role, so it is not an acceptable fix.
+
+The other three losses, `c5505-mrgn-003`, `margin-collapse-004`, and
+`root-box-001`, contain no float. They are stable on the tie-breaker but
+cannot be causally assigned to K3e in this already-dirty shared source tree.
+They remain named corpus debt rather than being presented as float evidence.
+For the same reason, the 15 gains are whole-source movement, not all claimed
+as Buckram float wins.
+
+Verification:
+
+- `cargo test -p buckram -p livery -p genet-livery --offline`: passed with
+  38 Buckram tests, 129 genet-livery tests, 141 Livery tests, and all doc
+  tests green.
+- strict Clippy passed for Buckram and genet-livery with dependency linting
+  disabled. The workspace configuration still prints its existing
+  unreachable disallowed-type warning.
+- the feature-unified release `genet-wpt` build passed.
+- fresh expectations are at
+  `Code/testing/genet/wpt-ledger/2026-07-27_buckram_k3e_final`. Each of the
+  five moved directories was rerun against that ledger and returned
+  `unexpected=0`.
+
+Still open in K3: per-line float exclusion using variable Parley break widths,
+atomic-BFC avoidance beside floats, shrink-to-fit and intrinsic float widths,
+float state through ordinary nested blocks, collapsed-empty-box clearance,
+vertical auto block-size finalisation, positioning, independent-BFC
+baselines, intrinsic block queries, and the out-of-flow IFC participant
+protected by K3b's cache guard.
+
+#### K3f receipt - 2026-07-27
+
+K3f admits one real float-affected inline formatting lane. It does not close
+floats or K3.
+
+Buckram now snapshots the active float margin boxes into an immutable
+`FloatLineConstraints` value for a direct measured inline leaf. The query is
+flow-relative and takes the line's complete block-axis span. Its physical
+adapter handles horizontal RTL without making physical coordinates primary.
+It also exposes the next lower float boundary that gives an overfull line more
+inline room.
+
+The scratch algorithm boundary carries those constraints separately from
+known and available size. A measured leaf must opt in explicitly. Livery's
+retained, soft-wrapping inline formatter opts in; the deterministic estimate
+callback, `nowrap`, and nested line contexts do not, so they retain the named
+`FloatLineExclusion` or `NestedFloatState` deferral rather than silently
+claiming support. Float geometry is not part of Taffy's cache key, so the
+admitted leaf's backend cache is cleared for the final BFC pass. Livery's own
+retained inline cache is keyed by both width and the Buckram constraint
+snapshot, preventing a scalar intrinsic probe from aliasing the final
+float-aware layout.
+
+Parley 0.10 already supplies the needed shaped-paragraph primitive. Before
+each line, Livery sets that line's x offset and maximum advance from Buckram's
+interval. After Parley reports the actual line height, Livery queries the full
+line span and reverts and rebreaks the line if a float boundary changed the
+interval. If no content fits beside the float, it retries at the next wider
+float boundary and updates the line's block position. Alignment then runs
+inside each line's own box. This is not a port of the incumbent's
+top-edge-only band lookup.
+
+The live receipt uses a 200px independent BFC, an 80x40 left float, and a
+20px-line-height paragraph. Its first two line fragments start at x=80; every
+line at or below y=40 starts at x=0 and reclaims the full column. The root,
+html, body, and host remain in Buckram with zero Taffy block calls.
+
+The final all-nine diff has two status changes, both direct float evidence and
+both gains:
+
+- `css/CSS2/floats/floats-zero-height-wrap-001.xht`: fail -> pass;
+- `css/CSS2/floats/floats-zero-height-wrap-002.xht`: fail -> pass.
+
+Those tests are the useful distinction. A line spans a cleared 1px or
+zero-height float boundary; looking only at the line's top would miss the
+exclusion. The full-span query causes a rebreak against the 100px inset.
+
+The frozen K3e JSON contains 41 css-position passes, although K3e's printed
+table said 40; its stated 5,733 total was correct. Comparing frozen JSON to
+frozen JSON gives:
+
+| directory | K3e pass | K3f pass | delta | gains | regressions |
+|---|---:|---:|---:|---:|---:|
+| css-backgrounds | 241 | 241 | 0 | 0 | 0 |
+| css-borders | 32 | 32 | 0 | 0 | 0 |
+| css-flexbox | 384 | 384 | 0 | 0 | 0 |
+| css-grid | 435 | 435 | 0 | 0 | 0 |
+| css-multicol | 97 | 97 | 0 | 0 | 0 |
+| css-position | 41 | 41 | 0 | 0 | 0 |
+| css-tables | 50 | 50 | 0 | 0 | 0 |
+| css-writing-modes | 226 | 226 | 0 | 0 | 0 |
+| CSS2 | 4,227 | 4,229 | +2 | 2 | 0 |
+| **total** | **5,733** | **5,735** | **+2** | **2** | **0** |
+
+The one CSS2 `error` status is byte-for-byte unchanged from K3e and is not
+counted as movement.
+
+Verification:
+
+- `cargo test -p buckram -p livery -p genet-livery --offline`: passed with
+  40 Buckram tests, 130 genet-livery tests, 141 Livery tests, and all doc tests
+  green.
+- strict Clippy passed for Buckram and genet-livery with dependency linting
+  disabled. The workspace configuration still prints its existing
+  unreachable disallowed-type warning.
+- the feature-unified release `genet-wpt` build passed.
+- fresh expectations are at
+  `Code/testing/genet/wpt-ledger/2026-07-27_buckram_k3f`; the complete CSS2
+  repeat returned `unexpected=0`.
+
+Still open in K3: atomic-BFC avoidance beside floats, shrink-to-fit and
+intrinsic float widths, float state through ordinary nested blocks, nowrap and
+nested inline contexts beside floats, collapsed-empty-box clearance, vertical
+auto block-size finalisation, positioning, independent-BFC baselines,
+intrinsic block queries, and the out-of-flow IFC participant protected by
+K3b's cache guard.
 
 ### K4. CSS tables
 

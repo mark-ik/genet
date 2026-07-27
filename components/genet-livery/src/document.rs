@@ -3,9 +3,9 @@
 use std::{collections::HashMap, hash::Hash};
 
 use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
-use livery::PropertyId;
 use livery::cascade::DeclaredValue;
 use livery::media::Device;
+use livery::{AnimationClass, PropertyId};
 use livery::{
     PropertyValue,
     selector::StatePseudoClass,
@@ -15,7 +15,7 @@ use livery::{
 use paint_list_api::DeviceIntSize;
 
 use crate::{
-    FragmentPlane, IncrementalStyle, InteractionStates, LayoutError, LiveryPaintList, RestyleStats,
+    IncrementalStyle, InteractionStates, LayoutError, LiveryLayout, LiveryPaintList, RestyleStats,
     StylePlane, StyleSet, TextSystem, emit_paint_list_with_text_system_scrolled_with_images,
     hit_test_with_scroll,
     layout::{
@@ -44,7 +44,7 @@ pub struct LinkTarget {
 struct LayoutState<Id> {
     viewport: (u32, u32),
     styles: StylePlane<Id>,
-    fragments: FragmentPlane<Id>,
+    fragments: LiveryLayout<Id>,
     content_width: f32,
     content_height: f32,
 }
@@ -69,6 +69,7 @@ struct KeyframeAnimation<Id> {
     name: Box<str>,
     start_ms: f64,
     duration_ms: f64,
+    delay_ms: f64,
     timing: TimingFunction,
 }
 
@@ -490,7 +491,7 @@ where
     fn document_content_extent(
         &self,
         styles: &StylePlane<D::NodeId>,
-        fragments: &FragmentPlane<D::NodeId>,
+        fragments: &LiveryLayout<D::NodeId>,
     ) -> (f32, f32) {
         let mut extent = (0.0, 0.0);
         for child in self.dom.dom_children(self.dom.document()) {
@@ -503,7 +504,7 @@ where
         &self,
         id: D::NodeId,
         styles: &StylePlane<D::NodeId>,
-        fragments: &FragmentPlane<D::NodeId>,
+        fragments: &LiveryLayout<D::NodeId>,
         extent: &mut (f32, f32),
         nested: bool,
     ) {
@@ -660,20 +661,30 @@ where
         } else {
             ((self.clock_ms - animation.start_ms) / animation.duration_ms).clamp(0.0, 1.0) as f32
         };
+        if self.clock_ms < animation.start_ms {
+            return;
+        }
         let progress = animation.timing.sample(progress);
-        let base = styles
-            .get(animation.node)
-            .map_or(1.0, |style| style.opacity.value());
-        if let Some(value) = keyframe_opacity(keyframes, progress, base)
-            && let Some(style) = styles.get_mut(animation.node)
-        {
-            style.opacity = Opacity::from_value(value);
+        let Some(base) = styles.get(animation.node).cloned() else {
+            return;
+        };
+        let updates = keyframe_properties(keyframes)
+            .into_iter()
+            .filter_map(|property| {
+                keyframe_value(keyframes, property, progress, base.get(property))
+                    .map(|value| (property, value))
+            })
+            .collect::<Vec<_>>();
+        if let Some(style) = styles.get_mut(animation.node) {
+            for (property, value) in updates {
+                let _ = style.set(property, value);
+            }
         }
     }
 
     fn schedule_keyframe_animation(&mut self, styles: &StylePlane<D::NodeId>) {
         let candidate = self.find_keyframe_animation(self.dom.document(), styles);
-        let Some((node, name, duration_ms, timing)) = candidate else {
+        let Some((node, name, duration_ms, delay_ms, timing)) = candidate else {
             self.keyframe_animation = None;
             return;
         };
@@ -681,6 +692,7 @@ where
             animation.node == node
                 && animation.name.as_ref() == name.as_str()
                 && animation.duration_ms == duration_ms
+                && animation.delay_ms == delay_ms
                 && animation.timing == timing
         }) {
             return;
@@ -688,8 +700,9 @@ where
         self.keyframe_animation = Some(KeyframeAnimation {
             node,
             name: name.into_boxed_str(),
-            start_ms: self.clock_ms,
+            start_ms: self.clock_ms + delay_ms,
             duration_ms,
+            delay_ms,
             timing,
         });
     }
@@ -698,7 +711,7 @@ where
         &self,
         id: D::NodeId,
         styles: &StylePlane<D::NodeId>,
-    ) -> Option<(D::NodeId, String, f64, TimingFunction)> {
+    ) -> Option<(D::NodeId, String, f64, f64, TimingFunction)> {
         if let Some(style) = styles.get(id)
             && let AnimationName::Name(name) = &style.animation_name
         {
@@ -708,6 +721,7 @@ where
                     id,
                     name.to_string(),
                     duration_ms,
+                    f64::from(style.animation_delay.milliseconds()),
                     style.animation_timing_function,
                 ));
             }
@@ -938,7 +952,29 @@ where
     }
 }
 
-fn keyframe_opacity(keyframes: &Keyframes, progress: f32, fallback: f32) -> Option<f32> {
+fn keyframe_properties(keyframes: &Keyframes) -> Vec<PropertyId> {
+    let mut properties = Vec::new();
+    for declaration in keyframes
+        .frames()
+        .iter()
+        .flat_map(|frame| &frame.declarations().declarations)
+    {
+        if declaration.property.metadata().animation != AnimationClass::None
+            && matches!(declaration.value, DeclaredValue::Value(_))
+            && !properties.contains(&declaration.property)
+        {
+            properties.push(declaration.property);
+        }
+    }
+    properties
+}
+
+fn keyframe_value(
+    keyframes: &Keyframes,
+    property: PropertyId,
+    progress: f32,
+    fallback: PropertyValue,
+) -> Option<PropertyValue> {
     let samples = keyframes
         .frames()
         .iter()
@@ -947,20 +983,24 @@ fn keyframe_opacity(keyframes: &Keyframes, progress: f32, fallback: f32) -> Opti
                 .declarations()
                 .declarations
                 .iter()
-                .find(|declaration| declaration.property == PropertyId::Opacity)
+                .rev()
+                .find(|declaration| declaration.property == property)
                 .and_then(|declaration| match &declaration.value {
-                    DeclaredValue::Value(PropertyValue::Opacity(value)) => {
-                        Some((frame.offset(), value.value()))
-                    },
+                    DeclaredValue::Value(value) => Some((frame.offset(), value.clone())),
                     _ => None,
                 })
         })
         .collect::<Vec<_>>();
-    let Some(&(first_offset, first_value)) = samples.first() else {
-        return Some(fallback);
-    };
-    if progress <= first_offset {
-        return Some(first_value);
+    let first_offset = samples.first().map(|(offset, _)| *offset)?;
+    let mut samples = samples;
+    if first_offset > 0.0 {
+        samples.insert(0, (0.0, fallback.clone()));
+    }
+    if samples.last().is_some_and(|(offset, _)| *offset < 1.0) {
+        samples.push((1.0, fallback));
+    }
+    if progress <= samples[0].0 {
+        return Some(samples[0].1.clone());
     }
     for pair in samples.windows(2) {
         let [(left_offset, left_value), (right_offset, right_value)] = pair else {
@@ -969,10 +1009,10 @@ fn keyframe_opacity(keyframes: &Keyframes, progress: f32, fallback: f32) -> Opti
         if progress <= *right_offset {
             let span = (*right_offset - *left_offset).max(f32::EPSILON);
             let local = ((progress - *left_offset) / span).clamp(0.0, 1.0);
-            return Some(*left_value + (*right_value - *left_value) * local);
+            return Some(left_value.interpolate(right_value, local));
         }
     }
-    samples.last().map(|(_, value)| *value)
+    samples.last().map(|(_, value)| value.clone())
 }
 
 fn find_id<D: LayoutDom>(dom: &D, id: D::NodeId, target: &str) -> Option<D::NodeId> {

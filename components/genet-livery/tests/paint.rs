@@ -79,6 +79,118 @@ fn backgrounds_and_borders_follow_dom_paint_order() {
 }
 
 #[test]
+fn body_background_propagates_to_the_canvas_and_not_its_offset_box() {
+    let list = render(
+        r#"<html><body><p>canvas</p></body></html>"#,
+        "html { background-color: transparent; background-image: none; } \
+         body { background-color: green; margin: 0; }",
+        1,
+    );
+    let green = list
+        .commands()
+        .iter()
+        .filter_map(|command| match command {
+            PaintCmd::DrawRect(rect)
+                if rect.color == ColorF::new(0.0, f32::from(0x80_u8) / 255.0, 0.0, 1.0) =>
+            {
+                Some(rect.placement.bounds)
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(green.len(), 1, "the propagated background is not repainted");
+    assert_eq!(green[0].min.x, 0.0);
+    assert_eq!(green[0].min.y, 0.0);
+    assert_eq!(green[0].max.x, 320.0);
+    assert_eq!(green[0].max.y, 240.0);
+}
+
+#[test]
+fn display_none_root_keeps_the_canvas_background_transparent() {
+    let list = render(
+        r#"<html><body><p>hidden</p></body></html>"#,
+        "html { display: none; background-color: green; } \
+         body { background-color: red; }",
+        1,
+    );
+    assert!(
+        !list
+            .commands()
+            .iter()
+            .any(|command| matches!(command, PaintCmd::DrawRect(_))),
+        "display:none on the selected root makes the CSS canvas transparent"
+    );
+}
+
+#[test]
+fn containment_on_html_or_body_disables_body_background_propagation() {
+    for containment in ["html { contain: paint; }", "body { contain: paint; }"] {
+        let list = render(
+            r#"<html><body><p>contained</p></body></html>"#,
+            &format!(
+                "{containment} html {{ background-color: transparent; background-image: none; }} \
+                 body {{ background-color: green; margin: 8px; }}"
+            ),
+            1,
+        );
+        let green = list
+            .commands()
+            .iter()
+            .find_map(|command| match command {
+                PaintCmd::DrawRect(rect)
+                    if rect.color == ColorF::new(0.0, f32::from(0x80_u8) / 255.0, 0.0, 1.0) =>
+                {
+                    Some(rect.placement.bounds)
+                },
+                _ => None,
+            })
+            .expect("the body still paints its own background");
+
+        assert!(green.min.x > 0.0, "{containment}");
+        assert!(green.min.y > 0.0, "{containment}");
+        assert!(green.max.y < 240.0, "{containment}");
+    }
+}
+
+#[test]
+fn negative_delay_keyframe_background_color_reaches_the_canvas() {
+    let document = StaticDocument::parse(r#"<html><body></body></html>"#);
+    let styles = StyleSet::cambium(&[r#"
+        body {
+            animation: bgcolor 1000000s cubic-bezier(0, 1, 1, 0) -500000s;
+        }
+        @keyframes bgcolor {
+            0% { background-color: rgb(0, 200, 0); }
+            100% { background-color: rgb(200, 0, 0); }
+        }
+    "#]);
+    let mut retained = LiveryDocument::new(document, styles, Device::screen(320.0, 240.0));
+    let list = retained.frame(320, 240).expect("initial animation frame");
+    let canvas = list.commands().iter().find_map(|command| match command {
+        PaintCmd::DrawRect(rect)
+            if rect.placement.bounds.min.x == 0.0
+                && rect.placement.bounds.min.y == 0.0
+                && rect.placement.bounds.max.x == 320.0
+                && rect.placement.bounds.max.y == 240.0 =>
+        {
+            Some(rect.color)
+        },
+        _ => None,
+    });
+
+    assert_eq!(
+        canvas,
+        Some(ColorF::new(
+            f32::from(100_u8) / 255.0,
+            f32::from(100_u8) / 255.0,
+            0.0,
+            1.0
+        ))
+    );
+}
+
+#[test]
 fn border_radii_reach_the_neutral_border_primitive() {
     let list = render(
         r#"<html><body><div class="card"></div></body></html>"#,
@@ -344,6 +456,34 @@ fn formatting_whitespace_does_not_shift_following_block_flow() {
             .expect("card background")
     };
     assert_eq!(card_bounds(&mut compact), card_bounds(&mut formatted));
+}
+
+#[test]
+fn blockified_flex_item_does_not_reenter_inline_paint_layout() {
+    let mut document = LiveryDocument::new(
+        StaticDocument::parse(
+            "<html><body><div class=\"flex\"><span>one</span></div></body></html>",
+        ),
+        StyleSet::cambium(&["body { margin: 0; } \
+             .flex { display: flex; width: 320px; height: 128px; background-color: blue; } \
+             span { display: inline-block; margin: 16px; width: 80px; height: 96px; \
+                    background-color: white; }"]),
+        Device::screen(320.0, 240.0),
+    );
+    let frame = document.frame(320, 240).expect("retained flex frame");
+    let item = frame
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::DrawRect(rect) if rect.color == ColorF::new(1.0, 1.0, 1.0, 1.0) => {
+                Some(rect.placement.bounds)
+            },
+            _ => None,
+        })
+        .expect("flex item background");
+
+    assert_eq!((item.min.x, item.min.y), (16.0, 16.0));
+    assert_eq!((item.max.x, item.max.y), (96.0, 112.0));
 }
 
 #[test]
