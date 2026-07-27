@@ -3518,6 +3518,72 @@ mod tests {
     }
 
     #[test]
+    fn live_empty_clearance_keeps_its_following_margin_chain_in_buckram() {
+        fn by_id(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+            expected: &str,
+        ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+            if dom.attributes(node).any(|attribute| {
+                attribute.name.ns.as_ref().is_empty()
+                    && attribute.name.local.as_ref() == "id"
+                    && attribute.value == expected
+            }) {
+                return Some(node);
+            }
+            dom.dom_children(node)
+                .find_map(|child| by_id(dom, child, expected))
+        }
+
+        let dom = StaticDocument::parse(
+            "<html><body><div id=\"host\">\
+             <div id=\"float\"></div><div id=\"empty\"></div><div id=\"after\"></div>\
+             </div></body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&["html, body, div { margin: 0; padding: 0; border: 0; }\
+                 #host { width: 200px; overflow-x: hidden; overflow-y: hidden; }\
+                 #float { float: left; width: 80px; height: 40px; }\
+                 #empty { clear: left; margin-top: 10px; margin-bottom: 20px; }\
+                 #after { height: 10px; margin-top: 30px; }"]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let rect = |id| {
+            let node = by_id(&dom, dom.document(), id).expect(id);
+            layout.get(node).expect(id).physical_rect()
+        };
+
+        let host = rect("host");
+        let float = rect("float");
+        let empty = rect("empty");
+        let after = rect("after");
+        let algorithms = layout.block_algorithm_counts();
+
+        assert_eq!((float.x - host.x, float.y - host.y), (0.0, 0.0));
+        assert_eq!(
+            (empty.y - host.y, empty.height),
+            (40.0, 0.0),
+            "host={host:?}, float={float:?}, empty={empty:?}, after={after:?}, algorithms={algorithms:?}"
+        );
+        assert_eq!((after.y - host.y, after.height), (70.0, 10.0));
+        assert_eq!(host.height, 80.0);
+        assert_eq!(algorithms.taffy, 0);
+    }
+
+    #[test]
     fn live_inline_lines_wrap_beside_a_float_then_reclaim_the_column() {
         fn by_id(
             dom: &StaticDocument,

@@ -1113,6 +1113,80 @@ block-size finalisation, positioning, independent-BFC baselines, intrinsic
 block queries, and the out-of-flow IFC participant protected by K3b's cache
 guard.
 
+#### K3i receipt - 2026-07-27
+
+K3i closes clearance through a self-collapsing empty block. The
+`ClearanceThroughCollapsedBox` deferral has been removed.
+
+CSS2 gives this case two linked rules. When clearance is introduced, it
+separates the box from the preceding margin chain and places the box's border
+edge past the relevant float. If the empty box's own block-start and
+block-end margins are adjoining, they may still collapse through into the
+top margin of a following sibling. That resulting chain must not collapse
+with the parent box's block-end margin.
+
+`BlockFormattingContext` now records whether its active trailing collapsed
+margin contains clearance. The flag belongs to the active margin chain, not
+to the parent or child box generally:
+
+- a cleared self-collapsing box starts a new active chain at its used border
+  position;
+- later self-collapsing siblings extend that chain;
+- a non-collapsing box consumes the chain and replaces it with its own
+  block-end margin; and
+- only a still-active cleared chain suppresses parent-end margin collapse.
+
+This avoids both failures available to a coarse boolean: letting the cleared
+chain escape through the parent, or permanently disabling valid parent-end
+collapse after a later non-empty sibling.
+
+The pure fixture uses a 200px BFC, an 80x40 left float, an empty `clear:
+left` box with 10px and 20px block margins, and a following 10px box with a
+30px block-start margin. The empty border box lands at y=40, its margins
+collapse with the following margin, the next box lands at y=70, and used
+block size is 80px. A trailing-empty variant retains a 60px used size and
+reports that its active margin cannot collapse with the parent end.
+
+The adapter fixture proves the same y=40 and y=70 placements, 80px root
+height, and Buckram dispatch for both the empty box and root. The live
+HTML/Livery fixture repeats that geometry inside an explicit overflow BFC and
+reports zero Taffy block calls.
+
+This slice has no WPT status movement:
+
+- `css/CSS2/floats-clear` remains 65 passes, 146 failures, 38 skips, and zero
+  errors across 249 files;
+- `css/CSS2/floats` remains 44 passes, 57 failures, 43 skips, and zero errors
+  across 144 files;
+- the complete CSS2 ledger is byte-identical to K3h at 4,229 passes, 1,745
+  failures, 3,279 skips, and one error across 9,254 files; and
+- every frozen all-nine K3f expectation guard returns `unexpected=0`, so the
+  total remains 5,735 with zero gains and zero regressions.
+
+The closest public self-collapsing clearance tests also enter positioned
+subtrees or require float state to cross ordinary nested blocks. Those
+deferrals remain real, so the structural and live fixtures are the capability
+receipt and WPT remains the unchanged regression guard.
+
+Verification:
+
+- `cargo test -p buckram -p livery -p genet-livery --offline`: passed with
+  46 Buckram tests, 133 genet-livery tests, 141 Livery tests, and all doc tests
+  green.
+- strict Clippy passed for Buckram and genet-livery with dependency linting
+  disabled. The workspace configuration still prints its existing
+  unreachable disallowed-type warning.
+- the feature-unified release `genet-wpt` build passed.
+- fresh `floats`, `floats-clear`, and complete CSS2 expectations are at
+  `Code/testing/genet/wpt-ledger/2026-07-27_buckram_k3i`.
+
+Still open in K3: multi-child and block-content auto floats, inline-block
+shrink-to-fit, nonzero-inline-margin and non-block BFC avoidance beside
+floats, float state through ordinary nested blocks, nowrap and nested inline
+contexts beside floats, vertical auto block-size finalisation, positioning,
+independent-BFC baselines, intrinsic block queries, and the out-of-flow IFC
+participant protected by K3b's cache guard.
+
 ### K4. CSS tables
 
 Implement anonymous table fixup, row and column structure, spans, fixed and

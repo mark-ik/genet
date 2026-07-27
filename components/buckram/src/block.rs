@@ -353,7 +353,6 @@ pub enum BlockDeferral {
     FloatLineExclusion,
     FloatFormattingContextAvoidance,
     NestedFloatState,
-    ClearanceThroughCollapsedBox,
     IntrinsicSize,
     IndependentFormattingContext,
     Replaced,
@@ -785,6 +784,7 @@ pub struct BlockFormattingContext {
     collapse_parent_start: bool,
     float_exclusions: Vec<FloatExclusion>,
     latest_float_block_start: f32,
+    active_margin_has_clearance: bool,
 }
 
 impl BlockFormattingContext {
@@ -807,6 +807,7 @@ impl BlockFormattingContext {
             collapse_parent_start,
             float_exclusions: Vec::new(),
             latest_float_block_start: 0.0,
+            active_margin_has_clearance: false,
         }
     }
 
@@ -1109,10 +1110,25 @@ impl BlockFormattingContext {
             }
         }
         if margin_state.collapses_through {
-            self.active_margin = adjoining.collapse_with(margin_state.block_end);
+            if has_clearance {
+                // Clearance separates this empty box's adjoining margins
+                // from the preceding chain. Its own start and end margins
+                // may still collapse through into following siblings, but
+                // that resulting chain may not collapse with the parent's
+                // block-end margin.
+                self.block_cursor = logical.block_start;
+                self.active_margin = margin_state
+                    .block_start
+                    .collapse_with(margin_state.block_end);
+                self.active_margin_has_clearance = true;
+                self.all_children_collapse_through = false;
+            } else {
+                self.active_margin = adjoining.collapse_with(margin_state.block_end);
+            }
         } else {
             self.block_cursor = logical.block_start + logical.block_size;
             self.active_margin = margin_state.block_end;
+            self.active_margin_has_clearance = false;
             self.all_children_collapse_through = false;
         }
         self.has_child = true;
@@ -1145,6 +1161,12 @@ impl BlockFormattingContext {
         } else {
             CollapsedMargin::ZERO
         }
+    }
+
+    /// Whether the active trailing margin chain may adjoin the parent's
+    /// block-end margin.
+    pub(crate) fn active_margin_may_collapse_with_parent_end(&self) -> bool {
+        !self.active_margin_has_clearance
     }
 
     pub fn used_block_size_with_margin_collapse(&self, collapse_parent_end: bool) -> f32 {
@@ -1777,5 +1799,62 @@ mod tests {
             build().place_in_flow(clear(ClearSide::Both), size).rect.y,
             70.0
         );
+    }
+
+    #[test]
+    fn clearance_through_an_empty_box_starts_a_new_following_margin_chain() {
+        let mut context = horizontal_context(200.0);
+        context.place_float(
+            fixed_float(FloatSide::Left, 80.0),
+            PhysicalSize {
+                width: 80.0,
+                height: 40.0,
+            },
+        );
+        let clear = BlockStyle {
+            clear: ClearSide::Left,
+            ..fixed_width(200.0)
+        };
+        let empty = context.place_in_flow_with_margins(
+            clear,
+            PhysicalSize {
+                width: 200.0,
+                height: 0.0,
+            },
+            margin_state(10.0, 20.0, true),
+        );
+        let following = context.place_in_flow_with_margins(
+            fixed_width(200.0),
+            PhysicalSize {
+                width: 200.0,
+                height: 10.0,
+            },
+            margin_state(30.0, 0.0, false),
+        );
+
+        assert_eq!(empty.rect.y, 40.0);
+        assert_eq!(following.rect.y, 70.0);
+        assert_eq!(context.used_block_size(), 80.0);
+        assert!(context.active_margin_may_collapse_with_parent_end());
+
+        let mut trailing_empty = horizontal_context(200.0);
+        trailing_empty.place_float(
+            fixed_float(FloatSide::Left, 80.0),
+            PhysicalSize {
+                width: 80.0,
+                height: 40.0,
+            },
+        );
+        trailing_empty.place_in_flow_with_margins(
+            clear,
+            PhysicalSize {
+                width: 200.0,
+                height: 0.0,
+            },
+            margin_state(10.0, 20.0, true),
+        );
+
+        assert_eq!(trailing_empty.used_block_size(), 60.0);
+        assert!(!trailing_empty.active_margin_may_collapse_with_parent_end());
     }
 }

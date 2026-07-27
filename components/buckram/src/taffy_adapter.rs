@@ -1001,9 +1001,6 @@ where
                             child_collapses_through,
                         )
                     };
-                if child_style.clear != ClearSide::None && child_margin_state.collapses_through {
-                    return Err(BlockDeferral::ClearanceThroughCollapsedBox);
-                }
                 if let Some(float_avoiding_placement) = float_avoiding_placement {
                     formatting_context.place_float_avoiding_in_flow(
                         child_style,
@@ -1047,12 +1044,15 @@ where
         }
 
         let all_children_collapse_through = formatting_context.all_children_collapse_through();
-        let margin_collapse = style.child_margin_collapse(
+        let mut margin_collapse = style.child_margin_collapse(
             containing_inline,
             containing_block_size,
             is_layout_root,
             all_children_collapse_through,
         );
+        if !formatting_context.active_margin_may_collapse_with_parent_end() {
+            margin_collapse.block_end = false;
+        }
         let collapses_through = style.can_collapse_through(
             containing_inline,
             containing_block_size,
@@ -1748,6 +1748,101 @@ mod tests {
         assert_eq!((tree.layout(right).x, tree.layout(right).y), (140.0, 0.0));
         assert_eq!((tree.layout(clear).x, tree.layout(clear).y), (0.0, 70.0));
         assert_eq!(tree.layout(root).height, 80.0);
+        assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Buckram));
+    }
+
+    #[test]
+    fn buckram_carries_clearance_through_an_empty_collapsing_block() {
+        let mut tree = AlgorithmTree::<Style, (), u8>::new();
+        let float = tree.new_with_children_and_block_style(
+            AlgorithmKind::Leaf,
+            BlockStyle {
+                size: crate::BlockDimensions::new(
+                    BlockSizeValue::Length(crate::FlowLength::px(80.0)),
+                    BlockSizeValue::Length(crate::FlowLength::px(40.0)),
+                ),
+                float: FloatSide::Left,
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                size: taffy::Size {
+                    width: Dimension::length(80.0),
+                    height: Dimension::length(40.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            1,
+        );
+        let mut empty_style = BlockStyle {
+            clear: ClearSide::Left,
+            ..BlockStyle::default()
+        };
+        empty_style.margin.top = crate::FlowLengthAuto::Value(crate::FlowLength::px(10.0));
+        empty_style.margin.bottom = crate::FlowLengthAuto::Value(crate::FlowLength::px(20.0));
+        let empty = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            empty_style,
+            Style {
+                display: Display::Block,
+                ..Style::default()
+            },
+            &[],
+            2,
+        );
+        let mut following_style = BlockStyle {
+            size: crate::BlockDimensions::new(
+                BlockSizeValue::Auto,
+                BlockSizeValue::Length(crate::FlowLength::px(10.0)),
+            ),
+            ..BlockStyle::default()
+        };
+        following_style.margin.top = crate::FlowLengthAuto::Value(crate::FlowLength::px(30.0));
+        let following = tree.new_with_children_and_block_style(
+            AlgorithmKind::Leaf,
+            following_style,
+            Style {
+                size: taffy::Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(10.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            3,
+        );
+        let root = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                size: taffy::Size {
+                    width: Dimension::length(200.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            &[float, empty, following],
+            0,
+        );
+
+        tree.compute_layout_with_measure(root, available(200.0, 200.0), zero_measure);
+
+        assert_eq!((tree.layout(float).x, tree.layout(float).y), (0.0, 0.0));
+        assert_eq!(
+            (tree.layout(empty).y, tree.layout(empty).height),
+            (40.0, 0.0)
+        );
+        assert_eq!(
+            (tree.layout(following).y, tree.layout(following).height),
+            (70.0, 10.0)
+        );
+        assert_eq!(tree.layout(root).height, 80.0);
+        assert_eq!(tree.block_algorithm(empty), Some(BlockAlgorithm::Buckram));
         assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Buckram));
     }
 
