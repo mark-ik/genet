@@ -259,6 +259,12 @@ impl LoadedDocument {
     pub fn inspect(&self) -> ContentReport {
         content_report(&self.doc)
     }
+
+    /// The parsed DOM retained by the static session. Read-only consumers use
+    /// this for host-neutral inspection and semantic clipping.
+    pub fn dom(&self) -> &StaticDocument {
+        &self.doc
+    }
 }
 
 // `resolve_href` (link resolution) now lives in the dependency-free `crate::href`

@@ -36,6 +36,7 @@ genet-host-api = { workspace = true }
 netrender = { workspace = true }
 genet-layout = { path = "../genet-layout" }
 genet-render = { path = "../genet-render" }
+genet-extract = { path = "../genet-extract" }
 genet-static-dom = { path = "../genet-static-dom" }
 layout_dom_api = { workspace = true }
 genet-livery = { path = "../genet-livery", optional = true }

@@ -15,10 +15,9 @@ use std::any::Any;
 use genet_host_api::ResourceFetcher;
 use genet_layout::ScrollKey;
 use inker::session_engine::{
-    DocumentSession, SessionClick, SessionEngine, SessionError, SessionLink, SessionScrollKey,
-    SessionSpawnRequest,
+    DocumentClip, DocumentSession, SessionClick, SessionEngine, SessionError, SessionLink,
+    SessionScrollKey, SessionSpawnRequest,
 };
-#[cfg(feature = "livery")]
 use layout_dom_api::LayoutDom;
 use netrender::Scene;
 
@@ -74,12 +73,16 @@ impl<Fetch: ResourceFetcher + Send + Sync> SessionEngine<Scene> for StaticSessio
             None => LoadedDocument::load(&self.fetcher, &request.address)
                 .map_err(SessionError::SpawnFailed)?,
         };
-        Ok(Box::new(StaticDocumentSession { doc }))
+        Ok(Box::new(StaticDocumentSession {
+            doc,
+            address: request.address.clone(),
+        }))
     }
 }
 
 struct StaticDocumentSession {
     doc: LoadedDocument,
+    address: String,
 }
 
 impl DocumentSession<Scene> for StaticDocumentSession {
@@ -110,6 +113,9 @@ impl DocumentSession<Scene> for StaticDocumentSession {
     /// "genet ask").
     fn inspect(&self) -> Option<inker::ContentReport> {
         Some(self.doc.inspect())
+    }
+    fn clip(&self) -> Option<DocumentClip> {
+        semantic_clip_from_dom(&self.address, self.doc.dom())
     }
     fn as_any(&mut self) -> &mut dyn Any {
         self
@@ -195,6 +201,7 @@ impl<Fetch: ResourceFetcher + Send + Sync> SessionEngine<Scene> for LiverySessio
         }
         Ok(Box::new(LiveryDocumentSession {
             doc,
+            address: request.address.clone(),
             last_error: None,
         }))
     }
@@ -263,6 +270,7 @@ fn livery_resource_urls(dom: &genet_static_dom::StaticDocument, sheets: &[String
 #[cfg(feature = "livery")]
 pub struct LiveryDocumentSession {
     doc: genet_livery::LiveryDocument<genet_static_dom::StaticDocument>,
+    address: String,
     last_error: Option<String>,
 }
 
@@ -364,9 +372,26 @@ impl DocumentSession<Scene> for LiveryDocumentSession {
         Some(genet_render::content_report(self.doc.dom()))
     }
 
+    fn clip(&self) -> Option<DocumentClip> {
+        semantic_clip_from_dom(&self.address, self.doc.dom())
+    }
+
     fn as_any(&mut self) -> &mut dyn Any {
         self
     }
+}
+
+fn semantic_clip_from_dom<D: LayoutDom>(address: &str, dom: &D) -> Option<DocumentClip> {
+    let report = genet_render::content_report(dom);
+    let text = genet_extract::extract_main_text(dom).unwrap_or_else(|| report.headings.join("\n"));
+    let text = text.trim().to_string();
+    (!text.is_empty()).then(|| DocumentClip {
+        source_url: address.to_string(),
+        title: report.title,
+        text,
+        selector: None,
+        links: report.links,
+    })
 }
 
 // ── Scripted lane (genet.scripted / genet.scripted.nova) ────────────────
@@ -686,6 +711,23 @@ mod tests {
         assert_eq!(report.title.as_deref(), Some("The Page"));
         assert_eq!(report.headings, vec!["Heading"]);
         assert_eq!(report.links, vec!["/next"]);
+    }
+
+    #[test]
+    fn static_session_exposes_a_host_neutral_semantic_clip() {
+        let engine = StaticSessionEngine::new(NoFetch);
+        let request = SessionSpawnRequest::new("https://example.test/report").with_body(
+            "<html><head><title>The Page</title></head><body><main>\
+                 <h1>Heading</h1><p>A useful finding.</p>\
+                 <a href=\"https://example.test/source\">source</a></main></body></html>",
+        );
+        let session = engine.spawn(&request).expect("spawns");
+        let clip = session.clip().expect("the static lane can supply a clip");
+        assert_eq!(clip.source_url, "https://example.test/report");
+        assert_eq!(clip.title.as_deref(), Some("The Page"));
+        assert!(clip.text.contains("A useful finding."));
+        assert_eq!(clip.links, vec!["https://example.test/source"]);
+        assert_eq!(clip.selector, None, "v1 captures the whole document");
     }
 
     #[test]

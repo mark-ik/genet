@@ -66,8 +66,8 @@ pub use routing::{
     SurfaceContractMode, SurfaceTargetId, WorkspaceRouteId,
 };
 pub use session_engine::{
-    ContentReport, DocumentSession, EngineKindIndex, EngineKinds, OutlineEntry, SessionClick,
-    SessionEngine, SessionError, SessionLink, SessionRegistry, SessionScrollKey,
+    ContentReport, DocumentClip, DocumentSession, EngineKindIndex, EngineKinds, OutlineEntry,
+    SessionClick, SessionEngine, SessionError, SessionLink, SessionRegistry, SessionScrollKey,
     SessionSpawnRequest,
 };
 pub use sniff::sniff_content_type;

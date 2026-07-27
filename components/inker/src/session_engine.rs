@@ -126,6 +126,20 @@ pub struct ContentReport {
     pub headings: Vec<String>,
 }
 
+/// A host-neutral semantic fragment offered by a retained document session.
+///
+/// v1 sessions may expose the whole addressed document when they do not yet
+/// implement range selection. The source address and optional selector keep
+/// that distinction explicit for consumers such as Knot clipping.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DocumentClip {
+    pub source_url: String,
+    pub title: Option<String>,
+    pub text: String,
+    pub selector: Option<String>,
+    pub links: Vec<String>,
+}
+
 /// One element in the structural outline.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutlineEntry {
@@ -242,6 +256,13 @@ pub trait DocumentSession<F>: Any {
     /// lanes without a structural read; the host reports the absence honestly
     /// rather than synthesizing one.
     fn inspect(&self) -> Option<ContentReport> {
+        None
+    }
+
+    /// Capture the current semantic clip. `None` means this document lane
+    /// cannot supply clip content; hosts must not synthesize authority or
+    /// recover source bytes by downcasting.
+    fn clip(&self) -> Option<DocumentClip> {
         None
     }
 
