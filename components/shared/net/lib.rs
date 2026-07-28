@@ -1081,13 +1081,12 @@ impl Metadata {
             .content_type
             .clone()
             .map(|content_type| content_type.into_inner().into());
-        MimeClassifier::default().classify(
-            load_context,
-            no_sniff,
-            ApacheBugFlag::from_content_type(mime.as_ref()),
-            &mime,
-            data,
-        )
+        let apache_bug_flag = if matches!(self.final_url.scheme(), "http" | "https") {
+            ApacheBugFlag::from_http_headers(self.headers.as_deref())
+        } else {
+            ApacheBugFlag::Off
+        };
+        MimeClassifier::default().classify(load_context, no_sniff, apache_bug_flag, &mime, data)
     }
 }
 

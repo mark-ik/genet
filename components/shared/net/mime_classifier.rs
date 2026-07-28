@@ -2,7 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use mime::{self, Mime};
+use http::{HeaderMap, header};
+use mime::Mime;
 
 use crate::LoadContext;
 
@@ -37,11 +38,19 @@ pub enum ApacheBugFlag {
 
 impl ApacheBugFlag {
     /// <https://mimesniff.spec.whatwg.org/#supplied-mime-type-detection-algorithm>
-    pub fn from_content_type(mime_type: Option<&Mime>) -> ApacheBugFlag {
-        // TODO(36801): also handle charset ISO-8859-1
-        if mime_type.is_some_and(|mime_type| {
-            *mime_type == mime::TEXT_PLAIN || *mime_type == mime::TEXT_PLAIN_UTF_8
-        }) {
+    pub fn from_http_headers(headers: Option<&HeaderMap>) -> ApacheBugFlag {
+        const APACHE_BUG_CONTENT_TYPES: [&[u8]; 4] = [
+            b"text/plain",
+            b"text/plain; charset=ISO-8859-1",
+            b"text/plain; charset=iso-8859-1",
+            b"text/plain; charset=UTF-8",
+        ];
+
+        let supplied_type = headers
+            .and_then(|headers| headers.get_all(header::CONTENT_TYPE).iter().last())
+            .map(|value| value.as_bytes());
+
+        if supplied_type.is_some_and(|value| APACHE_BUG_CONTENT_TYPES.contains(&value)) {
             ApacheBugFlag::On
         } else {
             ApacheBugFlag::Off
