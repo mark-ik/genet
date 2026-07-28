@@ -270,6 +270,8 @@ pub trait DocumentSession<F>: Any {
     /// content report) stay on the concrete type; hosts that need them
     /// downcast through here rather than the trait growing every lane's
     /// diagnostics.
+    fn as_any_ref(&self) -> &dyn Any;
+
     fn as_any(&mut self) -> &mut dyn Any;
 }
 
@@ -418,6 +420,9 @@ mod tests {
         fn set_hidden(&mut self, hidden: bool) {
             self.hidden = hidden;
         }
+        fn as_any_ref(&self) -> &dyn Any {
+            self
+        }
         fn as_any(&mut self) -> &mut dyn Any {
             self
         }
@@ -487,6 +492,10 @@ mod tests {
             .spawn("echo.session", &SessionSpawnRequest::new("a"))
             .unwrap();
         session.set_hidden(true);
+        assert!(
+            session.as_any_ref().downcast_ref::<EchoSession>().is_some(),
+            "immutable hosts can reach lane extras without taking session ownership"
+        );
         let echo = session
             .as_any()
             .downcast_mut::<EchoSession>()

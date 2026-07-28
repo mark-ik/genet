@@ -117,6 +117,9 @@ impl DocumentSession<Scene> for StaticDocumentSession {
     fn clip(&self) -> Option<DocumentClip> {
         semantic_clip_from_dom(&self.address, self.doc.dom())
     }
+    fn as_any_ref(&self) -> &dyn Any {
+        self
+    }
     fn as_any(&mut self) -> &mut dyn Any {
         self
     }
@@ -376,6 +379,10 @@ impl DocumentSession<Scene> for LiveryDocumentSession {
         semantic_clip_from_dom(&self.address, self.doc.dom())
     }
 
+    fn as_any_ref(&self) -> &dyn Any {
+        self
+    }
+
     fn as_any(&mut self) -> &mut dyn Any {
         self
     }
@@ -508,6 +515,9 @@ impl<E: script_engine_api::ScriptEngine + 'static> DocumentSession<Scene>
     /// Observation extras (extract, dom_snapshot, dispatch_event, dom stats)
     /// stay on the concrete type until the observation contract lands
     /// (session-engines plan phase 3 rescope); hosts reach them here.
+    fn as_any_ref(&self) -> &dyn Any {
+        self
+    }
     fn as_any(&mut self) -> &mut dyn Any {
         self
     }
@@ -629,6 +639,9 @@ impl DocumentSession<Scene> for SmolwebDocumentSession {
     }
     fn content_height(&mut self, width: u32, height: u32) -> u32 {
         self.doc.content_height(width, height)
+    }
+    fn as_any_ref(&self) -> &dyn Any {
+        self
     }
     fn as_any(&mut self) -> &mut dyn Any {
         self
