@@ -153,6 +153,17 @@ pub enum FormattingContextKind {
     Table,
 }
 
+/// The formatting context that generated a floated box.
+///
+/// This survives blockification, inline splitting, and anonymous-box fixup.
+/// It is intentionally distinct from the box's outer and inner display roles
+/// and from the formatting context the generated box itself establishes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FloatContextProvenance {
+    Block,
+    Inline,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PositioningScheme {
     Static,
@@ -190,6 +201,7 @@ pub struct CssBox<Id> {
     pub flow: FlowAxes,
     pub positioning: PositioningScheme,
     pub float: FloatSide,
+    pub float_context: FloatContextProvenance,
     pub replaced: bool,
     pub formatting_context: Option<FormattingContextKind>,
     pub containing_block: ContainingBlock,
@@ -213,6 +225,7 @@ impl<Id> CssBox<Id> {
             flow,
             positioning,
             float: FloatSide::None,
+            float_context: FloatContextProvenance::Block,
             replaced,
             formatting_context,
             containing_block,
@@ -223,6 +236,11 @@ impl<Id> CssBox<Id> {
 
     pub fn with_float(mut self, float: FloatSide) -> Self {
         self.float = float;
+        self
+    }
+
+    pub fn with_float_context(mut self, float_context: FloatContextProvenance) -> Self {
+        self.float_context = float_context;
         self
     }
 
@@ -307,6 +325,7 @@ struct ProtoBox<Id> {
     flow: FlowAxes,
     positioning: PositioningScheme,
     float: FloatSide,
+    float_context: FloatContextProvenance,
     replaced: bool,
     collapsible_whitespace: bool,
     principal: bool,
@@ -315,7 +334,11 @@ struct ProtoBox<Id> {
 }
 
 impl<Id: Copy> ProtoBox<Id> {
-    fn from_input(input: BoxTreeInput<Id>, item_child: bool) -> Self {
+    fn from_input(
+        input: BoxTreeInput<Id>,
+        item_child: bool,
+        float_context: FloatContextProvenance,
+    ) -> Self {
         let blockify_as_item = item_child && !matches!(input.origin, BoxOrigin::Text(_));
         Self {
             origin: input.origin,
@@ -328,6 +351,7 @@ impl<Id: Copy> ProtoBox<Id> {
             flow: input.flow,
             positioning: input.positioning,
             float: input.float,
+            float_context,
             replaced: input.replaced,
             collapsible_whitespace: input.collapsible_whitespace,
             principal: !matches!(
@@ -374,7 +398,7 @@ where
 {
     let normalized = roots
         .into_iter()
-        .flat_map(|root| normalize_input(root, false))
+        .flat_map(|root| normalize_input(root, false, FloatContextProvenance::Block))
         .collect::<Vec<_>>();
     let mut tree = CssBoxTree::default();
     for root in normalized {
@@ -383,7 +407,11 @@ where
     tree
 }
 
-fn normalize_input<Id>(input: BoxTreeInput<Id>, item_child: bool) -> Vec<ProtoBox<Id>>
+fn normalize_input<Id>(
+    input: BoxTreeInput<Id>,
+    item_child: bool,
+    float_context: FloatContextProvenance,
+) -> Vec<ProtoBox<Id>>
 where
     Id: Copy,
 {
@@ -392,7 +420,7 @@ where
         BoxGeneration::Contents => input
             .children
             .into_iter()
-            .flat_map(|child| normalize_input(child, item_child))
+            .flat_map(|child| normalize_input(child, item_child, float_context))
             .collect(),
         BoxGeneration::Normal => {
             let mut input = input;
@@ -400,11 +428,12 @@ where
                 input.display.inside,
                 Some(DisplayInside::Flex | DisplayInside::Grid)
             );
+            let child_float_context = child_float_context(&input, item_child);
             let children = std::mem::take(&mut input.children)
                 .into_iter()
-                .flat_map(|child| normalize_input(child, children_are_items))
+                .flat_map(|child| normalize_input(child, children_are_items, child_float_context))
                 .collect::<Vec<_>>();
-            let mut proto = ProtoBox::from_input(input, item_child);
+            let mut proto = ProtoBox::from_input(input, item_child, float_context);
             proto.children = children;
 
             if proto.display.list_item
@@ -422,6 +451,25 @@ where
             fix_children(&mut proto);
             vec![proto]
         },
+    }
+}
+
+fn child_float_context<Id>(input: &BoxTreeInput<Id>, item_child: bool) -> FloatContextProvenance {
+    let blockify_as_item = item_child && !matches!(input.origin, BoxOrigin::Text(_));
+    let display = blockified_display(
+        input.display,
+        input.positioning,
+        input.float,
+        blockify_as_item,
+    );
+    if input.positioning.is_in_flow()
+        && input.float == FloatSide::None
+        && display.outside == Some(DisplayOutside::Inline)
+        && display.inside == Some(DisplayInside::Flow)
+    {
+        FloatContextProvenance::Inline
+    } else {
+        FloatContextProvenance::Block
     }
 }
 
@@ -714,6 +762,7 @@ where
         flow,
         positioning: PositioningScheme::Static,
         float: FloatSide::None,
+        float_context: FloatContextProvenance::Block,
         replaced: false,
         collapsible_whitespace: false,
         principal: false,
@@ -737,6 +786,7 @@ where
         flow,
         positioning: PositioningScheme::Static,
         float: FloatSide::None,
+        float_context: FloatContextProvenance::Block,
         replaced: false,
         collapsible_whitespace: false,
         principal: false,
@@ -767,6 +817,7 @@ where
         flow,
         positioning: PositioningScheme::Static,
         float: FloatSide::None,
+        float_context: FloatContextProvenance::Block,
         replaced: false,
         collapsible_whitespace: false,
         principal: false,
@@ -798,6 +849,7 @@ where
                 })
             }),
         )
+        .with_float_context(proto.float_context)
         .with_float(proto.float),
         parent,
         proto.principal,
@@ -1170,6 +1222,55 @@ mod tests {
         );
         assert_eq!(tree[split[0]].children().len(), 1);
         assert_eq!(tree[split[1]].children().len(), 1);
+    }
+
+    #[test]
+    fn float_context_provenance_survives_inline_splitting_and_anonymous_fixup() {
+        let inline_float = input(BoxOrigin::Element(3), DisplayRole::INLINE_FLOW, Vec::new())
+            .with_float(FloatSide::Left);
+        let block_float = input(BoxOrigin::Element(5), DisplayRole::INLINE_FLOW, Vec::new())
+            .with_float(FloatSide::Left);
+        let tree = generate_box_tree([input(
+            BoxOrigin::Element(1),
+            DisplayRole::BLOCK_FLOW,
+            vec![input(
+                BoxOrigin::Element(2),
+                DisplayRole::INLINE_FLOW,
+                vec![
+                    text(6, false),
+                    inline_float,
+                    input(
+                        BoxOrigin::Element(4),
+                        DisplayRole::BLOCK_FLOW,
+                        vec![block_float],
+                    ),
+                    text(7, false),
+                ],
+            )],
+        )]);
+        let continuations = tree.boxes_for_node(2);
+        let inline_float = tree.principal_box(3).expect("inline float");
+        let block_float = tree.principal_box(5).expect("block float");
+
+        assert_eq!(continuations.len(), 2);
+        for continuation in continuations {
+            let wrapper = tree[*continuation].parent().expect("anonymous wrapper");
+            assert!(matches!(
+                tree[wrapper].origin,
+                BoxOrigin::Anonymous {
+                    kind: AnonymousBoxKind::Block,
+                    ..
+                }
+            ));
+        }
+        assert_eq!(
+            tree[inline_float].float_context,
+            FloatContextProvenance::Inline
+        );
+        assert_eq!(
+            tree[block_float].float_context,
+            FloatContextProvenance::Block
+        );
     }
 
     #[test]

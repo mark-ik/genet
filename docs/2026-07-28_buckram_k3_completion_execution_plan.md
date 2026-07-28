@@ -329,6 +329,47 @@ live guard is safe but coarse.
   counterexamples retain their old status or improve for a separately proven
   reason.
 
+### Receipt
+
+Capability: Generated boxes now carry explicit `Block` or `Inline` float-origin
+provenance through blockification, split-inline continuation, and anonymous
+fixup. Ordinary generated `Block` formatting-context roots can continue a
+parent float context when their existing role checks pass.
+
+Boundary: Inline-origin floats remain explicitly marked for the adapter's
+deferred lane. This does not admit nested-inline float layout, signed-margin
+float geometry, nowrap line decisions, or the broad `Block` role.
+
+Pure: `float_context_provenance_survives_inline_splitting_and_anonymous_fixup`
+proves both split continuations receive anonymous wrappers while their direct
+inline float retains `Inline` provenance and a nested block float retains
+`Block` provenance.
+
+Adapter: `buckram_exports_nested_floats_through_two_ordinary_blocks_to_outer_siblings`
+proves newly created float state crosses two ordinary blocks to a following
+clear; the existing inline-origin and explicit-BFC fixtures remain green.
+
+Live: `live_generated_block_roots_translate_nested_float_state` proves a
+collapsed 10px/20px margin chain plus 3px border and 5px padding translates a
+nested float to y=28px and its following clear to y=68px. Livery's DOM/style
+box-tree fixture retains `Inline` provenance for a floated inline continuation.
+
+WPT: The K3l diagnostic files `floats-placement-005.html`,
+`floats-wrap-top-below-inline-003l.xht`, and
+`floats-placement-vertical-001b/001c.xht` each retain a one-file `run`
+crash-smoke result of 1 passed, 0 failed, 0 errored. This is not a
+behavioral testharness or reftest claim.
+
+Verification: `cargo test -p buckram -p livery -p genet-livery --offline`,
+`cargo clippy -p buckram -p genet-livery --offline --no-deps -- -D warnings`,
+edition-2024 `rustfmt --check` on touched Rust files, `git diff --check`, and
+`cargo build -p genet-wpt --release --all-features --offline` all passed from
+an isolated K3o target.
+
+Proof directory: `C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-28_buckram_k3o`
+
+Commit: `Preserve Buckram float-context provenance`
+
 ## K3p. Nested and inline float completion
 
 ### Problem

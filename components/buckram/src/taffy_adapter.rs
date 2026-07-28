@@ -3136,7 +3136,7 @@ mod tests {
     }
 
     #[test]
-    fn buckram_exports_nested_floats_to_following_outer_siblings() {
+    fn buckram_exports_nested_floats_through_two_ordinary_blocks_to_outer_siblings() {
         let mut tree = AlgorithmTree::<Style, (), u8>::new();
         let nested_float = tree.new_with_children_and_block_style(
             AlgorithmKind::Leaf,
@@ -3159,7 +3159,7 @@ mod tests {
             &[],
             1,
         );
-        let wrapper = tree.new_with_children_and_block_style(
+        let inner = tree.new_with_children_and_block_style(
             AlgorithmKind::Block,
             BlockStyle::default(),
             Style {
@@ -3169,7 +3169,18 @@ mod tests {
             &[nested_float],
             2,
         );
-        tree.enable_nested_float_state(wrapper);
+        tree.enable_nested_float_state(inner);
+        let outer = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle::default(),
+            Style {
+                display: Display::Block,
+                ..Style::default()
+            },
+            &[inner],
+            3,
+        );
+        tree.enable_nested_float_state(outer);
         let clear = tree.new_with_children_and_block_style(
             AlgorithmKind::Leaf,
             BlockStyle {
@@ -3188,7 +3199,7 @@ mod tests {
                 ..Style::default()
             },
             &[],
-            3,
+            4,
         );
         let root = tree.new_with_children_and_block_style(
             AlgorithmKind::Block,
@@ -3204,7 +3215,7 @@ mod tests {
                 },
                 ..Style::default()
             },
-            &[wrapper, clear],
+            &[outer, clear],
             0,
         );
 
@@ -3214,10 +3225,12 @@ mod tests {
             (tree.layout(nested_float).x, tree.layout(nested_float).y),
             (0.0, 0.0)
         );
-        assert_eq!(tree.layout(wrapper).height, 0.0);
+        assert_eq!(tree.layout(inner).height, 0.0);
+        assert_eq!(tree.layout(outer).height, 0.0);
         assert_eq!(tree.layout(clear).y, 40.0);
         assert_eq!(tree.layout(root).height, 50.0);
-        assert_eq!(tree.block_algorithm(wrapper), Some(BlockAlgorithm::Buckram));
+        assert_eq!(tree.block_algorithm(inner), Some(BlockAlgorithm::Buckram));
+        assert_eq!(tree.block_algorithm(outer), Some(BlockAlgorithm::Buckram));
         assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Buckram));
     }
 

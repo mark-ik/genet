@@ -4,10 +4,10 @@ use buckram::{
     AlgorithmAvailableSpace, AlgorithmKind, AlgorithmNodeId, AlgorithmSize, AlgorithmTree,
     BlockBoxSizing, BlockDimensions, BlockPosition as BuckramBlockPosition, BlockSizeValue,
     BlockStyle, BoxId, BoxOrigin, ClearSide, CssBox, DisplayInside, DisplayOutside,
-    FloatLineConstraints, FloatSide, FlowAxes, FlowLength, FlowLengthAuto, FormattingContextKind,
-    Fragment as TreeFragment, FragmentId, FragmentTree, InternalTableRole, IntrinsicSizeCache,
-    IntrinsicSizeKind, IntrinsicSizeQuery, IntrinsicSizes, LayoutResult, LogicalAxis, PhysicalRect,
-    PhysicalSides, PositioningScheme,
+    FloatContextProvenance, FloatLineConstraints, FloatSide, FlowAxes, FlowLength, FlowLengthAuto,
+    FormattingContextKind, Fragment as TreeFragment, FragmentId, FragmentTree, InternalTableRole,
+    IntrinsicSizeCache, IntrinsicSizeKind, IntrinsicSizeQuery, IntrinsicSizes, LayoutResult,
+    LogicalAxis, PhysicalRect, PhysicalSides, PositioningScheme,
 };
 use layout_dom_api::{LayoutDom, NodeKind};
 use livery::{
@@ -1202,7 +1202,7 @@ where
                     self.tree.enable_nested_float_state(node);
                 }
                 if block_style.float != FloatSide::None
-                    && float_is_nested_in_inline(self.boxes, box_id)
+                    && self.boxes[box_id].float_context == FloatContextProvenance::Inline
                 {
                     self.tree.mark_inline_context_float(node);
                 }
@@ -1504,7 +1504,7 @@ where
                     self.tree.enable_nested_float_state(node);
                 }
                 if block_style.float != FloatSide::None
-                    && float_is_nested_in_inline(self.boxes, box_id)
+                    && self.boxes[box_id].float_context == FloatContextProvenance::Inline
                 {
                     self.tree.mark_inline_context_float(node);
                 }
@@ -1646,39 +1646,6 @@ where
             css_box.positioning,
             PositioningScheme::Static | PositioningScheme::Relative | PositioningScheme::Sticky
         )
-}
-
-fn float_is_nested_in_inline<Id>(boxes: &GeneratedBoxTree<Id>, box_id: BoxId) -> bool
-where
-    Id: Copy + Eq + Hash,
-{
-    let mut ancestor = boxes[box_id].parent();
-    while let Some(box_id) = ancestor {
-        let css_box = &boxes[box_id];
-        if css_box.float != FloatSide::None
-            || matches!(
-                css_box.positioning,
-                PositioningScheme::Absolute | PositioningScheme::Fixed
-            )
-            || matches!(
-                css_box.display.inside,
-                Some(
-                    DisplayInside::FlowRoot
-                        | DisplayInside::Flex
-                        | DisplayInside::Grid
-                        | DisplayInside::Table
-                )
-            )
-        {
-            return false;
-        }
-        match css_box.display.outside {
-            Some(DisplayOutside::Inline) => return true,
-            Some(DisplayOutside::Block) => return false,
-            Some(DisplayOutside::RunIn) | None => ancestor = css_box.parent(),
-        }
-    }
-    false
 }
 
 fn anonymous_block_style<Id>(boxes: &GeneratedBoxTree<Id>, box_id: BoxId) -> BlockStyle
@@ -1902,10 +1869,6 @@ fn supports_nested_float_state<Id>(
 ) -> bool {
     kind == AlgorithmKind::Block
         && css_box.display.outside == Some(DisplayOutside::Block)
-        // A generated block-formatting root can contain split inline
-        // continuations whose floated descendants no longer retain enough
-        // inline provenance for safe float-state transfer.
-        && css_box.formatting_context != Some(FormattingContextKind::Block)
         && css_box.display.internal_table.is_none()
         && !block_style.establishes_bfc
         && block_style.position == BuckramBlockPosition::Static
@@ -3878,6 +3841,116 @@ mod tests {
         assert_eq!(isolated_clear.y, isolated.y);
         assert_eq!(isolated.height, 10.0);
         assert_eq!(algorithms.taffy, 0);
+    }
+
+    #[test]
+    fn live_generated_block_roots_translate_nested_float_state() {
+        fn by_id(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+            expected: &str,
+        ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+            if dom.attributes(node).any(|attribute| {
+                attribute.name.ns.as_ref().is_empty()
+                    && attribute.name.local.as_ref() == "id"
+                    && attribute.value == expected
+            }) {
+                return Some(node);
+            }
+            dom.dom_children(node)
+                .find_map(|child| by_id(dom, child, expected))
+        }
+
+        let dom = StaticDocument::parse(
+            "<html><body><div id=\"host\"><div id=\"outer\"><div id=\"middle\">\
+             <div id=\"float\"></div></div></div><div id=\"clear\"></div></div></body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&["html, body, div { margin: 0; padding: 0; border: 0; }\
+                 #host { width: 200px; overflow-x: hidden; overflow-y: hidden; }\
+                 #outer { margin-top: 10px; }\
+                 #middle { margin-top: 20px; padding-top: 5px; border-top: 3px solid; }\
+                 #float { float: left; width: 80px; height: 40px; }\
+                 #clear { clear: left; height: 10px; }"]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let rect = |id| {
+            let node = by_id(&dom, dom.document(), id).expect(id);
+            layout.get(node).expect(id).physical_rect()
+        };
+
+        let host = rect("host");
+        let outer = rect("outer");
+        let middle = rect("middle");
+        let float = rect("float");
+        let clear = rect("clear");
+        let algorithms = layout.block_algorithm_counts();
+
+        assert_eq!((outer.y - host.y, middle.y - host.y), (20.0, 20.0));
+        assert_eq!(float.y - host.y, 28.0);
+        assert_eq!(clear.y - host.y, 68.0);
+        assert_eq!(host.height, 78.0);
+        assert_eq!(algorithms.taffy, 0);
+    }
+
+    #[test]
+    fn livery_box_tree_preserves_split_inline_float_provenance() {
+        fn by_id(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+            expected: &str,
+        ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+            if dom.attributes(node).any(|attribute| {
+                attribute.name.ns.as_ref().is_empty()
+                    && attribute.name.local.as_ref() == "id"
+                    && attribute.value == expected
+            }) {
+                return Some(node);
+            }
+            dom.dom_children(node)
+                .find_map(|child| by_id(dom, child, expected))
+        }
+
+        let dom = StaticDocument::parse(
+            "<html><body><div id=\"host\"><div id=\"wrapper\"><span id=\"split\">before\
+             <span id=\"inline-float\"></span><span id=\"block\"></span>after</span></div>\
+             <div id=\"clear\"></div></div></body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "html, body, div, span { margin: 0; padding: 0; border: 0; }\
+                 #host { width: 200px; overflow-x: hidden; overflow-y: hidden; }\
+                 #inline-float { float: left; width: 80px; height: 40px; }\
+                 #block { display: block; height: 0; }\
+                 #clear { clear: left; height: 10px; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let split = by_id(&dom, dom.document(), "split").expect("split");
+        let inline_float = by_id(&dom, dom.document(), "inline-float").expect("inline float");
+        let boxes = GeneratedBoxTree::from_dom(&dom, &styles);
+        let float_box = boxes.principal_box(inline_float).expect("float box");
+
+        assert_eq!(boxes.boxes_for_node(split).len(), 2);
+        assert_eq!(
+            boxes[float_box].float_context,
+            FloatContextProvenance::Inline
+        );
     }
 
     #[test]
