@@ -55,10 +55,10 @@ that scores on the ledger is neither. See the table entry under the
 sub-diff findings.
 
 **Open, in measured value order:** the `content` longhand (F0 ratchet plus
-19 CSS2 files, one slice paid twice), the three color functions
-(`color-layers()` 160, `alpha()` 20, `contrast-color()` 16), `order` with
-grid auto-placement, and the css-flexbox long tail, which is measured as
-genuinely flat and stays ranked last. Everything after F4 is gated on
+19 CSS2 files, one slice paid twice), contextual color computation
+(`currentcolor`, system colors, element `color-scheme`, and paint), `order`
+with grid auto-placement, and the css-flexbox long tail, which is measured
+as genuinely flat and stays ranked last. Everything after F4 is gated on
 receipts, not dates.
 
 **A standing correction to how this plan reasons.** Several entries were
@@ -270,9 +270,11 @@ reviewed; the direction holds and the grind is accepted. Two riders:
   `calc()` before it reaches the math program. Two details worth recording:
   the keywords are numbers in the *function's* units, so `rgb(from ...)`
   binds 0-255 while `color(from ... srgb ...)` binds 0-1 for the same color;
-  and an omitted alpha inherits the origin's rather than resetting to 1. A
-  `currentcolor` origin is rejected rather than silently resolving to black,
-  matching `color-mix()`.
+  and an omitted alpha inherits the origin's rather than resetting to 1.
+  The eager `Color` leaf still rejects a `currentcolor` origin. That avoids
+  a false black result but is not conforming cascade behavior; the
+  authoritative computed-expression correction is specified in
+  `2026-07-28_livery_contextual_color_computation_plan.md`.
 
   It also exposed a general bug: a hue channel only accepted angle-typed
   math, so `hsl(calc(60 + 60) 100% 50%)` failed. A hue takes both an angle
@@ -299,14 +301,16 @@ reviewed; the direction holds and the grind is accepted. Two riders:
   the authored shape than the computed value does: keywords stay keywords
   (`red`, `rebeccapurple`, `canvastext`), and `color-mix()` and relative
   colors serialize as themselves with only their arguments canonicalized
-  (csswg-drafts #7302), resolving at computed-value time. Livery resolved
-  everything at parse time. `SpecifiedColor`
+  (csswg-drafts #7302). Livery resolved absolute forms at parse time.
+  `SpecifiedColor`
   (`components/livery/src/values/color/specified.rs`) is the retained layer
   in between: validation stays the resolving parser's job (nothing it
   rejects becomes a specified value), and the capture only remembers what
   the resolver forgets. It hooks in at exactly one seam,
   `canonicalize_specified_longhand`, keyed on the property catalog's value
-  type; the cascade, computed values, and paint are untouched. The same
+  type; the cascade, computed values, and paint are untouched. This is a
+  CSSOM boundary, not yet the standards-required computed-value boundary for
+  contextual functions. The same
   boundary now carries opacity's authored range (`opacity: 3` is valid,
   serializes as `3` specified, clamps computed). One regression appeared
   mid-course and was caught by the third run: the first opacity fix
@@ -322,16 +326,20 @@ reviewed; the direction holds and the grind is accepted. Two riders:
   to `hsl()`/`hwb()` (number-or-angle hue, both remaining channels
   percentages), and `color-invalid.html` went 8/10 to all-pass.
 
-  **What remains in css-color: 3 files where Stylo leads, all genuinely
-  unimplemented functions** (196 subtests): `color-layers()` 160, `alpha()`
-  20, `contrast-color()` 16. The 813-subtest specified-value gap the first
-  receipt diagnosed is closed; the two big `-valid-` files now read 997/1147
-  and 523/642, with the tails being math-percentage arguments and
-  `currentcolor` operands (both named gaps).
+  **2026-07-28 correction.** `color-layers()`, `alpha()`, and
+  `contrast-color()` now have absolute-color parsers, algorithms, and
+  retained specified forms. `color-mix()` follows the current one-or-more
+  grammar and ordered mixing algorithm, including all-zero transparent black
+  and percentage-typed math. The remaining `currentcolor` and system-color
+  failures are not three parser tails. They expose the missing computed
+  expression, element scheme, and used-value context. That work is separated
+  into `2026-07-28_livery_contextual_color_computation_plan.md`.
 
-  **Unit receipts:** 32 tests in `components/livery/tests/color.rs`;
-  `cargo test -p livery -p genet-livery` is 234 green, and genet-wpt,
-  genet-documents, and genet-scripted build on the livery feature.
+  **Unit receipts, updated 2026-07-28:** 55 tests in
+  `components/livery/tests/color.rs`; `cargo test -p livery --offline` is
+  160 green. The 2026-07-25 cross-crate receipt remains 234 green, with
+  genet-wpt, genet-documents, and genet-scripted building on the Livery
+  feature.
 
   **Three defects surfaced, all pre-existing:**
 
@@ -349,11 +357,12 @@ reviewed; the direction holds and the grind is accepted. Two riders:
      tests; every change was to the spec-correct value, none to accommodate
      the implementation.
 
-  **Named gaps, not silently approximated:** `color-layers()` (160
-  subtests), `contrast-color()` (16), gamut mapping (`to_srgb8` clips per
-  channel rather than doing CSS Color 4's oklch chroma reduction), and
-  percentage-valued `calc()` in channel position, which is rejected because
-  Livery's math program reduces percentages against a length base. Gamut
+  **Named gaps, not silently approximated:** contextual color computation
+  (the linked corrective plan), gamut mapping (`to_srgb8` clips per channel
+  rather than doing CSS Color 4's oklch chroma reduction), and unresolved
+  tree-dependent color math. Percentage-typed `calc()`, `min()`, `max()`,
+  and `clamp()` now resolve against explicit color-channel or mix-weight
+  bases. Gamut
   mapping is the one with teeth: clipping is visibly wrong for a saturated
   wide-gamut color, and it is a paint-quality issue rather than a parse
   failure, so it will not show up as a test error.
@@ -1068,9 +1077,10 @@ to that sequencing even though it is technically independent today.
 
 - ~~Specified-value serialization~~ **DONE 2026-07-25** (`SpecifiedColor`,
   the +1,520 jump in the receipt; see F0).
-- `color-layers()` (160), `alpha()` (20), `contrast-color()` (16): three
-  unimplemented functions, in that order by value; the retained specified
-  form they need now exists.
+- ~~`color-layers()` (160), `alpha()` (20), `contrast-color()` (16)~~
+  **ABSOLUTE FORMS LANDED 2026-07-28.** Context-dependent uses now belong to
+  `2026-07-28_livery_contextual_color_computation_plan.md`; they are a
+  computed-value and inheritance seam, not more function-parser work.
 
 Remaining instrument debt: none. The census reports the consumed set, the
 ledger is preserved outside `target/`, and the diff readers are checked in.
