@@ -1407,19 +1407,67 @@ mod tests {
     }
 
     #[test]
-    fn overconstrained_auto_inline_start_resolves_to_zero() {
-        let mut style = fixed_width(200.0);
-        style.margin.left = FlowLengthAuto::Auto;
-        style.margin.right = FlowLengthAuto::Value(FlowLength::px(25.0));
-
-        assert_eq!(
-            solve_in_flow_inline_size(style, 100.0),
-            UsedInlineSize {
-                margin_start: 0.0,
-                border_box: 200.0,
-                margin_end: -100.0,
+    fn one_auto_inline_margin_uses_the_logical_start_in_both_directions() {
+        for (flow, auto_on_left) in [
+            (FlowAxes::HORIZONTAL_LTR, true),
+            (
+                FlowAxes::new(WritingMode::HorizontalTb, Direction::Rtl),
+                false,
+            ),
+        ] {
+            let mut style = fixed_width(100.0);
+            style.flow = flow;
+            style.containing_flow = flow;
+            if auto_on_left {
+                style.margin.left = FlowLengthAuto::Auto;
+                style.margin.right = FlowLengthAuto::Value(FlowLength::px(20.0));
+            } else {
+                style.margin.left = FlowLengthAuto::Value(FlowLength::px(20.0));
+                style.margin.right = FlowLengthAuto::Auto;
             }
-        );
+
+            assert_eq!(
+                solve_in_flow_inline_size(style, 300.0),
+                UsedInlineSize {
+                    margin_start: 180.0,
+                    border_box: 100.0,
+                    margin_end: 20.0,
+                },
+                "flow={flow:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn overconstrained_auto_inline_start_resolves_to_zero() {
+        for (flow, auto_on_left) in [
+            (FlowAxes::HORIZONTAL_LTR, true),
+            (
+                FlowAxes::new(WritingMode::HorizontalTb, Direction::Rtl),
+                false,
+            ),
+        ] {
+            let mut style = fixed_width(200.0);
+            style.flow = flow;
+            style.containing_flow = flow;
+            if auto_on_left {
+                style.margin.left = FlowLengthAuto::Auto;
+                style.margin.right = FlowLengthAuto::Value(FlowLength::px(25.0));
+            } else {
+                style.margin.left = FlowLengthAuto::Value(FlowLength::px(25.0));
+                style.margin.right = FlowLengthAuto::Auto;
+            }
+
+            assert_eq!(
+                solve_in_flow_inline_size(style, 100.0),
+                UsedInlineSize {
+                    margin_start: 0.0,
+                    border_box: 200.0,
+                    margin_end: -100.0,
+                },
+                "flow={flow:?}"
+            );
+        }
     }
 
     #[test]

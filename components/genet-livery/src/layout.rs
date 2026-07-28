@@ -3948,7 +3948,7 @@ mod tests {
     }
 
     #[test]
-    fn live_bfc_inline_margins_can_force_float_avoidance_in_both_directions() {
+    fn live_bfc_auto_margins_fit_or_move_below_floats_in_both_directions() {
         fn by_id(
             dom: &StaticDocument,
             node: <StaticDocument as LayoutDom>::NodeId,
@@ -3971,6 +3971,8 @@ mod tests {
              <div id=\"ltr-bfc\" class=\"bfc\"></div></div>\
              <div id=\"rtl\" class=\"host\"><div class=\"left-float\"></div>\
              <div id=\"rtl-bfc\" class=\"bfc\"></div></div>\
+             <div id=\"lowered\" class=\"host\"><div class=\"right-float\"></div>\
+             <div id=\"lowered-bfc\" class=\"bfc\"></div></div>\
              </body></html>",
         );
         let styles = resolve_styles(
@@ -3979,9 +3981,10 @@ mod tests {
                  .host { width: 100px; overflow-x: hidden; overflow-y: hidden; }\
                  .right-float { float: right; width: 50px; height: 40px; }\
                  .left-float { float: left; width: 50px; height: 40px; }\
-                 .bfc { display: flow-root; height: 60px; }\
-                 #ltr-bfc { margin-left: 51px; }\
-                 #rtl { direction: rtl; } #rtl-bfc { margin-right: 51px; }"]),
+                 .bfc { display: flow-root; width: 30px; height: 20px; }\
+                 #ltr-bfc { margin-left: auto; }\
+                 #rtl { direction: rtl; } #rtl-bfc { margin-right: auto; }\
+                 #lowered-bfc { width: 60px; margin-left: auto; margin-right: 10px; }"]),
             &Device::screen(320.0, 240.0),
             &InteractionStates::default(),
         );
@@ -4005,6 +4008,8 @@ mod tests {
         let ltr_bfc = rect("ltr-bfc");
         let rtl = rect("rtl");
         let rtl_bfc = rect("rtl-bfc");
+        let lowered = rect("lowered");
+        let lowered_bfc = rect("lowered-bfc");
         let algorithms = layout.block_algorithm_counts();
 
         assert_eq!(
@@ -4014,8 +4019,8 @@ mod tests {
                 ltr_bfc.width,
                 ltr_bfc.height,
             ),
-            (51.0, 40.0, 49.0, 60.0),
-            "ltr={ltr:?}, ltr_bfc={ltr_bfc:?}, rtl={rtl:?}, rtl_bfc={rtl_bfc:?}, algorithms={algorithms:?}"
+            (20.0, 0.0, 30.0, 20.0),
+            "ltr={ltr:?}, ltr_bfc={ltr_bfc:?}, rtl={rtl:?}, rtl_bfc={rtl_bfc:?}, lowered={lowered:?}, lowered_bfc={lowered_bfc:?}, algorithms={algorithms:?}"
         );
         assert_eq!(
             (
@@ -4024,9 +4029,18 @@ mod tests {
                 rtl_bfc.width,
                 rtl_bfc.height,
             ),
-            (0.0, 40.0, 49.0, 60.0)
+            (50.0, 0.0, 30.0, 20.0)
         );
-        assert_eq!((ltr.height, rtl.height), (100.0, 100.0));
+        assert_eq!(
+            (
+                lowered_bfc.x - lowered.x,
+                lowered_bfc.y - lowered.y,
+                lowered_bfc.width,
+                lowered_bfc.height,
+            ),
+            (30.0, 40.0, 60.0, 20.0)
+        );
+        assert_eq!((ltr.height, rtl.height, lowered.height), (40.0, 40.0, 60.0));
         assert_eq!(algorithms.taffy, 0);
     }
 

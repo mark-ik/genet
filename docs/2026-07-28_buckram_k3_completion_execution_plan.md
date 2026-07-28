@@ -252,6 +252,41 @@ equation.
   inventing an interim baseline.
 - Route a table-shaped failure to K4 rather than admitting a grid surrogate.
 
+### K3n receipt - 2026-07-28
+
+Capability: automatic inline margins participate in Buckram's selected float
+band. A non-table flow-root BFC fits beside a float when the band permits it,
+or moves below and resolves its margins against the full containing block.
+
+Boundary retained: baseline-dependent atomic inline alignment remains deferred
+to K3q; table wrappers remain routed to K4; flex and grid retain their
+established dispatch when no float is active.
+
+Pure fixture: `block_width_equation_centres_two_auto_margins`,
+`one_auto_inline_margin_uses_the_logical_start_in_both_directions`, and
+`overconstrained_auto_inline_start_resolves_to_zero` cover two auto margins,
+one auto margin, over-constraint, and both inline directions.
+
+Adapter fixture: `buckram_remeasures_opted_in_bfcs_inside_the_float_band`
+proves an admitted BFC that fits beside a float and a definite one that moves
+below it without widening ordinary flex or grid dispatch.
+
+Live fixture: `live_bfc_auto_margins_fit_or_move_below_floats_in_both_directions`
+proves LTR and RTL flow-root placement, the below-float retry, and zero final
+Taffy block fallback.
+
+WPT exact movement: `css/CSS2/floats` (48/53/43), `css/CSS2/normal-flow`
+(537/194/161), `css/css-flexbox` (383/503/472), and `css/css-grid`
+(435/709/747) exactly match their K3m or K3l status maps.
+
+Verification: `cargo test -p buckram -p livery -p genet-livery --offline`;
+`cargo clippy -p buckram -p genet-livery --offline --no-deps -- -D warnings`;
+`rustfmt --check`; `git diff --check`; release `genet-wpt` build.
+
+Proof directory: `C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-28_buckram_k3n`
+
+Commit: `Prove Buckram float-band auto margins`
+
 ## K3o. Durable generated-box provenance and `Block` context continuation
 
 ### Problem
