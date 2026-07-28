@@ -7,7 +7,7 @@ use buckram::{
     FloatContextProvenance, FloatLineConstraints, FloatSide, FlowAxes, FlowLength, FlowLengthAuto,
     FormattingContextKind, Fragment as TreeFragment, FragmentId, FragmentTree, InternalTableRole,
     IntrinsicSizeCache, IntrinsicSizeKind, IntrinsicSizeQuery, IntrinsicSizes, LayoutResult,
-    LogicalAxis, PhysicalRect, PhysicalSides, PositioningScheme,
+    LogicalAxis, PhysicalRect, PhysicalSides, PhysicalSize, PositioningScheme,
 };
 use layout_dom_api::{LayoutDom, NodeKind};
 use livery::{
@@ -803,6 +803,12 @@ where
         &boxes,
         root,
         Point { x: 0.0, y: 0.0 },
+        Fragment {
+            x: 0.0,
+            y: 0.0,
+            width: viewport_width,
+            height: viewport_height,
+        },
         None,
         &mut output,
     )?;
@@ -1160,6 +1166,12 @@ where
         root,
         FragmentCursor {
             origin: Point { x: 0.0, y: 0.0 },
+            containing: Fragment {
+                x: 0.0,
+                y: 0.0,
+                width: viewport_width,
+                height: viewport_height,
+            },
             parent: None,
         },
         &mut output,
@@ -1657,6 +1669,7 @@ where
 #[derive(Clone, Copy)]
 struct FragmentCursor {
     origin: Point<f32>,
+    containing: Fragment,
     parent: Option<FragmentId>,
 }
 
@@ -2019,11 +2032,39 @@ where
     }
 }
 
+/// Record flow-relative fragment geometry without changing the physical
+/// rectangle consumed by the retained text and paint lanes.
+fn fragment_for_box<Id>(
+    boxes: &GeneratedBoxTree<Id>,
+    box_id: BoxId,
+    physical: Fragment,
+    relative: Fragment,
+    containing: Fragment,
+) -> TreeFragment
+where
+    Id: Copy + Eq + Hash,
+{
+    let flow = boxes[box_id].flow;
+    if flow.is_horizontal() {
+        TreeFragment::from_horizontal_physical(box_id, physical)
+    } else {
+        let logical = flow.logical_rect(
+            relative,
+            PhysicalSize {
+                width: containing.width,
+                height: containing.height,
+            },
+        );
+        TreeFragment::from_physical_with_logical(box_id, physical, logical, flow)
+    }
+}
+
 fn collect_fragments<Id>(
     tree: &AlgorithmTree<Style, TextMeasure, Option<BoxId>>,
     boxes: &GeneratedBoxTree<Id>,
     node: AlgorithmNodeId,
     parent_origin: Point<f32>,
+    containing_rect: Fragment,
     parent_fragment: Option<FragmentId>,
     output: &mut FragmentOutput<'_>,
 ) -> Result<(), LayoutError>
@@ -2035,15 +2076,15 @@ where
         x: parent_origin.x + computed.x,
         y: parent_origin.y + computed.y,
     };
+    let rect = Fragment {
+        x: origin.x,
+        y: origin.y,
+        width: computed.width,
+        height: computed.height,
+    };
     let mut child_parent = parent_fragment;
     {
         let source = *tree.source(node);
-        let rect = Fragment {
-            x: origin.x,
-            y: origin.y,
-            width: computed.width,
-            height: computed.height,
-        };
         let origin_node = match source {
             Some(box_id) => {
                 let structural_parent = boxes[box_id].parent().and_then(|parent_box| {
@@ -2054,14 +2095,29 @@ where
                         .copied()
                 });
                 let parent = structural_parent.or(parent_fragment);
-                child_parent = Some(
-                    output.fragments.push(
-                        TreeFragment::from_horizontal_physical(box_id, rect)
-                            .with_baselines(fragment_baselines(tree, boxes, node, box_id, rect)),
-                        parent,
-                        parent,
-                    ),
-                );
+                let flow = boxes[box_id].flow;
+                let fragment = if flow.is_horizontal() {
+                    TreeFragment::from_horizontal_physical(box_id, rect)
+                } else {
+                    let logical_rect = flow.logical_rect(
+                        PhysicalRect {
+                            x: computed.x,
+                            y: computed.y,
+                            width: computed.width,
+                            height: computed.height,
+                        },
+                        PhysicalSize {
+                            width: containing_rect.width,
+                            height: containing_rect.height,
+                        },
+                    );
+                    TreeFragment::from_physical_with_logical(box_id, rect, logical_rect, flow)
+                };
+                child_parent = Some(output.fragments.push(
+                    fragment.with_baselines(fragment_baselines(tree, boxes, node, box_id, rect)),
+                    parent,
+                    parent,
+                ));
                 legacy_origin_node(boxes, box_id)
             },
             None => None,
@@ -2069,7 +2125,7 @@ where
         let _ = origin_node;
     }
     for child in tree.children(node) {
-        collect_fragments(tree, boxes, *child, origin, child_parent, output)?;
+        collect_fragments(tree, boxes, *child, origin, rect, child_parent, output)?;
     }
     Ok(())
 }
@@ -2090,6 +2146,18 @@ where
     let origin = Point {
         x: cursor.origin.x + computed.x,
         y: cursor.origin.y + computed.y,
+    };
+    let relative_rect = Fragment {
+        x: computed.x,
+        y: computed.y,
+        width: computed.width,
+        height: computed.height,
+    };
+    let rect = Fragment {
+        x: origin.x,
+        y: origin.y,
+        width: computed.width,
+        height: computed.height,
     };
     let placement = if let Some(context) = tree.context(node)
         && let Some(layout) = context.layout_for_width(computed.width)
@@ -2112,12 +2180,6 @@ where
         }
         source_ids.sort_unstable();
         source_ids.dedup();
-        let rect = Fragment {
-            x: origin.x,
-            y: origin.y,
-            width: computed.width,
-            height: computed.height,
-        };
         for box_id in source_ids {
             let structural_parent = boxes[box_id].parent().and_then(|parent_box| {
                 output
@@ -2133,15 +2195,27 @@ where
                 .filter(|fragments| !fragments.is_empty());
             if let Some(line_fragments) = line_fragments {
                 for line_fragment in line_fragments {
+                    let relative_line = Fragment {
+                        x: line_fragment.x - cursor.origin.x,
+                        y: line_fragment.y - cursor.origin.y,
+                        width: line_fragment.width,
+                        height: line_fragment.height,
+                    };
                     let fragment_id = output.fragments.push(
-                        TreeFragment::from_horizontal_physical(box_id, *line_fragment)
-                            .with_baselines(fragment_baselines(
-                                tree,
-                                boxes,
-                                node,
-                                box_id,
-                                *line_fragment,
-                            )),
+                        fragment_for_box(
+                            boxes,
+                            box_id,
+                            *line_fragment,
+                            relative_line,
+                            cursor.containing,
+                        )
+                        .with_baselines(fragment_baselines(
+                            tree,
+                            boxes,
+                            node,
+                            box_id,
+                            *line_fragment,
+                        )),
                         parent,
                         parent,
                     );
@@ -2149,7 +2223,7 @@ where
                 }
             } else {
                 let fragment_id = output.fragments.push(
-                    TreeFragment::from_horizontal_physical(box_id, rect)
+                    fragment_for_box(boxes, box_id, rect, relative_rect, cursor.containing)
                         .with_baselines(fragment_baselines(tree, boxes, node, box_id, rect)),
                     parent,
                     parent,
@@ -2165,6 +2239,7 @@ where
             *child,
             FragmentCursor {
                 origin,
+                containing: rect,
                 parent: child_parent,
             },
             output,
@@ -3448,6 +3523,83 @@ mod tests {
         );
         assert_eq!(algorithms.taffy, 0);
         assert_eq!(second.y, first.y + 20.0);
+    }
+
+    #[test]
+    fn live_orthogonal_normal_flow_preserves_logical_fragment_geometry_and_baseline() {
+        use buckram::{Direction, WritingMode};
+
+        let document = StaticDocument::parse(
+            "<html><body><div class=\"vertical\"><div>orthogonal text</div></div></body></html>",
+        );
+        let styles = resolve_styles(
+            &document,
+            &StyleSet::cambium(&["html, body, div { margin: 0; padding: 0; border: 0; } \
+                 .vertical { writing-mode: vertical-rl; height: 100px; }"]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let vertical = document
+            .first_with_class(document.document(), "vertical")
+            .expect("vertical host");
+        assert!(
+            styles
+                .get(vertical)
+                .is_some_and(|style| style.writing_mode.is_vertical()),
+            "the cascade must retain vertical-rl for the principal box"
+        );
+        let mut text = TextSystem::new();
+        let (resolved, layout) = layout_with_text_system(
+            &document,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("orthogonal layout");
+
+        assert!(
+            resolved
+                .get(vertical)
+                .is_some_and(|style| style.writing_mode.is_vertical()),
+            "relative-unit resolution must preserve vertical-rl"
+        );
+
+        let vertical_box = layout
+            .boxes()
+            .principal_box(vertical)
+            .expect("vertical principal box");
+        assert_eq!(
+            layout.boxes()[vertical_box].flow,
+            FlowAxes::new(WritingMode::VerticalRl, Direction::Ltr),
+            "the generated principal box must preserve the computed flow"
+        );
+        let fragment = layout
+            .fragments()
+            .fragments_for_box(vertical_box)
+            .next()
+            .expect("vertical fragment");
+        let physical = fragment.physical_rect();
+        assert_eq!(
+            fragment.flow(),
+            FlowAxes::new(WritingMode::VerticalRl, Direction::Ltr)
+        );
+        assert_eq!(fragment.logical_rect.inline_size, physical.height);
+        assert_eq!(fragment.logical_rect.block_size, physical.width);
+        assert!(
+            fragment.baselines.first.is_some() && fragment.baselines.last.is_some(),
+            "the host must retain its modeled BFC baseline output"
+        );
+        assert!(
+            fragment
+                .containing_fragment()
+                .and_then(|id| layout.fragments().get(id))
+                .is_some(),
+            "the orthogonal host must retain its containing fragment"
+        );
+        assert!(layout.block_algorithm_counts().buckram >= 4);
     }
 
     #[test]

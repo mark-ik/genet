@@ -113,6 +113,30 @@ impl Fragment {
         }
     }
 
+    /// Preserve a physical consumer rectangle while attaching the logical
+    /// geometry that produced it. This is used when a host has already
+    /// accumulated ancestor origins at its physical fragment edge.
+    pub fn from_physical_with_logical(
+        box_id: BoxId,
+        physical_rect: PhysicalRect,
+        logical_rect: LogicalRect,
+        flow: FlowAxes,
+    ) -> Self {
+        Self {
+            id: FragmentId(u32::MAX),
+            box_id,
+            parent: None,
+            containing_fragment: None,
+            fragmentation_context: FragmentationContextId::INITIAL,
+            logical_rect,
+            continuation: None,
+            baselines: Baselines::default(),
+            overflow: logical_rect,
+            flow,
+            physical_rect,
+        }
+    }
+
     pub fn id(&self) -> FragmentId {
         self.id
     }

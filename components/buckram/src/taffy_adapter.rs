@@ -19,8 +19,8 @@ use crate::{
     Baselines, BlockBoxSizing, BlockContainingBlock, BlockDeferral, BlockFormattingContext,
     BlockMarginState, BlockSizeValue, BlockStyle, ClearSide, CollapsedMargin, FloatLineConstraints,
     FloatSide, FlowAxes, FlowLength, FlowLengthAuto, IntrinsicSizeKind, IntrinsicSizes,
-    LogicalSides, PhysicalSides, PhysicalSize, solve_float_inline_size, solve_in_flow_inline_size,
-    solve_shrink_to_fit_inline_size,
+    LogicalRect, LogicalSides, LogicalSize, PhysicalSides, PhysicalSize, solve_float_inline_size,
+    solve_in_flow_inline_size, solve_shrink_to_fit_inline_size,
 };
 
 /// Formatting role selected by Buckram before entering a backend algorithm.
@@ -569,6 +569,13 @@ impl PhysicalOptionalSize {
             height: available_option(size.height),
         }
     }
+
+    fn into_taffy(self) -> taffy::Size<Option<f32>> {
+        taffy::Size {
+            width: self.width,
+            height: self.height,
+        }
+    }
 }
 
 fn available_option(value: taffy::AvailableSpace) -> Option<f32> {
@@ -592,9 +599,57 @@ fn logical_optional_size(axes: FlowAxes, physical: PhysicalOptionalSize) -> Logi
     }
 }
 
+fn physical_optional_size(axes: FlowAxes, logical: LogicalOptionalSize) -> PhysicalOptionalSize {
+    if axes.is_horizontal() {
+        PhysicalOptionalSize {
+            width: logical.inline,
+            height: logical.block,
+        }
+    } else {
+        PhysicalOptionalSize {
+            width: logical.block,
+            height: logical.inline,
+        }
+    }
+}
+
+fn physical_available_size(
+    axes: FlowAxes,
+    logical: AlgorithmSize<AlgorithmAvailableSpace>,
+) -> taffy::Size<taffy::AvailableSpace> {
+    if axes.is_horizontal() {
+        taffy::Size {
+            width: to_taffy_available(logical.width),
+            height: to_taffy_available(logical.height),
+        }
+    } else {
+        taffy::Size {
+            width: to_taffy_available(logical.height),
+            height: to_taffy_available(logical.width),
+        }
+    }
+}
+
+fn logical_available_size(
+    axes: FlowAxes,
+    physical: taffy::Size<taffy::AvailableSpace>,
+) -> AlgorithmSize<AlgorithmAvailableSpace> {
+    if axes.is_horizontal() {
+        AlgorithmSize::new(
+            from_taffy_available(physical.width),
+            from_taffy_available(physical.height),
+        )
+    } else {
+        AlgorithmSize::new(
+            from_taffy_available(physical.height),
+            from_taffy_available(physical.width),
+        )
+    }
+}
+
+#[derive(Clone, Copy)]
 struct LogicalOptionalSize {
     inline: Option<f32>,
-    #[allow(dead_code)]
     block: Option<f32>,
 }
 
@@ -677,11 +732,23 @@ struct AlgorithmRun<'a, S, Context, Source, Measure> {
 
 #[derive(Clone, Copy)]
 struct BlockChildInput {
-    border_box_width: f32,
-    containing_width: f32,
-    available_width: f32,
-    containing_height: Option<f32>,
-    available_height: taffy::AvailableSpace,
+    /// The containing formatting context's logical axes. A child can have a
+    /// different own flow, but its containing-size inputs remain in this
+    /// context's coordinate space until the adapter boundary.
+    containing_flow: FlowAxes,
+    border_box_inline_size: f32,
+    containing_size: LogicalOptionalSize,
+    available_size: AlgorithmSize<AlgorithmAvailableSpace>,
+}
+
+struct PendingBlockChildLayout {
+    child: AlgorithmNodeId,
+    order: u32,
+    output: LayoutOutput,
+    padding: PhysicalSides<f32>,
+    border: PhysicalSides<f32>,
+    margin: PhysicalSides<f32>,
+    logical_rect: LogicalRect,
 }
 
 impl<S, Context, Source, Measure> AlgorithmRun<'_, S, Context, Source, Measure>
@@ -762,6 +829,20 @@ where
                         || *active_right_float))
             {
                 return Some(BlockDeferral::IndependentFormattingContext);
+            }
+
+            // Float exclusions live in their owning BFC's logical axes. Do
+            // not copy physical left/right state into an orthogonal child;
+            // only same-flow continuation is admitted until that transform
+            // has its own modeled contract.
+            if child_style.flow.is_horizontal() != child_style.containing_flow.is_horizontal()
+                && (child_style.float != FloatSide::None
+                    || child_style.clear != ClearSide::None
+                    || *active_left_float
+                    || *active_right_float
+                    || self.exports_float_state(child))
+            {
+                return Some(BlockDeferral::NestedFloatState);
             }
 
             match child_style.clear {
@@ -954,26 +1035,28 @@ where
             &mut self.resolved_shrink_to_fit,
             resolved_shrink_to_fit.then_some(child),
         );
+        let known_dimensions = physical_optional_size(
+            input.containing_flow,
+            LogicalOptionalSize {
+                inline: Some(input.border_box_inline_size),
+                block: None,
+            },
+        )
+        .into_taffy();
+        let parent_size =
+            physical_optional_size(input.containing_flow, input.containing_size).into_taffy();
         let output = self.compute_node(
             child.into_taffy(),
             LayoutInput {
                 run_mode: RunMode::PerformLayout,
                 sizing_mode: SizingMode::InherentSize,
                 axis: taffy::RequestedAxis::Both,
-                known_dimensions: taffy::Size {
-                    width: Some(input.border_box_width),
-                    height: None,
-                },
-                parent_size: taffy::Size {
-                    width: Some(input.containing_width),
-                    height: input.containing_height,
-                },
-                available_space: taffy::Size {
-                    width: taffy::AvailableSpace::Definite(input.available_width),
-                    height: input
-                        .containing_height
-                        .map_or(input.available_height, taffy::AvailableSpace::Definite),
-                },
+                known_dimensions,
+                parent_size,
+                available_space: physical_available_size(
+                    input.containing_flow,
+                    input.available_size,
+                ),
                 vertical_margins_are_collapsible: taffy::Line::FALSE,
             },
             None,
@@ -1240,6 +1323,7 @@ where
         }
 
         let style = self.tree.nodes[node_index].block_style;
+        let is_layout_root = self.tree.nodes[node_index].parent.is_none();
         if let Some(deferral) = style.deferral() {
             let resolved_shrink_to_fit = self.resolved_shrink_to_fit == Some(node)
                 && matches!(
@@ -1250,27 +1334,36 @@ where
                 return Err(deferral);
             }
         }
-        // The logical engine supports a definite vertical containing block,
-        // but auto block-size finalisation for vertical flow needs a deferred
-        // physical conversion pass. Keep that boundary named for now.
-        if !style.flow.is_horizontal() {
-            return Err(BlockDeferral::OrthogonalAutoBlockSize);
-        }
-
         let parent_physical = PhysicalOptionalSize::from_taffy(inputs.parent_size);
         let available_physical = PhysicalOptionalSize::from_available(inputs.available_space);
-        let parent_logical = logical_optional_size(style.containing_flow, parent_physical);
-        let available_logical = logical_optional_size(style.containing_flow, available_physical);
-        let containing_inline = parent_logical
+        let containing_parent = logical_optional_size(style.containing_flow, parent_physical);
+        let containing_available = logical_optional_size(style.containing_flow, available_physical);
+        let containing_inline = containing_parent
             .inline
-            .or(available_logical.inline)
+            .or(containing_available.inline)
             .ok_or(BlockDeferral::IndefiniteInlineSize)?;
-        let containing_block_size = parent_logical.block.or(available_logical.block);
+        // Physical CSS width/height resolve against the containing block's
+        // physical axes. Once resolved, keep the box's own logical axes until
+        // its auto block size is known.
+        let own_parent = logical_optional_size(style.flow, parent_physical);
+        let own_available_optional = logical_optional_size(style.flow, available_physical);
+        let own_available = logical_available_size(style.flow, inputs.available_space);
+        let containing_block_size = own_parent.block.or(own_available_optional.block);
         let padding = style.resolved_padding(containing_inline);
         let border = style.border;
         let padding_border = padding.zip_map(border, |padding, border| padding + border);
 
         let mut outer = PhysicalOptionalSize::from_taffy(inputs.known_dimensions);
+        // Taffy's root setup offers the available physical width as a known
+        // dimension. For an orthogonal root that axis is its own auto block
+        // axis, not a completed used size. Retain the logical query until
+        // children establish the block contribution below.
+        if is_layout_root
+            && !style.flow.is_horizontal()
+            && matches!(style.size.width, BlockSizeValue::Auto)
+        {
+            outer.width = None;
+        }
         outer.width = outer.width.or_else(|| {
             resolve_outer_dimension(
                 style.size.width,
@@ -1291,23 +1384,34 @@ where
                 style.box_sizing,
             )
         });
-        if outer.width.is_none() {
-            outer.width = available_physical.width;
-        }
-
-        let content_width = outer
-            .width
-            .map(|width| (width - padding_border.left - padding_border.right).max(0.0))
+        let mut outer_logical = logical_optional_size(style.flow, outer);
+        outer_logical.inline = outer_logical.inline.or(match own_available.width {
+            AlgorithmAvailableSpace::Definite(size) => Some(size),
+            AlgorithmAvailableSpace::MinContent | AlgorithmAvailableSpace::MaxContent => None,
+        });
+        let content_padding_border = style.content_logical_padding_border(containing_inline);
+        let content_inline = outer_logical
+            .inline
+            .map(|size| {
+                (size - content_padding_border.inline_start - content_padding_border.inline_end)
+                    .max(0.0)
+            })
             .ok_or(BlockDeferral::IndefiniteInlineSize)?;
-        let content_height = outer
-            .height
-            .map(|height| (height - padding_border.top - padding_border.bottom).max(0.0));
+        let content_block = outer_logical.block.map(|size| {
+            (size - content_padding_border.block_start - content_padding_border.block_end).max(0.0)
+        });
+        let content_physical = physical_optional_size(
+            style.flow,
+            LogicalOptionalSize {
+                inline: Some(content_inline),
+                block: content_block,
+            },
+        );
 
         if let Some(deferral) = self.block_subtree_deferral(node) {
             return Err(deferral);
         }
 
-        let is_layout_root = self.tree.nodes[node_index].parent.is_none();
         let collapse_parent_start = style
             .child_margin_collapse(
                 containing_inline,
@@ -1317,8 +1421,8 @@ where
             )
             .block_start;
         let content_box = PhysicalSize {
-            width: content_width,
-            height: content_height.unwrap_or(0.0),
+            width: content_physical.width.unwrap_or_default(),
+            height: content_physical.height.unwrap_or_default(),
         };
         let mut formatting_context = BlockFormattingContext::with_float_state(
             BlockContainingBlock {
@@ -1329,21 +1433,29 @@ where
             self.nested_float_state.clone().unwrap_or_default(),
         );
         let children = self.tree.nodes[node_index].children.clone();
+        let mut placed_children = Vec::with_capacity(children.len());
         for (order, child) in children.into_iter().enumerate() {
             let child_style = self.tree.nodes[child.index()].block_style;
+            let child_containing_block_size =
+                logical_optional_size(child_style.flow, content_physical).block;
             let inline = if self.tree.nodes[child.index()].intrinsic_shrink_to_fit_enabled {
-                self.resolve_intrinsic_shrink_to_fit(child, child_style, content_width)?
+                self.resolve_intrinsic_shrink_to_fit(child, child_style, content_inline)?
             } else if child_style.float == FloatSide::None {
-                solve_in_flow_inline_size(child_style, content_width)
+                solve_in_flow_inline_size(child_style, content_inline)
             } else {
-                solve_float_inline_size(child_style, content_width)
+                solve_float_inline_size(child_style, content_inline)
             };
             let provisional_margin_state = BlockMarginState::from_box(
                 child_style,
-                content_width,
+                content_inline,
                 CollapsedMargin::ZERO,
                 CollapsedMargin::ZERO,
-                child_style.child_margin_collapse(content_width, content_height, false, true),
+                child_style.child_margin_collapse(
+                    content_inline,
+                    child_containing_block_size,
+                    false,
+                    true,
+                ),
                 false,
             );
             let avoids_floats = child_style.float == FloatSide::None
@@ -1351,11 +1463,16 @@ where
                 && formatting_context.float_exclusion_count() != 0;
             let mut float_avoiding_placement = None;
             let default_child_input = BlockChildInput {
-                border_box_width: inline.border_box,
-                containing_width: content_width,
-                available_width: content_width,
-                containing_height: content_height,
-                available_height: inputs.available_space.height,
+                containing_flow: style.flow,
+                border_box_inline_size: inline.border_box,
+                containing_size: LogicalOptionalSize {
+                    inline: Some(content_inline),
+                    block: content_block,
+                },
+                available_size: AlgorithmSize::new(
+                    AlgorithmAvailableSpace::Definite(content_inline),
+                    content_block.map_or(own_available.height, AlgorithmAvailableSpace::Definite),
+                ),
             };
             let mut child_output = if avoids_floats {
                 let mut measured_block_size = 0.0;
@@ -1374,11 +1491,12 @@ where
                     let output = self.compute_block_child(
                         child,
                         BlockChildInput {
-                            border_box_width: candidate.inline_size.border_box,
-                            containing_width: content_width,
-                            available_width: candidate.inline_size.border_box,
-                            containing_height: content_height,
-                            available_height: inputs.available_space.height,
+                            border_box_inline_size: candidate.inline_size.border_box,
+                            available_size: AlgorithmSize::new(
+                                AlgorithmAvailableSpace::Definite(candidate.inline_size.border_box),
+                                default_child_input.available_size.height,
+                            ),
+                            ..default_child_input
                         },
                         None,
                         None,
@@ -1429,15 +1547,15 @@ where
                         child,
                         child_style,
                         child_size,
-                        content_width,
-                        content_height,
+                        content_inline,
+                        child_containing_block_size,
                     )?;
                     let origin = Self::predicted_child_content_origin(
                         &formatting_context,
                         child_style,
                         margin_state,
                         inline,
-                        content_width,
+                        content_inline,
                     );
                     let float_state =
                         formatting_context.float_state_for_descendant(origin.0, origin.1);
@@ -1456,15 +1574,15 @@ where
                         child,
                         child_style,
                         next_size,
-                        content_width,
-                        content_height,
+                        content_inline,
+                        child_containing_block_size,
                     )?;
                     let next_origin = Self::predicted_child_content_origin(
                         &formatting_context,
                         child_style,
                         next_margin_state,
                         inline,
-                        content_width,
+                        content_inline,
                     );
                     child_output = next_output;
                     if (next_origin.0 - origin.0).abs() <= 0.01
@@ -1486,8 +1604,8 @@ where
                 child,
                 child_style,
                 child_size,
-                content_width,
-                content_height,
+                content_inline,
+                child_containing_block_size,
             )?;
             let placement = if child_style.float != FloatSide::None {
                 formatting_context.place_float(child_style, child_size)
@@ -1511,15 +1629,14 @@ where
                 && let Some(float_state) =
                     self.tree.nodes[child.index()].exported_float_state.take()
             {
-                let padding_border = child_style.logical_padding_border(content_width);
-                let logical_border_box = style.flow.logical_rect(placement.rect, content_box);
+                let padding_border = child_style.logical_padding_border(content_inline);
                 formatting_context.import_descendant_float_state(
                     float_state,
-                    logical_border_box.inline_start + padding_border.inline_start,
-                    logical_border_box.block_start + padding_border.block_start,
+                    placement.logical_rect.inline_start + padding_border.inline_start,
+                    placement.logical_rect.block_start + padding_border.block_start,
                 );
             }
-            let child_padding = child_style.resolved_padding(content_width);
+            let child_padding = child_style.resolved_padding(content_inline);
             let child_border = child_style.border;
             let logical_margin = LogicalSides {
                 inline_start: placement.margin_inline_start,
@@ -1528,22 +1645,17 @@ where
                 block_end: 0.0,
             };
             let child_margin = style.flow.physical_sides(logical_margin);
-            let location = taffy::Point {
-                x: padding_border.left + placement.rect.x,
-                y: padding_border.top + placement.rect.y,
-            };
-            let mut child_layout = Layout::with_order(
-                order
+            placed_children.push(PendingBlockChildLayout {
+                child,
+                order: order
                     .try_into()
                     .expect("block child order exceeded u32::MAX"),
-            );
-            child_layout.location = location;
-            child_layout.size = child_output.size;
-            child_layout.scrollbar_size = taffy::Size::ZERO;
-            child_layout.padding = to_taffy_rect(child_padding);
-            child_layout.border = to_taffy_rect(child_border);
-            child_layout.margin = to_taffy_rect(child_margin);
-            self.set_unrounded_layout(child.into_taffy(), &child_layout);
+                output: child_output,
+                padding: child_padding,
+                border: child_border,
+                margin: child_margin,
+                logical_rect: placement.logical_rect,
+            });
         }
 
         let all_children_collapse_through = formatting_context.all_children_collapse_through();
@@ -1564,25 +1676,61 @@ where
             all_children_collapse_through,
         );
         let collapse_parent_end = margin_collapse.block_end || collapses_through;
-        let used_content_height = if is_layout_root || style.establishes_bfc {
+        let used_content_block = if is_layout_root || style.establishes_bfc {
             formatting_context.used_block_size_containing_floats(collapse_parent_end)
         } else {
             formatting_context.used_block_size_with_margin_collapse(collapse_parent_end)
         };
-        let auto_outer_height = used_content_height + padding_border.top + padding_border.bottom;
-        let final_height = outer.height.unwrap_or_else(|| {
+        let auto_outer_block = used_content_block
+            + content_padding_border.block_start
+            + content_padding_border.block_end;
+        let (minimum_block, maximum_block) = if style.flow.is_horizontal() {
+            (style.min_size.height, style.max_size.height)
+        } else {
+            (style.min_size.width, style.max_size.width)
+        };
+        let final_block = outer_logical.block.unwrap_or_else(|| {
             clamp_outer_dimension(
-                auto_outer_height,
-                style.min_size.height,
-                style.max_size.height,
-                parent_physical.height,
-                padding_border.top + padding_border.bottom,
+                auto_outer_block,
+                minimum_block,
+                maximum_block,
+                own_parent.block,
+                content_padding_border.block_start + content_padding_border.block_end,
                 style.box_sizing,
             )
         });
+        let final_size = style.flow.physical_size(LogicalSize {
+            inline: outer_logical
+                .inline
+                .expect("an owned block has a definite used inline size"),
+            block: final_block,
+        });
+        let final_content_box = style.flow.physical_size(LogicalSize {
+            inline: content_inline,
+            block: (final_block
+                - content_padding_border.block_start
+                - content_padding_border.block_end)
+                .max(0.0),
+        });
+        for child in placed_children {
+            let rect = style
+                .flow
+                .physical_rect(child.logical_rect, final_content_box);
+            let mut child_layout = Layout::with_order(child.order);
+            child_layout.location = taffy::Point {
+                x: padding_border.left + rect.x,
+                y: padding_border.top + rect.y,
+            };
+            child_layout.size = child.output.size;
+            child_layout.scrollbar_size = taffy::Size::ZERO;
+            child_layout.padding = to_taffy_rect(child.padding);
+            child_layout.border = to_taffy_rect(child.border);
+            child_layout.margin = to_taffy_rect(child.margin);
+            self.set_unrounded_layout(child.child.into_taffy(), &child_layout);
+        }
         let final_size = taffy::Size {
-            width: outer.width.unwrap_or_default(),
-            height: final_height,
+            width: final_size.width,
+            height: final_size.height,
         };
         self.tree.nodes[node_index].block_margins = Some(BlockMarginState::from_box(
             style,
@@ -3875,5 +4023,243 @@ mod tests {
             )
             .unwrap()
         );
+    }
+
+    #[test]
+    fn orthogonal_auto_block_sizes_finalize_before_physical_child_placement() {
+        use crate::{Direction, WritingMode};
+
+        for (writing_mode, first_x, second_x) in [
+            (WritingMode::VerticalRl, 30.0, 0.0),
+            (WritingMode::VerticalLr, 0.0, 20.0),
+            (WritingMode::SidewaysRl, 30.0, 0.0),
+            (WritingMode::SidewaysLr, 0.0, 20.0),
+        ] {
+            let flow = FlowAxes::new(writing_mode, Direction::Ltr);
+            let mut tree = AlgorithmTree::<Style, (), u8>::new();
+            let first = tree.new_with_children_and_block_style(
+                AlgorithmKind::Leaf,
+                BlockStyle::anonymous(flow, flow),
+                Style::default(),
+                &[],
+                1,
+            );
+            let second = tree.new_with_children_and_block_style(
+                AlgorithmKind::Leaf,
+                BlockStyle::anonymous(flow, flow),
+                Style::default(),
+                &[],
+                2,
+            );
+            let root = tree.new_with_children_and_block_style(
+                AlgorithmKind::Block,
+                BlockStyle {
+                    flow,
+                    containing_flow: flow,
+                    establishes_bfc: true,
+                    ..BlockStyle::default()
+                },
+                Style {
+                    display: Display::Block,
+                    ..Style::default()
+                },
+                &[first, second],
+                0,
+            );
+
+            tree.compute_layout_with_measure(
+                root,
+                available(300.0, 200.0),
+                |known, _available, node, _context, _line_constraints| {
+                    let block = if node == first { 20.0 } else { 30.0 };
+                    AlgorithmSize::new(block, known.height.unwrap_or(200.0))
+                },
+            );
+
+            assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Buckram));
+            assert_eq!(
+                tree.layout(root),
+                AlgorithmLayout {
+                    width: 50.0,
+                    height: 200.0,
+                    ..AlgorithmLayout::default()
+                },
+                "{writing_mode:?} root size"
+            );
+            assert_eq!(
+                tree.layout(first),
+                AlgorithmLayout {
+                    x: first_x,
+                    width: 20.0,
+                    height: 200.0,
+                    ..AlgorithmLayout::default()
+                },
+                "{writing_mode:?} first child"
+            );
+            assert_eq!(
+                tree.layout(second),
+                AlgorithmLayout {
+                    x: second_x,
+                    width: 30.0,
+                    height: 200.0,
+                    ..AlgorithmLayout::default()
+                },
+                "{writing_mode:?} second child"
+            );
+        }
+    }
+
+    #[test]
+    fn adapter_nests_horizontal_and_vertical_normal_flow_in_both_directions() {
+        use crate::{Direction, WritingMode};
+
+        fn layout_nested(parent_flow: FlowAxes, child_flow: FlowAxes) -> AlgorithmLayout {
+            let mut tree = AlgorithmTree::<Style, (), u8>::new();
+            let leaf = tree.new_with_children_and_block_style(
+                AlgorithmKind::Leaf,
+                BlockStyle::anonymous(child_flow, child_flow),
+                Style::default(),
+                &[],
+                2,
+            );
+            let child = tree.new_with_children_and_block_style(
+                AlgorithmKind::Block,
+                BlockStyle {
+                    flow: child_flow,
+                    containing_flow: parent_flow,
+                    size: if child_flow.is_horizontal() {
+                        crate::BlockDimensions::new(
+                            BlockSizeValue::Length(FlowLength::px(80.0)),
+                            BlockSizeValue::Auto,
+                        )
+                    } else {
+                        crate::BlockDimensions::new(
+                            BlockSizeValue::Auto,
+                            BlockSizeValue::Length(FlowLength::px(80.0)),
+                        )
+                    },
+                    ..BlockStyle::default()
+                },
+                Style {
+                    display: Display::Block,
+                    ..Style::default()
+                },
+                &[leaf],
+                1,
+            );
+            let root = tree.new_with_children_and_block_style(
+                AlgorithmKind::Block,
+                BlockStyle {
+                    flow: parent_flow,
+                    containing_flow: parent_flow,
+                    size: if parent_flow.is_horizontal() {
+                        crate::BlockDimensions::new(
+                            BlockSizeValue::Length(FlowLength::px(200.0)),
+                            BlockSizeValue::Auto,
+                        )
+                    } else {
+                        crate::BlockDimensions::new(
+                            BlockSizeValue::Auto,
+                            BlockSizeValue::Length(FlowLength::px(200.0)),
+                        )
+                    },
+                    establishes_bfc: true,
+                    ..BlockStyle::default()
+                },
+                Style {
+                    display: Display::Block,
+                    ..Style::default()
+                },
+                &[child],
+                0,
+            );
+
+            tree.compute_layout_with_measure(
+                root,
+                available(200.0, 200.0),
+                |known, _available, _node, _context, _line_constraints| {
+                    AlgorithmSize::new(known.width.unwrap_or(20.0), known.height.unwrap_or(20.0))
+                },
+            );
+
+            assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Buckram));
+            assert_eq!(tree.block_algorithm(child), Some(BlockAlgorithm::Buckram));
+            tree.layout(child)
+        }
+
+        let horizontal_parent = FlowAxes::HORIZONTAL_LTR;
+        let vertical_child = FlowAxes::new(WritingMode::VerticalRl, Direction::Ltr);
+        assert_eq!(
+            layout_nested(horizontal_parent, vertical_child),
+            AlgorithmLayout {
+                width: 200.0,
+                height: 80.0,
+                ..AlgorithmLayout::default()
+            }
+        );
+
+        let vertical_parent = FlowAxes::new(WritingMode::VerticalLr, Direction::Ltr);
+        let horizontal_child = FlowAxes::HORIZONTAL_LTR;
+        assert_eq!(
+            layout_nested(vertical_parent, horizontal_child),
+            AlgorithmLayout {
+                width: 80.0,
+                height: 200.0,
+                ..AlgorithmLayout::default()
+            }
+        );
+    }
+
+    #[test]
+    fn orthogonal_float_continuation_stays_deferred_without_a_logical_transform() {
+        use crate::{Direction, WritingMode};
+
+        let horizontal = FlowAxes::HORIZONTAL_LTR;
+        let vertical = FlowAxes::new(WritingMode::VerticalRl, Direction::Ltr);
+        let mut tree = AlgorithmTree::<Style, (), u8>::new();
+        let orthogonal_float = tree.new_with_children_and_block_style(
+            AlgorithmKind::Leaf,
+            BlockStyle {
+                flow: vertical,
+                containing_flow: horizontal,
+                float: FloatSide::Left,
+                size: crate::BlockDimensions::new(
+                    BlockSizeValue::Length(FlowLength::px(40.0)),
+                    BlockSizeValue::Length(FlowLength::px(80.0)),
+                ),
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                size: taffy::Size {
+                    width: Dimension::length(40.0),
+                    height: Dimension::length(80.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            1,
+        );
+        let root = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                size: taffy::Size {
+                    width: Dimension::length(200.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            &[orthogonal_float],
+            0,
+        );
+
+        tree.compute_layout_with_measure(root, available(200.0, 200.0), zero_measure);
+
+        assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Taffy));
     }
 }

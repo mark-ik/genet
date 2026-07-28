@@ -561,6 +561,49 @@ containing flows differ.
   transform.
 - Route multi-fragment vertical sizing to K6.
 
+### K3r receipt - 2026-07-28
+
+Buckram now keeps normal-flow blocks in their own logical axes while their
+auto block size is unresolved. Specified physical CSS width and height are
+resolved against the containing block, then converted to the box's own axes.
+Child placement is retained as a logical rectangle until the parent's block
+contribution is complete, when the final physical outer size and child
+locations are derived at the fragment edge. This closes normal flow for
+vertical-rl, vertical-lr, sideways-rl, sideways-lr, and horizontal/vertical
+parent-child nesting. `OrthogonalAutoBlockSize` is removed.
+
+Livery now retains the same two-coordinate contract for non-horizontal
+fragments: absolute physical rectangles for paint plus flow-relative logical
+rectangles for layout consumers. The retained IFC collector follows that
+conversion too. The live vertical-rl proof covers generated boxes, logical and
+physical fragment geometry, first and last baselines, and a containing
+fragment.
+
+Orthogonal float and clearance continuation remains deferred. Buckram does
+not copy physical `left` or `right` state across a horizontal/vertical
+boundary without an explicit logical transform. Multi-fragment vertical sizing
+remains K6.
+
+Verification:
+
+- `cargo test -p buckram -p livery -p genet-livery --offline`: pass, 27 test
+  targets reported success.
+- `cargo clippy -p buckram --offline --no-deps -- -D warnings`: pass. The
+  combined Buckram and Genet-Livery command is currently blocked by
+  `clippy::implicit_saturating_sub` in `components/genet-livery/src/text.rs`,
+  introduced by committed selection work outside K3r; this slice does not
+  alter that file.
+- `rustfmt --check` on the changed Rust files and `git diff --check`: pass.
+- Release `genet-wpt --all-features --offline` build: pass under Rust 1.97.
+- Named WPT crash-smoke, not behavioral reftest or testharness evidence:
+  `css/css-writing-modes` 1233/1368, `css/css-sizing` 732/732, and `css/CSS2`
+  6383/9254; each completed with zero failed and zero errored files.
+
+Proof directory:
+`C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-28_buckram_k3r`
+
+Commit: `Complete Buckram orthogonal normal flow`
+
 ## K3s. Dispatch audit and closure
 
 ### Work

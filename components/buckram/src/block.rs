@@ -348,7 +348,6 @@ pub enum BlockDeferral {
     AspectRatio,
     SizeContainment,
     NonlinearLength,
-    OrthogonalAutoBlockSize,
     ParentMarginCollapse,
     IndefiniteInlineSize,
     BackendSizingMode,
@@ -647,6 +646,9 @@ pub struct BlockContainingBlock {
 /// One in-flow child placement relative to the containing content box.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BlockPlacement {
+    /// Parent-flow geometry retained until the caller has finalized the
+    /// containing block's own block size.
+    pub logical_rect: LogicalRect,
     pub rect: PhysicalRect,
     pub margin_inline_start: f32,
     pub margin_inline_end: f32,
@@ -1013,6 +1015,7 @@ impl BlockFormattingContext {
         };
 
         BlockPlacement {
+            logical_rect: border_box,
             rect: self
                 .containing_block
                 .flow
@@ -1268,6 +1271,7 @@ impl BlockFormattingContext {
         self.has_child = true;
 
         BlockPlacement {
+            logical_rect: logical,
             rect: self
                 .containing_block
                 .flow
