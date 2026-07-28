@@ -802,10 +802,13 @@ wrong one.
   it gates F4 and nothing else. It is a replacement-safety instrument. It
   can reach zero while the engine is still far from the specifications,
   because Stylo is not a specification.
-- **Absolute Livery conformance** answers *how much of the platform is
+- **Absolute Genet CSS conformance** answers *how much of the platform is
   built*. Its measure is **absolute passing subtests over time**, counted
   against the whole corpus and including failures, errors, and tests that
-  cannot run at all. It never mentions Stylo.
+  cannot run at all. It never uses Stylo as the oracle. Each lane names its
+  actual owners, including Stylo geometry in the current hybrid testharness
+  route, so those results are not misrepresented as Livery layout
+  conformance.
 
 The repository already ruled this once and the cutover drifted off it: the
 [grand audit](./2026-06-24_grand_audit.md) says "100% WPT is not a real
@@ -836,12 +839,17 @@ obvious from an absolute count.
   of 708, CSS2 skips 3,279 of 9,254) and a differential hides them entirely,
   because both engines skip the same files.
 
-**Not yet built:** the conformance ledger itself. The reftest and
-testharness runs already emit per-file status, so the counting exists; what
-is missing is a run that reports absolute totals over the whole corpus
-rather than nine chosen directories, and a baseline to track it over time.
-That is the instrument the next slice needs, and until it exists this plan
-can only speak to replacement safety.
+**Built 2026-07-28:** `genet-wpt conformance` joins exact screen-reftest and
+testharness result maps to the authoritative WPT manifest, reports absolute
+file and subtest totals, rejects missing or unpinned evidence by default, and
+keeps worker-only and unsupported manifest kinds visible. The report names
+the routes honestly: Livery owns the screen reftest renderer; testharness uses
+Livery CSSOM with Stylo geometry until that half is replaced. Print reftests
+remain unsupported until a print harness exists. Its first live diagnostic
+proof covers all 9,254 `css/CSS2` manifest variants. See the
+[absolute CSS conformance ledger](./2026-07-28_absolute_css_conformance_ledger.md).
+The first current whole-`css` baseline is deliberately held until K3s so K3's
+runner and expectation stream stay fixed.
 
 ## Deferral register
 
