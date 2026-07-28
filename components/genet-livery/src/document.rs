@@ -16,8 +16,8 @@ use paint_list_api::DeviceIntSize;
 
 use crate::{
     IncrementalStyle, InteractionStates, LayoutError, LiveryLayout, LiveryPaintList, RestyleStats,
-    StylePlane, StyleSet, TextSystem, emit_paint_list_with_text_system_scrolled_with_images,
-    hit_test_with_scroll,
+    StylePlane, StyleSet, TextRange, TextRect, TextSelection, TextSystem,
+    emit_paint_list_with_text_system_scrolled_with_images, hit_test_with_scroll,
     layout::{
         layout_with_text_system, resolve_container_query_styles,
         resolve_container_query_styles_with_images,
@@ -100,6 +100,8 @@ where
     keyframe_animation: Option<KeyframeAnimation<D::NodeId>>,
     nested_scroll: HashMap<D::NodeId, (f32, f32)>,
     image_sources: HashMap<String, Vec<u8>>,
+    selection_anchor: Option<(D::NodeId, usize)>,
+    selection_range: Option<TextRange<D::NodeId>>,
 }
 
 impl<D> LiveryDocument<D>
@@ -130,6 +132,8 @@ where
             keyframe_animation: None,
             nested_scroll: HashMap::new(),
             image_sources: HashMap::new(),
+            selection_anchor: None,
+            selection_range: None,
         }
     }
 
@@ -444,6 +448,119 @@ where
         links
     }
 
+    /// Begin a primary-pointer text selection against the retained shaped
+    /// clusters from the last frame.
+    pub fn begin_text_selection(&mut self, x: f32, y: f32) -> bool {
+        self.selection_range = None;
+        self.selection_anchor = {
+            let Some(frame) = self
+                .layout
+                .as_ref()
+                .and_then(|layout| layout.fragments.text_frame())
+            else {
+                return false;
+            };
+            frame.text_position_at_point(x, y, |source, fragment| {
+                self.viewport_text_rect(source, fragment)
+            })
+        };
+        self.selection_anchor.is_some()
+    }
+
+    /// Extend the current primary-pointer selection.
+    pub fn extend_text_selection(&mut self, x: f32, y: f32) -> bool {
+        let Some(anchor) = self.selection_anchor else {
+            return false;
+        };
+        let focus = {
+            let Some(frame) = self
+                .layout
+                .as_ref()
+                .and_then(|layout| layout.fragments.text_frame())
+            else {
+                return false;
+            };
+            frame.text_position_at_point(x, y, |source, fragment| {
+                self.viewport_text_rect(source, fragment)
+            })
+        };
+        let Some(focus) = focus else {
+            return false;
+        };
+        let next = TextRange {
+            anchor_node: anchor.0,
+            anchor_offset: anchor.1,
+            focus_node: focus.0,
+            focus_offset: focus.1,
+        };
+        if self.selection_range == Some(next) {
+            return false;
+        }
+        self.selection_range = Some(next);
+        true
+    }
+
+    /// Finish the current selection. A collapsed gesture clears the range and
+    /// lets the session perform the ordinary click action.
+    pub fn finish_text_selection(&mut self, x: f32, y: f32) -> bool {
+        self.extend_text_selection(x, y);
+        self.selection_anchor = None;
+        if self.text_selection().is_some() {
+            true
+        } else {
+            self.selection_range = None;
+            false
+        }
+    }
+
+    /// Recompute the selected text and viewport geometry from the retained
+    /// source range.
+    pub fn text_selection(&self) -> Option<TextSelection<D::NodeId>> {
+        let frame = self
+            .layout
+            .as_ref()
+            .and_then(|layout| layout.fragments.text_frame())?;
+        frame.text_selection(self.selection_range?, |source, fragment| {
+            self.viewport_text_rect(source, fragment)
+        })
+    }
+
+    /// Link URLs whose descendant text contributes to this selection.
+    pub fn links_for_selection(&self, selection: &TextSelection<D::NodeId>) -> Vec<String> {
+        let mut links = Vec::new();
+        for source in &selection.source_nodes {
+            if let Some(href) = self.link_ancestor(*source)
+                && !links.contains(&href)
+            {
+                links.push(href);
+            }
+        }
+        links
+    }
+
+    /// Resolve the first retained occurrence of `text` to viewport pointer
+    /// endpoints for Genet Probe and find-to-select consumers.
+    pub fn text_target(&self, text: &str) -> Option<([f32; 2], [f32; 2])> {
+        let frame = self
+            .layout
+            .as_ref()
+            .and_then(|layout| layout.fragments.text_frame())?;
+        let range = frame.find_text_range(text)?;
+        let anchor = frame.caret_rect(
+            range.anchor_node,
+            range.anchor_offset,
+            |source, fragment| self.viewport_text_rect(source, fragment),
+        )?;
+        let focus =
+            frame.caret_rect(range.focus_node, range.focus_offset, |source, fragment| {
+                self.viewport_text_rect(source, fragment)
+            })?;
+        Some((
+            [anchor.x, anchor.y + anchor.height * 0.5],
+            [focus.x, focus.y + focus.height * 0.5],
+        ))
+    }
+
     pub fn click_at(&mut self, x: f32, y: f32) -> ClickOutcome {
         let Some(target) = self.hit_test(x, y) else {
             return ClickOutcome::None;
@@ -465,6 +582,16 @@ where
             ClickOutcome::Focused
         } else {
             ClickOutcome::None
+        }
+    }
+
+    fn viewport_text_rect(&self, source: D::NodeId, fragment: crate::layout::Fragment) -> TextRect {
+        let (nested_x, nested_y) = self.ancestor_scroll(source);
+        TextRect {
+            x: fragment.x - self.scroll.0 - nested_x,
+            y: fragment.y - self.scroll.1 - nested_y,
+            width: fragment.width,
+            height: fragment.height,
         }
     }
 

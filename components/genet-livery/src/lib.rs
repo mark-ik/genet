@@ -35,7 +35,7 @@ pub use livery::{PropertyId, canonicalize_specified_longhand, canonicalize_speci
 pub(crate) use paint::emit_paint_list_with_text_system_scrolled_with_images;
 pub use paint::{LiveryPaintList, emit_paint_list, emit_paint_list_with_text_system};
 pub use style::{StylePlane, StyleSet, UsedValueContext, resolve_styles};
-pub use text::TextSystem;
+pub use text::{TextRange, TextRect, TextSelection, TextSystem};
 
 /// Clean-room UA defaults for the bounded Cambium structural lane.
 ///

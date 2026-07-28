@@ -326,7 +326,19 @@ impl DocumentSession<Scene> for LiveryDocumentSession {
         match self.doc.frame(width, height) {
             Ok(list) => {
                 self.last_error = None;
-                paint_list_render::translate_paint_list(&list)
+                let mut scene = paint_list_render::translate_paint_list(&list);
+                if let Some(selection) = self.doc.text_selection() {
+                    for rect in selection.rects {
+                        let x0 = rect.x.max(0.0);
+                        let y0 = rect.y.max(0.0);
+                        let x1 = (rect.x + rect.width).min(width as f32);
+                        let y1 = (rect.y + rect.height).min(height as f32);
+                        if x0 < x1 && y0 < y1 {
+                            scene.push_rect(x0, y0, x1, y1, [0.18, 0.46, 0.95, 0.34]);
+                        }
+                    }
+                }
+                scene
             },
             Err(error) => {
                 self.last_error = Some(error.to_string());
@@ -376,6 +388,31 @@ impl DocumentSession<Scene> for LiveryDocumentSession {
         }
     }
 
+    fn pointer_down(&mut self, x: f32, y: f32) -> SessionClick {
+        if self.doc.begin_text_selection(x, y) {
+            SessionClick::Handled
+        } else {
+            self.click_at(x, y)
+        }
+    }
+
+    fn pointer_move(&mut self, x: f32, y: f32) -> bool {
+        self.doc.extend_text_selection(x, y)
+    }
+
+    fn pointer_up(&mut self, x: f32, y: f32) -> SessionClick {
+        if self.doc.finish_text_selection(x, y) {
+            SessionClick::Handled
+        } else {
+            self.click_at(x, y)
+        }
+    }
+
+    fn text_target(&self, text: &str) -> Option<SessionTextTarget> {
+        let (anchor, focus) = self.doc.text_target(text)?;
+        Some(SessionTextTarget { anchor, focus })
+    }
+
     fn links(&self) -> Vec<SessionLink> {
         self.doc
             .links()
@@ -408,7 +445,37 @@ impl DocumentSession<Scene> for LiveryDocumentSession {
     }
 
     fn clip(&self) -> Option<DocumentClip> {
-        semantic_clip_from_dom(&self.address, self.doc.dom())
+        let selection = self.doc.text_selection();
+        match selection {
+            Some(selection) => {
+                let links = self.doc.links_for_selection(&selection);
+                semantic_clip_from_selection_with_links(
+                    &self.address,
+                    self.doc.dom(),
+                    TextSelection {
+                        range: genet_layout::TextRange {
+                            anchor_node: selection.range.anchor_node,
+                            anchor_offset: selection.range.anchor_offset,
+                            focus_node: selection.range.focus_node,
+                            focus_offset: selection.range.focus_offset,
+                        },
+                        rects: selection
+                            .rects
+                            .into_iter()
+                            .map(|rect| genet_layout::CaretRect {
+                                x: rect.x,
+                                y: rect.y,
+                                width: rect.width,
+                                height: rect.height,
+                            })
+                            .collect(),
+                        text: selection.text,
+                    },
+                    links,
+                )
+            },
+            None => semantic_clip_from_dom(&self.address, self.doc.dom()),
+        }
     }
 
     fn as_any_ref(&self) -> &dyn Any {
@@ -443,6 +510,30 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq,
 {
+    let mut links = Vec::new();
+    for (url, rect) in link_rects {
+        if selection
+            .rects
+            .iter()
+            .any(|selected| rect_intersects_selection(rect, selected))
+            && !links.iter().any(|seen| seen == &url)
+        {
+            links.push(url);
+        }
+    }
+    semantic_clip_from_selection_with_links(address, dom, selection, links)
+}
+
+fn semantic_clip_from_selection_with_links<D>(
+    address: &str,
+    dom: &D,
+    selection: TextSelection<D::NodeId>,
+    links: Vec<String>,
+) -> Option<DocumentClip>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq,
+{
     if selection.text.is_empty() {
         return None;
     }
@@ -462,17 +553,6 @@ where
         "quote": selection.text,
     })
     .to_string();
-    let mut links = Vec::new();
-    for (url, rect) in link_rects {
-        if selection
-            .rects
-            .iter()
-            .any(|selected| rect_intersects_selection(rect, selected))
-            && !links.iter().any(|seen| seen == &url)
-        {
-            links.push(url);
-        }
-    }
     let report = genet_render::content_report(dom);
     Some(DocumentClip {
         source_url: address.to_string(),
@@ -1094,6 +1174,68 @@ mod tests {
         assert_eq!(report.title.as_deref(), Some("The Page"));
         assert_eq!(report.headings, vec!["Heading"]);
         assert_eq!(report.links, vec!["/next"]);
+    }
+
+    #[cfg(feature = "livery")]
+    #[test]
+    fn livery_session_pointer_selection_scopes_clip_and_selector() {
+        let engine = LiverySessionEngine::new(NoFetch);
+        let request = SessionSpawnRequest::new("https://example.test/report")
+            .with_body(
+                "<html><head><title>The Page</title><style>\
+                 html, body, p { margin: 0; padding: 0; }\
+                 </style></head><body><p>before \
+                 <a href=\"/chosen\">selected link</a> after \
+                 <a href=\"/outside\">outside</a></p></body></html>",
+            )
+            .with_viewport(640, 200);
+        let mut session = engine.spawn(&request).expect("spawns");
+        let unselected = session.frame(640, 200);
+        let unselected_rects = unselected
+            .ops
+            .iter()
+            .filter(|op| matches!(op, netrender::SceneOp::Rect(_)))
+            .count();
+        let target = session
+            .text_target("selected link")
+            .expect("Livery source ranges resolve to pointer endpoints");
+
+        assert_eq!(
+            session.pointer_down(target.anchor[0], target.anchor[1]),
+            SessionClick::Handled
+        );
+        assert!(
+            session.pointer_move(target.focus[0], target.focus[1]),
+            "the range extends through ordinary pointer input"
+        );
+        assert_eq!(
+            session.pointer_up(target.focus[0], target.focus[1]),
+            SessionClick::Handled
+        );
+
+        let selected = session.frame(640, 200);
+        let selected_rects = selected
+            .ops
+            .iter()
+            .filter(|op| matches!(op, netrender::SceneOp::Rect(_)))
+            .count();
+        assert!(
+            selected_rects > unselected_rects,
+            "the retained Livery range paints selection geometry"
+        );
+
+        let clip = session.clip().expect("selection supplies a clip");
+        assert_eq!(clip.source_url, "https://example.test/report");
+        assert_eq!(clip.text, "selected link");
+        assert_eq!(clip.links, vec!["/chosen"]);
+        let selector: serde_json::Value =
+            serde_json::from_str(clip.selector.as_deref().expect("range selector"))
+                .expect("selector is typed JSON");
+        assert_eq!(selector["type"], "dom-range");
+        assert_eq!(selector["version"], 1);
+        assert_eq!(selector["quote"], "selected link");
+        assert!(selector["anchor"]["path"].is_array());
+        assert!(selector["focus"]["path"].is_array());
     }
 
     #[cfg(feature = "livery")]

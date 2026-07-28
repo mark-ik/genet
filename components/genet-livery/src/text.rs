@@ -60,6 +60,33 @@ struct Brush {
     source_index: usize,
 }
 
+/// One retained text rectangle in viewport coordinates.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TextRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// A source-node text range in rendered byte space.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextRange<Id> {
+    pub anchor_node: Id,
+    pub anchor_offset: usize,
+    pub focus_node: Id,
+    pub focus_offset: usize,
+}
+
+/// A non-collapsed retained selection over Livery's shaped text.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextSelection<Id> {
+    pub range: TextRange<Id>,
+    pub source_nodes: Vec<Id>,
+    pub rects: Vec<TextRect>,
+    pub text: String,
+}
+
 fn break_inline_lines(
     layout: &mut parley::Layout<Brush>,
     width: f32,
@@ -221,6 +248,15 @@ impl TextSystem {
             parent_style,
             request.line_constraints,
         );
+        let text_sources = spans
+            .iter()
+            .filter_map(|span| {
+                span.source.map(|source| TextSource {
+                    source,
+                    range: span.range.clone(),
+                })
+            })
+            .collect();
         let zero_line_strut = text.is_empty()
             && spans.is_empty()
             && !inline_boxes.is_empty()
@@ -292,12 +328,16 @@ impl TextSystem {
                     measured_height
                 },
                 items,
+                text,
+                text_sources,
             })
         } else {
             Some(InlineLayout {
                 width: 0.0,
                 height: 0.0,
                 items,
+                text,
+                text_sources,
             })
         }
     }
@@ -474,6 +514,11 @@ impl TextSystem {
             });
         let mut visual_commands = Vec::new();
         let mut prepared_sources = Vec::new();
+        let text_sources = spans
+            .iter()
+            .filter_map(|span| Some((span.source?, text.get(span.range.clone())?.to_owned())))
+            .collect();
+        frame.record_text_group(text_sources);
         for item in self.shape(
             &text,
             &mut spans,
@@ -494,6 +539,16 @@ impl TextSystem {
                         glyph.point.y += origin.1;
                     }
                     frame.record_inline_fragment(source, run.fragment, line_y);
+                    for cluster in &run.clusters {
+                        let mut cluster_fragment = cluster.fragment;
+                        translate_fragment(&mut cluster_fragment, origin);
+                        frame.record_text_cluster(
+                            cluster.source,
+                            cluster.range.clone(),
+                            cluster_fragment,
+                            cluster.rtl,
+                        );
+                    }
                     for owner in &run.owners {
                         frame.record_inline_fragment(
                             *owner,
@@ -740,6 +795,40 @@ impl TextSystem {
                             glyph.point.y +=
                                 vertical_shift + extra_leading * 0.5 - empty_line_shift;
                         }
+                        let line_fragment_y = metrics.block_min_coord
+                            + if has_text_top || has_text_bottom {
+                                common_vertical_shift
+                            } else {
+                                vertical_shift
+                            };
+                        let mut cluster_x = run.offset() + negative_margin_offset;
+                        let mut clusters = Vec::new();
+                        for cluster in parley_run.visual_clusters() {
+                            let advance = cluster.advance().max(0.0);
+                            let global = cluster.text_range();
+                            let source_span = spans
+                                .get(cluster.first_style().brush.source_index)
+                                .and_then(|span| span.source.map(|source| (source, span)));
+                            if let Some((source, source_span)) = source_span {
+                                let start = global.start.max(source_span.range.start);
+                                let end = global.end.min(source_span.range.end);
+                                if start < end {
+                                    clusters.push(ShapedCluster {
+                                        source,
+                                        range: (start - source_span.range.start)
+                                            ..(end - source_span.range.start),
+                                        fragment: Fragment {
+                                            x: cluster_x,
+                                            y: line_fragment_y,
+                                            width: advance,
+                                            height: metrics.line_height.max(0.0),
+                                        },
+                                        rtl: cluster.is_rtl(),
+                                    });
+                                }
+                            }
+                            cluster_x += advance;
+                        }
                         let [red, green, blue, alpha] = brush.color;
                         let paint_height = metrics.line_height.max(content_height);
                         result.push(ShapedItem::Text(ShapedRun {
@@ -761,12 +850,7 @@ impl TextSystem {
                             },
                             line_fragment: Fragment {
                                 x: run.offset() + negative_margin_offset,
-                                y: metrics.block_min_coord
-                                    + if has_text_top || has_text_bottom {
-                                        common_vertical_shift
-                                    } else {
-                                        vertical_shift
-                                    },
+                                y: line_fragment_y,
                                 width: run.advance().max(0.0),
                                 height: metrics.line_height.max(0.0),
                             },
@@ -774,6 +858,7 @@ impl TextSystem {
                             font_size: parley_run.font_size(),
                             color: ColorF::new(red, green, blue, alpha),
                             glyphs,
+                            clusters,
                         }));
                     },
                     PositionedLayoutItem::InlineBox(positioned) => {
@@ -887,6 +972,8 @@ pub(crate) struct InlineLayout<Source> {
     width: f32,
     height: f32,
     items: Vec<ShapedItem<Source>>,
+    text: String,
+    text_sources: Vec<TextSource<Source>>,
 }
 
 pub(crate) struct InlinePlacement<Source> {
@@ -982,6 +1069,17 @@ where
         let mut visual_commands = Vec::new();
         let mut prepared_sources = Vec::new();
         let mut placement = InlinePlacement::default();
+        let text_sources = self
+            .text_sources
+            .iter()
+            .filter_map(|source| {
+                Some((
+                    node_for(source.source)?,
+                    self.text.get(source.range.clone())?.to_owned(),
+                ))
+            })
+            .collect();
+        frame.record_text_group(text_sources);
 
         for item in &self.items {
             match item {
@@ -1002,6 +1100,19 @@ where
                         continue;
                     };
                     frame.record_inline_fragment(source_node, fragment, line_y);
+                    for cluster in &run.clusters {
+                        let Some(cluster_node) = node_for(cluster.source) else {
+                            continue;
+                        };
+                        let mut cluster_fragment = cluster.fragment;
+                        translate_fragment(&mut cluster_fragment, origin);
+                        frame.record_text_cluster(
+                            cluster_node,
+                            cluster.range.clone(),
+                            cluster_fragment,
+                            cluster.rtl,
+                        );
+                    }
                     let mut command_owners = Vec::new();
                     for owner in &run.owners {
                         let Some(owner_node) = node_for(*owner) else {
@@ -1089,6 +1200,11 @@ pub(crate) struct TextFrame<Id> {
     inline_line_keys: HashMap<Id, Vec<f32>>,
     painted_decorations: HashSet<Id>,
     used_fonts: HashSet<FontInstanceKey>,
+    text_order: Vec<Id>,
+    text_values: HashMap<Id, String>,
+    text_groups: HashMap<Id, usize>,
+    text_clusters: Vec<RetainedTextCluster<Id>>,
+    next_text_group: usize,
 }
 
 impl<Id> Default for TextFrame<Id> {
@@ -1101,6 +1217,11 @@ impl<Id> Default for TextFrame<Id> {
             inline_line_keys: HashMap::new(),
             painted_decorations: HashSet::new(),
             used_fonts: HashSet::new(),
+            text_order: Vec::new(),
+            text_values: HashMap::new(),
+            text_groups: HashMap::new(),
+            text_clusters: Vec::new(),
+            next_text_group: 0,
         }
     }
 }
@@ -1180,6 +1301,264 @@ where
         fragments.push(fragment);
         line_keys.push(line_y);
     }
+
+    fn record_text_group(&mut self, sources: Vec<(Id, String)>) {
+        if sources.is_empty() {
+            return;
+        }
+        let group = self.next_text_group;
+        self.next_text_group = self.next_text_group.saturating_add(1);
+        for (source, text) in sources {
+            if self.text_values.contains_key(&source) {
+                continue;
+            }
+            self.text_order.push(source);
+            self.text_values.insert(source, text);
+            self.text_groups.insert(source, group);
+        }
+    }
+
+    fn record_text_cluster(
+        &mut self,
+        source: Id,
+        range: Range<usize>,
+        fragment: Fragment,
+        rtl: bool,
+    ) {
+        self.text_clusters.push(RetainedTextCluster {
+            source,
+            range,
+            fragment,
+            rtl,
+        });
+    }
+
+    pub(crate) fn text_position_at_point<F>(
+        &self,
+        x: f32,
+        y: f32,
+        mut transform: F,
+    ) -> Option<(Id, usize)>
+    where
+        F: FnMut(Id, Fragment) -> TextRect,
+    {
+        let mut closest = None::<(f32, &RetainedTextCluster<Id>, TextRect)>;
+        for cluster in &self.text_clusters {
+            let rect = transform(cluster.source, cluster.fragment);
+            if rect.height <= 0.0 || y < rect.y || y >= rect.y + rect.height {
+                continue;
+            }
+            let distance = if x < rect.x {
+                rect.x - x
+            } else if x > rect.x + rect.width {
+                x - (rect.x + rect.width)
+            } else {
+                0.0
+            };
+            if closest.as_ref().is_none_or(|(best, _, _)| distance < *best) {
+                closest = Some((distance, cluster, rect));
+            }
+        }
+        let (_, cluster, rect) = closest?;
+        let leading = x <= rect.x + rect.width * 0.5;
+        let offset = match (cluster.rtl, leading) {
+            (false, true) | (true, false) => cluster.range.start,
+            (false, false) | (true, true) => cluster.range.end,
+        };
+        Some((cluster.source, offset))
+    }
+
+    pub(crate) fn find_text_range(&self, needle: &str) -> Option<TextRange<Id>> {
+        let needle = needle.to_ascii_lowercase();
+        if needle.is_empty() {
+            return None;
+        }
+        self.text_order.iter().find_map(|source| {
+            let text = self.text_values.get(source)?;
+            let start = text.to_ascii_lowercase().find(&needle)?;
+            Some(TextRange {
+                anchor_node: *source,
+                anchor_offset: start,
+                focus_node: *source,
+                focus_offset: start + needle.len(),
+            })
+        })
+    }
+
+    pub(crate) fn caret_rect<F>(
+        &self,
+        source: Id,
+        offset: usize,
+        mut transform: F,
+    ) -> Option<TextRect>
+    where
+        F: FnMut(Id, Fragment) -> TextRect,
+    {
+        let cluster = self
+            .text_clusters
+            .iter()
+            .filter(|cluster| cluster.source == source)
+            .min_by_key(|cluster| {
+                if offset < cluster.range.start {
+                    cluster.range.start - offset
+                } else if offset > cluster.range.end {
+                    offset - cluster.range.end
+                } else {
+                    0
+                }
+            })?;
+        let rect = transform(source, cluster.fragment);
+        let length = cluster.range.end.saturating_sub(cluster.range.start);
+        let fraction = if length == 0 {
+            0.0
+        } else {
+            (offset.clamp(cluster.range.start, cluster.range.end) - cluster.range.start) as f32
+                / length as f32
+        };
+        let fraction = if cluster.rtl {
+            1.0 - fraction
+        } else {
+            fraction
+        };
+        Some(TextRect {
+            x: rect.x + rect.width * fraction,
+            y: rect.y,
+            width: 1.0,
+            height: rect.height,
+        })
+    }
+
+    pub(crate) fn text_selection<F>(
+        &self,
+        range: TextRange<Id>,
+        mut transform: F,
+    ) -> Option<TextSelection<Id>>
+    where
+        F: FnMut(Id, Fragment) -> TextRect,
+    {
+        let anchor_index = self
+            .text_order
+            .iter()
+            .position(|source| *source == range.anchor_node)?;
+        let focus_index = self
+            .text_order
+            .iter()
+            .position(|source| *source == range.focus_node)?;
+        let ((start_index, start_offset), (end_index, end_offset)) = if anchor_index < focus_index
+            || (anchor_index == focus_index && range.anchor_offset <= range.focus_offset)
+        {
+            (
+                (anchor_index, range.anchor_offset),
+                (focus_index, range.focus_offset),
+            )
+        } else {
+            (
+                (focus_index, range.focus_offset),
+                (anchor_index, range.anchor_offset),
+            )
+        };
+        if start_index == end_index && start_offset == end_offset {
+            return None;
+        }
+
+        let ordered = TextRange {
+            anchor_node: self.text_order[start_index],
+            anchor_offset: start_offset,
+            focus_node: self.text_order[end_index],
+            focus_offset: end_offset,
+        };
+        let mut selected = Vec::new();
+        let mut text = String::new();
+        let mut previous_group = None;
+        for index in start_index..=end_index {
+            let source = self.text_order[index];
+            let value = self.text_values.get(&source)?;
+            let start = if index == start_index {
+                start_offset.min(value.len())
+            } else {
+                0
+            };
+            let end = if index == end_index {
+                end_offset.min(value.len())
+            } else {
+                value.len()
+            };
+            if start >= end {
+                continue;
+            }
+            if let Some(slice) = value.get(start..end) {
+                let group = self.text_groups.get(&source).copied();
+                if !text.is_empty() && previous_group != group {
+                    text.push('\n');
+                }
+                text.push_str(slice);
+                previous_group = group;
+                selected.push((source, start, end));
+            }
+        }
+        if text.is_empty() {
+            return None;
+        }
+
+        let mut rects = Vec::new();
+        for cluster in &self.text_clusters {
+            let Some((_, start, end)) = selected
+                .iter()
+                .find(|(source, _, _)| *source == cluster.source)
+            else {
+                continue;
+            };
+            let start = (*start).max(cluster.range.start);
+            let end = (*end).min(cluster.range.end);
+            if start >= end {
+                continue;
+            }
+            let mut rect = transform(cluster.source, cluster.fragment);
+            let length = cluster.range.end.saturating_sub(cluster.range.start);
+            if length > 0 {
+                let start_fraction = (start - cluster.range.start) as f32 / length as f32;
+                let end_fraction = (end - cluster.range.start) as f32 / length as f32;
+                let (left, right) = if cluster.rtl {
+                    (1.0 - end_fraction, 1.0 - start_fraction)
+                } else {
+                    (start_fraction, end_fraction)
+                };
+                rect.x += rect.width * left;
+                rect.width *= right - left;
+            }
+            if rect.width > 0.0 && rect.height > 0.0 {
+                rects.push(rect);
+            }
+        }
+        rects.sort_by(|left, right| {
+            left.y
+                .total_cmp(&right.y)
+                .then_with(|| left.x.total_cmp(&right.x))
+        });
+        let mut merged = Vec::<TextRect>::new();
+        for rect in rects {
+            if let Some(previous) = merged.last_mut()
+                && (previous.y - rect.y).abs() <= 0.5
+                && (previous.height - rect.height).abs() <= 0.5
+                && rect.x <= previous.x + previous.width + 0.5
+            {
+                let right = (previous.x + previous.width).max(rect.x + rect.width);
+                previous.x = previous.x.min(rect.x);
+                previous.width = right - previous.x;
+                continue;
+            }
+            merged.push(rect);
+        }
+        if merged.is_empty() {
+            return None;
+        }
+        Some(TextSelection {
+            range: ordered,
+            source_nodes: selected.iter().map(|(source, _, _)| *source).collect(),
+            rects: merged,
+            text,
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1188,12 +1567,26 @@ struct PreparedCommand<Id> {
     command: PaintCmd,
 }
 
+#[derive(Clone, Debug)]
+struct RetainedTextCluster<Id> {
+    source: Id,
+    range: Range<usize>,
+    fragment: Fragment,
+    rtl: bool,
+}
+
 struct SourceSpan<Id> {
     source: Option<Id>,
     owners: Vec<Id>,
     style: ComputedValues,
     range: Range<usize>,
     negative_margin_offset: f32,
+}
+
+#[derive(Clone)]
+struct TextSource<Id> {
+    source: Id,
+    range: Range<usize>,
 }
 
 struct InlineAtom<Id> {
@@ -1238,6 +1631,15 @@ struct ShapedRun<Id> {
     font_size: f32,
     color: ColorF,
     glyphs: Vec<GlyphInstance>,
+    clusters: Vec<ShapedCluster<Id>>,
+}
+
+#[derive(Clone)]
+struct ShapedCluster<Id> {
+    source: Id,
+    range: Range<usize>,
+    fragment: Fragment,
+    rtl: bool,
 }
 
 fn translate_fragment(fragment: &mut Fragment, origin: (f32, f32)) {
