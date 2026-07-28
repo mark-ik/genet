@@ -296,8 +296,14 @@ impl<S, Context, Source> AlgorithmTree<S, Context, Source> {
     pub fn enable_float_avoidance(&mut self, id: AlgorithmNodeId) {
         let node = &mut self.nodes[id.index()];
         assert!(
-            matches!(node.kind, AlgorithmKind::Leaf | AlgorithmKind::Block),
-            "the first float-avoidance lane accepts block and leaf algorithms"
+            matches!(
+                node.kind,
+                AlgorithmKind::Leaf
+                    | AlgorithmKind::Block
+                    | AlgorithmKind::Flex
+                    | AlgorithmKind::Grid
+            ),
+            "float avoidance accepts block, leaf, flex, and grid algorithms"
         );
         assert!(
             node.block_style.establishes_bfc && node.block_style.float == FloatSide::None,
@@ -571,7 +577,13 @@ where
             if child_style.establishes_bfc
                 && child_style.float == FloatSide::None
                 && !self.owns_direct_float_lane(child)
-                && !child_node.float_avoidance_enabled
+                // K3g admitted block/leaf BFCs generally. Flex and grid use
+                // this lane only when float exclusion actually needs it, so
+                // ordinary parents retain their established dispatch.
+                && !(child_node.float_avoidance_enabled
+                    && (matches!(child_node.kind, AlgorithmKind::Leaf | AlgorithmKind::Block)
+                        || active_left_float
+                        || active_right_float))
             {
                 return Some(BlockDeferral::IndependentFormattingContext);
             }
@@ -2108,6 +2120,203 @@ mod tests {
         assert_eq!(tree.context(bfc), Some(&vec![49.0]));
         assert_eq!(tree.layout(root).height, 100.0);
         assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Buckram));
+    }
+
+    #[test]
+    fn buckram_places_flex_and_grid_algorithms_around_a_float() {
+        let mut tree = AlgorithmTree::<Style, (), u8>::new();
+        let float = tree.new_with_children_and_block_style(
+            AlgorithmKind::Leaf,
+            BlockStyle {
+                size: crate::BlockDimensions::new(
+                    BlockSizeValue::Length(crate::FlowLength::px(40.0)),
+                    BlockSizeValue::Length(crate::FlowLength::px(40.0)),
+                ),
+                float: FloatSide::Left,
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                size: taffy::Size {
+                    width: Dimension::length(40.0),
+                    height: Dimension::length(40.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            1,
+        );
+        let flex_child = tree.new_with_children(
+            AlgorithmKind::Leaf,
+            Style {
+                size: taffy::Size {
+                    width: Dimension::length(20.0),
+                    height: Dimension::length(10.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            2,
+        );
+        let flex = tree.new_with_children_and_block_style(
+            AlgorithmKind::Flex,
+            BlockStyle {
+                size: crate::BlockDimensions::new(
+                    BlockSizeValue::Auto,
+                    BlockSizeValue::Length(crate::FlowLength::px(20.0)),
+                ),
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Flex,
+                size: taffy::Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(20.0),
+                },
+                ..Style::default()
+            },
+            &[flex_child],
+            3,
+        );
+        tree.enable_float_avoidance(flex);
+        let grid_child = tree.new_with_children(
+            AlgorithmKind::Leaf,
+            Style {
+                size: taffy::Size {
+                    width: Dimension::length(20.0),
+                    height: Dimension::length(10.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            4,
+        );
+        let grid = tree.new_with_children_and_block_style(
+            AlgorithmKind::Grid,
+            BlockStyle {
+                size: crate::BlockDimensions::new(
+                    BlockSizeValue::Length(crate::FlowLength::px(70.0)),
+                    BlockSizeValue::Length(crate::FlowLength::px(20.0)),
+                ),
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Grid,
+                size: taffy::Size {
+                    width: Dimension::length(70.0),
+                    height: Dimension::length(20.0),
+                },
+                grid_template_columns: vec![length(20.0_f32)],
+                ..Style::default()
+            },
+            &[grid_child],
+            5,
+        );
+        tree.enable_float_avoidance(grid);
+        let root = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                size: taffy::Size {
+                    width: Dimension::length(100.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            &[float, flex, grid],
+            0,
+        );
+
+        tree.compute_layout_with_measure(root, available(100.0, 200.0), zero_measure);
+
+        assert_eq!(
+            tree.layout(flex),
+            AlgorithmLayout {
+                x: 40.0,
+                y: 0.0,
+                width: 60.0,
+                height: 20.0,
+            }
+        );
+        assert_eq!(
+            tree.layout(flex_child),
+            AlgorithmLayout {
+                width: 20.0,
+                height: 10.0,
+                ..AlgorithmLayout::default()
+            }
+        );
+        assert_eq!(
+            tree.layout(grid),
+            AlgorithmLayout {
+                x: 0.0,
+                y: 40.0,
+                width: 70.0,
+                height: 20.0,
+            }
+        );
+        assert_eq!(
+            tree.layout(grid_child),
+            AlgorithmLayout {
+                width: 20.0,
+                height: 10.0,
+                ..AlgorithmLayout::default()
+            }
+        );
+        assert_eq!(tree.layout(root).height, 60.0);
+        assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Buckram));
+        assert_eq!(tree.block_algorithm(flex), None);
+        assert_eq!(tree.block_algorithm(grid), None);
+    }
+
+    #[test]
+    fn flex_without_an_active_float_does_not_widen_the_buckram_block_lane() {
+        let mut tree = AlgorithmTree::<Style, (), u8>::new();
+        let flex = tree.new_with_children_and_block_style(
+            AlgorithmKind::Flex,
+            BlockStyle {
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Flex,
+                size: taffy::Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(20.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            1,
+        );
+        tree.enable_float_avoidance(flex);
+        let root = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                size: taffy::Size {
+                    width: Dimension::length(100.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            &[flex],
+            0,
+        );
+
+        tree.compute_layout_with_measure(root, available(100.0, 200.0), zero_measure);
+
+        assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Taffy));
     }
 
     #[test]

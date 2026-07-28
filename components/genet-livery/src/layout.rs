@@ -1801,11 +1801,18 @@ fn supports_float_avoidance<Id>(
     block_style: BlockStyle,
     kind: AlgorithmKind,
 ) -> bool {
-    matches!(kind, AlgorithmKind::Leaf | AlgorithmKind::Block)
-        && css_box.display.outside == Some(DisplayOutside::Block)
+    matches!(
+        kind,
+        AlgorithmKind::Leaf | AlgorithmKind::Block | AlgorithmKind::Flex | AlgorithmKind::Grid
+    ) && css_box.display.outside == Some(DisplayOutside::Block)
         && matches!(
             css_box.display.inside,
-            Some(DisplayInside::Flow | DisplayInside::FlowRoot) | None
+            Some(
+                DisplayInside::Flow
+                    | DisplayInside::FlowRoot
+                    | DisplayInside::Flex
+                    | DisplayInside::Grid
+            ) | None
         )
         && css_box.display.internal_table.is_none()
         && block_style.establishes_bfc
@@ -3807,6 +3814,93 @@ mod tests {
             (0.0, 40.0, 49.0, 60.0)
         );
         assert_eq!((ltr.height, rtl.height), (100.0, 100.0));
+        assert_eq!(algorithms.taffy, 0);
+    }
+
+    #[test]
+    fn live_flex_and_grid_bfcs_use_buckram_float_placement() {
+        fn by_id(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+            expected: &str,
+        ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+            if dom.attributes(node).any(|attribute| {
+                attribute.name.ns.as_ref().is_empty()
+                    && attribute.name.local.as_ref() == "id"
+                    && attribute.value == expected
+            }) {
+                return Some(node);
+            }
+            dom.dom_children(node)
+                .find_map(|child| by_id(dom, child, expected))
+        }
+
+        let dom = StaticDocument::parse(
+            "<html><body><div id=\"host\"><div id=\"float\"></div>\
+             <div id=\"flex\"><div id=\"flex-child\"></div></div>\
+             <div id=\"grid\"><div id=\"grid-child\"></div></div>\
+             </div></body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&["html, body, div { margin: 0; padding: 0; border: 0; }\
+                 #host { width: 100px; overflow-x: hidden; overflow-y: hidden; }\
+                 #float { float: left; width: 40px; height: 40px; }\
+                 #flex { display: flex; height: 20px; }\
+                 #flex-child { width: 20px; height: 10px; }\
+                 #grid { display: grid; grid-template-columns: 20px; width: 70px; height: 20px; }\
+                 #grid-child { width: 20px; height: 10px; }"]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let rect = |id| {
+            let node = by_id(&dom, dom.document(), id).expect(id);
+            layout.get(node).expect(id).physical_rect()
+        };
+
+        let host = rect("host");
+        let flex = rect("flex");
+        let flex_child = rect("flex-child");
+        let grid = rect("grid");
+        let grid_child = rect("grid-child");
+        let algorithms = layout.block_algorithm_counts();
+
+        assert_eq!(
+            (
+                flex.x - host.x,
+                flex.y - host.y,
+                flex.width,
+                flex.height,
+                flex_child.x - flex.x,
+                flex_child.y - flex.y,
+            ),
+            (40.0, 0.0, 60.0, 20.0, 0.0, 0.0),
+            "host={host:?}, flex={flex:?}, flex_child={flex_child:?}, grid={grid:?}, grid_child={grid_child:?}, algorithms={algorithms:?}"
+        );
+        assert_eq!(
+            (
+                grid.x - host.x,
+                grid.y - host.y,
+                grid.width,
+                grid.height,
+                grid_child.x - grid.x,
+                grid_child.y - grid.y,
+            ),
+            (0.0, 40.0, 70.0, 20.0, 0.0, 0.0)
+        );
+        assert_eq!(host.height, 60.0);
+        assert!(algorithms.buckram > 0);
         assert_eq!(algorithms.taffy, 0);
     }
 

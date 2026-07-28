@@ -1258,6 +1258,71 @@ contexts beside floats, vertical auto block-size finalisation, positioning,
 independent-BFC baselines, intrinsic block queries, and the out-of-flow IFC
 participant protected by K3b's cache guard.
 
+#### K3k receipt - 2026-07-27
+
+K3k admits block-level flex and grid formatting-context roots beside an active
+preceding float. Buckram owns the CSS float exclusion and normal-flow
+placement. Taffy remains the algorithm library for the isolated flex or grid
+subtree at the width Buckram supplies.
+
+This is not a general widening of Buckram's block lane. A first attempt marked
+every block-level flex and grid root as float-capable, which also let ordinary
+parents adopt those independent formatting contexts when no float existed.
+The `css-flexbox` guard caught the resulting unrelated one-gain,
+one-regression swap. The final admission rule is causal:
+
+- block and leaf BFC roots retain K3g's existing explicit lane;
+- flex and grid roots bypass the independent-formatting-context deferral only
+  while a preceding left or right float remains active; and
+- a flex or grid root with no active float keeps the existing Taffy block
+  parent path.
+
+The adapter fixture uses a 100px BFC and a 40x40 left float. An auto-width,
+20px-high flex root is laid out at x=40, y=0 with a 60px width. A following
+70x20 grid root cannot fit in the same float band and moves to x=0, y=40.
+Their 20x10 children retain exact flex and grid placements, the root height is
+60px, and the parent block algorithm is Buckram. A counter-fixture removes
+the float and proves the flex parent remains on the existing Taffy block lane.
+
+The live HTML/Livery fixture proves the same flex and grid geometry, child
+placements, 60px host height, Buckram block dispatch, and zero Taffy block
+fallback calls. The flex and grid algorithms themselves remain Taffy calls;
+the counter records only block-algorithm ownership.
+
+This slice has no WPT status movement:
+
+- focused `css/CSS2/floats` remains 47 passes, 54 failures, 43 skips, and zero
+  errors across 144 files;
+- complete CSS2 remains 4,232 passes, 1,742 failures, 3,279 skips, and one
+  error across 9,254 files;
+- `css-flexbox` remains 384 passes, 502 failures, 472 skips, and zero errors;
+  and
+- every frozen all-nine K3j expectation guard returns `unexpected=0`, so the
+  total remains 5,737.
+
+The adapter and live fixtures are the capability receipt. The selected WPT
+corpus does not isolate a block-level flex or grid BFC beside a float, so the
+unchanged ledgers remain regression guards rather than conformance evidence
+for this lane.
+
+Verification:
+
+- `cargo test -p buckram -p livery -p genet-livery --offline`: passed with
+  50 Buckram tests, 135 genet-livery tests, 141 Livery tests, and all doc tests
+  green.
+- strict Clippy passed for Buckram and genet-livery with dependency linting
+  disabled.
+- the feature-unified release `genet-wpt` build passed.
+- release-build and complete CSS2 guard logs are at
+  `Code/testing/genet/wpt-ledger/2026-07-27_buckram_k3k`.
+
+Still open in K3: multi-child and block-content auto floats, inline-block
+shrink-to-fit, automatic inline margins, table and atomic-inline BFC
+avoidance beside floats, float state through ordinary nested blocks, nowrap
+and nested inline contexts beside floats, vertical auto block-size
+finalisation, positioning, independent-BFC baselines, intrinsic block
+queries, and the out-of-flow IFC participant protected by K3b's cache guard.
+
 ### K4. CSS tables
 
 Implement anonymous table fixup, row and column structure, spans, fixed and
