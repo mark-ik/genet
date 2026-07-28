@@ -1705,8 +1705,8 @@ mod controls {
     use crate::{
         AnyView, DomHandle, GenetAppRunner, GenetCtx, GenetElement, Key, KeyEvent, Modifiers,
         NamedKey, PointerClick, PointerEvent, PointerPhase, RadioGroup, SelectState, Slider,
-        TextInput, View, WheelEvent, button, checkbox, el, lens, on_pointer, on_wheel, overlay_at,
-        overlay_rect, radio_group, select, slider, text_field,
+        TextInput, View, WheelEvent, button, checkbox, el, focusable, lens, on_click, on_pointer,
+        on_wheel, overlay_at, overlay_rect, radio_group, select, slider, text_field,
     };
 
     /// The text data of the single text child under `node`, if any.
@@ -2313,6 +2313,101 @@ mod controls {
         runner.dispatch_key(named(NamedKey::ArrowRight));
         assert_eq!(runner.state().selected, 0, "radio arrows wrap and select");
         assert_eq!(runner.focus(), Some(opt0));
+        assert!(
+            runner.default_prevented(),
+            "the radio component consumes navigation"
+        );
+
+        runner.dispatch_key(named(NamedKey::End));
+        assert_eq!(
+            runner.state().selected,
+            2,
+            "End remains a Cambium extension"
+        );
+        assert_eq!(runner.focus(), Some(opt2));
+        runner.dispatch_key(named(NamedKey::Space));
+        assert_eq!(runner.state().selected, 2, "Space checks the focused radio");
+        assert!(
+            runner.default_prevented(),
+            "the radio component consumes Space"
+        );
+
+        // The focused radio is the command origin even if selection was changed
+        // independently, as can happen through programmatic or AT focus.
+        let opt1 = dom
+            .borrow()
+            .dom_children(root)
+            .nth(1)
+            .expect("second option");
+        runner.set_focus(Some(opt1));
+        runner.dispatch_key(named(NamedKey::Space));
+        assert_eq!(
+            runner.state().selected,
+            1,
+            "Space checks the focused, previously unselected radio"
+        );
+        runner.set_focus(Some(opt0));
+        runner.dispatch_key(named(NamedKey::ArrowLeft));
+        assert_eq!(
+            runner.state().selected,
+            2,
+            "Arrow navigation starts from the focused radio"
+        );
+        assert_eq!(runner.focus(), Some(opt2));
+
+        // A retained request is an edge for its exact target. An unrelated
+        // rebuild after focus leaves must not steal focus back.
+        runner.set_focus(None);
+        runner.update(|state| state.selected = 1);
+        assert_eq!(runner.state().selected, 1);
+        assert_eq!(runner.focus(), None);
+    }
+
+    /// ARIA roles expose semantics; they do not opt arbitrary nodes into
+    /// Cambium's authored-widget keyboard behavior.
+    #[test]
+    fn runner_does_not_invent_radio_behavior_from_roles() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner = GenetAppRunner::<_, _, _, ()>::new(
+            dom.clone(),
+            |_: &usize| {
+                let radios: Vec<_> = (0..2)
+                    .map(|index| {
+                        focusable(on_click(
+                            el::<_, usize, ()>("div", format!("radio {index}"))
+                                .attr("role", "radio")
+                                .attr("aria-checked", "false"),
+                            move |count: &mut usize, _| *count += index + 1,
+                        ))
+                    })
+                    .collect();
+                el::<_, usize, ()>("div", radios).attr("role", "radiogroup")
+            },
+            0usize,
+        );
+        let root = runner.root();
+        let first = dom
+            .borrow()
+            .dom_children(root)
+            .next()
+            .expect("first semantic radio");
+        runner.set_focus(Some(first));
+
+        runner.dispatch_key(named(NamedKey::ArrowRight));
+        assert_eq!(runner.state(), &0, "Arrow does not synthesize a click");
+        assert_eq!(runner.focus(), Some(first), "Arrow does not move focus");
+        assert!(
+            !runner.default_prevented(),
+            "an unhandled semantic role does not consume Arrow"
+        );
+
+        runner.dispatch_key(named(NamedKey::Space));
+        assert_eq!(runner.state(), &0, "Space does not synthesize a click");
+        assert_eq!(runner.focus(), Some(first), "Space leaves focus unchanged");
+        assert!(
+            !runner.default_prevented(),
+            "an unhandled semantic role does not consume Space"
+        );
     }
 
     /// `TextInput` multi-line navigation (the textarea model): up/down move between
