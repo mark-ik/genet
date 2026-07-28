@@ -2020,8 +2020,7 @@ fn receipt_html(width: CatalogWidth) -> String {
 fn write_receipts() -> std::io::Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .and_then(std::path::Path::parent)
-        .expect("cambium crate lives under workspace/crates");
+        .expect("cambium crate lives under the Cambium component root");
     let directory = root.join("docs").join("receipts");
     std::fs::create_dir_all(&directory)?;
     for width in [CatalogWidth::Narrow, CatalogWidth::Regular] {
@@ -2062,11 +2061,11 @@ mod tests {
     fn committed_receipts_match_the_live_catalog() {
         assert_eq!(
             super::receipt_html(super::CatalogWidth::Narrow),
-            include_str!("../../../docs/receipts/component_catalog_narrow.html")
+            include_str!("../../docs/receipts/component_catalog_narrow.html")
         );
         assert_eq!(
             super::receipt_html(super::CatalogWidth::Regular),
-            include_str!("../../../docs/receipts/component_catalog_regular.html")
+            include_str!("../../docs/receipts/component_catalog_regular.html")
         );
     }
 }

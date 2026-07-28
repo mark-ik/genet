@@ -613,10 +613,6 @@ where
         // 3. Runner-level key defaults, each suppressed when a handler prevented it
         //    (the escape hatches, G2.3).
         if !event.prop.default_prevented() {
-            let radio_target = {
-                let dom = self.dom.borrow();
-                radio_navigation_target(&dom, focus, &event.key)
-            };
             let activates = {
                 let dom = self.dom.borrow();
                 semantic_activation_matches(&dom, focus, &event.key)
@@ -628,31 +624,10 @@ where
                     self.focus_traverse(logic, state, !event.mods.shift);
                     return actions; // focus_traverse rebuilt
                 }
-                // Radio groups use one Tab stop. Arrow keys move to the next
-                // radio, select it through the same click path as a pointer,
-                // and keep focus on the newly selected item.
-                Key::Named(
-                    NamedKey::ArrowLeft
-                    | NamedKey::ArrowUp
-                    | NamedKey::ArrowRight
-                    | NamedKey::ArrowDown
-                    | NamedKey::Home
-                    | NamedKey::End,
-                ) if radio_target.is_some() && self.ctx.key_handlers_at(focus).is_empty() => {
-                    let target = radio_target.expect("guarded above");
-                    actions.extend(self.dispatch_click(
-                        logic,
-                        state,
-                        target,
-                        PointerClick::at((0.0, 0.0)),
-                    ));
-                    actions.extend(self.set_focus(logic, state, Some(target)));
-                    self.last_default_prevented = true;
-                    return actions;
-                }
                 // Enter/Space activate a focusable control that has a click handler
                 // according to its native tag or ARIA role. Checkbox, switch,
-                // and radio roles use Space; buttons use Enter and Space.
+                // roles use Space; buttons use Enter and Space. Radio groups
+                // own their authored-widget behavior in Cambium.
                 Key::Named(NamedKey::Enter | NamedKey::Space)
                     if !self.ctx.click_handlers_at(focus).is_empty()
                         && self.ctx.key_handlers_at(focus).is_empty()
@@ -1226,7 +1201,7 @@ fn attr<'a>(dom: &'a ScriptedDom, node: NodeId, name: &str) -> Option<&'a str> {
 fn semantic_activation_matches(dom: &ScriptedDom, node: NodeId, key: &Key) -> bool {
     let role = attr(dom, node, "role");
     match (role, key) {
-        (Some("checkbox" | "switch" | "radio"), Key::Named(NamedKey::Space)) => true,
+        (Some("checkbox" | "switch"), Key::Named(NamedKey::Space)) => true,
         (Some("button"), Key::Named(NamedKey::Enter | NamedKey::Space)) => true,
         (None, Key::Named(NamedKey::Enter | NamedKey::Space)) => {
             dom.element_name(node)
@@ -1237,28 +1212,6 @@ fn semantic_activation_matches(dom: &ScriptedDom, node: NodeId, key: &Key) -> bo
         }
         _ => false,
     }
-}
-
-fn radio_navigation_target(dom: &ScriptedDom, focus: NodeId, key: &Key) -> Option<NodeId> {
-    if attr(dom, focus, "role") != Some("radio") {
-        return None;
-    }
-    let parent = dom.parent(focus)?;
-    let radios: Vec<_> = dom
-        .dom_children(parent)
-        .filter(|&node| attr(dom, node, "role") == Some("radio"))
-        .collect();
-    let current = radios.iter().position(|&node| node == focus)?;
-    let target = match key {
-        Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowUp) => {
-            (current + radios.len() - 1) % radios.len()
-        }
-        Key::Named(NamedKey::ArrowRight | NamedKey::ArrowDown) => (current + 1) % radios.len(),
-        Key::Named(NamedKey::Home) => 0,
-        Key::Named(NamedKey::End) => radios.len() - 1,
-        _ => return None,
-    };
-    radios.get(target).copied()
 }
 
 #[cfg(test)]

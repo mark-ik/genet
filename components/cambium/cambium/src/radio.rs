@@ -2,18 +2,17 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! A radio-button group: the simplest of the remaining T2 controls, the
-//! `select` pattern without the dropdown.
+//! A radio-button group with component-owned selection and keyboard behavior.
 //!
 //! State is which option is selected; clicking one selects it and (since the
-//! group is a single index) deselects the rest. No engine work, no overlay, no
-//! drag: one `on_click` element per option, reflecting the selection via a
-//! class plus `role="radio"` / `aria-checked`. Composable onto an app field via
-//! [`lens`](crate::lens), like [`checkbox`](crate::checkbox) /
-//! [`select`](crate::select).
+//! group is a single index) deselects the rest. The group owns the WAI-ARIA
+//! radio pattern's Space activation, wrapping Arrow-key movement, roving
+//! `tabindex`, and focus transfer. `Home` and `End` are retained as Cambium
+//! extensions. ARIA roles expose the component's semantics; the generic runner
+//! does not infer behavior from them.
 
 use crate::pod::GenetElement;
-use crate::{GenetCtx, View, el, focusable_if, on_click};
+use crate::{GenetCtx, Key, NamedKey, View, el, on_click, on_key, request_focus};
 
 /// The state of a radio group: the index of the selected option in the
 /// `options` slice passed to [`radio_group`]. Composable via [`lens`](crate::lens).
@@ -23,6 +22,8 @@ pub struct RadioGroup {
     pub selected: usize,
     /// Accessible name announced for the group.
     pub label: String,
+    /// Retained target used to move DOM focus after keyboard navigation.
+    pub focus_request: Option<usize>,
 }
 
 impl RadioGroup {
@@ -31,6 +32,7 @@ impl RadioGroup {
         Self {
             selected,
             label: "Options".into(),
+            focus_request: None,
         }
     }
 
@@ -59,6 +61,12 @@ pub fn radio_group(
     state: &RadioGroup,
     options: &[&str],
 ) -> impl View<RadioGroup, (), GenetCtx, Element = GenetElement> + use<> {
+    let option_count = options.len();
+    let active = if state.selected < option_count {
+        state.selected
+    } else {
+        0
+    };
     // One clickable row per option. The per-option closures share one type (one
     // closure definition capturing a `usize`), so the `Vec` is homogeneous.
     let items: Vec<_> = options
@@ -66,18 +74,39 @@ pub fn radio_group(
         .enumerate()
         .map(|(i, label)| {
             let selected = i == state.selected;
+            let active = i == active;
             let indicator = if selected { "(o) " } else { "( ) " };
-            focusable_if(
-                on_click(
-                    el::<_, RadioGroup, ()>("div", format!("{indicator}{label}"))
-                        .attr("role", "radio")
-                        .attr("aria-checked", if selected { "true" } else { "false" })
-                        .attr("tabindex", if selected { "0" } else { "-1" })
-                        .attr("class", if selected { "radio selected" } else { "radio" }),
-                    move |s: &mut RadioGroup, _| s.selected = i,
-                ),
-                selected,
-            )
+            let item = on_click(
+                el::<_, RadioGroup, ()>("div", format!("{indicator}{label}"))
+                    .attr("role", "radio")
+                    .attr("aria-checked", if selected { "true" } else { "false" })
+                    .attr("tabindex", if active { "0" } else { "-1" })
+                    .attr("class", if selected { "radio selected" } else { "radio" }),
+                move |s: &mut RadioGroup, _| {
+                    s.selected = i;
+                    s.focus_request = None;
+                },
+            );
+            let keyboard = on_key(item, move |state: &mut RadioGroup, event| {
+                let next = match event.key {
+                    Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowUp) => {
+                        (i + option_count - 1) % option_count
+                    },
+                    Key::Named(NamedKey::ArrowRight | NamedKey::ArrowDown) => {
+                        (i + 1) % option_count
+                    },
+                    // Cambium extensions retained from the original runner behavior.
+                    Key::Named(NamedKey::Home) => 0,
+                    Key::Named(NamedKey::End) => option_count - 1,
+                    Key::Named(NamedKey::Space) => i,
+                    _ => return,
+                };
+                state.selected = next;
+                state.focus_request = Some(next);
+                event.prevent_default();
+            })
+            .focusable(active);
+            request_focus(keyboard, state.focus_request == Some(i))
         })
         .collect();
     el::<_, RadioGroup, ()>("div", items)
@@ -94,5 +123,6 @@ mod tests {
         assert_eq!(RadioGroup::new(2).selected, 2);
         assert_eq!(RadioGroup::default().selected, 0);
         assert_eq!(RadioGroup::default().label, "Options");
+        assert_eq!(RadioGroup::default().focus_request, None);
     }
 }
