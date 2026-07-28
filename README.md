@@ -15,6 +15,11 @@ servoshell).
 
 **Made with AI**
 
+<p align="center">
+  <img src="assets/screenshots/pelt-gemini.png" alt="Pelt rendering a Gemini document beside its graph context" width="900"><br>
+  <sub>Pelt, genet's reference browser, rendering a Gemini document beside its graph context.</sub>
+</p>
+
 ## How genet differs from Servo
 
 - **Scripting.** SpiderMonkey (`mozjs`) and the SpiderMonkey-backed
