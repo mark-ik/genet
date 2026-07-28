@@ -33,14 +33,14 @@
 //! - [`MisfinEngine`] — Misfin gemini-style mail body (gemtext)
 //! - [`NexEngine`] — Nex directory listings + content
 //! - [`GuppyEngine`] — Guppy UDP-smolweb body (gemtext)
+//! - [`HtmlFragmentEngine`] — sanitized reader-mode HTML fragments
 //!
 //! Use [`engines`] to get a `Vec<Box<dyn Engine>>` of all default nematic
 //! engines for one-call registration with [`inker::EngineRegistry`].
 //!
 //! ## Status
 //!
-//! Pre-1.0. All fifteen registered engines are implemented. HTML reader mode
-//! is outside Nematic's current scope.
+//! Pre-1.0. All sixteen registered engines are implemented.
 
 #![doc(html_root_url = "https://docs.rs/nematic/0.1.0")]
 
@@ -50,6 +50,8 @@ pub mod finger;
 pub mod gemtext;
 pub mod gopher;
 pub mod guppy;
+#[cfg(feature = "html-fragment")]
+pub mod html;
 pub mod knot;
 
 pub mod markdown;
@@ -66,6 +68,8 @@ pub use finger::{ENGINE_ID as ENGINE_FINGER, FingerEngine};
 pub use gemtext::{ENGINE_ID as ENGINE_GEMTEXT, GemtextEngine};
 pub use gopher::{ENGINE_ID as ENGINE_GOPHER, GopherEngine};
 pub use guppy::{ENGINE_ID as ENGINE_GUPPY, GuppyEngine};
+#[cfg(feature = "html-fragment")]
+pub use html::{ENGINE_ID as ENGINE_HTML, HtmlFragmentEngine};
 pub use knot::{ENGINE_ID as ENGINE_KNOT, KnotEngine};
 // The djot-bodied knot engine (design doc §10). Registered in `engines()` below; it shares the
 // `text/x-knot` content-type with `KnotEngine`, and routing resolves that content-type to this
@@ -84,7 +88,8 @@ use inker::Engine;
 /// All default nematic engines, ready to register with an
 /// [`inker::EngineRegistry`].
 pub fn engines() -> Vec<Box<dyn Engine>> {
-    vec![
+    #[allow(unused_mut)]
+    let mut engines: Vec<Box<dyn Engine>> = vec![
         Box::new(MarkdownEngine::new()),
         Box::new(GemtextEngine::new()),
         Box::new(GopherEngine::new()),
@@ -100,7 +105,10 @@ pub fn engines() -> Vec<Box<dyn Engine>> {
         Box::new(MisfinEngine::new()),
         Box::new(NexEngine::new()),
         Box::new(GuppyEngine::new()),
-    ]
+    ];
+    #[cfg(feature = "html-fragment")]
+    engines.push(Box::new(HtmlFragmentEngine::new()));
+    engines
 }
 
 /// Crate version.
@@ -135,26 +143,27 @@ mod tests {
         }
         let mut ids: Vec<&str> = registry.engine_ids().collect();
         ids.sort();
-        assert_eq!(
-            ids,
-            vec![
-                ENGINE_FEED,
-                ENGINE_FILE,
-                ENGINE_FINGER,
-                ENGINE_GEMTEXT,
-                ENGINE_GOPHER,
-                ENGINE_GUPPY,
-                ENGINE_KNOT,
-                ENGINE_KNOT_DJOT,
-                ENGINE_MARKDOWN,
-                ENGINE_MISFIN,
-                ENGINE_NEX,
-                ENGINE_SCROLL,
-                ENGINE_SPARTAN,
-                ENGINE_TEXT,
-                ENGINE_TITAN
-            ]
-        );
+        let mut expected = vec![
+            ENGINE_FEED,
+            ENGINE_FILE,
+            ENGINE_FINGER,
+            ENGINE_GEMTEXT,
+            ENGINE_GOPHER,
+            ENGINE_GUPPY,
+            ENGINE_KNOT,
+            ENGINE_KNOT_DJOT,
+            ENGINE_MARKDOWN,
+            ENGINE_MISFIN,
+            ENGINE_NEX,
+            ENGINE_SCROLL,
+            ENGINE_SPARTAN,
+            ENGINE_TEXT,
+            ENGINE_TITAN,
+        ];
+        #[cfg(feature = "html-fragment")]
+        expected.push(ENGINE_HTML);
+        expected.sort();
+        assert_eq!(ids, expected);
     }
 
     #[test]
@@ -193,7 +202,7 @@ mod tests {
         for engine in engines() {
             registry.register(engine);
         }
-        for id in [
+        let mut ids = vec![
             ENGINE_MARKDOWN,
             ENGINE_GEMTEXT,
             ENGINE_GOPHER,
@@ -204,7 +213,10 @@ mod tests {
             ENGINE_SCROLL,
             ENGINE_MISFIN,
             ENGINE_GUPPY,
-        ] {
+        ];
+        #[cfg(feature = "html-fragment")]
+        ids.push(ENGINE_HTML);
+        for id in ids {
             let result = registry.dispatch(&decision(id), &EngineInput::new("a:b", "hi"));
             assert!(result.is_ok(), "dispatch for {id} failed: {result:?}");
         }

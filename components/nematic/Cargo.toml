@@ -21,8 +21,13 @@ publish = true
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = ["html-fragment"]
+html-fragment = ["dep:genet-static-dom"]
+
 [dependencies]
 inker = { workspace = true }
+genet-static-dom = { path = "../genet-static-dom", optional = true }
 # Smolweb parsers: the portable per-format ASTs the engines below lower into
 # `DocumentBlock`. The parse layer (gemtext/gopher/nex/feed) lives in errand
 # (transport + parse, one smolweb crate — a workspace sibling since the
