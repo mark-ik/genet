@@ -116,6 +116,7 @@ struct AlgorithmNode<S, Context, Source> {
     kind: AlgorithmKind,
     block_style: BlockStyle,
     block_algorithm: Option<BlockAlgorithm>,
+    block_deferral: Option<BlockDeferral>,
     block_margins: Option<BlockMarginState>,
     exported_float_state: Option<FloatContextState>,
     nested_float_state_enabled: bool,
@@ -221,6 +222,7 @@ impl<S, Context, Source> AlgorithmTree<S, Context, Source> {
             kind,
             block_style,
             block_algorithm: None,
+            block_deferral: None,
             block_margins: None,
             exported_float_state: None,
             nested_float_state_enabled: false,
@@ -267,6 +269,16 @@ impl<S, Context, Source> AlgorithmTree<S, Context, Source> {
 
     pub fn block_algorithm(&self, id: AlgorithmNodeId) -> Option<BlockAlgorithm> {
         self.nodes[id.index()].block_algorithm
+    }
+
+    /// The named Buckram boundary that selected Taffy's block algorithm.
+    ///
+    /// `None` means this node either used Buckram's block algorithm or is not
+    /// a block-algorithm node. Taffy descendants reached while an ancestor's
+    /// fallback is already active report `BackendSizingMode`; their ancestor
+    /// retains the CSS-facing reason.
+    pub fn block_deferral(&self, id: AlgorithmNodeId) -> Option<BlockDeferral> {
+        self.nodes[id.index()].block_deferral
     }
 
     pub fn block_margins(&self, id: AlgorithmNodeId) -> Option<BlockMarginState> {
@@ -1246,9 +1258,13 @@ where
         containing_block_size: Option<f32>,
     ) -> Result<BlockMarginState, BlockDeferral> {
         if self.tree.nodes[child.index()].kind == AlgorithmKind::Block {
-            return self.tree.nodes[child.index()]
+            let child_node = &self.tree.nodes[child.index()];
+            if let Some(deferral) = child_node.block_deferral {
+                return Err(deferral);
+            }
+            return Ok(child_node
                 .block_margins
-                .ok_or(BlockDeferral::ParentMarginCollapse);
+                .expect("an admitted Buckram block child must return a modeled margin state"));
         }
 
         let child_size_logical = child_style.containing_flow.logical_size(child_size);
@@ -1768,11 +1784,13 @@ where
                         Ok(output) => {
                             tree.tree.nodes[node_index].block_algorithm =
                                 Some(BlockAlgorithm::Buckram);
+                            tree.tree.nodes[node_index].block_deferral = None;
                             output
                         },
-                        Err(_) => {
+                        Err(deferral) => {
                             tree.tree.nodes[node_index].block_algorithm =
                                 Some(BlockAlgorithm::Taffy);
+                            tree.tree.nodes[node_index].block_deferral = Some(deferral);
                             tree.tree.nodes[node_index].block_margins = None;
                             compute_block_layout(tree, node_id, inputs, None)
                         },
@@ -1780,6 +1798,8 @@ where
                 },
                 AlgorithmKind::Block => {
                     tree.tree.nodes[node_index].block_algorithm = Some(BlockAlgorithm::Taffy);
+                    tree.tree.nodes[node_index].block_deferral =
+                        Some(BlockDeferral::BackendSizingMode);
                     tree.tree.nodes[node_index].block_margins = None;
                     compute_block_layout(tree, node_id, inputs, block_context)
                 },
@@ -3880,6 +3900,10 @@ mod tests {
             "fixture must exhaust the bounded retry loop"
         );
         assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Taffy));
+        assert_eq!(
+            tree.block_deferral(root),
+            Some(BlockDeferral::NestedFloatState)
+        );
     }
 
     #[test]
@@ -4261,5 +4285,55 @@ mod tests {
         tree.compute_layout_with_measure(root, available(200.0, 200.0), zero_measure);
 
         assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Taffy));
+        assert_eq!(
+            tree.block_deferral(root),
+            Some(BlockDeferral::NestedFloatState)
+        );
+    }
+
+    #[test]
+    fn taffy_block_fallback_retains_the_css_facing_deferral() {
+        let mut tree = AlgorithmTree::<Style, (), u8>::new();
+        let child = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle::default(),
+            Style {
+                display: Display::Block,
+                size: taffy::Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(20.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            1,
+        );
+        let root = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                replaced: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                size: taffy::Size {
+                    width: Dimension::length(200.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            &[child],
+            0,
+        );
+
+        tree.compute_layout_with_measure(root, available(200.0, 200.0), zero_measure);
+
+        assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Taffy));
+        assert_eq!(tree.block_deferral(root), Some(BlockDeferral::Replaced));
+        assert_eq!(tree.block_algorithm(child), Some(BlockAlgorithm::Taffy));
+        assert_eq!(
+            tree.block_deferral(child),
+            Some(BlockDeferral::BackendSizingMode)
+        );
     }
 }

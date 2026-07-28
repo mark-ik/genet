@@ -348,7 +348,6 @@ pub enum BlockDeferral {
     AspectRatio,
     SizeContainment,
     NonlinearLength,
-    ParentMarginCollapse,
     IndefiniteInlineSize,
     BackendSizingMode,
 }
