@@ -10,9 +10,12 @@
 //! GPU-free and testable; the windowed present loop (`static_viewer`) drives it.
 
 use genet_host_api::ResourceFetcher;
-use genet_layout::{IncrementalLayout, ScrollKey, ScrollOffsets, inline_stylesheets};
+use genet_layout::{
+    IncrementalLayout, ScrollKey, ScrollOffsets, TextRange, TextSelection, inline_stylesheets,
+};
 use genet_render::{ContentReport, content_report, scene_from_session_dom};
 use genet_static_dom::{StaticDocument, StaticNodeId};
+use inker::SessionTextTarget;
 use netrender::Scene;
 
 /// A local-scheme [`ResourceFetcher`]: `data:` decodes the inline payload,
@@ -96,6 +99,12 @@ pub struct LoadedDocument {
     /// A `url#id` fragment to scroll to once, applied on the first frame after the
     /// session exists (anchor-fragment navigation on load). Cleared after applying.
     pending_fragment: Option<String>,
+    /// The retained text position where the captured primary-pointer gesture
+    /// began.
+    selection_anchor: Option<(StaticNodeId, usize)>,
+    /// The current DOM text range. A collapsed range is retained during the
+    /// gesture but is not exposed as a clip.
+    selection_range: Option<TextRange<StaticNodeId>>,
 }
 
 /// What a content click ([`LoadedDocument::click_at`]) resolved to.
@@ -144,6 +153,8 @@ impl LoadedDocument {
             session: None,
             size: (0, 0),
             pending_fragment: None,
+            selection_anchor: None,
+            selection_range: None,
         }
     }
 
@@ -178,7 +189,20 @@ impl LoadedDocument {
             .session
             .as_ref()
             .expect("session built by ensure_session");
-        scene_from_session_dom(session, &self.doc, width, height)
+        let mut scene = scene_from_session_dom(session, &self.doc, width, height);
+        if let Some(selection) = self.text_selection() {
+            let (scroll_x, scroll_y) = session.viewport_scroll();
+            for rect in selection.rects {
+                let x0 = (rect.x - scroll_x).max(0.0);
+                let y0 = (rect.y - scroll_y).max(0.0);
+                let x1 = (rect.x + rect.width - scroll_x).min(width as f32);
+                let y1 = (rect.y + rect.height - scroll_y).min(height as f32);
+                if x0 < x1 && y0 < y1 {
+                    scene.push_rect(x0, y0, x1, y1, [0.18, 0.46, 0.95, 0.34]);
+                }
+            }
+        }
+        scene
     }
 
     /// Scroll the document by a device-px wheel delta, clamped to the
@@ -244,6 +268,87 @@ impl LoadedDocument {
             return ClickOutcome::Scrolled;
         }
         ClickOutcome::Navigate(href)
+    }
+
+    /// Begin a text-selection gesture at viewport point `(x, y)`. Any prior
+    /// range is cleared. Returns whether the point resolved to laid-out text.
+    pub fn begin_text_selection(&mut self, x: f32, y: f32) -> bool {
+        self.selection_range = None;
+        self.selection_anchor = self.session.as_ref().and_then(|session| {
+            session.text_position_at_point(&self.doc, x, y, &ScrollOffsets::default())
+        });
+        self.selection_anchor.is_some()
+    }
+
+    /// Extend the captured selection to `(x, y)`. Returns whether its retained
+    /// range changed.
+    pub fn extend_text_selection(&mut self, x: f32, y: f32) -> bool {
+        let (Some(anchor), Some(session)) = (self.selection_anchor, self.session.as_ref()) else {
+            return false;
+        };
+        let Some(focus) =
+            session.text_position_at_point(&self.doc, x, y, &ScrollOffsets::default())
+        else {
+            return false;
+        };
+        let next = TextRange {
+            anchor_node: anchor.0,
+            anchor_offset: anchor.1,
+            focus_node: focus.0,
+            focus_offset: focus.1,
+        };
+        if self.selection_range == Some(next) {
+            return false;
+        }
+        self.selection_range = Some(next);
+        true
+    }
+
+    /// Finish the captured selection. A collapsed gesture clears its range and
+    /// returns `false`, allowing the caller to perform the ordinary click.
+    pub fn finish_text_selection(&mut self, x: f32, y: f32) -> bool {
+        self.extend_text_selection(x, y);
+        self.selection_anchor = None;
+        if self.text_selection().is_some() {
+            true
+        } else {
+            self.selection_range = None;
+            false
+        }
+    }
+
+    /// The current non-collapsed selection, recomputed through the retained
+    /// layout so resize/repaint refreshes its geometry without changing its DOM
+    /// range.
+    pub fn text_selection(&self) -> Option<TextSelection<StaticNodeId>> {
+        let session = self.session.as_ref()?;
+        session.text_selection(&self.doc, self.selection_range?)
+    }
+
+    /// Resolve the first retained occurrence of `text` to viewport pointer
+    /// endpoints. This is read-only target resolution for find-to-select and
+    /// Genet Probe; callers still drive the normal pointer lifecycle.
+    pub fn text_target(&self, text: &str) -> Option<SessionTextTarget> {
+        let session = self.session.as_ref()?;
+        let range = session
+            .find_text_ranges(&self.doc, text)
+            .into_iter()
+            .next()?;
+        let start = session.caret_rect(&self.doc, range.node, range.start, 1.0)?;
+        let end = session.caret_rect(&self.doc, range.node, range.end, 1.0)?;
+        let (scroll_x, scroll_y) = session.viewport_scroll();
+        Some(SessionTextTarget {
+            anchor: [start.x - scroll_x, start.y + start.height * 0.5 - scroll_y],
+            focus: [end.x - scroll_x, end.y + end.height * 0.5 - scroll_y],
+        })
+    }
+
+    /// Link rectangles from the retained layout, in the same unscrolled
+    /// document coordinate space as selection rectangles.
+    pub fn link_rects(&self) -> Vec<(String, [f32; 4])> {
+        self.session
+            .as_ref()
+            .map_or_else(Vec::new, |session| session.link_rects(&self.doc))
     }
 
     /// The current document scroll offset in device px (`(0, 0)` before the first

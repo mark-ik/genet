@@ -140,6 +140,20 @@ pub struct DocumentClip {
     pub links: Vec<String>,
 }
 
+/// A semantic text occurrence resolved to lane-local pointer coordinates.
+///
+/// Hosts use this for find-to-select and automation without learning a
+/// document engine's DOM ids or text-layout representation. Driving these
+/// points through [`DocumentSession::pointer_down`],
+/// [`DocumentSession::pointer_move`], and [`DocumentSession::pointer_up`] still
+/// exercises the ordinary input path; this is target resolution, not a second
+/// selection mutation API.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SessionTextTarget {
+    pub anchor: [f32; 2],
+    pub focus: [f32; 2],
+}
+
 /// One element in the structural outline.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutlineEntry {
@@ -226,6 +240,37 @@ pub trait DocumentSession<F>: Any {
     fn scroll_to(&mut self, _y: f32) {}
 
     fn click_at(&mut self, x: f32, y: f32) -> SessionClick;
+
+    /// Begin a primary-pointer gesture in lane-local coordinates.
+    ///
+    /// The default preserves the original click-on-press contract for lanes
+    /// that have not adopted gesture state. Text-selecting lanes override this
+    /// to retain an anchor and defer link activation until pointer-up.
+    fn pointer_down(&mut self, x: f32, y: f32) -> SessionClick {
+        self.click_at(x, y)
+    }
+
+    /// Extend the captured primary-pointer gesture. `true` means visible
+    /// session state changed and the host should redraw.
+    fn pointer_move(&mut self, _x: f32, _y: f32) -> bool {
+        false
+    }
+
+    /// Finish the captured primary-pointer gesture.
+    ///
+    /// Lanes retaining text selection return [`SessionClick::Handled`] for a
+    /// non-collapsed selection, or the ordinary click result when the gesture
+    /// collapsed.
+    fn pointer_up(&mut self, _x: f32, _y: f32) -> SessionClick {
+        SessionClick::Miss
+    }
+
+    /// Resolve the first laid-out occurrence of `text` to pointer endpoints.
+    /// This remains read-only: callers must drive the normal pointer lifecycle
+    /// to create selection state.
+    fn text_target(&self, _text: &str) -> Option<SessionTextTarget> {
+        None
+    }
 
     /// The link hit-table off the retained layout (no live-DOM query per
     /// click) — the mechanism all three lanes already share.

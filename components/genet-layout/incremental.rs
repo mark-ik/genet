@@ -1832,6 +1832,115 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         )
     }
 
+    /// Resolve a viewport point to the retained inline leaf and byte offset
+    /// used by caret and selection geometry.
+    ///
+    /// Hit-testing already accounts for the document viewport and nested
+    /// scrollers. Caret geometry lives in unscrolled document space, so this
+    /// maps the point back through those offsets before asking Parley for the
+    /// nearest cluster boundary.
+    pub fn text_position_at_point<D>(
+        &self,
+        dom: &D,
+        x: f32,
+        y: f32,
+        scroll: &ScrollOffsets<Id>,
+    ) -> Option<(Id, usize)>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let hit = self.hit_test(dom, x, y, scroll)?;
+        let leaf = self.text_leaf(dom, hit)?;
+        let merged = self.merged_scroll(scroll);
+        let mut document_x = x + self.viewport.scroll.0;
+        let mut document_y = y + self.viewport.scroll.1;
+        let mut current = Some(leaf);
+        while let Some(node) = current {
+            if let Some((scroll_x, scroll_y)) = merged.get(&node) {
+                document_x += scroll_x;
+                document_y += scroll_y;
+            }
+            current = dom.parent(node);
+        }
+        let byte = crate::caret::caret_byte_at_point(
+            dom,
+            leaf,
+            document_x,
+            document_y,
+            &self.built,
+            &self.text_ctx,
+            &self.fragments,
+        )?;
+        Some((leaf, byte))
+    }
+
+    /// Resolve a point drag through the retained layout into an ordered text
+    /// range, its highlight rectangles, and its exact plain-text export.
+    pub fn select_text<D>(
+        &self,
+        dom: &D,
+        anchor: (f32, f32),
+        focus: (f32, f32),
+        scroll: &ScrollOffsets<Id>,
+    ) -> Option<crate::caret::TextSelection<Id>>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        let anchor = self.text_position_at_point(dom, anchor.0, anchor.1, scroll)?;
+        let focus = self.text_position_at_point(dom, focus.0, focus.1, scroll)?;
+        self.text_selection(
+            dom,
+            crate::caret::TextRange {
+                anchor_node: anchor.0,
+                anchor_offset: anchor.1,
+                focus_node: focus.0,
+                focus_offset: focus.1,
+            },
+        )
+    }
+
+    /// Recompute a retained DOM range after resize or repaint without
+    /// re-resolving its pointer endpoints.
+    pub fn text_selection<D>(
+        &self,
+        dom: &D,
+        range: crate::caret::TextRange<Id>,
+    ) -> Option<crate::caret::TextSelection<Id>>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        crate::caret::text_selection(dom, range, &self.built, &self.text_ctx, &self.fragments)
+    }
+
+    /// Every single-leaf occurrence of `needle` in retained text space.
+    /// The returned byte ranges feed caret geometry directly, allowing a host
+    /// to resolve a semantic text target before driving the ordinary pointer
+    /// lifecycle.
+    pub fn find_text_ranges<D>(
+        &self,
+        dom: &D,
+        needle: &str,
+    ) -> Vec<crate::highlights::HighlightRange<Id>>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        crate::caret::find_text_ranges(dom, &self.built, &self.text_ctx, needle)
+    }
+
+    fn text_leaf<D>(&self, dom: &D, mut node: Id) -> Option<Id>
+    where
+        D: LayoutDom<NodeId = Id>,
+    {
+        loop {
+            if let Some(taffy_id) = self.built.node_map.get(&node)
+                && self.text_ctx.layouts.contains_key(taffy_id)
+            {
+                return Some(node);
+            }
+            node = dom.parent(node)?;
+        }
+    }
+
     /// Register (or replace) the named custom highlight: `ranges` paint with
     /// `style` on every subsequent emit (css-highlight-api subset; the
     /// overlay-roots "highlight slot"). Ranges are static byte ranges into each

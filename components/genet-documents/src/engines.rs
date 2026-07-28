@@ -13,10 +13,10 @@
 use std::any::Any;
 
 use genet_host_api::ResourceFetcher;
-use genet_layout::ScrollKey;
+use genet_layout::{ScrollKey, TextSelection};
 use inker::session_engine::{
     DocumentClip, DocumentSession, SessionClick, SessionEngine, SessionError, SessionLink,
-    SessionScrollKey, SessionSpawnRequest,
+    SessionScrollKey, SessionSpawnRequest, SessionTextTarget,
 };
 use layout_dom_api::LayoutDom;
 use netrender::Scene;
@@ -101,11 +101,35 @@ impl DocumentSession<Scene> for StaticDocumentSession {
     fn click_at(&mut self, x: f32, y: f32) -> SessionClick {
         session_click_from_outcome(self.doc.click_at(x, y))
     }
-    /// The static lane resolves links through hit-testing (`click_at`); a
-    /// retained link table is additive follow-up, so the table is empty
-    /// rather than pretended.
+    fn pointer_down(&mut self, x: f32, y: f32) -> SessionClick {
+        if self.doc.begin_text_selection(x, y) {
+            SessionClick::Handled
+        } else {
+            session_click_from_outcome(self.doc.click_at(x, y))
+        }
+    }
+    fn pointer_move(&mut self, x: f32, y: f32) -> bool {
+        self.doc.extend_text_selection(x, y)
+    }
+    fn pointer_up(&mut self, x: f32, y: f32) -> SessionClick {
+        if self.doc.finish_text_selection(x, y) {
+            SessionClick::Handled
+        } else {
+            session_click_from_outcome(self.doc.click_at(x, y))
+        }
+    }
+    fn text_target(&self, text: &str) -> Option<SessionTextTarget> {
+        self.doc.text_target(text)
+    }
     fn links(&self) -> Vec<SessionLink> {
-        Vec::new()
+        self.doc
+            .link_rects()
+            .into_iter()
+            .map(|(url, [x0, y0, x1, y1])| SessionLink {
+                url,
+                rect: [x0, y0, x1 - x0, y1 - y0],
+            })
+            .collect()
     }
     /// The structural report, through the trait: this session type is private,
     /// so a host cannot take the `as_any` detour meerkat uses on its own types
@@ -115,7 +139,15 @@ impl DocumentSession<Scene> for StaticDocumentSession {
         Some(self.doc.inspect())
     }
     fn clip(&self) -> Option<DocumentClip> {
-        semantic_clip_from_dom(&self.address, self.doc.dom())
+        match self.doc.text_selection() {
+            Some(selection) => semantic_clip_from_selection(
+                &self.address,
+                self.doc.dom(),
+                selection,
+                self.doc.link_rects(),
+            ),
+            None => semantic_clip_from_dom(&self.address, self.doc.dom()),
+        }
     }
     fn as_any_ref(&self) -> &dyn Any {
         self
@@ -399,6 +431,81 @@ fn semantic_clip_from_dom<D: LayoutDom>(address: &str, dom: &D) -> Option<Docume
         selector: None,
         links: report.links,
     })
+}
+
+fn semantic_clip_from_selection<D>(
+    address: &str,
+    dom: &D,
+    selection: TextSelection<D::NodeId>,
+    link_rects: Vec<(String, [f32; 4])>,
+) -> Option<DocumentClip>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq,
+{
+    if selection.text.is_empty() {
+        return None;
+    }
+    let anchor_path = dom_path(dom, selection.range.anchor_node)?;
+    let focus_path = dom_path(dom, selection.range.focus_node)?;
+    let selector = serde_json::json!({
+        "type": "dom-range",
+        "version": 1,
+        "anchor": {
+            "path": anchor_path,
+            "offset": selection.range.anchor_offset,
+        },
+        "focus": {
+            "path": focus_path,
+            "offset": selection.range.focus_offset,
+        },
+        "quote": selection.text,
+    })
+    .to_string();
+    let mut links = Vec::new();
+    for (url, rect) in link_rects {
+        if selection
+            .rects
+            .iter()
+            .any(|selected| rect_intersects_selection(rect, selected))
+            && !links.iter().any(|seen| seen == &url)
+        {
+            links.push(url);
+        }
+    }
+    let report = genet_render::content_report(dom);
+    Some(DocumentClip {
+        source_url: address.to_string(),
+        title: report.title,
+        text: selection.text,
+        selector: Some(selector),
+        links,
+    })
+}
+
+fn dom_path<D>(dom: &D, mut node: D::NodeId) -> Option<Vec<usize>>
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq,
+{
+    let mut path = Vec::new();
+    while node != dom.document() {
+        let parent = dom.parent(node)?;
+        let index = dom.dom_children(parent).position(|child| child == node)?;
+        path.push(index);
+        node = parent;
+    }
+    path.reverse();
+    Some(path)
+}
+
+fn rect_intersects_selection(rect: [f32; 4], selected: &genet_layout::CaretRect) -> bool {
+    let selected_right = selected.x + selected.width;
+    let selected_bottom = selected.y + selected.height;
+    rect[0] < selected_right
+        && rect[2] > selected.x
+        && rect[1] < selected_bottom
+        && rect[3] > selected.y
 }
 
 // ── Scripted lane (genet.scripted / genet.scripted.nova) ────────────────
@@ -741,6 +848,48 @@ mod tests {
         assert!(clip.text.contains("A useful finding."));
         assert_eq!(clip.links, vec!["https://example.test/source"]);
         assert_eq!(clip.selector, None, "v1 captures the whole document");
+    }
+
+    #[test]
+    fn static_session_pointer_selection_scopes_clip_and_selector() {
+        let engine = StaticSessionEngine::new(NoFetch);
+        let request = SessionSpawnRequest::new("https://example.test/report")
+            .with_body(
+                "<html><head><title>The Page</title></head><body style=\"margin:0\">\
+                 <p style=\"margin:0\">before <a href=\"/chosen\">selected link</a> after \
+                 <a href=\"/outside\">outside</a></p></body></html>",
+            )
+            .with_viewport(640, 200);
+        let mut session = engine.spawn(&request).expect("spawns");
+        let _ = session.frame(640, 200);
+        let target = session
+            .text_target("selected link")
+            .expect("retained text resolves to pointer endpoints");
+
+        assert_eq!(
+            session.pointer_down(target.anchor[0], target.anchor[1]),
+            SessionClick::Handled
+        );
+        assert!(
+            session.pointer_move(target.focus[0], target.focus[1]),
+            "the range extends through ordinary pointer input"
+        );
+        assert_eq!(
+            session.pointer_up(target.focus[0], target.focus[1]),
+            SessionClick::Handled
+        );
+
+        let clip = session.clip().expect("selection supplies a clip");
+        assert_eq!(clip.text, "selected link");
+        assert_eq!(clip.links, vec!["/chosen"]);
+        let selector: serde_json::Value =
+            serde_json::from_str(clip.selector.as_deref().expect("range selector"))
+                .expect("selector is typed JSON");
+        assert_eq!(selector["type"], "dom-range");
+        assert_eq!(selector["version"], 1);
+        assert_eq!(selector["quote"], "selected link");
+        assert!(selector["anchor"]["path"].is_array());
+        assert!(selector["focus"]["path"].is_array());
     }
 
     #[test]

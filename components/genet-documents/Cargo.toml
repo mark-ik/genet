@@ -39,6 +39,7 @@ genet-render = { path = "../genet-render" }
 genet-extract = { path = "../genet-extract" }
 genet-static-dom = { path = "../genet-static-dom" }
 layout_dom_api = { workspace = true }
+serde_json = { workspace = true }
 genet-livery = { path = "../genet-livery", optional = true }
 paint_list_render = { workspace = true, optional = true }
 data-url = { workspace = true }
