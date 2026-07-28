@@ -1814,7 +1814,6 @@ fn supports_float_avoidance<Id>(
         && !block_style.replaced
         && block_style.flow.is_horizontal()
         && block_style.containing_flow.is_horizontal()
-        && block_style.has_zero_inline_margins()
 }
 
 fn supports_float_shrink_to_fit<Id, Context, Source>(
@@ -3725,6 +3724,89 @@ mod tests {
             (host.x, host.y + 40.0, 150.0, 20.0)
         );
         assert_eq!(host.height, 60.0);
+        assert_eq!(algorithms.taffy, 0);
+    }
+
+    #[test]
+    fn live_bfc_inline_margins_can_force_float_avoidance_in_both_directions() {
+        fn by_id(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+            expected: &str,
+        ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+            if dom.attributes(node).any(|attribute| {
+                attribute.name.ns.as_ref().is_empty()
+                    && attribute.name.local.as_ref() == "id"
+                    && attribute.value == expected
+            }) {
+                return Some(node);
+            }
+            dom.dom_children(node)
+                .find_map(|child| by_id(dom, child, expected))
+        }
+
+        let dom = StaticDocument::parse(
+            "<html><body>\
+             <div id=\"ltr\" class=\"host\"><div class=\"right-float\"></div>\
+             <div id=\"ltr-bfc\" class=\"bfc\"></div></div>\
+             <div id=\"rtl\" class=\"host\"><div class=\"left-float\"></div>\
+             <div id=\"rtl-bfc\" class=\"bfc\"></div></div>\
+             </body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&["html, body, div { margin: 0; padding: 0; border: 0; }\
+                 .host { width: 100px; overflow-x: hidden; overflow-y: hidden; }\
+                 .right-float { float: right; width: 50px; height: 40px; }\
+                 .left-float { float: left; width: 50px; height: 40px; }\
+                 .bfc { display: flow-root; height: 60px; }\
+                 #ltr-bfc { margin-left: 51px; }\
+                 #rtl { direction: rtl; } #rtl-bfc { margin-right: 51px; }"]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let rect = |id| {
+            let node = by_id(&dom, dom.document(), id).expect(id);
+            layout.get(node).expect(id).physical_rect()
+        };
+
+        let ltr = rect("ltr");
+        let ltr_bfc = rect("ltr-bfc");
+        let rtl = rect("rtl");
+        let rtl_bfc = rect("rtl-bfc");
+        let algorithms = layout.block_algorithm_counts();
+
+        assert_eq!(
+            (
+                ltr_bfc.x - ltr.x,
+                ltr_bfc.y - ltr.y,
+                ltr_bfc.width,
+                ltr_bfc.height,
+            ),
+            (51.0, 40.0, 49.0, 60.0),
+            "ltr={ltr:?}, ltr_bfc={ltr_bfc:?}, rtl={rtl:?}, rtl_bfc={rtl_bfc:?}, algorithms={algorithms:?}"
+        );
+        assert_eq!(
+            (
+                rtl_bfc.x - rtl.x,
+                rtl_bfc.y - rtl.y,
+                rtl_bfc.width,
+                rtl_bfc.height,
+            ),
+            (0.0, 40.0, 49.0, 60.0)
+        );
+        assert_eq!((ltr.height, rtl.height), (100.0, 100.0));
         assert_eq!(algorithms.taffy, 0);
     }
 

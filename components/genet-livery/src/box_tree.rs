@@ -133,6 +133,9 @@ fn display_role(display: ComputedDisplay) -> DisplayRole {
         ComputedDisplay::Contents => DisplayRole::CONTENTS,
         ComputedDisplay::Inline => DisplayRole::INLINE_FLOW,
         ComputedDisplay::Block => DisplayRole::BLOCK_FLOW,
+        ComputedDisplay::FlowRoot => {
+            normal(Some(DisplayOutside::Block), Some(DisplayInside::FlowRoot))
+        },
         ComputedDisplay::ListItem => DisplayRole {
             list_item: true,
             ..DisplayRole::BLOCK_FLOW

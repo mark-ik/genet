@@ -252,17 +252,6 @@ impl BlockStyle {
         )
     }
 
-    /// Whether both inline-axis margins are explicit zeroes.
-    ///
-    /// The first float-avoiding BFC lane keeps nonzero and automatic inline
-    /// margins deferred because CSS2 leaves the amount of BFC narrowing
-    /// deliberately undefined and interoperable margin behavior needs its
-    /// own policy fixture.
-    pub fn has_zero_inline_margins(self) -> bool {
-        let margin = self.containing_flow.logical_sides(self.margin);
-        margin.inline_start == FlowLengthAuto::ZERO && margin.inline_end == FlowLengthAuto::ZERO
-    }
-
     pub fn logical_padding_border(self, containing_inline_size: f32) -> crate::LogicalSides<f32> {
         self.containing_flow.logical_sides(
             self.resolved_padding(containing_inline_size)
@@ -1710,6 +1699,43 @@ mod tests {
         assert_eq!(lowered.block_start, 40.0);
         assert_eq!(lowered.inline_start, 0.0);
         assert_eq!(lowered.inline_size.border_box, 150.0);
+    }
+
+    #[test]
+    fn bfc_margin_can_force_its_border_box_below_a_float() {
+        let margin_state = BlockMarginState {
+            block_start: CollapsedMargin::ZERO,
+            block_end: CollapsedMargin::ZERO,
+            collapses_through: false,
+        };
+        let mut context = horizontal_context(100.0);
+        context.place_float(
+            fixed_float(FloatSide::Right, 50.0),
+            PhysicalSize {
+                width: 50.0,
+                height: 40.0,
+            },
+        );
+        let mut bfc = BlockStyle {
+            establishes_bfc: true,
+            ..BlockStyle::default()
+        };
+        bfc.margin.left = FlowLengthAuto::Value(FlowLength::px(51.0));
+
+        let placement = context.float_avoiding_placement(bfc, margin_state, 60.0);
+
+        assert_eq!(
+            placement,
+            FloatAvoidingPlacement {
+                block_start: 40.0,
+                inline_start: 51.0,
+                inline_size: UsedInlineSize {
+                    margin_start: 51.0,
+                    border_box: 49.0,
+                    margin_end: 0.0,
+                },
+            }
+        );
     }
 
     #[test]

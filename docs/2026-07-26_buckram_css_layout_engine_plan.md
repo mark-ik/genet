@@ -1187,6 +1187,77 @@ contexts beside floats, vertical auto block-size finalisation, positioning,
 independent-BFC baselines, intrinsic block queries, and the out-of-flow IFC
 participant protected by K3b's cache guard.
 
+#### K3j receipt - 2026-07-27
+
+K3j closes nonzero fixed inline margins for block-level BFC roots beside
+floats and makes `display: flow-root` an actual Livery computed value.
+
+CSS2 section 9.5 requires the border box of a block formatting context beside
+a float not to overlap the float's margin box. It does not require the BFC
+root's margin box to avoid the float. Buckram therefore resolves the ordinary
+block width equation, including inline margins, inside each candidate float
+band and checks the resulting border box. If a fixed margin places that border
+box outside the available band, layout advances to the next float bottom and
+resolves the same equation again against the recovered containing block.
+Percentage inputs remain relative to the containing block, not the temporary
+float band.
+
+The pure fixture uses a 100px BFC, a 50x40 right float, and a 60px-high BFC
+root with a 51px inline-start margin. The BFC border box cannot fit beside the
+float, so it lands at x=51, y=40 with a 49px used width. The adapter fixture
+proves the same placement, the 100px root height, and a 49px measure
+constraint with Buckram block dispatch.
+
+The live HTML/Livery fixture repeats the case in both directions:
+
+- LTR uses a right float and `margin-left: 51px`;
+- RTL uses a left float and `margin-right: 51px`;
+- both `display: flow-root` boxes land at y=40 with a 49x60 border box; and
+- the receipt reports zero Taffy block calls.
+
+This slice also corrected a standards-model omission. Livery's `Display` enum
+now accepts `flow-root`, and genet-livery maps it to block outer display plus
+flow-root inner display. It establishes a BFC through Buckram instead of
+silently falling back to `display: block`.
+
+The focused `css/CSS2/floats` ledger moves from 44 to 47 passes, with these
+three exact fail-to-pass changes:
+
+- `floats-placement-004.html`;
+- `floats-wrap-bfc-with-margin-004.html`; and
+- `floats-wrap-bfc-with-margin-005.html`.
+
+The complete CSS2 ledger has the same three gains and no regressions: 4,232
+passes, 1,742 failures, 3,279 skips, and one error across 9,254 files. Seven
+of the other eight frozen directories are byte-identical to K3f.
+`css-multicol` moves from 97 to 96 passes because
+`multicol-nested-029.html` loses a false pass: its reference now correctly
+establishes a `flow-root` BFC, while the test's `columns: 1` container still
+falls through ordinary block layout because multicol computed values and
+fragmentation remain deferred. The tested page did not regress; correcting
+the reference exposed that named multicol boundary. Across all nine
+directories the net is two passes, from 5,735 to 5,737.
+
+Verification:
+
+- `cargo test -p buckram -p livery -p genet-livery --offline`: passed with
+  48 Buckram tests, 134 genet-livery tests, 141 Livery tests, and all doc tests
+  green.
+- strict Clippy passed for Buckram and genet-livery with dependency linting
+  disabled. The workspace configuration still prints its existing
+  unreachable disallowed-type warning. Livery's pre-existing strict-Clippy
+  backlog was not part of this receipt.
+- the feature-unified release `genet-wpt` build passed.
+- fresh focused, complete CSS2, and all-nine expectations are at
+  `Code/testing/genet/wpt-ledger/2026-07-27_buckram_k3j`.
+
+Still open in K3: multi-child and block-content auto floats, inline-block
+shrink-to-fit, automatic inline margins and non-block BFC avoidance beside
+floats, float state through ordinary nested blocks, nowrap and nested inline
+contexts beside floats, vertical auto block-size finalisation, positioning,
+independent-BFC baselines, intrinsic block queries, and the out-of-flow IFC
+participant protected by K3b's cache guard.
+
 ### K4. CSS tables
 
 Implement anonymous table fixup, row and column structure, spans, fixed and

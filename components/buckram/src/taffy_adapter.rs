@@ -300,10 +300,8 @@ impl<S, Context, Source> AlgorithmTree<S, Context, Source> {
             "the first float-avoidance lane accepts block and leaf algorithms"
         );
         assert!(
-            node.block_style.establishes_bfc
-                && node.block_style.float == FloatSide::None
-                && node.block_style.has_zero_inline_margins(),
-            "float avoidance requires an in-flow BFC with zero inline margins"
+            node.block_style.establishes_bfc && node.block_style.float == FloatSide::None,
+            "float avoidance requires an in-flow BFC"
         );
         node.float_avoidance_enabled = true;
     }
@@ -2030,6 +2028,86 @@ mod tests {
             }
         );
         assert_eq!(tree.layout(root).height, 60.0);
+    }
+
+    #[test]
+    fn buckram_applies_bfc_inline_margins_before_avoiding_a_float() {
+        let mut tree = AlgorithmTree::<Style, Vec<f32>, u8>::new();
+        let float = tree.new_with_children_and_block_style(
+            AlgorithmKind::Leaf,
+            BlockStyle {
+                size: crate::BlockDimensions::new(
+                    BlockSizeValue::Length(crate::FlowLength::px(50.0)),
+                    BlockSizeValue::Length(crate::FlowLength::px(40.0)),
+                ),
+                float: FloatSide::Right,
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                size: taffy::Size {
+                    width: Dimension::length(50.0),
+                    height: Dimension::length(40.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            1,
+        );
+        let mut bfc_style = BlockStyle {
+            establishes_bfc: true,
+            ..BlockStyle::default()
+        };
+        bfc_style.margin.left = crate::FlowLengthAuto::Value(crate::FlowLength::px(51.0));
+        let bfc =
+            tree.new_leaf_with_context_and_block_style(bfc_style, Style::default(), Vec::new(), 2);
+        tree.enable_float_avoidance(bfc);
+        let root = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                size: taffy::Size {
+                    width: Dimension::length(100.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            &[float, bfc],
+            0,
+        );
+
+        tree.compute_layout_with_measure(
+            root,
+            available(100.0, 200.0),
+            |known, available, _, context, _| {
+                let width = known.width.unwrap_or(match available.width {
+                    AlgorithmAvailableSpace::Definite(width) => width,
+                    AlgorithmAvailableSpace::MinContent => 0.0,
+                    AlgorithmAvailableSpace::MaxContent => f32::INFINITY,
+                });
+                if let Some(context) = context {
+                    context.push(width);
+                }
+                AlgorithmSize::new(width, 60.0)
+            },
+        );
+
+        assert_eq!(
+            tree.layout(bfc),
+            AlgorithmLayout {
+                x: 51.0,
+                y: 40.0,
+                width: 49.0,
+                height: 60.0,
+            }
+        );
+        assert_eq!(tree.context(bfc), Some(&vec![49.0]));
+        assert_eq!(tree.layout(root).height, 100.0);
+        assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Buckram));
     }
 
     #[test]

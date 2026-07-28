@@ -928,6 +928,7 @@ keyword_value! {
         Contents => "contents",
         Inline => "inline",
         Block => "block",
+        FlowRoot => "flow-root",
         ListItem => "list-item",
         InlineBlock => "inline-block",
         Flex => "flex",
