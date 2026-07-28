@@ -449,6 +449,11 @@ Make inline and block axes primary. Implement intrinsic-size queries, BFC/IFC
 establishment, margin collapsing, clearance, float exclusion, shrink-to-fit,
 and the containing-block relationships required by flow.
 
+K3m onward is executed through the
+[K3 completion execution plan](2026-07-28_buckram_k3_completion_execution_plan.md).
+That plan owns slice order and interim receipts. This architecture plan keeps
+the K3 boundary and receives the final closure receipt.
+
 This stage reviews each remaining use of Taffy's block algorithm. Keep a use
 only when Buckram can supply its CSS inputs and recover correct fragments
 without hiding required state.
@@ -1405,13 +1410,15 @@ Verification:
   `Code/testing/genet/wpt-ledger/2026-07-27_buckram_k3l`.
 
 Still open in K3: multi-child and block-content auto floats, inline-block
-shrink-to-fit, automatic inline margins, table and atomic-inline BFC
+shrink-to-fit, automatic inline margins, non-table atomic-inline BFC
 avoidance beside floats, float continuation through generated `Block`
 formatting-context roots and across flow changes, negative-margin and
 split-inline nested floats, nowrap and nested inline contexts beside floats,
-vertical auto block-size finalisation, positioning, independent-BFC
-baselines, intrinsic block queries, and the out-of-flow IFC participant
-protected by K3b's cache guard.
+vertical auto block-size finalisation, independent-BFC baselines, intrinsic
+block queries, and the final Taffy block-dispatch audit.
+
+Table-specific avoidance is routed to K4. Positioning and the out-of-flow IFC
+participant protected by K3b's cache guard are routed to K5.
 
 ### K4. CSS tables
 
