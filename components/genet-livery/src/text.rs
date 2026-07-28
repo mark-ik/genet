@@ -62,21 +62,25 @@ struct Brush {
 
 fn break_inline_lines(
     layout: &mut parley::Layout<Brush>,
-    wrap_width: Option<f32>,
+    width: f32,
+    wraps: bool,
     constraints: Option<&FloatLineConstraints>,
 ) {
-    let Some(content_width) = wrap_width else {
+    if !width.is_finite() || width <= 0.0 {
         layout.break_all_lines(None);
         return;
-    };
+    }
     let Some(constraints) = constraints else {
-        layout.break_all_lines(Some(content_width));
+        layout.break_all_lines(wraps.then_some(width));
         return;
     };
+    let layout_max_advance = if wraps { width } else { f32::INFINITY };
 
     {
         let mut breaker = layout.break_lines();
-        breaker.state_mut().set_layout_max_advance(content_width);
+        breaker
+            .state_mut()
+            .set_layout_max_advance(layout_max_advance);
         'lines: loop {
             let mut line_top = breaker.committed_y() as f32;
             let mut available = constraints.horizontal_physical_space(line_top, 0.0);
@@ -85,7 +89,11 @@ fn break_inline_lines(
                     let state = breaker.state_mut();
                     state.set_line_x(available.inline_start);
                     state.set_line_y(f64::from(line_top));
-                    state.set_line_max_advance(available.inline_size);
+                    state.set_line_max_advance(if wraps {
+                        available.inline_size
+                    } else {
+                        f32::INFINITY
+                    });
                 }
                 let Some(yielded) = breaker.break_next() else {
                     break 'lines;
@@ -597,10 +605,12 @@ impl TextSystem {
             });
         }
         let mut layout = builder.build(text);
-        let wrap_width = (root_style.text_wrap_mode == TextWrapMode::Wrap)
-            .then_some(width)
-            .filter(|width| width.is_finite() && *width > 0.0);
-        break_inline_lines(&mut layout, wrap_width, line_constraints);
+        break_inline_lines(
+            &mut layout,
+            width,
+            root_style.text_wrap_mode == TextWrapMode::Wrap,
+            line_constraints,
+        );
         layout.align(
             text_alignment(root_style.text_align),
             AlignmentOptions::default(),

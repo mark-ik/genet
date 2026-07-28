@@ -783,9 +783,6 @@ where
             let child_node = &self.tree.nodes[child.index()];
             let style = child_node.block_style;
             if style.float != FloatSide::None {
-                if !style.has_nonnegative_block_margins() {
-                    return Some(BlockDeferral::NestedFloatState);
-                }
                 continue;
             }
             if child_node.kind == AlgorithmKind::Block
@@ -3136,7 +3133,7 @@ mod tests {
     }
 
     #[test]
-    fn buckram_exports_nested_floats_through_two_ordinary_blocks_to_outer_siblings() {
+    fn buckram_exports_nested_negative_margin_floats_through_ordinary_blocks() {
         let mut tree = AlgorithmTree::<Style, (), u8>::new();
         let nested_float = tree.new_with_children_and_block_style(
             AlgorithmKind::Leaf,
@@ -3147,6 +3144,12 @@ mod tests {
                 ),
                 float: FloatSide::Left,
                 establishes_bfc: true,
+                margin: PhysicalSides {
+                    top: FlowLengthAuto::Value(FlowLength::px(-10.0)),
+                    right: FlowLengthAuto::ZERO,
+                    bottom: FlowLengthAuto::ZERO,
+                    left: FlowLengthAuto::ZERO,
+                },
                 ..BlockStyle::default()
             },
             Style {
@@ -3223,12 +3226,12 @@ mod tests {
 
         assert_eq!(
             (tree.layout(nested_float).x, tree.layout(nested_float).y),
-            (0.0, 0.0)
+            (0.0, -10.0)
         );
         assert_eq!(tree.layout(inner).height, 0.0);
         assert_eq!(tree.layout(outer).height, 0.0);
-        assert_eq!(tree.layout(clear).y, 40.0);
-        assert_eq!(tree.layout(root).height, 50.0);
+        assert_eq!(tree.layout(clear).y, 30.0);
+        assert_eq!(tree.layout(root).height, 40.0);
         assert_eq!(tree.block_algorithm(inner), Some(BlockAlgorithm::Buckram));
         assert_eq!(tree.block_algorithm(outer), Some(BlockAlgorithm::Buckram));
         assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Buckram));
@@ -3566,6 +3569,94 @@ mod tests {
 
         tree.compute_layout_with_measure(root, available(200.0, 200.0), zero_measure);
 
+        assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Taffy));
+    }
+
+    #[test]
+    fn nested_float_state_nonconvergence_remains_deferred() {
+        let mut tree = AlgorithmTree::<Style, (), u8>::new();
+        let float = tree.new_with_children_and_block_style(
+            AlgorithmKind::Leaf,
+            BlockStyle {
+                size: crate::BlockDimensions::new(
+                    BlockSizeValue::Length(crate::FlowLength::px(80.0)),
+                    BlockSizeValue::Length(crate::FlowLength::px(40.0)),
+                ),
+                float: FloatSide::Left,
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                size: taffy::Size {
+                    width: Dimension::length(80.0),
+                    height: Dimension::length(40.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            1,
+        );
+        let oscillating_leaf = tree.new_with_children_and_block_style(
+            AlgorithmKind::Leaf,
+            BlockStyle {
+                margin: PhysicalSides {
+                    top: FlowLengthAuto::ZERO,
+                    right: FlowLengthAuto::ZERO,
+                    bottom: FlowLengthAuto::Value(FlowLength::px(20.0)),
+                    left: FlowLengthAuto::ZERO,
+                },
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                ..Style::default()
+            },
+            &[],
+            2,
+        );
+        let wrapper = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle::default(),
+            Style {
+                display: Display::Block,
+                ..Style::default()
+            },
+            &[oscillating_leaf],
+            3,
+        );
+        tree.enable_nested_float_state(wrapper);
+        let root = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                size: taffy::Size {
+                    width: Dimension::length(200.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            &[float, wrapper],
+            0,
+        );
+        let calls = std::cell::Cell::new(0_u32);
+
+        tree.compute_layout_with_measure(root, available(200.0, 200.0), |known, _, _, _, _| {
+            let call = calls.get();
+            calls.set(call + 1);
+            AlgorithmSize::new(
+                known.width.unwrap_or(200.0),
+                if call % 2 == 0 { 0.0 } else { 10.0 },
+            )
+        });
+
+        assert!(
+            calls.get() >= 6,
+            "fixture must exhaust the bounded retry loop"
+        );
         assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Taffy));
     }
 

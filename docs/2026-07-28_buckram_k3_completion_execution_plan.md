@@ -406,6 +406,44 @@ margin-box geometry with IFC line decisions.
 - Preserve the old path when a nested inline box lacks a stable fragment or
   baseline output.
 
+### K3p receipt (2026-07-28)
+
+`FloatMarginBox` now carries a `SignedBlockExtent`: a float with a negative
+used block-size still positions its border box, but is inert for exclusion,
+clearance, line constraints, and BFC height. Positive exclusions translated
+above a descendant content origin remain active. The ordinary-block
+translated-state loop now admits negative margins; a converging nested-float
+fixture reaches the outer clearer, while an oscillating origin fixture exhausts
+its bounded retries and deliberately returns to Taffy.
+
+All admitted inline groups receive float constraints. The IFC keeps `nowrap`
+as a single unbounded Parley line, but selects its line origin and any wider
+float band through the same breaker used for wrapped lines. The live receipt
+covers nested inline content in LTR and RTL. Nested clear without a shared
+role and floats originating inside an inline context remain deferred because
+their fragment and baseline paths are still not stable.
+
+Verification: `cargo test -p buckram -p livery -p genet-livery --offline`,
+the post-suite `nested_float_state_nonconvergence_remains_deferred` fixture,
+`cargo clippy -p buckram -p genet-livery --offline --no-deps -- -D warnings`,
+edition-2024 `rustfmt --check` on touched Rust files, and `git diff --check`
+passed. `cargo build -p genet-wpt --release --all-features --offline` passed
+from a temporary isolated target with `RUSTUP_TOOLCHAIN=1.97.1-x86_64-pc-windows-msvc`;
+the override prevents the `oxc-miette` dependency's local 1.94 toolchain file
+from mixing compilers in the same target.
+
+WPT crash-smoke: `negative-margin-float-positioning.html`,
+`negative-block-margin-pushing-float-out-of-block-formatting-context.html`,
+`float-nowrap-5.html`,
+`float-in-inline-anonymous-block-with-overflow-hidden.html`,
+`margin-collapse-135.xht`, and `text/bidi-span-001.html` each report 1
+passed, 0 failed, 0 errored. These are parser/layout crash-smoke results, not
+behavioral reftest or testharness claims.
+
+Proof directory: `C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-28_buckram_k3p`
+
+Commit: `Complete Buckram nested float state and nowrap bands`
+
 ## K3q. Intrinsic block queries and independent-BFC baselines
 
 ### Problem

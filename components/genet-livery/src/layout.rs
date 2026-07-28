@@ -1382,9 +1382,10 @@ where
             },
             roots.to_vec(),
         );
-        if parent_style.text_wrap_mode == livery::values::TextWrapMode::Wrap {
-            self.tree.enable_float_line_constraints(node);
-        }
+        // The inline formatter owns the distinction between wrapped and
+        // no-wrap lines. Both still need the current float band to choose a
+        // line origin and, when possible, the next wider band.
+        self.tree.enable_float_line_constraints(node);
         Ok(node)
     }
 }
@@ -3770,6 +3771,86 @@ mod tests {
                 .filter(|line| line.y >= host.y + 40.0)
                 .all(|line| (line.x - host.x).abs() <= 0.5),
             "lines below the float must use the full content column"
+        );
+        assert_eq!(algorithms.taffy, 0);
+    }
+
+    #[test]
+    fn live_nowrap_nested_inline_content_uses_float_bands_in_both_directions() {
+        fn by_id(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+            expected: &str,
+        ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+            if dom.attributes(node).any(|attribute| {
+                attribute.name.ns.as_ref().is_empty()
+                    && attribute.name.local.as_ref() == "id"
+                    && attribute.value == expected
+            }) {
+                return Some(node);
+            }
+            dom.dom_children(node)
+                .find_map(|child| by_id(dom, child, expected))
+        }
+
+        let dom = StaticDocument::parse(
+            "<html><body>\
+             <div id=\"ltr\" class=\"host\"><div class=\"float\"></div>\
+             <span id=\"ltr-copy\"><span><span>aa aa aa aa</span></span></span></div>\
+             <div id=\"rtl\" class=\"host\"><div class=\"float\"></div>\
+             <span id=\"rtl-copy\"><span><span>aa aa aa aa</span></span></span></div>\
+             </body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "html, body, div, span { margin: 0; padding: 0; border: 0; }\
+                 .host { width: 200px; overflow-x: hidden; overflow-y: hidden;\
+                         white-space: nowrap; font-family: monospace; font-size: 10px;\
+                         line-height: 20px; }\
+                 .float { float: left; width: 80px; height: 40px; }\
+                 #rtl { direction: rtl; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let rect = |id| {
+            let node = by_id(&dom, dom.document(), id).expect(id);
+            layout.get(node).expect(id).physical_rect()
+        };
+        let copy_lines = |id| {
+            let node = by_id(&dom, dom.document(), id).expect(id);
+            layout
+                .fragments_for_node(node)
+                .map(|fragment| fragment.physical_rect())
+                .collect::<Vec<_>>()
+        };
+
+        let ltr = rect("ltr");
+        let rtl = rect("rtl");
+        let ltr_lines = copy_lines("ltr-copy");
+        let rtl_lines = copy_lines("rtl-copy");
+        let algorithms = layout.block_algorithm_counts();
+
+        assert_eq!(ltr_lines.len(), 1, "nowrap must remain one line");
+        assert_eq!(rtl_lines.len(), 1, "nowrap must remain one line");
+        assert_eq!((ltr_lines[0].x, ltr_lines[0].y), (ltr.x + 80.0, ltr.y));
+        assert!(
+            rtl_lines[0].x >= rtl.x + 80.0 - 0.5
+                && rtl_lines[0].x + rtl_lines[0].width <= rtl.x + rtl.width + 0.5
+                && (rtl_lines[0].y - rtl.y).abs() <= 0.5,
+            "rtl host={rtl:?}, lines={rtl_lines:?}"
         );
         assert_eq!(algorithms.taffy, 0);
     }
