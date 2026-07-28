@@ -7,8 +7,10 @@
 //! frame, asserting against a typed observation and an event stream. This is
 //! that loop, lifted off the app: it parses a small generic grammar, and each
 //! [`tick`](Scenario::tick) drives the app through the [`Automatable`] trait and
-//! the [`Driveable`] hooks. The frame pump stays the app's (it owns winit); the
-//! app calls `tick` after each frame and `finish` at the end.
+//! the [`Driveable`] hooks. Pointer clicks and retained-text selection are
+//! lowered here to ordinary pointer delivery. The frame pump stays the app's
+//! (it owns winit); the app calls `tick` after each frame and `finish` at the
+//! end.
 //!
 //! Two things the generic loop cannot do are the app's: taking a screenshot, and
 //! any verb specific to the app's own state (`assert pane roster`). Those go
@@ -49,6 +51,7 @@ pub const DEFAULT_WAIT_CAP: u32 = 600;
 enum Step {
     Act(String),
     Click(Selector),
+    SelectText(String),
     Settle(u32),
     /// Hold until the app reports quiet ([`Automatable::busy`]), capped at this
     /// many frames so a receipt can never hang.
@@ -57,7 +60,11 @@ enum Step {
     Capture(String),
     AssertText(String),
     AssertEvent(String),
-    AssertSnap { field: String, cmp: Cmp, value: String },
+    AssertSnap {
+        field: String,
+        cmp: Cmp,
+        value: String,
+    },
     App(String),
 }
 
@@ -155,21 +162,22 @@ impl Scenario {
                 Some(false) => {
                     self.wait = None;
                     self.log.push(format!("waited {spent} frames"));
-                }
+                },
                 // Still working, and cap remaining: hold.
                 Some(true) if left > 0 => {
                     self.wait = Some((left - 1, spent + 1));
                     return Progress::Running;
-                }
+                },
                 // Still working at the cap. Proceed (the next step's own
                 // assertion gives a better message than a generic timeout
                 // would), but make the timeout loud AND matchable: it goes in
                 // the log and the event stream, like an interaction miss.
                 Some(true) => {
                     self.wait = None;
-                    self.log.push(format!("wait: still busy after {spent} frames"));
+                    self.log
+                        .push(format!("wait: still busy after {spent} frames"));
                     self.events.push(format!("wait-timeout {spent}"));
-                }
+                },
                 // The app does not report quiescence. Burn the cap rather than
                 // return instantly: `wait` degrades to the frame counting it
                 // replaces, and says so once instead of silently racing.
@@ -183,7 +191,7 @@ impl Scenario {
                         return Progress::Running;
                     }
                     self.wait = None;
-                }
+                },
             }
         }
         let Some(step) = self.steps.get(self.idx).cloned() else {
@@ -213,15 +221,23 @@ impl Scenario {
                 if !app.act(&label) {
                     self.fail(format!("act: no command '{label}'"));
                 }
-            }
+            },
             Step::Click(sel) => {
                 if !app.click(&sel) {
                     // The miss attributes itself into the event stream, so a
                     // scenario that drives a miss can assert it (and one that did
                     // not mean to miss sees why it failed downstream).
-                    self.events.push(format!("interaction-missed {}", describe(&sel)));
+                    self.events
+                        .push(format!("interaction-missed {}", describe(&sel)));
                 }
-            }
+            },
+            Step::SelectText(text) => match app.select_text(&text) {
+                Ok(true) => {},
+                Ok(false) => self
+                    .events
+                    .push(format!("interaction-missed text '{text}'")),
+                Err(message) => self.fail(format!("select-text '{text}': {message}")),
+            },
             Step::Settle(n) => self.settle = n,
             // Arm the wait; `tick` runs it down against the app's own report.
             Step::Wait(cap) => self.wait = Some((cap, 0)),
@@ -232,13 +248,13 @@ impl Scenario {
                 } else {
                     self.fail(format!("capture '{name}' failed"));
                 }
-            }
+            },
             Step::AssertText(substr) => {
                 let present = app.with_surfaces(|s| text_present(s, &substr));
                 if !present {
                     self.fail(format!("assert text '{substr}': not on any surface"));
                 }
-            }
+            },
             Step::AssertEvent(substr) => {
                 if !self.events.iter().any(|e| e.contains(&substr)) {
                     self.fail(format!(
@@ -246,7 +262,7 @@ impl Scenario {
                         self.events.iter().rev().take(6).collect::<Vec<_>>()
                     ));
                 }
-            }
+            },
             Step::AssertSnap { field, cmp, value } => {
                 let snap = app.snapshot();
                 let got = if field == "focused" {
@@ -255,18 +271,18 @@ impl Scenario {
                     snap.field(&field).map(str::to_string)
                 };
                 match got {
-                    Some(got) if compare(&got, cmp, &value) => {}
+                    Some(got) if compare(&got, cmp, &value) => {},
                     Some(got) => self.fail(format!(
                         "assert snap {field} {cmp:?} '{value}': got '{got}'"
                     )),
                     None => self.fail(format!("assert snap {field}: no such field")),
                 }
-            }
+            },
             Step::App(line) => {
                 if let Err(msg) = app.app_step(&line) {
                     self.fail(msg);
                 }
-            }
+            },
         }
     }
 }
@@ -284,7 +300,7 @@ fn compare(got: &str, cmp: Cmp, want: &str) -> bool {
                 } else {
                     a <= b
                 }
-            }
+            },
             _ => false,
         },
     }
@@ -315,6 +331,8 @@ fn parse_step(line: &str) -> Result<Step, String> {
         "log" => Ok(Step::Log(rest.to_string())),
         "capture" => Ok(Step::Capture(rest.trim().to_string())),
         "click" => Ok(Step::Click(parse_selector(rest)?)),
+        "select-text" if !rest.is_empty() => Ok(Step::SelectText(rest.to_string())),
+        "select-text" => Err("select-text wants retained text".into()),
         "assert" => {
             let (kind, arg) = split_first(rest);
             match kind {
@@ -330,12 +348,12 @@ fn parse_step(line: &str) -> Result<Step, String> {
                         }),
                         _ => Err("assert snap wants '<field> <op> <value>'".into()),
                     }
-                }
+                },
                 // Any other `assert ...` is an app-specific verb (assert pane,
                 // assert focused): pass the whole line through to the host.
                 _ => Ok(Step::App(line.to_string())),
             }
-        }
+        },
         // Unknown verb: the host's own vocabulary.
         _ => Ok(Step::App(line.to_string())),
     }
@@ -385,7 +403,7 @@ fn split_first(line: &str) -> (&str, &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ProbeSnapshot, ProbeSurface};
+    use crate::{ProbeSnapshot, ProbeSurface, TextTarget};
     use genet_scripted_dom::ScriptedDom;
     use layout_dom_api::{LayoutDom, LayoutDomMut, LocalName, Namespace, QualName};
 
@@ -400,6 +418,8 @@ mod tests {
         acted: Vec<String>,
         captured: Vec<String>,
         pressed: Vec<(f32, f32)>,
+        moved: Vec<(f32, f32)>,
+        released: Vec<(f32, f32)>,
         /// How many more polls report busy. `None` = this app does not report
         /// quiescence at all (the default trait behavior).
         busy_for: Option<u32>,
@@ -424,6 +444,8 @@ mod tests {
                 acted: Vec::new(),
                 captured: Vec::new(),
                 pressed: Vec::new(),
+                moved: Vec::new(),
+                released: Vec::new(),
                 busy_for: None,
             }
         }
@@ -449,6 +471,16 @@ mod tests {
                 .with_focus("Example Domain")
                 .with_field("node-count", "12")
         }
+        fn text_target(&self, text: &str) -> Result<Option<TextTarget>, String> {
+            match text {
+                "select me" => Ok(Some(TextTarget {
+                    anchor: (10.0, 20.0),
+                    focus: (50.0, 60.0),
+                })),
+                "ambiguous" => Err("more than one retained surface matched".into()),
+                _ => Ok(None),
+            }
+        }
         fn drain_events(&mut self) -> Vec<String> {
             Vec::new()
         }
@@ -459,8 +491,12 @@ mod tests {
         fn press(&mut self, x: f32, y: f32) {
             self.pressed.push((x, y));
         }
-        fn moved(&mut self, _x: f32, _y: f32) {}
-        fn release(&mut self, _x: f32, _y: f32) {}
+        fn moved(&mut self, x: f32, y: f32) {
+            self.moved.push((x, y));
+        }
+        fn release(&mut self, x: f32, y: f32) {
+            self.released.push((x, y));
+        }
         fn busy(&mut self) -> Option<bool> {
             let left = self.busy_for?;
             self.busy_for = Some(left.saturating_sub(1));
@@ -558,7 +594,10 @@ mod tests {
             out.log
         );
         // It really waited: the 4-frame cap, not a single frame.
-        assert!(ticks >= 4, "burned the cap rather than returning instantly: {ticks}");
+        assert!(
+            ticks >= 4,
+            "burned the cap rather than returning instantly: {ticks}"
+        );
     }
 
     #[test]
@@ -566,7 +605,11 @@ mod tests {
         let mut app = MockApp::new();
         let out = run("assert snap node-count >= 99", &mut app);
         assert!(!out.ok);
-        assert!(out.log.iter().any(|l| l.contains("node-count")), "{:?}", out.log);
+        assert!(
+            out.log.iter().any(|l| l.contains("node-count")),
+            "{:?}",
+            out.log
+        );
     }
 
     #[test]
@@ -584,11 +627,37 @@ mod tests {
     }
 
     #[test]
+    fn text_selection_is_a_probe_owned_pointer_gesture() {
+        let mut app = MockApp::new();
+        let out = run("select-text select me", &mut app);
+        assert!(out.ok, "log: {:?}", out.log);
+        assert_eq!(app.pressed, [(10.0, 20.0)]);
+        assert_eq!(app.moved, [(30.0, 40.0), (50.0, 60.0)]);
+        assert_eq!(app.released, [(50.0, 60.0)]);
+    }
+
+    #[test]
+    fn ambiguous_text_selection_fails_loudly() {
+        let mut app = MockApp::new();
+        let out = run("select-text ambiguous", &mut app);
+        assert!(!out.ok);
+        assert!(
+            out.log.iter().any(|line| line.contains("more than one")),
+            "{:?}",
+            out.log
+        );
+    }
+
+    #[test]
     fn an_unknown_verb_reaches_app_step_and_fails_by_default() {
         let mut app = MockApp::new();
         let out = run("assert pane roster", &mut app);
         // MockApp does not override app_step, so the app-specific verb fails loudly.
         assert!(!out.ok);
-        assert!(out.log.iter().any(|l| l.contains("unknown verb")), "{:?}", out.log);
+        assert!(
+            out.log.iter().any(|l| l.contains("unknown verb")),
+            "{:?}",
+            out.log
+        );
     }
 }

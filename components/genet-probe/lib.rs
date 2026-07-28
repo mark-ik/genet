@@ -43,8 +43,8 @@ pub struct ProbeSurface<'a> {
 }
 
 /// What a selector matches an element by. Class matches a token in the element's
-/// `class` (so `.tab` matches `class="tab selected"`); Role matches the `role`
-/// attribute exactly. Both are the semantics cambium already emits.
+/// `class` (so `.tab` matches `class="tab selected"`); Role matches explicit
+/// ARIA roles plus the native role of controls such as `<button>`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Match {
     Class(String),
@@ -110,6 +110,17 @@ pub struct Hit {
     pub point: (f32, f32),
 }
 
+/// A retained text range resolved to window-space drag endpoints.
+///
+/// The application resolves the range because it owns the live document
+/// sessions and their placement. Probe owns the interaction: it turns these
+/// points into the same press/move/release sequence a person produces.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextTarget {
+    pub anchor: (f32, f32),
+    pub focus: (f32, f32),
+}
+
 fn ns_local(name: &str) -> (Namespace, LocalName) {
     (Namespace::from(""), LocalName::from(name))
 }
@@ -132,7 +143,13 @@ fn child_text(dom: &ScriptedDom, node: NodeId) -> String {
 fn matches(dom: &ScriptedDom, node: NodeId, sel: &Selector) -> bool {
     let by_kind = match &sel.matcher {
         Match::Class(c) => dom.has_class(node, c),
-        Match::Role(r) => attr(dom, node, "role").as_deref() == Some(r.as_str()),
+        Match::Role(r) => {
+            attr(dom, node, "role").as_deref() == Some(r.as_str())
+                || (r == "button"
+                    && dom
+                        .element_name(node)
+                        .is_some_and(|name| name.local.as_ref() == "button"))
+        },
     };
     if !by_kind {
         return false;
@@ -261,6 +278,16 @@ pub trait Automatable {
     /// trait — the mock held a plain DOM and hid it.)
     fn with_surfaces<R>(&self, f: impl FnOnce(&[ProbeSurface<'_>]) -> R) -> R;
 
+    /// Resolve retained text to window-space drag endpoints.
+    ///
+    /// Apps without selectable retained text use the default miss. An
+    /// implementation should return an error when the request is ambiguous,
+    /// rather than choosing a document by arrival or surface order.
+    fn text_target(&self, text: &str) -> Result<Option<TextTarget>, String> {
+        let _ = text;
+        Ok(None)
+    }
+
     /// A typed read of app state for assertions the DOM cannot express.
     fn snapshot(&self) -> ProbeSnapshot;
 
@@ -318,9 +345,24 @@ pub trait AutomatableExt: Automatable {
                 self.press(hit.point.0, hit.point.1);
                 self.release(hit.point.0, hit.point.1);
                 true
-            }
+            },
             None => false,
         }
+    }
+
+    /// Resolve `text` and select it through the ordinary pointer lifecycle.
+    fn select_text(&mut self, text: &str) -> Result<bool, String> {
+        let Some(target) = self.text_target(text)? else {
+            return Ok(false);
+        };
+        self.press(target.anchor.0, target.anchor.1);
+        self.moved(
+            (target.anchor.0 + target.focus.0) * 0.5,
+            (target.anchor.1 + target.focus.1) * 0.5,
+        );
+        self.moved(target.focus.0, target.focus.1);
+        self.release(target.focus.0, target.focus.1);
+        Ok(true)
     }
 }
 
@@ -445,6 +487,15 @@ mod tests {
         let s = surfaces(&dom);
         let hit = resolve(&s, &Selector::role("tab")).expect("role=tab must resolve");
         assert_eq!(hit.point.0, 540.0, "first tab centre x = 40 + surface 500");
+    }
+
+    #[test]
+    fn a_button_role_selector_honors_the_native_button_role() {
+        let dom = strip_dom();
+        let s = surfaces(&dom);
+        let hit = resolve(&s, &Selector::role("button").containing("Example Domain"))
+            .expect("a native button has the button role without a redundant role attribute");
+        assert_eq!(hit.point, (710.0, 60.0));
     }
 
     #[test]
