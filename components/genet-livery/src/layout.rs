@@ -161,7 +161,8 @@ impl Error for LayoutError {}
 
 #[derive(Clone, Debug)]
 struct TextMeasure {
-    width: f32,
+    min_width: f32,
+    max_width: f32,
     height: f32,
 }
 
@@ -758,13 +759,13 @@ where
             };
             let available_width = match available.width {
                 AlgorithmAvailableSpace::Definite(width) => width,
-                AlgorithmAvailableSpace::MinContent => 0.0,
-                AlgorithmAvailableSpace::MaxContent => context.width,
+                AlgorithmAvailableSpace::MinContent => context.min_width,
+                AlgorithmAvailableSpace::MaxContent => context.max_width,
             };
             AlgorithmSize::new(
                 known
                     .width
-                    .unwrap_or(context.width.min(available_width.max(0.0))),
+                    .unwrap_or(context.max_width.min(available_width.max(0.0))),
                 known.height.unwrap_or(context.height),
             )
         },
@@ -831,7 +832,7 @@ where
             tree: AlgorithmTree::new(),
             image_sources,
         };
-        let Some(root) = state.build_box(
+        let Some(atomic_root) = state.build_box(
             box_id,
             None,
             16.0,
@@ -839,6 +840,34 @@ where
         )?
         else {
             continue;
+        };
+        // An admitted atomic inline root needs a containing block so its
+        // shrink-to-fit query runs as a child formatting context. Keep the
+        // established direct-root path for the deferred cases, whose inline
+        // placement may depend on unsupported vertical alignment behavior.
+        let root = if state.tree.uses_intrinsic_shrink_to_fit(atomic_root) {
+            state.tree.new_with_children_and_block_style(
+                AlgorithmKind::Block,
+                BlockStyle {
+                    size: BlockDimensions::new(
+                        BlockSizeValue::Length(FlowLength::px(viewport_width)),
+                        BlockSizeValue::Length(FlowLength::px(viewport_height)),
+                    ),
+                    ..BlockStyle::default()
+                },
+                Style {
+                    display: Display::Block,
+                    size: Size {
+                        width: Dimension::length(viewport_width),
+                        height: Dimension::length(viewport_height),
+                    },
+                    ..Style::default()
+                },
+                &[atomic_root],
+                None,
+            )
+        } else {
+            atomic_root
         };
         state.tree.compute_layout_with_measure(
             root,
@@ -852,13 +881,13 @@ where
                 };
                 let available_width = match available.width {
                     AlgorithmAvailableSpace::Definite(width) => width,
-                    AlgorithmAvailableSpace::MinContent => 0.0,
-                    AlgorithmAvailableSpace::MaxContent => context.width,
+                    AlgorithmAvailableSpace::MinContent => context.min_width,
+                    AlgorithmAvailableSpace::MaxContent => context.max_width,
                 };
                 AlgorithmSize::new(
                     known
                         .width
-                        .unwrap_or(context.width.min(available_width.max(0.0))),
+                        .unwrap_or(context.max_width.min(available_width.max(0.0))),
                     known.height.unwrap_or(context.height),
                 )
             },
@@ -1180,14 +1209,15 @@ where
                 if supports_float_avoidance(&self.boxes[box_id], block_style, kind) {
                     self.tree.enable_float_avoidance(node);
                 }
-                if supports_float_shrink_to_fit(
+                if supports_intrinsic_shrink_to_fit(
                     &self.tree,
                     node,
                     &self.boxes[box_id],
+                    &computed,
                     block_style,
                     kind,
                 ) {
-                    self.tree.enable_float_shrink_to_fit(node);
+                    self.tree.enable_intrinsic_shrink_to_fit(node);
                 }
                 Ok(Some(node))
             },
@@ -1481,14 +1511,15 @@ where
                 if supports_float_avoidance(&self.boxes[box_id], block_style, kind) {
                     self.tree.enable_float_avoidance(node);
                 }
-                if supports_float_shrink_to_fit(
+                if supports_intrinsic_shrink_to_fit(
                     &self.tree,
                     node,
                     &self.boxes[box_id],
+                    &computed,
                     block_style,
                     kind,
                 ) {
-                    self.tree.enable_float_shrink_to_fit(node);
+                    self.tree.enable_intrinsic_shrink_to_fit(node);
                 }
                 Ok(Some(node))
             },
@@ -1507,7 +1538,7 @@ where
                 let line_height = inherited
                     .map(|style| line_height_px(&style.line_height, font_size))
                     .unwrap_or(font_size * 1.2);
-                let width = if preserves_whitespace {
+                let min_width = if preserves_whitespace {
                     text.lines()
                         .map(|line| line.chars().count())
                         .max()
@@ -1517,6 +1548,11 @@ where
                 } as f32
                     * font_size
                     * 0.6;
+                let max_width = if preserves_whitespace {
+                    min_width
+                } else {
+                    collapsed_text_width(text) as f32 * font_size * 0.6
+                };
                 let line_count = if preserves_whitespace {
                     text.lines().count().max(1)
                 } else {
@@ -1529,7 +1565,11 @@ where
                         display: Display::Block,
                         ..Style::default()
                     },
-                    TextMeasure { width, height },
+                    TextMeasure {
+                        min_width,
+                        max_width,
+                        height,
+                    },
                     Some(box_id),
                 );
                 Ok(Some(node))
@@ -1882,7 +1922,8 @@ fn supports_float_avoidance<Id>(
     matches!(
         kind,
         AlgorithmKind::Leaf | AlgorithmKind::Block | AlgorithmKind::Flex | AlgorithmKind::Grid
-    ) && css_box.display.outside == Some(DisplayOutside::Block)
+    ) && (css_box.display.outside == Some(DisplayOutside::Block)
+        || (css_box.display.outside == Some(DisplayOutside::Inline) && block_style.shrink_to_fit))
         && matches!(
             css_box.display.inside,
             Some(
@@ -1901,28 +1942,32 @@ fn supports_float_avoidance<Id>(
         && block_style.containing_flow.is_horizontal()
 }
 
-fn supports_float_shrink_to_fit<Id, Context, Source>(
+fn supports_intrinsic_shrink_to_fit<Id, Context, Source>(
     tree: &AlgorithmTree<Style, Context, Source>,
     node: AlgorithmNodeId,
     css_box: &CssBox<Id>,
+    computed: &ComputedValues,
     block_style: BlockStyle,
     kind: AlgorithmKind,
 ) -> bool {
+    let float_root = css_box.display.outside == Some(DisplayOutside::Block)
+        && block_style.float != FloatSide::None;
+    let atomic_inline_root = css_box.display.outside == Some(DisplayOutside::Inline)
+        && block_style.float == FloatSide::None;
     kind == AlgorithmKind::Block
-        && css_box.display.outside == Some(DisplayOutside::Block)
         && matches!(
             css_box.display.inside,
             Some(DisplayInside::Flow | DisplayInside::FlowRoot)
         )
         && css_box.display.internal_table.is_none()
         && block_style.position == BuckramBlockPosition::Static
-        && block_style.float != FloatSide::None
         && block_style.shrink_to_fit
         && !block_style.replaced
+        && computed.vertical_align == VerticalAlign::Baseline
         && block_style.flow.is_horizontal()
         && block_style.containing_flow.is_horizontal()
-        && tree.children(node).len() == 1
-        && tree.context(tree.children(node)[0]).is_some()
+        && (float_root || atomic_inline_root)
+        && tree.supports_intrinsic_shrink_to_fit(node)
 }
 
 fn algorithm_kind<Id>(css_box: &CssBox<Id>, leaf: bool) -> AlgorithmKind {
@@ -2713,6 +2758,26 @@ fn collapsed_word_width(text: &str) -> usize {
         }
     }
     maximum.max(current)
+}
+
+fn collapsed_text_width(text: &str) -> usize {
+    let mut width = 0;
+    let mut pending_space = false;
+    for character in text.chars() {
+        if matches!(
+            character,
+            '\u{0009}' | '\u{000A}' | '\u{000C}' | '\u{000D}' | ' '
+        ) {
+            pending_space = width != 0;
+        } else {
+            if pending_space {
+                width += 1;
+                pending_space = false;
+            }
+            width += 1;
+        }
+    }
+    width
 }
 
 fn to_taffy_style(computed: &ComputedValues, font_size: f32) -> Style {
@@ -4121,5 +4186,110 @@ mod tests {
         );
         assert!(narrow_float.height > wide_float.height);
         assert_eq!(algorithms.taffy, 0);
+    }
+
+    #[test]
+    fn live_multi_child_float_and_atomic_inline_use_intrinsic_subtrees() {
+        fn by_id(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+            expected: &str,
+        ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+            if dom.attributes(node).any(|attribute| {
+                attribute.name.ns.as_ref().is_empty()
+                    && attribute.name.local.as_ref() == "id"
+                    && attribute.value == expected
+            }) {
+                return Some(node);
+            }
+            dom.dom_children(node)
+                .find_map(|child| by_id(dom, child, expected))
+        }
+
+        let dom = StaticDocument::parse(
+            "<html><body>\
+             <div id=\"narrow\" class=\"host\"><div id=\"narrow-float\" class=\"float\">\
+             <div>aaaa aaaa aaaa aaaa</div><div>aaaa aaaa aaaa aaaa</div></div>\
+             <div class=\"clear\"></div></div>\
+             <div id=\"wide\" class=\"host\"><div id=\"wide-float\" class=\"float\">\
+             <div>aaaa aaaa aaaa aaaa</div><div>aaaa aaaa aaaa aaaa</div></div>\
+             <div class=\"clear\"></div></div>\
+             </body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&["html, body, div { margin: 0; padding: 0; border: 0; }\
+                 .host { overflow-x: hidden; overflow-y: hidden; }\
+                 #narrow { width: 80px; } #wide { width: 200px; }\
+                 .float { float: left; font-family: monospace; font-size: 10px;\
+                          line-height: 20px; }\
+                 .clear { clear: both; height: 1px; }"]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let rect = |id| {
+            let node = by_id(&dom, dom.document(), id).expect(id);
+            layout.get(node).expect(id).physical_rect()
+        };
+
+        let narrow_host = rect("narrow");
+        let narrow_float = rect("narrow-float");
+        let wide_host = rect("wide");
+        let wide_float = rect("wide-float");
+
+        assert!((narrow_float.width - narrow_host.width).abs() <= 0.5);
+        assert!(
+            wide_float.width > narrow_float.width + 10.0
+                && wide_float.width < wide_host.width - 10.0,
+            "narrow={narrow_float:?}, wide={wide_float:?}"
+        );
+        assert!(narrow_float.height > wide_float.height);
+        assert_eq!(layout.block_algorithm_counts().taffy, 0);
+
+        fn atomic_inline_width(viewport_width: f32) -> f32 {
+            let dom = StaticDocument::parse(
+                "<html><body><span id=\"atomic\">aaaa aaaa aaaa aaaa</span></body></html>",
+            );
+            let styles = resolve_styles(
+                &dom,
+                &StyleSet::cambium(&["html, body, span { margin: 0; padding: 0; border: 0; }\
+                     span { display: inline-block; font-family: monospace; font-size: 10px;\
+                            line-height: 20px; }"]),
+                &Device::screen(viewport_width, 240.0),
+                &InteractionStates::default(),
+            );
+            let mut text = TextSystem::new();
+            let (_, layout) = layout_with_text_system(
+                &dom,
+                &styles,
+                viewport_width,
+                240.0,
+                ViewportSizes::uniform(viewport_width, 240.0),
+                &mut text,
+                &HashMap::new(),
+            )
+            .expect("atomic inline layout");
+            let atomic = by_id(&dom, dom.document(), "atomic").expect("atomic node");
+            layout
+                .get(atomic)
+                .expect("atomic fragment")
+                .physical_rect()
+                .width
+        }
+
+        assert_eq!(atomic_inline_width(30.0), 30.0);
+        assert_eq!(atomic_inline_width(80.0), 80.0);
+        assert_eq!(atomic_inline_width(200.0), 114.0);
     }
 }

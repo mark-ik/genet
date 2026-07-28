@@ -179,6 +179,41 @@ run modes cannot remain the browser-facing query API.
 - Keep a role deferred when percentage or cyclic intrinsic dependencies cannot
   be represented by the query contract.
 
+### K3m receipt - 2026-07-28
+
+Capability: Buckram now derives min-content and max-content inline sizes for
+admitted in-flow subtrees, then uses the shared shrink-to-fit equation for
+multi-child floats, block-content floats, and baseline-aligned atomic inline
+blocks.
+
+Boundary retained: descendant percentages, cyclic constraints, replaced boxes,
+orthogonal flows, non-linear lengths, nested shrink-to-fit, descendant floats,
+and non-baseline atomic inline alignment remain deferred. Flex and grid use
+their intrinsic query mode only, never a recovered final layout.
+
+Pure fixture: `auto_shrink_to_fit_width_clamps_available_space_between_intrinsic_sizes`.
+
+Adapter fixture: `buckram_queries_multi_child_and_block_content_intrinsics_for_shrink_to_fit`
+and `buckram_queries_atomic_inline_intrinsics_without_float_placement`, each
+covering 30, 80, and 200 px available widths with zero Taffy block fallback.
+
+Live fixture: `live_multi_child_float_and_atomic_inline_use_intrinsic_subtrees`
+proves the two float shapes and 30, 80, and 200 px inline-block widths with
+zero final Taffy block fallback.
+
+WPT exact movement: `css/CSS2/floats` (48/53/43), `css/css-sizing`
+(202/310/220), and `css/CSS2/normal-flow` (537/194/161) exactly match their
+K3l or pre-change status maps. `inline-block-zorder-005.xht` passes on the
+final runner.
+
+Verification: `cargo test -p buckram -p livery -p genet-livery --offline`;
+`cargo clippy -p buckram -p genet-livery --offline --no-deps -- -D warnings`;
+`rustfmt --check`; `git diff --check`; release `genet-wpt` build.
+
+Proof directory: `C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-28_buckram_k3m`
+
+Commit: `Expand Buckram intrinsic shrink-to-fit queries`
+
 ## K3n. Automatic inline margins and non-table atomic BFC avoidance
 
 ### Problem

@@ -579,17 +579,16 @@ pub fn solve_float_inline_size(style: BlockStyle, containing_inline_size: f32) -
     }
 }
 
-/// Resolve an auto-width float using CSS2's shrink-to-fit equation.
+/// Resolve an auto-width shrink-to-fit box using CSS2's shrink-to-fit equation.
 ///
-/// The intrinsic pair describes the float's content box. Padding and border
+/// The intrinsic pair describes the box's content box. Padding and border
 /// are added after `min(max(min-content, available), max-content)`, then the
 /// box's definite minimum and maximum constraints are applied.
-pub fn solve_float_shrink_to_fit_inline_size(
+pub fn solve_shrink_to_fit_inline_size(
     style: BlockStyle,
     containing_inline_size: f32,
     intrinsic: IntrinsicSizes,
 ) -> UsedInlineSize {
-    debug_assert_ne!(style.float, FloatSide::None);
     debug_assert!(style.shrink_to_fit);
     let margins = style.logical_margin(containing_inline_size);
     let padding_border = style.logical_padding_border(containing_inline_size);
@@ -1639,7 +1638,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_float_width_clamps_available_space_between_intrinsic_sizes() {
+    fn auto_shrink_to_fit_width_clamps_available_space_between_intrinsic_sizes() {
         let style = BlockStyle {
             padding: PhysicalSides {
                 top: FlowLength::ZERO,
@@ -1655,15 +1654,15 @@ mod tests {
         let intrinsic = IntrinsicSizes::new(40.0, 120.0).expect("valid intrinsic pair");
 
         assert_eq!(
-            solve_float_shrink_to_fit_inline_size(style, 100.0, intrinsic).border_box,
+            solve_shrink_to_fit_inline_size(style, 100.0, intrinsic).border_box,
             100.0
         );
         assert_eq!(
-            solve_float_shrink_to_fit_inline_size(style, 200.0, intrinsic).border_box,
+            solve_shrink_to_fit_inline_size(style, 200.0, intrinsic).border_box,
             130.0
         );
         assert_eq!(
-            solve_float_shrink_to_fit_inline_size(style, 30.0, intrinsic).border_box,
+            solve_shrink_to_fit_inline_size(style, 30.0, intrinsic).border_box,
             50.0
         );
 
@@ -1679,8 +1678,7 @@ mod tests {
             ..style
         };
         assert_eq!(
-            solve_float_shrink_to_fit_inline_size(conflicting_constraints, 200.0, intrinsic)
-                .border_box,
+            solve_shrink_to_fit_inline_size(conflicting_constraints, 200.0, intrinsic).border_box,
             100.0
         );
     }
