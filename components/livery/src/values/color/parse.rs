@@ -155,11 +155,9 @@ fn parse_hue<'i>(
 /// channel resolves as an `<angle>` (radians, converted back to degrees here),
 /// every other channel as a `<number>`.
 ///
-/// Known gap: a percentage-valued expression in channel position
-/// (`rgb(calc(50%) 0 0)`) is rejected rather than scaled by the channel's
-/// basis. The math program reduces percentages against a length base, which is
-/// the wrong reference for a color channel. Recorded rather than approximated,
-/// since a silent wrong scale is worse than a parse failure.
+/// Percentage-typed expressions resolve against the channel's own basis:
+/// alpha and modern RGB use 1, legacy RGB uses 255, and each perceptual
+/// channel supplies the range CSS Color assigns to 100%.
 fn parse_math_number<'i>(
     input: &mut Parser<'i, '_>,
     name: &str,
@@ -197,7 +195,9 @@ fn parse_math_number<'i>(
             .or_else(|_| crate::values::calc::parse_number(source))
             .map_err(|_| fail(input));
     }
-    crate::values::calc::parse_number(source).map_err(|_| fail(input))
+    crate::values::calc::parse_number(source)
+        .or_else(|_| crate::values::calc::parse_percentage(source, channel.percentage_basis()))
+        .map_err(|_| fail(input))
 }
 
 pub(super) fn is_math_function(name: &str) -> bool {
@@ -205,7 +205,8 @@ pub(super) fn is_math_function(name: &str) -> bool {
         "calc", "min", "max", "clamp", "round", "mod", "rem", "sin", "cos", "tan", "asin", "acos",
         "atan", "atan2", "pow", "sqrt", "hypot", "log", "exp", "abs", "sign",
     ];
-    MATH.iter().any(|candidate| name.eq_ignore_ascii_case(candidate))
+    MATH.iter()
+        .any(|candidate| name.eq_ignore_ascii_case(candidate))
 }
 
 /// The alpha channel: `<number>` or `<percentage>`, or `none`.

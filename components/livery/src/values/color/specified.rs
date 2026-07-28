@@ -61,7 +61,7 @@ pub struct MixForm {
     /// The hue method when it is not the `shorter` default, which serializes
     /// to nothing.
     hue: Option<String>,
-    operands: [MixOperand; 2],
+    operands: Vec<MixOperand>,
 }
 
 /// A retained `alpha()` value.
@@ -250,13 +250,14 @@ fn capture_mix<'i>(input: &mut Parser<'i, '_>) -> Result<SpecifiedColor, Failure
         })
         .ok();
     let (space, hue) = interpolation.unwrap_or_else(|| ("oklab".to_owned(), None));
-    let first = capture_operand(input)?;
-    input.expect_comma()?;
-    let second = capture_operand(input)?;
+    let mut operands = vec![capture_operand(input)?];
+    while input.try_parse(|nested| nested.expect_comma()).is_ok() {
+        operands.push(capture_operand(input)?);
+    }
     let form = MixForm {
         space,
         hue,
-        operands: [first, second],
+        operands,
     };
     validate_mix(&form, input)?;
     Ok(SpecifiedColor::Mix(form))
@@ -512,40 +513,80 @@ impl fmt::Display for MixForm {
             }
             formatter.write_str(",")?;
         }
-        // CSS Color 5 serialization: percentages print explicitly, with an
-        // omitted one filled in as the other's complement, except in the
-        // balanced 50%/50% case, which prints neither. A math percentage has
-        // no computable complement and prints alone.
-        let [first, second] = &self.operands;
-        let (left, right) = match (&first.percentage, &second.percentage) {
-            (None, None) => (None, None),
-            (Some(Percentage::Number(p)), None) | (None, Some(Percentage::Number(p)))
-                if *p == 50.0 =>
-            {
-                (None, None)
-            },
-            (Some(Percentage::Number(p)), None) => {
-                (Some(format_pct(*p)), Some(format_pct(100.0 - *p)))
-            },
-            (None, Some(Percentage::Number(p))) => {
-                (Some(format_pct(100.0 - *p)), Some(format_pct(*p)))
-            },
-            (left, right) => (
-                left.as_ref().map(Percentage::to_css),
-                right.as_ref().map(Percentage::to_css),
-            ),
-        };
-        if self.space == "oklab" {
-            write!(formatter, "{}", first.color)?;
-            if let Some(percentage) = left {
-                write!(formatter, " {percentage}")?;
+        let percentages = self.serialized_percentages();
+        for (index, (operand, percentage)) in self.operands.iter().zip(percentages).enumerate() {
+            if index != 0 {
+                formatter.write_str(",")?;
             }
-        } else {
-            write_operand(formatter, first, left)?;
+            if index == 0 && self.space == "oklab" {
+                write!(formatter, "{}", operand.color)?;
+                if let Some(percentage) = percentage {
+                    write!(formatter, " {percentage}")?;
+                }
+            } else {
+                write_operand(formatter, operand, percentage)?;
+            }
         }
-        formatter.write_str(",")?;
-        write_operand(formatter, second, right)?;
         formatter.write_str(")")
+    }
+}
+
+impl MixForm {
+    /// CSS Color 5 §11.1 keeps authored percentages, fills omitted numeric
+    /// percentages, and omits every percentage only when all effective
+    /// percentages are exactly `100% / N`. A math percentage makes omitted
+    /// percentages unknown.
+    fn serialized_percentages(&self) -> Vec<Option<String>> {
+        let has_math = self
+            .operands
+            .iter()
+            .any(|operand| matches!(operand.percentage, Some(Percentage::Math(_))));
+        if has_math {
+            return self
+                .operands
+                .iter()
+                .map(|operand| operand.percentage.as_ref().map(Percentage::to_css))
+                .collect();
+        }
+
+        let specified_sum = self
+            .operands
+            .iter()
+            .filter_map(|operand| match operand.percentage {
+                Some(Percentage::Number(value)) => Some(value),
+                None | Some(Percentage::Math(_)) => None,
+            })
+            .sum::<f32>();
+        let omitted_count = self
+            .operands
+            .iter()
+            .filter(|operand| operand.percentage.is_none())
+            .count();
+        let omitted_percentage = (100.0 - specified_sum) / omitted_count.max(1) as f32;
+        let effective = self
+            .operands
+            .iter()
+            .map(|operand| match operand.percentage {
+                Some(Percentage::Number(value)) => value,
+                None => omitted_percentage,
+                Some(Percentage::Math(_)) => unreachable!("math was handled above"),
+            })
+            .collect::<Vec<_>>();
+        let even_percentage = 100.0 / self.operands.len() as f32;
+        if effective.iter().all(|value| *value == even_percentage) {
+            return vec![None; self.operands.len()];
+        }
+
+        self.operands
+            .iter()
+            .zip(effective)
+            .map(|(operand, effective)| {
+                Some(match &operand.percentage {
+                    Some(percentage) => percentage.to_css(),
+                    None => format_pct(effective),
+                })
+            })
+            .collect()
     }
 }
 
