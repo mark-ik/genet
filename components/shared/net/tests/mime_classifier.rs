@@ -7,9 +7,11 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::{self, PathBuf};
 
+use http::{HeaderMap, HeaderValue, header};
 use mime::{self, Mime};
-use net_traits::LoadContext;
 use net_traits::mime_classifier::{ApacheBugFlag, MimeClassifier, Mp4Matcher, NoSniffFlag};
+use net_traits::{LoadContext, Metadata};
+use servo_url::ServoUrl;
 
 fn read_file(path: &path::Path) -> io::Result<Vec<u8>> {
     let mut file = File::open(path)?;
@@ -55,6 +57,91 @@ fn test_sniff_mp4_matcher_long() {
 fn test_validate_classifier() {
     let classifier = MimeClassifier::default();
     classifier.validate().expect("Validation error")
+}
+
+fn apache_bug_flag_for_content_types(values: &[&'static str]) -> ApacheBugFlag {
+    let mut headers = HeaderMap::new();
+    for value in values {
+        headers.append(header::CONTENT_TYPE, HeaderValue::from_static(value));
+    }
+    ApacheBugFlag::from_http_headers(Some(&headers))
+}
+
+#[test]
+fn test_apache_bug_flag_matches_exact_content_type_bytes() {
+    for value in [
+        "text/plain",
+        "text/plain; charset=ISO-8859-1",
+        "text/plain; charset=iso-8859-1",
+        "text/plain; charset=UTF-8",
+    ] {
+        assert!(apache_bug_flag_for_content_types(&[value]) == ApacheBugFlag::On);
+    }
+}
+
+#[test]
+fn test_apache_bug_flag_rejects_content_type_near_misses() {
+    for value in [
+        "Text/plain",
+        "text/plain;charset=UTF-8",
+        "text/plain;  charset=UTF-8",
+        "text/plain; charset=utf-8",
+        "text/plain; charset=Iso-8859-1",
+        "text/plain; charset=UTF-8; profile=legacy",
+    ] {
+        assert!(apache_bug_flag_for_content_types(&[value]) == ApacheBugFlag::Off);
+    }
+}
+
+#[test]
+fn test_apache_bug_flag_uses_last_content_type_header() {
+    assert!(
+        apache_bug_flag_for_content_types(&["text/plain", "application/octet-stream"])
+            == ApacheBugFlag::Off
+    );
+    assert!(
+        apache_bug_flag_for_content_types(&["application/octet-stream", "text/plain"])
+            == ApacheBugFlag::On
+    );
+}
+
+#[test]
+fn test_resource_metadata_uses_raw_last_content_type_for_apache_flag() {
+    fn metadata_with_last_content_type(url: &str, value: &'static str) -> Metadata {
+        let mut metadata = Metadata::default(ServoUrl::parse(url).unwrap());
+        metadata.set_content_type(Some(&mime::TEXT_PLAIN));
+        metadata
+            .headers
+            .as_mut()
+            .unwrap()
+            .append(header::CONTENT_TYPE, HeaderValue::from_static(value));
+        metadata
+    }
+
+    let binary = [0];
+    let exact = metadata_with_last_content_type(
+        "https://example.test/resource",
+        "text/plain; charset=UTF-8",
+    );
+    assert_eq!(
+        exact.resource_content_type_metadata(LoadContext::Browsing, &binary),
+        mime::APPLICATION_OCTET_STREAM
+    );
+
+    let near_miss = metadata_with_last_content_type(
+        "https://example.test/resource",
+        "text/plain; charset=utf-8",
+    );
+    assert_eq!(
+        near_miss.resource_content_type_metadata(LoadContext::Browsing, &binary),
+        mime::TEXT_PLAIN
+    );
+
+    let non_http = metadata_with_last_content_type("file:///resource", "text/plain; charset=UTF-8");
+    assert_eq!(
+        non_http.resource_content_type_metadata(LoadContext::Browsing, &binary),
+        mime::TEXT_PLAIN
+    );
 }
 
 #[cfg(test)]
