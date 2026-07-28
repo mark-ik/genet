@@ -1323,6 +1323,96 @@ and nested inline contexts beside floats, vertical auto block-size
 finalisation, positioning, independent-BFC baselines, intrinsic block
 queries, and the out-of-flow IFC participant protected by K3b's cache guard.
 
+#### K3l receipt - 2026-07-27
+
+K3l gives an explicitly admitted ordinary descendant block access to the same
+CSS float context as its parent. Buckram owns that continuation. Taffy still
+receives isolated flex and grid calls and has no float-context state.
+
+The continuation is geometry, not a backend-tree shortcut:
+
+- ancestor exclusions are translated from the parent content box into the
+  descendant content box;
+- the descendant exports only floats it created, not the inherited exclusions;
+- exported floats are translated back into the parent content box before
+  following siblings are placed;
+- explicit BFC roots start with empty state and export nothing; and
+- direction or writing-mode changes, positioned or replaced boxes, and
+  unresolved generated-box roles remain outside the admission rule.
+
+Collapsed margins make the descendant content origin an output of layout, so
+the adapter cannot translate the float state once and assume it is correct. It
+first lays out the child to obtain its margin state, predicts the content
+origin, and repeats with translated exclusions until the origin stabilises.
+The pass count is bounded by the number of exclusions; failure to converge is
+an explicit `NestedFloatState` deferral.
+
+The live admission is narrower than the algorithm fixture. A box must be a
+static, non-replaced, same-flow block-level box which does not establish a BFC
+or carry an internal-table role. Generated `Block` formatting-context roots
+remain deferred because split inline continuations do not yet preserve enough
+float provenance through box fixup. Floats still known to originate under an
+inline box are marked and keep the subtree deferred. Potentially negative
+block margins on an exported float are also deferred because their margin-box
+extent is not yet safe to translate.
+
+Two guard failures made those boundaries concrete. The first broad live gate
+moved four focused float files: two gains and two regressions in the
+`floats-placement-vertical-001*` split-inline family. A generated-box role
+matrix showed that excluding `Block` formatting-context roots retained
+`floats-placement-005.html` and removed both regressions. The first complete
+CSS2 run then caught `floats-clear/margin-collapse-135.xht`: treating a nested
+clear-only subtree as if it exported floats had widened Buckram into an
+unsupported negative-margin collapse case. Nested clearance now requires the
+same explicit shared-float role; its adapter counter-fixture and the WPT both
+retain the old Taffy path.
+
+The capability fixtures cover all three boundaries:
+
+- the pure block fixture translates an ancestor left exclusion into a
+  descendant, creates a right float there, and imports only that new exclusion
+  back into the parent; its margin guard also rejects a potentially negative
+  exported float;
+- adapter fixtures prove nested-float export, inherited per-line constraints,
+  inherited clearance, the BFC stop, split-inline deferral, and nested-clear
+  deferral without the shared role; and
+- live Livery fixtures prove that a float inside one admitted ordinary wrapper
+  clears an outer sibling, that a `flow-root` stops the state, and that lines
+  inside an admitted wrapper use the ancestor float band and reclaim the full
+  width below it. Both live fixtures report zero Taffy block fallbacks.
+
+Final WPT movement is one fail-to-pass and zero regressions:
+
+- focused `css/CSS2/floats` moves from 47 passes and 54 failures to 48 passes
+  and 53 failures, with 43 skips and zero errors across 144 files;
+- the only changed file is `css/CSS2/floats/floats-placement-005.html`;
+- complete CSS2 moves from 4,232 passes and 1,742 failures to 4,233 passes and
+  1,741 failures, with 3,279 skips and one error across 9,254 files;
+- the other eight frozen directories have no status movement; and
+- the all-nine pass total moves from 5,737 to 5,738.
+
+Verification:
+
+- `cargo test -p buckram -p livery -p genet-livery --offline`: passed with
+  58 Buckram tests, 136 genet-livery tests, 141 Livery tests, and all doc tests
+  green.
+- strict Clippy passed for Buckram and genet-livery with dependency linting
+  disabled.
+- exact-file Rustfmt and `git diff --check` passed.
+- the feature-unified release `genet-wpt` build passed.
+- the role matrix, focused and complete CSS2 ledgers, all-nine ledgers, and
+  release-build log are at
+  `Code/testing/genet/wpt-ledger/2026-07-27_buckram_k3l`.
+
+Still open in K3: multi-child and block-content auto floats, inline-block
+shrink-to-fit, automatic inline margins, table and atomic-inline BFC
+avoidance beside floats, float continuation through generated `Block`
+formatting-context roots and across flow changes, negative-margin and
+split-inline nested floats, nowrap and nested inline contexts beside floats,
+vertical auto block-size finalisation, positioning, independent-BFC
+baselines, intrinsic block queries, and the out-of-flow IFC participant
+protected by K3b's cache guard.
+
 ### K4. CSS tables
 
 Implement anonymous table fixup, row and column structure, spans, fixed and

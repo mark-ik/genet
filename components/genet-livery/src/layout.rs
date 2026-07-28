@@ -1169,6 +1169,14 @@ where
                     &children,
                     vec![box_id],
                 );
+                if supports_nested_float_state(&self.boxes[box_id], block_style, kind) {
+                    self.tree.enable_nested_float_state(node);
+                }
+                if block_style.float != FloatSide::None
+                    && float_is_nested_in_inline(self.boxes, box_id)
+                {
+                    self.tree.mark_inline_context_float(node);
+                }
                 if supports_float_avoidance(&self.boxes[box_id], block_style, kind) {
                     self.tree.enable_float_avoidance(node);
                 }
@@ -1191,13 +1199,18 @@ where
             BoxOrigin::Pseudo { .. } | BoxOrigin::Anonymous { .. } => {
                 let computed = inherited.cloned().unwrap_or_default();
                 let children = self.build_children(box_id, &computed, parent_font_size)?;
+                let block_style = anonymous_block_style(self.boxes, box_id);
+                let kind = algorithm_kind(&self.boxes[box_id], children.is_empty());
                 let node = self.tree.new_with_children_and_block_style(
-                    algorithm_kind(&self.boxes[box_id], children.is_empty()),
-                    anonymous_block_style(self.boxes, box_id),
+                    kind,
+                    block_style,
                     anonymous_taffy_style(&self.boxes[box_id]),
                     &children,
                     vec![box_id],
                 );
+                if supports_nested_float_state(&self.boxes[box_id], block_style, kind) {
+                    self.tree.enable_nested_float_state(node);
+                }
                 Ok(Some(node))
             },
         }
@@ -1457,6 +1470,14 @@ where
                     &children,
                     Some(box_id),
                 );
+                if supports_nested_float_state(&self.boxes[box_id], block_style, kind) {
+                    self.tree.enable_nested_float_state(node);
+                }
+                if block_style.float != FloatSide::None
+                    && float_is_nested_in_inline(self.boxes, box_id)
+                {
+                    self.tree.mark_inline_context_float(node);
+                }
                 if supports_float_avoidance(&self.boxes[box_id], block_style, kind) {
                     self.tree.enable_float_avoidance(node);
                 }
@@ -1523,13 +1544,18 @@ where
                             .transpose()
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                let block_style = anonymous_block_style(self.boxes, box_id);
+                let kind = algorithm_kind(&self.boxes[box_id], children.is_empty());
                 let node = self.tree.new_with_children_and_block_style(
-                    algorithm_kind(&self.boxes[box_id], children.is_empty()),
-                    anonymous_block_style(self.boxes, box_id),
+                    kind,
+                    block_style,
                     anonymous_taffy_style(&self.boxes[box_id]),
                     &children,
                     Some(box_id),
                 );
+                if supports_nested_float_state(&self.boxes[box_id], block_style, kind) {
+                    self.tree.enable_nested_float_state(node);
+                }
                 Ok(Some(node))
             },
         }
@@ -1580,6 +1606,39 @@ where
             css_box.positioning,
             PositioningScheme::Static | PositioningScheme::Relative | PositioningScheme::Sticky
         )
+}
+
+fn float_is_nested_in_inline<Id>(boxes: &GeneratedBoxTree<Id>, box_id: BoxId) -> bool
+where
+    Id: Copy + Eq + Hash,
+{
+    let mut ancestor = boxes[box_id].parent();
+    while let Some(box_id) = ancestor {
+        let css_box = &boxes[box_id];
+        if css_box.float != FloatSide::None
+            || matches!(
+                css_box.positioning,
+                PositioningScheme::Absolute | PositioningScheme::Fixed
+            )
+            || matches!(
+                css_box.display.inside,
+                Some(
+                    DisplayInside::FlowRoot
+                        | DisplayInside::Flex
+                        | DisplayInside::Grid
+                        | DisplayInside::Table
+                )
+            )
+        {
+            return false;
+        }
+        match css_box.display.outside {
+            Some(DisplayOutside::Inline) => return true,
+            Some(DisplayOutside::Block) => return false,
+            Some(DisplayOutside::RunIn) | None => ancestor = css_box.parent(),
+        }
+    }
+    false
 }
 
 fn anonymous_block_style<Id>(boxes: &GeneratedBoxTree<Id>, box_id: BoxId) -> BlockStyle
@@ -1794,6 +1853,25 @@ fn block_style_has_nonlinear_lengths(computed: &ComputedValues) -> bool {
 
 fn length_has_math(value: CssLengthPercentage) -> bool {
     matches!(value, CssLengthPercentage::Math(_))
+}
+
+fn supports_nested_float_state<Id>(
+    css_box: &CssBox<Id>,
+    block_style: BlockStyle,
+    kind: AlgorithmKind,
+) -> bool {
+    kind == AlgorithmKind::Block
+        && css_box.display.outside == Some(DisplayOutside::Block)
+        // A generated block-formatting root can contain split inline
+        // continuations whose floated descendants no longer retain enough
+        // inline provenance for safe float-state transfer.
+        && css_box.formatting_context != Some(FormattingContextKind::Block)
+        && css_box.display.internal_table.is_none()
+        && !block_style.establishes_bfc
+        && block_style.position == BuckramBlockPosition::Static
+        && block_style.float == FloatSide::None
+        && !block_style.replaced
+        && block_style.flow == block_style.containing_flow
 }
 
 fn supports_float_avoidance<Id>(
@@ -3590,7 +3668,7 @@ mod tests {
     }
 
     #[test]
-    fn live_inline_lines_wrap_beside_a_float_then_reclaim_the_column() {
+    fn live_inline_lines_in_an_ordinary_wrapper_share_outer_float_exclusions() {
         fn by_id(
             dom: &StaticDocument,
             node: <StaticDocument as LayoutDom>::NodeId,
@@ -3609,8 +3687,9 @@ mod tests {
 
         let dom = StaticDocument::parse(
             "<html><body><div id=\"host\"><div id=\"float\"></div>\
-             <span id=\"copy\">aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa \
-             aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa</span>\
+             <div id=\"wrapper\"><span id=\"copy\">aa aa aa aa aa aa aa aa aa aa aa aa \
+             aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa aa \
+             aa aa</span></div>\
              </div></body></html>",
         );
         let styles = resolve_styles(
@@ -3664,6 +3743,75 @@ mod tests {
                 .all(|line| (line.x - host.x).abs() <= 0.5),
             "lines below the float must use the full content column"
         );
+        assert_eq!(algorithms.taffy, 0);
+    }
+
+    #[test]
+    fn live_nested_float_state_crosses_ordinary_wrappers_but_stops_at_bfcs() {
+        fn by_id(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+            expected: &str,
+        ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+            if dom.attributes(node).any(|attribute| {
+                attribute.name.ns.as_ref().is_empty()
+                    && attribute.name.local.as_ref() == "id"
+                    && attribute.value == expected
+            }) {
+                return Some(node);
+            }
+            dom.dom_children(node)
+                .find_map(|child| by_id(dom, child, expected))
+        }
+
+        let dom = StaticDocument::parse(
+            "<html><body>\
+             <div id=\"shared\" class=\"host\"><div id=\"wrapper\"><div class=\"float\"></div></div>\
+             <div id=\"shared-clear\" class=\"clear\"></div></div>\
+             <div id=\"isolated\" class=\"host\"><div id=\"boundary\"><div class=\"float\"></div></div>\
+             <div id=\"isolated-clear\" class=\"clear\"></div></div>\
+             </body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&["html, body, div { margin: 0; padding: 0; border: 0; }\
+                 .host { width: 200px; overflow-x: hidden; overflow-y: hidden; }\
+                 .float { float: left; width: 80px; height: 40px; }\
+                 .clear { clear: left; height: 10px; }\
+                 #boundary { display: flow-root; height: 0; }"]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let rect = |id| {
+            let node = by_id(&dom, dom.document(), id).expect(id);
+            layout.get(node).expect(id).physical_rect()
+        };
+
+        let shared = rect("shared");
+        let wrapper = rect("wrapper");
+        let shared_clear = rect("shared-clear");
+        let isolated = rect("isolated");
+        let boundary = rect("boundary");
+        let isolated_clear = rect("isolated-clear");
+        let algorithms = layout.block_algorithm_counts();
+
+        assert_eq!(wrapper.height, 0.0);
+        assert_eq!(shared_clear.y - shared.y, 40.0);
+        assert_eq!(shared.height, 50.0);
+        assert_eq!(boundary.height, 0.0);
+        assert_eq!(isolated_clear.y, isolated.y);
+        assert_eq!(isolated.height, 10.0);
         assert_eq!(algorithms.taffy, 0);
     }
 

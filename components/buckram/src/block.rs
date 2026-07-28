@@ -37,6 +37,10 @@ impl FlowLength {
     pub fn resolve(self, containing_inline_size: f32) -> f32 {
         self.px + self.percentage * containing_inline_size
     }
+
+    fn is_nonnegative_for_nonnegative_basis(self) -> bool {
+        self.px >= 0.0 && self.percentage >= 0.0
+    }
 }
 
 /// A margin or inset value which may remain automatic until layout.
@@ -54,6 +58,13 @@ impl FlowLengthAuto {
         match self {
             Self::Auto => None,
             Self::Value(value) => Some(value.resolve(containing_inline_size)),
+        }
+    }
+
+    fn is_nonnegative_for_nonnegative_basis(self) -> bool {
+        match self {
+            Self::Auto => true,
+            Self::Value(value) => value.is_nonnegative_for_nonnegative_basis(),
         }
     }
 }
@@ -257,6 +268,12 @@ impl BlockStyle {
             self.resolved_padding(containing_inline_size)
                 .zip_map(self.border, |padding, border| padding + border),
         )
+    }
+
+    pub(crate) fn has_nonnegative_block_margins(self) -> bool {
+        let margin = self.containing_flow.logical_sides(self.margin);
+        margin.block_start.is_nonnegative_for_nonnegative_basis()
+            && margin.block_end.is_nonnegative_for_nonnegative_basis()
     }
 
     pub fn content_logical_padding_border(
@@ -678,6 +695,25 @@ struct FloatExclusion {
     margin_box: LogicalRect,
 }
 
+/// Float exclusions translated into one ordinary descendant block's content
+/// coordinate space.
+///
+/// This state is crate-private because it is an algorithm continuation, not a
+/// fragment-tree result. Explicit BFC boundaries never receive or export it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct FloatContextState {
+    exclusions: Vec<FloatExclusion>,
+}
+
+impl FloatContextState {
+    pub(crate) fn has_side(&self, side: FloatSide) -> bool {
+        self.exclusions.iter().any(|exclusion| {
+            exclusion.side == side
+                && exclusion.margin_box.block_start + exclusion.margin_box.block_size > 0.0
+        })
+    }
+}
+
 /// Immutable float geometry supplied to one inline formatting context.
 ///
 /// Line positions are local to the inline context. Buckram retains the
@@ -772,6 +808,7 @@ pub struct BlockFormattingContext {
     all_children_collapse_through: bool,
     collapse_parent_start: bool,
     float_exclusions: Vec<FloatExclusion>,
+    inherited_float_count: usize,
     latest_float_block_start: f32,
     active_margin_has_clearance: bool,
 }
@@ -785,6 +822,24 @@ impl BlockFormattingContext {
         containing_block: BlockContainingBlock,
         collapse_parent_start: bool,
     ) -> Self {
+        Self::with_float_state(
+            containing_block,
+            collapse_parent_start,
+            FloatContextState::default(),
+        )
+    }
+
+    pub(crate) fn with_float_state(
+        containing_block: BlockContainingBlock,
+        collapse_parent_start: bool,
+        float_state: FloatContextState,
+    ) -> Self {
+        let inherited_float_count = float_state.exclusions.len();
+        let latest_float_block_start = float_state
+            .exclusions
+            .iter()
+            .map(|exclusion| exclusion.margin_box.block_start)
+            .fold(0.0, f32::max);
         Self {
             containing_block,
             block_cursor: 0.0,
@@ -794,9 +849,55 @@ impl BlockFormattingContext {
             adjoining_parent_start: true,
             all_children_collapse_through: true,
             collapse_parent_start,
-            float_exclusions: Vec::new(),
-            latest_float_block_start: 0.0,
+            float_exclusions: float_state.exclusions,
+            inherited_float_count,
+            latest_float_block_start,
             active_margin_has_clearance: false,
+        }
+    }
+
+    /// Translate all active exclusions into a descendant content box.
+    pub(crate) fn float_state_for_descendant(
+        &self,
+        inline_offset: f32,
+        block_offset: f32,
+    ) -> FloatContextState {
+        FloatContextState {
+            exclusions: self
+                .float_exclusions
+                .iter()
+                .cloned()
+                .map(|mut exclusion| {
+                    exclusion.margin_box.inline_start -= inline_offset;
+                    exclusion.margin_box.block_start -= block_offset;
+                    exclusion
+                })
+                .collect(),
+        }
+    }
+
+    /// Return only floats created by this ordinary block, excluding inherited
+    /// ancestor exclusions.
+    pub(crate) fn exported_float_state(&self) -> FloatContextState {
+        FloatContextState {
+            exclusions: self.float_exclusions[self.inherited_float_count..].to_vec(),
+        }
+    }
+
+    /// Merge a descendant's newly created floats back into this BFC.
+    pub(crate) fn import_descendant_float_state(
+        &mut self,
+        state: FloatContextState,
+        inline_offset: f32,
+        block_offset: f32,
+    ) {
+        for mut exclusion in state.exclusions {
+            exclusion.margin_box.inline_start += inline_offset;
+            exclusion.margin_box.block_start += block_offset;
+            self.latest_float_block_start = self
+                .latest_float_block_start
+                .max(exclusion.margin_box.block_start);
+            self.float_exclusions.push(exclusion);
         }
     }
 
@@ -1529,6 +1630,15 @@ mod tests {
     }
 
     #[test]
+    fn nested_float_state_rejects_potentially_negative_block_margins() {
+        let mut style = fixed_float(FloatSide::Left, 80.0);
+        assert!(style.has_nonnegative_block_margins());
+
+        style.margin.top = FlowLengthAuto::Value(FlowLength::px(-1.0));
+        assert!(!style.has_nonnegative_block_margins());
+    }
+
+    #[test]
     fn auto_float_width_clamps_available_space_between_intrinsic_sizes() {
         let style = BlockStyle {
             padding: PhysicalSides {
@@ -1605,6 +1715,57 @@ mod tests {
         assert_eq!((lowered.rect.x, lowered.rect.y), (80.0, 30.0));
         assert_eq!(
             context.available_inline_space(10.0, 1.0),
+            FloatAvailableSpace {
+                inline_start: 80.0,
+                inline_size: 50.0,
+            }
+        );
+    }
+
+    #[test]
+    fn ordinary_descendants_translate_and_return_float_exclusions() {
+        let mut parent = horizontal_context(200.0);
+        parent.place_float(
+            fixed_float(FloatSide::Left, 80.0),
+            PhysicalSize {
+                width: 80.0,
+                height: 40.0,
+            },
+        );
+
+        let inherited = parent.float_state_for_descendant(20.0, 10.0);
+        let mut descendant = BlockFormattingContext::with_float_state(
+            BlockContainingBlock {
+                flow: FlowAxes::HORIZONTAL_LTR,
+                content_box: PhysicalSize {
+                    width: 160.0,
+                    height: 0.0,
+                },
+            },
+            false,
+            inherited,
+        );
+        assert_eq!(
+            descendant.available_inline_space(0.0, 10.0),
+            FloatAvailableSpace {
+                inline_start: 60.0,
+                inline_size: 100.0,
+            }
+        );
+
+        let nested = descendant.place_float(
+            fixed_float(FloatSide::Right, 50.0),
+            PhysicalSize {
+                width: 50.0,
+                height: 20.0,
+            },
+        );
+        assert_eq!((nested.rect.x, nested.rect.y), (110.0, 0.0));
+
+        parent.import_descendant_float_state(descendant.exported_float_state(), 20.0, 10.0);
+        assert_eq!(parent.float_exclusion_count(), 2);
+        assert_eq!(
+            parent.available_inline_space(15.0, 1.0),
             FloatAvailableSpace {
                 inline_start: 80.0,
                 inline_size: 50.0,

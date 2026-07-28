@@ -14,6 +14,7 @@ use taffy::{
     compute_leaf_layout, compute_root_layout, round_layout,
 };
 
+use crate::block::FloatContextState;
 use crate::{
     BlockBoxSizing, BlockContainingBlock, BlockDeferral, BlockFormattingContext, BlockMarginState,
     BlockSizeValue, BlockStyle, ClearSide, CollapsedMargin, FloatLineConstraints, FloatSide,
@@ -115,6 +116,9 @@ struct AlgorithmNode<S, Context, Source> {
     block_style: BlockStyle,
     block_algorithm: Option<BlockAlgorithm>,
     block_margins: Option<BlockMarginState>,
+    exported_float_state: Option<FloatContextState>,
+    nested_float_state_enabled: bool,
+    inline_context_float: bool,
     float_line_constraints_enabled: bool,
     float_avoidance_enabled: bool,
     float_shrink_to_fit_enabled: bool,
@@ -215,6 +219,9 @@ impl<S, Context, Source> AlgorithmTree<S, Context, Source> {
             block_style,
             block_algorithm: None,
             block_margins: None,
+            exported_float_state: None,
+            nested_float_state_enabled: false,
+            inline_context_float: false,
             float_line_constraints_enabled: false,
             float_avoidance_enabled: false,
             float_shrink_to_fit_enabled: false,
@@ -285,6 +292,36 @@ impl<S, Context, Source> AlgorithmTree<S, Context, Source> {
             "only a measured leaf can consume float line constraints"
         );
         self.nodes[id.index()].float_line_constraints_enabled = true;
+    }
+
+    /// Admit this ordinary block as a continuation of its parent's BFC.
+    ///
+    /// Callers decide from the generated CSS box role, keeping backend display
+    /// lookalikes and unresolved formatting-context boundaries outside this
+    /// lane.
+    pub fn enable_nested_float_state(&mut self, id: AlgorithmNodeId) {
+        let node = &self.nodes[id.index()];
+        assert_eq!(
+            node.kind,
+            AlgorithmKind::Block,
+            "nested float state requires an ordinary block algorithm node"
+        );
+        assert!(
+            !node.block_style.establishes_bfc,
+            "an explicit BFC must not inherit its parent's float state"
+        );
+        self.nodes[id.index()].nested_float_state_enabled = true;
+    }
+
+    /// Preserve the generated-box fact that this blockified float originated
+    /// inside an inline formatting context.
+    pub fn mark_inline_context_float(&mut self, id: AlgorithmNodeId) {
+        assert_ne!(
+            self.nodes[id.index()].block_style.float,
+            FloatSide::None,
+            "only a floated box can carry inline-context float provenance"
+        );
+        self.nodes[id.index()].inline_context_float = true;
     }
 
     /// Admit this block-level independent formatting context to Buckram's
@@ -383,6 +420,7 @@ where
             tree: self,
             measure,
             line_constraints: None,
+            nested_float_state: None,
             resolved_shrink_to_fit: None,
             marker: PhantomData,
         };
@@ -528,6 +566,7 @@ struct AlgorithmRun<'a, S, Context, Source, Measure> {
     tree: &'a mut AlgorithmTree<S, Context, Source>,
     measure: Measure,
     line_constraints: Option<FloatLineConstraints>,
+    nested_float_state: Option<FloatContextState>,
     resolved_shrink_to_fit: Option<AlgorithmNodeId>,
     marker: PhantomData<&'a mut Context>,
 }
@@ -559,8 +598,41 @@ where
     }
 
     fn block_subtree_deferral(&self, node: AlgorithmNodeId) -> Option<BlockDeferral> {
-        let mut active_left_float = false;
-        let mut active_right_float = false;
+        if self.contains_inline_context_float(node) {
+            return Some(BlockDeferral::NestedFloatState);
+        }
+        let mut active_left_float = self
+            .nested_float_state
+            .as_ref()
+            .is_some_and(|state| state.has_side(FloatSide::Left));
+        let mut active_right_float = self
+            .nested_float_state
+            .as_ref()
+            .is_some_and(|state| state.has_side(FloatSide::Right));
+        self.block_subtree_deferral_with_float_state(
+            node,
+            &mut active_left_float,
+            &mut active_right_float,
+        )
+    }
+
+    fn contains_inline_context_float(&self, node: AlgorithmNodeId) -> bool {
+        self.tree.nodes[node.index()]
+            .children
+            .iter()
+            .copied()
+            .any(|child| {
+                self.tree.nodes[child.index()].inline_context_float
+                    || self.contains_inline_context_float(child)
+            })
+    }
+
+    fn block_subtree_deferral_with_float_state(
+        &self,
+        node: AlgorithmNodeId,
+        active_left_float: &mut bool,
+        active_right_float: &mut bool,
+    ) -> Option<BlockDeferral> {
         for child in self.tree.nodes[node.index()].children.iter().copied() {
             let child_node = &self.tree.nodes[child.index()];
             let child_style = child_node.block_style;
@@ -582,37 +654,62 @@ where
                 // ordinary parents retain their established dispatch.
                 && !(child_node.float_avoidance_enabled
                     && (matches!(child_node.kind, AlgorithmKind::Leaf | AlgorithmKind::Block)
-                        || active_left_float
-                        || active_right_float))
+                        || *active_left_float
+                        || *active_right_float))
             {
                 return Some(BlockDeferral::IndependentFormattingContext);
             }
 
             match child_style.clear {
                 ClearSide::None => {},
-                ClearSide::Left => active_left_float = false,
-                ClearSide::Right => active_right_float = false,
+                ClearSide::Left => *active_left_float = false,
+                ClearSide::Right => *active_right_float = false,
                 ClearSide::Both => {
-                    active_left_float = false;
-                    active_right_float = false;
+                    *active_left_float = false;
+                    *active_right_float = false;
                 },
             }
 
             if child_style.float != FloatSide::None {
+                if child_node.inline_context_float {
+                    return Some(BlockDeferral::NestedFloatState);
+                }
                 match child_style.float {
                     FloatSide::None => {},
-                    FloatSide::Left => active_left_float = true,
-                    FloatSide::Right => active_right_float = true,
+                    FloatSide::Left => *active_left_float = true,
+                    FloatSide::Right => *active_right_float = true,
                 }
-                if child_node.kind == AlgorithmKind::Block
-                    && let Some(deferral) = self.block_subtree_deferral(child)
-                {
-                    return Some(deferral);
+                if child_node.kind == AlgorithmKind::Block {
+                    let mut isolated_left = false;
+                    let mut isolated_right = false;
+                    if let Some(deferral) = self.block_subtree_deferral_with_float_state(
+                        child,
+                        &mut isolated_left,
+                        &mut isolated_right,
+                    ) {
+                        return Some(deferral);
+                    }
                 }
                 continue;
             }
 
-            let floats_are_active = active_left_float || active_right_float;
+            let floats_are_active = *active_left_float || *active_right_float;
+            let exports_float_state = child_node.kind == AlgorithmKind::Block
+                && !child_style.establishes_bfc
+                && self.exports_float_state(child);
+            let contains_clearance = child_node.kind == AlgorithmKind::Block
+                && !child_style.establishes_bfc
+                && self.contains_clearance(child);
+            if exports_float_state && let Some(deferral) = self.nested_float_state_deferral(child) {
+                return Some(deferral);
+            }
+            if child_node.kind == AlgorithmKind::Block
+                && !child_style.establishes_bfc
+                && !self.shares_parent_float_context(child, child_style)
+                && (floats_are_active || exports_float_state || contains_clearance)
+            {
+                return Some(BlockDeferral::NestedFloatState);
+            }
             if floats_are_active
                 && child_style.establishes_bfc
                 && !child_node.float_avoidance_enabled
@@ -621,17 +718,29 @@ where
             }
             if floats_are_active
                 && !child_style.establishes_bfc
-                && !child_node.float_line_constraints_enabled
                 && self.has_line_boxes_in_same_bfc(child)
+                && !self.accepts_float_line_constraints_in_same_bfc(child)
             {
                 return Some(BlockDeferral::FloatLineExclusion);
             }
 
             if child_node.kind == AlgorithmKind::Block {
-                if !child_style.establishes_bfc && self.exports_float_state(child) {
-                    return Some(BlockDeferral::NestedFloatState);
-                }
-                if let Some(deferral) = self.block_subtree_deferral(child) {
+                let deferral = if child_style.establishes_bfc {
+                    let mut isolated_left = false;
+                    let mut isolated_right = false;
+                    self.block_subtree_deferral_with_float_state(
+                        child,
+                        &mut isolated_left,
+                        &mut isolated_right,
+                    )
+                } else {
+                    self.block_subtree_deferral_with_float_state(
+                        child,
+                        active_left_float,
+                        active_right_float,
+                    )
+                };
+                if let Some(deferral) = deferral {
                     return Some(deferral);
                 }
             }
@@ -639,12 +748,24 @@ where
         None
     }
 
-    fn owns_direct_float_lane(&self, node: AlgorithmNodeId) -> bool {
-        self.tree.nodes[node.index()]
-            .children
-            .iter()
-            .copied()
-            .any(|child| self.tree.nodes[child.index()].block_style.float != FloatSide::None)
+    fn nested_float_state_deferral(&self, node: AlgorithmNodeId) -> Option<BlockDeferral> {
+        for child in self.tree.nodes[node.index()].children.iter().copied() {
+            let child_node = &self.tree.nodes[child.index()];
+            let style = child_node.block_style;
+            if style.float != FloatSide::None {
+                if !style.has_nonnegative_block_margins() {
+                    return Some(BlockDeferral::NestedFloatState);
+                }
+                continue;
+            }
+            if child_node.kind == AlgorithmKind::Block
+                && !style.establishes_bfc
+                && let Some(deferral) = self.nested_float_state_deferral(child)
+            {
+                return Some(deferral);
+            }
+        }
+        None
     }
 
     fn exports_float_state(&self, node: AlgorithmNodeId) -> bool {
@@ -656,11 +777,33 @@ where
                 let child_node = &self.tree.nodes[child.index()];
                 let style = child_node.block_style;
                 style.float != FloatSide::None
-                    || style.clear != ClearSide::None
                     || (child_node.kind == AlgorithmKind::Block
                         && !style.establishes_bfc
                         && self.exports_float_state(child))
             })
+    }
+
+    fn contains_clearance(&self, node: AlgorithmNodeId) -> bool {
+        self.tree.nodes[node.index()]
+            .children
+            .iter()
+            .copied()
+            .any(|child| {
+                let child_node = &self.tree.nodes[child.index()];
+                let style = child_node.block_style;
+                style.clear != ClearSide::None
+                    || (child_node.kind == AlgorithmKind::Block
+                        && !style.establishes_bfc
+                        && self.contains_clearance(child))
+            })
+    }
+
+    fn owns_direct_float_lane(&self, node: AlgorithmNodeId) -> bool {
+        self.tree.nodes[node.index()]
+            .children
+            .iter()
+            .copied()
+            .any(|child| self.tree.nodes[child.index()].block_style.float != FloatSide::None)
     }
 
     fn has_line_boxes_in_same_bfc(&self, node: AlgorithmNodeId) -> bool {
@@ -675,19 +818,36 @@ where
             })
     }
 
+    fn accepts_float_line_constraints_in_same_bfc(&self, node: AlgorithmNodeId) -> bool {
+        let node = &self.tree.nodes[node.index()];
+        if node.context.is_some() && !node.float_line_constraints_enabled {
+            return false;
+        }
+        node.children.iter().copied().all(|child| {
+            let child_node = &self.tree.nodes[child.index()];
+            let style = child_node.block_style;
+            style.float != FloatSide::None
+                || style.establishes_bfc
+                || self.accepts_float_line_constraints_in_same_bfc(child)
+        })
+    }
+
     fn compute_block_child(
         &mut self,
         child: AlgorithmNodeId,
         input: BlockChildInput,
         line_constraints: Option<FloatLineConstraints>,
+        nested_float_state: Option<FloatContextState>,
     ) -> LayoutOutput {
-        if line_constraints.is_some() {
+        if line_constraints.is_some() || nested_float_state.is_some() {
             // Float geometry is not represented in Taffy's cache key. Force
-            // a measured inline leaf through the caller on the final pass.
+            // the nested subtree through the caller on the final pass.
             self.tree.nodes[child.index()].cache.clear();
         }
         let previous_line_constraints =
             std::mem::replace(&mut self.line_constraints, line_constraints);
+        let previous_nested_float_state =
+            std::mem::replace(&mut self.nested_float_state, nested_float_state);
         let resolved_shrink_to_fit = self.tree.nodes[child.index()].float_shrink_to_fit_enabled;
         let previous_resolved_shrink_to_fit = std::mem::replace(
             &mut self.resolved_shrink_to_fit,
@@ -718,6 +878,7 @@ where
             None,
         );
         self.line_constraints = previous_line_constraints;
+        self.nested_float_state = previous_nested_float_state;
         self.resolved_shrink_to_fit = previous_resolved_shrink_to_fit;
         output
     }
@@ -776,6 +937,69 @@ where
         }
     }
 
+    fn child_margin_state(
+        &self,
+        child: AlgorithmNodeId,
+        child_style: BlockStyle,
+        child_size: PhysicalSize,
+        containing_inline_size: f32,
+        containing_block_size: Option<f32>,
+    ) -> Result<BlockMarginState, BlockDeferral> {
+        if self.tree.nodes[child.index()].kind == AlgorithmKind::Block {
+            return self.tree.nodes[child.index()]
+                .block_margins
+                .ok_or(BlockDeferral::ParentMarginCollapse);
+        }
+
+        let child_size_logical = child_style.containing_flow.logical_size(child_size);
+        let child_has_line_boxes = self.tree.nodes[child.index()].context.is_some();
+        let child_collapses_through = child_style.can_collapse_through(
+            containing_inline_size,
+            containing_block_size,
+            false,
+            child_has_line_boxes,
+            true,
+        ) && child_size_logical.block == 0.0;
+        Ok(BlockMarginState::from_box(
+            child_style,
+            containing_inline_size,
+            CollapsedMargin::ZERO,
+            CollapsedMargin::ZERO,
+            child_style.child_margin_collapse(
+                containing_inline_size,
+                containing_block_size,
+                false,
+                true,
+            ),
+            child_collapses_through,
+        ))
+    }
+
+    fn shares_parent_float_context(&self, child: AlgorithmNodeId, child_style: BlockStyle) -> bool {
+        self.tree.nodes[child.index()].nested_float_state_enabled
+            && self.tree.nodes[child.index()].kind == AlgorithmKind::Block
+            && !child_style.establishes_bfc
+            && child_style.position == crate::BlockPosition::Static
+            && child_style.float == FloatSide::None
+            && !child_style.replaced
+            && child_style.flow == child_style.containing_flow
+    }
+
+    fn predicted_child_content_origin(
+        formatting_context: &BlockFormattingContext,
+        child_style: BlockStyle,
+        margin_state: BlockMarginState,
+        inline_size: crate::UsedInlineSize,
+        containing_inline_size: f32,
+    ) -> (f32, f32) {
+        let padding_border = child_style.logical_padding_border(containing_inline_size);
+        (
+            inline_size.margin_start + padding_border.inline_start,
+            formatting_context.hypothetical_in_flow_block_start(child_style, margin_state)
+                + padding_border.block_start,
+        )
+    }
+
     fn compute_owned_block_layout(
         &mut self,
         node_id: NodeId,
@@ -790,6 +1014,7 @@ where
 
         let node = AlgorithmNodeId::from_taffy(node_id);
         let node_index = node.index();
+        self.tree.nodes[node_index].exported_float_state = None;
         let parent_is_block = self.tree.nodes[node_index]
             .parent
             .is_none_or(|parent| self.tree.nodes[parent.index()].kind == AlgorithmKind::Block);
@@ -878,12 +1103,13 @@ where
             width: content_width,
             height: content_height.unwrap_or(0.0),
         };
-        let mut formatting_context = BlockFormattingContext::with_margin_collapse(
+        let mut formatting_context = BlockFormattingContext::with_float_state(
             BlockContainingBlock {
                 flow: style.flow,
                 content_box,
             },
             collapse_parent_start,
+            self.nested_float_state.clone().unwrap_or_default(),
         );
         let children = self.tree.nodes[node_index].children.clone();
         for (order, child) in children.into_iter().enumerate() {
@@ -907,7 +1133,14 @@ where
                 && self.tree.nodes[child.index()].float_avoidance_enabled
                 && formatting_context.float_exclusion_count() != 0;
             let mut float_avoiding_placement = None;
-            let child_output = if avoids_floats {
+            let default_child_input = BlockChildInput {
+                border_box_width: inline.border_box,
+                containing_width: content_width,
+                available_width: content_width,
+                containing_height: content_height,
+                available_height: inputs.available_space.height,
+            };
+            let mut child_output = if avoids_floats {
                 let mut measured_block_size = 0.0;
                 let attempts = formatting_context.float_exclusion_count() * 2 + 3;
                 let mut measured = None;
@@ -930,6 +1163,7 @@ where
                             containing_height: content_height,
                             available_height: inputs.available_space.height,
                         },
+                        None,
                         None,
                     );
                     let child_size = PhysicalSize {
@@ -963,54 +1197,84 @@ where
                 } else {
                     None
                 };
-                self.compute_block_child(
-                    child,
-                    BlockChildInput {
-                        border_box_width: inline.border_box,
-                        containing_width: content_width,
-                        available_width: content_width,
-                        containing_height: content_height,
-                        available_height: inputs.available_space.height,
-                    },
-                    line_constraints,
-                )
+                self.compute_block_child(child, default_child_input, line_constraints, None)
             };
+            let shares_float_context = self.shares_parent_float_context(child, child_style);
+            if shares_float_context && formatting_context.float_exclusion_count() != 0 {
+                let attempts = formatting_context.float_exclusion_count() * 2 + 3;
+                let mut converged = false;
+                for _ in 0..attempts {
+                    let child_size = PhysicalSize {
+                        width: child_output.size.width,
+                        height: child_output.size.height,
+                    };
+                    let margin_state = self.child_margin_state(
+                        child,
+                        child_style,
+                        child_size,
+                        content_width,
+                        content_height,
+                    )?;
+                    let origin = Self::predicted_child_content_origin(
+                        &formatting_context,
+                        child_style,
+                        margin_state,
+                        inline,
+                        content_width,
+                    );
+                    let float_state =
+                        formatting_context.float_state_for_descendant(origin.0, origin.1);
+                    self.clear_subtree_cache(child);
+                    let next_output = self.compute_block_child(
+                        child,
+                        default_child_input,
+                        None,
+                        Some(float_state),
+                    );
+                    let next_size = PhysicalSize {
+                        width: next_output.size.width,
+                        height: next_output.size.height,
+                    };
+                    let next_margin_state = self.child_margin_state(
+                        child,
+                        child_style,
+                        next_size,
+                        content_width,
+                        content_height,
+                    )?;
+                    let next_origin = Self::predicted_child_content_origin(
+                        &formatting_context,
+                        child_style,
+                        next_margin_state,
+                        inline,
+                        content_width,
+                    );
+                    child_output = next_output;
+                    if (next_origin.0 - origin.0).abs() <= 0.01
+                        && (next_origin.1 - origin.1).abs() <= 0.01
+                    {
+                        converged = true;
+                        break;
+                    }
+                }
+                if !converged {
+                    return Err(BlockDeferral::NestedFloatState);
+                }
+            }
             let child_size = PhysicalSize {
                 width: child_output.size.width,
                 height: child_output.size.height,
             };
+            let child_margin_state = self.child_margin_state(
+                child,
+                child_style,
+                child_size,
+                content_width,
+                content_height,
+            )?;
             let placement = if child_style.float != FloatSide::None {
                 formatting_context.place_float(child_style, child_size)
             } else {
-                let child_margin_state =
-                    if self.tree.nodes[child.index()].kind == AlgorithmKind::Block {
-                        self.tree.nodes[child.index()]
-                            .block_margins
-                            .ok_or(BlockDeferral::ParentMarginCollapse)?
-                    } else {
-                        let child_size_logical = style.flow.logical_size(child_size);
-                        let child_has_line_boxes = self.tree.nodes[child.index()].context.is_some();
-                        let child_collapses_through = child_style.can_collapse_through(
-                            content_width,
-                            content_height,
-                            false,
-                            child_has_line_boxes,
-                            true,
-                        ) && child_size_logical.block == 0.0;
-                        BlockMarginState::from_box(
-                            child_style,
-                            content_width,
-                            CollapsedMargin::ZERO,
-                            CollapsedMargin::ZERO,
-                            child_style.child_margin_collapse(
-                                content_width,
-                                content_height,
-                                false,
-                                true,
-                            ),
-                            child_collapses_through,
-                        )
-                    };
                 if let Some(float_avoiding_placement) = float_avoiding_placement {
                     formatting_context.place_float_avoiding_in_flow(
                         child_style,
@@ -1026,6 +1290,18 @@ where
                     )
                 }
             };
+            if shares_float_context
+                && let Some(float_state) =
+                    self.tree.nodes[child.index()].exported_float_state.take()
+            {
+                let padding_border = child_style.logical_padding_border(content_width);
+                let logical_border_box = style.flow.logical_rect(placement.rect, content_box);
+                formatting_context.import_descendant_float_state(
+                    float_state,
+                    logical_border_box.inline_start + padding_border.inline_start,
+                    logical_border_box.block_start + padding_border.block_start,
+                );
+            }
             let child_padding = child_style.resolved_padding(content_width);
             let child_border = child_style.border;
             let logical_margin = LogicalSides {
@@ -1099,6 +1375,10 @@ where
             margin_collapse,
             collapses_through,
         ));
+        if !style.establishes_bfc {
+            self.tree.nodes[node_index].exported_float_state =
+                Some(formatting_context.exported_float_state());
+        }
         Ok(LayoutOutput::from_outer_size(final_size))
     }
 
@@ -2407,5 +2687,485 @@ mod tests {
         assert_eq!(tree.layout(lines).height, 60.0);
         assert_eq!(tree.layout(root).height, 60.0);
         assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Buckram));
+    }
+
+    #[test]
+    fn buckram_exports_nested_floats_to_following_outer_siblings() {
+        let mut tree = AlgorithmTree::<Style, (), u8>::new();
+        let nested_float = tree.new_with_children_and_block_style(
+            AlgorithmKind::Leaf,
+            BlockStyle {
+                size: crate::BlockDimensions::new(
+                    BlockSizeValue::Length(crate::FlowLength::px(80.0)),
+                    BlockSizeValue::Length(crate::FlowLength::px(40.0)),
+                ),
+                float: FloatSide::Left,
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                size: taffy::Size {
+                    width: Dimension::length(80.0),
+                    height: Dimension::length(40.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            1,
+        );
+        let wrapper = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle::default(),
+            Style {
+                display: Display::Block,
+                ..Style::default()
+            },
+            &[nested_float],
+            2,
+        );
+        tree.enable_nested_float_state(wrapper);
+        let clear = tree.new_with_children_and_block_style(
+            AlgorithmKind::Leaf,
+            BlockStyle {
+                size: crate::BlockDimensions::new(
+                    BlockSizeValue::Auto,
+                    BlockSizeValue::Length(crate::FlowLength::px(10.0)),
+                ),
+                clear: ClearSide::Left,
+                ..BlockStyle::default()
+            },
+            Style {
+                size: taffy::Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(10.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            3,
+        );
+        let root = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                size: taffy::Size {
+                    width: Dimension::length(200.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            &[wrapper, clear],
+            0,
+        );
+
+        tree.compute_layout_with_measure(root, available(200.0, 200.0), zero_measure);
+
+        assert_eq!(
+            (tree.layout(nested_float).x, tree.layout(nested_float).y),
+            (0.0, 0.0)
+        );
+        assert_eq!(tree.layout(wrapper).height, 0.0);
+        assert_eq!(tree.layout(clear).y, 40.0);
+        assert_eq!(tree.layout(root).height, 50.0);
+        assert_eq!(tree.block_algorithm(wrapper), Some(BlockAlgorithm::Buckram));
+        assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Buckram));
+    }
+
+    #[test]
+    fn buckram_delivers_outer_float_constraints_through_an_ordinary_wrapper() {
+        let mut tree = AlgorithmTree::<Style, Vec<crate::FloatAvailableSpace>, u8>::new();
+        let float = tree.new_with_children_and_block_style(
+            AlgorithmKind::Leaf,
+            BlockStyle {
+                size: crate::BlockDimensions::new(
+                    BlockSizeValue::Length(crate::FlowLength::px(80.0)),
+                    BlockSizeValue::Length(crate::FlowLength::px(40.0)),
+                ),
+                float: FloatSide::Left,
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                size: taffy::Size {
+                    width: Dimension::length(80.0),
+                    height: Dimension::length(40.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            1,
+        );
+        let lines = tree.new_leaf_with_context_and_block_style(
+            BlockStyle::anonymous(FlowAxes::HORIZONTAL_LTR, FlowAxes::HORIZONTAL_LTR),
+            Style {
+                display: Display::Block,
+                ..Style::default()
+            },
+            Vec::new(),
+            2,
+        );
+        tree.enable_float_line_constraints(lines);
+        let wrapper = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle::default(),
+            Style {
+                display: Display::Block,
+                ..Style::default()
+            },
+            &[lines],
+            3,
+        );
+        tree.enable_nested_float_state(wrapper);
+        let root = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                size: taffy::Size {
+                    width: Dimension::length(200.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            &[float, wrapper],
+            0,
+        );
+
+        tree.compute_layout_with_measure(
+            root,
+            available(200.0, 200.0),
+            |known, _, _, context, constraints| {
+                let Some(context) = context else {
+                    return AlgorithmSize::new(0.0, 0.0);
+                };
+                if let Some(constraints) = constraints {
+                    *context = [0.0, 20.0, 40.0]
+                        .map(|line_top| constraints.available_space(line_top, 18.0))
+                        .to_vec();
+                }
+                AlgorithmSize::new(known.width.unwrap_or(200.0), known.height.unwrap_or(60.0))
+            },
+        );
+
+        assert_eq!(
+            tree.context(lines).expect("line context"),
+            &[
+                crate::FloatAvailableSpace {
+                    inline_start: 80.0,
+                    inline_size: 120.0,
+                },
+                crate::FloatAvailableSpace {
+                    inline_start: 80.0,
+                    inline_size: 120.0,
+                },
+                crate::FloatAvailableSpace {
+                    inline_start: 0.0,
+                    inline_size: 200.0,
+                },
+            ]
+        );
+        assert_eq!(tree.layout(wrapper).height, 60.0);
+        assert_eq!(tree.layout(root).height, 60.0);
+        assert_eq!(tree.block_algorithm(wrapper), Some(BlockAlgorithm::Buckram));
+        assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Buckram));
+    }
+
+    #[test]
+    fn buckram_stops_nested_float_state_at_an_explicit_bfc() {
+        let mut tree = AlgorithmTree::<Style, (), u8>::new();
+        let nested_float = tree.new_with_children_and_block_style(
+            AlgorithmKind::Leaf,
+            BlockStyle {
+                size: crate::BlockDimensions::new(
+                    BlockSizeValue::Length(crate::FlowLength::px(80.0)),
+                    BlockSizeValue::Length(crate::FlowLength::px(40.0)),
+                ),
+                float: FloatSide::Left,
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                size: taffy::Size {
+                    width: Dimension::length(80.0),
+                    height: Dimension::length(40.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            1,
+        );
+        let boundary = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                size: crate::BlockDimensions::new(
+                    BlockSizeValue::Auto,
+                    BlockSizeValue::Length(crate::FlowLength::ZERO),
+                ),
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                size: taffy::Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(0.0),
+                },
+                ..Style::default()
+            },
+            &[nested_float],
+            2,
+        );
+        let clear = tree.new_with_children_and_block_style(
+            AlgorithmKind::Leaf,
+            BlockStyle {
+                size: crate::BlockDimensions::new(
+                    BlockSizeValue::Auto,
+                    BlockSizeValue::Length(crate::FlowLength::px(10.0)),
+                ),
+                clear: ClearSide::Left,
+                ..BlockStyle::default()
+            },
+            Style {
+                size: taffy::Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(10.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            3,
+        );
+        let root = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                size: taffy::Size {
+                    width: Dimension::length(200.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            &[boundary, clear],
+            0,
+        );
+
+        tree.compute_layout_with_measure(root, available(200.0, 200.0), zero_measure);
+
+        assert_eq!(tree.layout(boundary).height, 0.0);
+        assert_eq!(tree.layout(clear).y, 0.0);
+        assert_eq!(tree.layout(root).height, 10.0);
+        assert_eq!(
+            tree.block_algorithm(boundary),
+            Some(BlockAlgorithm::Buckram)
+        );
+        assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Buckram));
+    }
+
+    #[test]
+    fn buckram_delivers_outer_clearance_through_an_ordinary_wrapper() {
+        let mut tree = AlgorithmTree::<Style, (), u8>::new();
+        let float = tree.new_with_children_and_block_style(
+            AlgorithmKind::Leaf,
+            BlockStyle {
+                size: crate::BlockDimensions::new(
+                    BlockSizeValue::Length(crate::FlowLength::px(80.0)),
+                    BlockSizeValue::Length(crate::FlowLength::px(40.0)),
+                ),
+                float: FloatSide::Left,
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                size: taffy::Size {
+                    width: Dimension::length(80.0),
+                    height: Dimension::length(40.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            1,
+        );
+        let clear = tree.new_with_children_and_block_style(
+            AlgorithmKind::Leaf,
+            BlockStyle {
+                size: crate::BlockDimensions::new(
+                    BlockSizeValue::Auto,
+                    BlockSizeValue::Length(crate::FlowLength::px(10.0)),
+                ),
+                clear: ClearSide::Left,
+                ..BlockStyle::default()
+            },
+            Style {
+                size: taffy::Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(10.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            2,
+        );
+        let wrapper = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle::default(),
+            Style {
+                display: Display::Block,
+                ..Style::default()
+            },
+            &[clear],
+            3,
+        );
+        tree.enable_nested_float_state(wrapper);
+        let root = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                size: taffy::Size {
+                    width: Dimension::length(200.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            &[float, wrapper],
+            0,
+        );
+
+        tree.compute_layout_with_measure(root, available(200.0, 200.0), zero_measure);
+
+        assert_eq!(tree.layout(clear).y, 40.0);
+        assert_eq!(tree.layout(wrapper).height, 50.0);
+        assert_eq!(tree.layout(root).height, 50.0);
+        assert_eq!(tree.block_algorithm(wrapper), Some(BlockAlgorithm::Buckram));
+        assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Buckram));
+    }
+
+    #[test]
+    fn nested_clear_without_a_shared_float_role_remains_deferred() {
+        let mut tree = AlgorithmTree::<Style, (), u8>::new();
+        let clear = tree.new_with_children_and_block_style(
+            AlgorithmKind::Leaf,
+            BlockStyle {
+                size: crate::BlockDimensions::new(
+                    BlockSizeValue::Auto,
+                    BlockSizeValue::Length(crate::FlowLength::px(10.0)),
+                ),
+                clear: ClearSide::Both,
+                ..BlockStyle::default()
+            },
+            Style {
+                size: taffy::Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(10.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            1,
+        );
+        let wrapper = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle::default(),
+            Style {
+                display: Display::Block,
+                ..Style::default()
+            },
+            &[clear],
+            2,
+        );
+        let root = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                size: taffy::Size {
+                    width: Dimension::length(200.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            &[wrapper],
+            0,
+        );
+
+        tree.compute_layout_with_measure(root, available(200.0, 200.0), zero_measure);
+
+        assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Taffy));
+    }
+
+    #[test]
+    fn buckram_keeps_inline_context_float_state_deferred() {
+        let mut tree = AlgorithmTree::<Style, (), u8>::new();
+        let nested_float = tree.new_with_children_and_block_style(
+            AlgorithmKind::Leaf,
+            BlockStyle {
+                size: crate::BlockDimensions::new(
+                    BlockSizeValue::Length(crate::FlowLength::px(80.0)),
+                    BlockSizeValue::Length(crate::FlowLength::px(40.0)),
+                ),
+                float: FloatSide::Left,
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                size: taffy::Size {
+                    width: Dimension::length(80.0),
+                    height: Dimension::length(40.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            1,
+        );
+        tree.mark_inline_context_float(nested_float);
+        let wrapper = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle::default(),
+            Style {
+                display: Display::Block,
+                ..Style::default()
+            },
+            &[nested_float],
+            2,
+        );
+        tree.enable_nested_float_state(wrapper);
+        let root = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                size: taffy::Size {
+                    width: Dimension::length(200.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            &[wrapper],
+            0,
+        );
+
+        tree.compute_layout_with_measure(root, available(200.0, 200.0), zero_measure);
+
+        assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Taffy));
     }
 }
