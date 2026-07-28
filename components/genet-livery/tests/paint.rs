@@ -1803,6 +1803,55 @@ fn vertical_inline_edges_paint_outside_the_line_box() {
 }
 
 #[test]
+fn vertical_writing_inline_block_edges_do_not_widen_the_line_box() {
+    fn target_size(writing_mode: &str, contents: &str) -> (f32, f32) {
+        let document = StaticDocument::parse(&format!(
+            "<html><body><div class=\"target\">{contents}</div></body></html>"
+        ));
+        let mut document = LiveryDocument::new(
+            document,
+            StyleSet::cambium(&[&format!(
+                ".target {{ border: 2px solid #0000ff; font-size: 32px; margin: 0; \\
+                 writing-mode: {writing_mode}; }} \\
+                 .left {{ border-left: 1.5em solid transparent; }} \\
+                 .right {{ border-right: 1.5em solid transparent; }}"
+            )]),
+            Device::screen(320.0, 240.0),
+        );
+        let frame = document.frame(320, 240).expect("vertical writing frame");
+        frame
+            .commands()
+            .iter()
+            .find_map(|command| match command {
+                PaintCmd::DrawBorder(border)
+                    if (
+                        border.widths.top,
+                        border.widths.right,
+                        border.widths.bottom,
+                        border.widths.left,
+                    ) == (2.0, 2.0, 2.0, 2.0) =>
+                {
+                    Some((
+                        border.placement.bounds.width(),
+                        border.placement.bounds.height(),
+                    ))
+                },
+                _ => None,
+            })
+            .expect("target border paints")
+    }
+
+    for writing_mode in ["vertical-lr", "vertical-rl"] {
+        let plain = target_size(writing_mode, "123456");
+        let decorated = target_size(
+            writing_mode,
+            "12<span class=\"left\">34</span><span class=\"right\">56</span>",
+        );
+        assert_eq!(decorated, plain, "{writing_mode}");
+    }
+}
+
+#[test]
 fn wrapped_inline_spans_paint_one_fragment_per_line() {
     let list = render(
         r#"<html><body><div class="label"><span>one two three four five</span></div></body></html>"#,

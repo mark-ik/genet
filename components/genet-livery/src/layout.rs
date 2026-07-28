@@ -3603,6 +3603,95 @@ mod tests {
     }
 
     #[test]
+    fn contained_root_keeps_body_writing_mode_local_to_body_content() {
+        fn first_text(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+        ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+            if dom.kind(node) == NodeKind::Text
+                && dom.text(node).is_some_and(|text| !text.is_empty())
+            {
+                return Some(node);
+            }
+            dom.dom_children(node)
+                .find_map(|child| first_text(dom, child))
+        }
+
+        fn text_fragment_x(
+            document: &StaticDocument,
+            css: &str,
+        ) -> (
+            f32,
+            Fragment,
+            FlowAxes,
+            Option<FlowAxes>,
+            (CssSize, CssSize),
+        ) {
+            let styles = resolve_styles(
+                document,
+                &StyleSet::cambium(&[css]),
+                &Device::screen(800.0, 600.0),
+                &InteractionStates::default(),
+            );
+            let mut text = TextSystem::new();
+            let (_, layout) = layout_with_text_system(
+                document,
+                &styles,
+                800.0,
+                600.0,
+                ViewportSizes::uniform(800.0, 600.0),
+                &mut text,
+                &HashMap::new(),
+            )
+            .expect("writing-mode layout");
+            let source = first_text(document, document.document()).expect("text node");
+            let text_x = layout
+                .fragments_for_node(source)
+                .next()
+                .expect("text fragment")
+                .physical_rect()
+                .x;
+            let parent = document.parent(source).expect("text parent");
+            let parent = layout.get(parent).expect("parent fragment").physical_rect();
+            let parent_box = layout
+                .boxes()
+                .principal_box(document.parent(source).expect("text parent"))
+                .expect("parent box");
+            let flow = layout.boxes()[parent_box].flow;
+            let containing_flow = layout.boxes()[parent_box]
+                .parent()
+                .map(|containing| layout.boxes()[containing].flow);
+            let style = styles
+                .get(document.parent(source).expect("text parent"))
+                .expect("parent style");
+            (
+                text_x,
+                parent,
+                flow,
+                containing_flow,
+                (style.width, style.height),
+            )
+        }
+
+        let target = StaticDocument::parse(
+            "<html><body>This text should run vertically on the left side</body></html>",
+        );
+        let reference = StaticDocument::parse(
+            "<html><body><div>This text should run vertically on the left side</div></body></html>",
+        );
+        let target_x = text_fragment_x(
+            &target,
+            "html { contain: paint; } body { writing-mode: vertical-rl; }",
+        );
+        let reference_x = text_fragment_x(&reference, "div { writing-mode: vertical-rl; }");
+
+        assert_eq!(
+            target_x.0, reference_x.0,
+            "target={target_x:?} reference={reference_x:?}"
+        );
+    }
+
+    #[test]
     fn replaced_html_dimension_hints_keep_percentage_and_canvas_width() {
         fn find_by_name(
             dom: &StaticDocument,

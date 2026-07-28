@@ -16,6 +16,9 @@ url = "https://www.w3.org/TR/css-fonts-4/"
 [sources.css_sizing_3]
 url = "https://www.w3.org/TR/css-sizing-3/"
 
+[sources.css_logical_properties_1]
+url = "https://www.w3.org/TR/css-logical-1/"
+
 [sources.css_position_3]
 url = "https://www.w3.org/TR/css-position-3/"
 
@@ -798,6 +801,16 @@ grammar = "auto | <length-percentage> | min-content | max-content | fit-content(
 seed_values = ["auto", "px", "percentage"]
 animation = "by-computed-value"
 source = "css_sizing_3"
+
+[[property]]
+name = "inline-size"
+value_type = "size"
+inherited = false
+initial = "auto"
+grammar = "auto | <length-percentage> | min-content | max-content | fit-content(<length-percentage>)"
+seed_values = ["auto", "px", "percentage"]
+animation = "by-computed-value"
+source = "css_logical_properties_1"
 
 [[property]]
 name = "left"
@@ -2142,14 +2155,6 @@ group = "position"
 inherited = false
 animation = "discrete"
 spec = "https://drafts.csswg.org/css-grid/#propdef-grid-template-areas"
-
-[[unimplemented]]
-name = "inline-size"
-group = "position"
-inherited = false
-animation = "by-computed-value"
-logical = true
-spec = "https://drafts.csswg.org/css-logical-props/#propdef-inline-size"
 
 [[unimplemented]]
 name = "inset-block-end"

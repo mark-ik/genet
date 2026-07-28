@@ -67,7 +67,7 @@ head, title, meta, link, style, script, template {
 }
 
 html { width: 100%; }
-body { width: 100%; margin: 8px; }
+body { inline-size: 100%; margin: 8px; }
 h1 { font-size: 2em; margin: 0.67em 0; font-weight: bold; }
 h2 { font-size: 1.5em; margin: 0.83em 0; font-weight: bold; }
 h3 { font-size: 1.17em; margin: 1em 0; font-weight: bold; }

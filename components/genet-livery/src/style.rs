@@ -236,6 +236,7 @@ where
         }
         let property = PropertyId::from_css_name(&property.to_ascii_lowercase())?;
         let values = self.get(id)?;
+        let property = logical_inline_property(property, values);
         if let Some(used) = used
             && box_is_unadorned(values)
         {
@@ -495,7 +496,7 @@ where
         }
 
         let (mut computed, custom) =
-            cascade_with_custom(parent, parent_custom, matched, matched_custom);
+            cascade_with_logical_inline_properties(parent, parent_custom, matched, matched_custom);
         resolve_viewport_units(&mut computed, device, tree_counts);
         resolve_font_metrics(&mut computed, parent);
         let mut resolved = 1;
@@ -531,6 +532,46 @@ where
             );
         }
         resolved
+    }
+}
+
+/// Resolve logical inline properties after the winning writing mode is known,
+/// while leaving declarations in their ordinary cascade priority order beside
+/// their physical counterparts. Generated logical fields retain the CSSOM
+/// values; layout consumes the mapped physical longhands.
+fn cascade_with_logical_inline_properties(
+    parent: Option<&ComputedValues>,
+    parent_custom: Option<&CustomProperties>,
+    matched: Vec<MatchedDeclaration>,
+    matched_custom: Vec<MatchedCustomDeclaration>,
+) -> (ComputedValues, CustomProperties) {
+    let (logical, _) = cascade_with_custom(
+        parent,
+        parent_custom,
+        matched.clone(),
+        matched_custom.clone(),
+    );
+    let inline_size = logical.inline_size;
+    let mapped = matched.into_iter().map(|mut declaration| {
+        let property = logical_inline_property(declaration.declaration.property, &logical);
+        if property != declaration.declaration.property {
+            declaration.declaration.property = property;
+        }
+        declaration
+    });
+    let (mut computed, custom) = cascade_with_custom(parent, parent_custom, mapped, matched_custom);
+    computed.inline_size = inline_size;
+    (computed, custom)
+}
+
+fn logical_inline_property(property: PropertyId, values: &ComputedValues) -> PropertyId {
+    if property != PropertyId::InlineSize {
+        return property;
+    }
+    if values.writing_mode.is_vertical() {
+        PropertyId::Height
+    } else {
+        PropertyId::Width
     }
 }
 
@@ -660,4 +701,47 @@ fn definite_size(size: Size, em: f32) -> Option<f32> {
         return None;
     };
     (!value.has_percentage()).then(|| value.to_px(em, 16.0, 0.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn matched(css: &str, source_order: u64) -> MatchedDeclaration {
+        let mut block = parse_declaration_block(css);
+        assert!(block.errors.is_empty(), "{css}: {:?}", block.errors);
+        assert_eq!(block.declarations.len(), 1, "{css}");
+        MatchedDeclaration {
+            declaration: block.declarations.remove(0),
+            origin: Origin::Author,
+            layer: CascadeLayer::Unlayered,
+            specificity: Specificity::INLINE,
+            source_order,
+        }
+    }
+
+    #[test]
+    fn inline_size_maps_to_the_winning_physical_axis() {
+        let (horizontal, _) = cascade_with_logical_inline_properties(
+            None,
+            None,
+            vec![matched("inline-size: 25px", 0), matched("width: 50px", 1)],
+            vec![],
+        );
+        assert_eq!(horizontal.inline_size, "25px".parse().unwrap());
+        assert_eq!(horizontal.width, "50px".parse().unwrap());
+
+        let (vertical, _) = cascade_with_logical_inline_properties(
+            None,
+            None,
+            vec![
+                matched("writing-mode: vertical-rl", 0),
+                matched("height: 50px", 1),
+                matched("inline-size: 25px", 2),
+            ],
+            vec![],
+        );
+        assert_eq!(vertical.inline_size, "25px".parse().unwrap());
+        assert_eq!(vertical.height, "25px".parse().unwrap());
+    }
 }

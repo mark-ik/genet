@@ -1,6 +1,6 @@
 # Buckram K3 completion execution plan
 
-**Status:** K3s audit complete; K3 closure blocked by final reftest ratchet
+**Status:** K3 closure complete; final ratchet has zero unexplained movement
 
 **Base capability receipt:** K3l, commit `4c71a0959b8`
 
@@ -687,6 +687,54 @@ Proof directory:
 
 K3 closure does not mean complete CSS layout. It means the remaining work is
 truthfully owned by K4, K5, K6, or an explicitly named post-cutover gap.
+
+### K3t closure receipt - 2026-07-28
+
+Capability: the final correction keeps orthogonal normal-flow children
+indefinite in the parent’s cross-flow axis, lowers `inline-size` after the
+winning writing mode is known, and gives retained text a real forced-break
+line with its own line-height. It also removes the duplicate negative inline
+margin shift from glyph paint. The resulting live path fixes the K3r
+orthogonal percentage cases, vertical inline decoration, body/root writing
+mode sizing, and the CSS2 replacement and preserved-newline references that
+had been passing accidentally.
+
+Boundary retained: K3 does not claim the newly exposed non-normal-flow
+families. The 21 K3s-to-K3t pass-to-fail movements are all exact false-pass
+disclosures, not newly broken behavior:
+
+- `css/CSS2/floats/float-no-content-beside-001.html` and
+  `css/CSS2/linebox/line-breaking-font-size-zero-001.html` need retained IFC
+  empty-line and zero-font break opportunities integrated with float
+  constraints.
+- Twelve `css/css-grid/abspos/grid-abspos-staticpos-*` files and
+  `css/css-writing-modes/abs-pos-border-offset-{001,002}.html` belong to K5’s
+  static-position and positioned containing-block work.
+- `css/css-grid/alignment/grid-baseline-align-cycles-001.html` and
+  `css/css-grid/firefox-bug-1881495.html` need Taffy-grid cyclic baseline and
+  intrinsic auto-block-size behavior beyond K3’s admitted BFC baseline
+  output.
+- `css/css-writing-modes/full-width-{002,003}.html` require
+  `text-combine-upright`; `wm-propagation-body-054.html` needs principal-flow
+  propagation through generated pseudo content and upright text orientation.
+
+WPT exact movement: against K3s, the nine fresh Livery maps move 64 failures
+to passes and the 21 named false passes to failures, from 5,762 to 5,805
+passes. The per-corpus counts and every changed URL are in
+`final-all-nine-delta-summary.txt` and `final-all-nine-delta-details.txt` in
+the proof directory below. The ratchet therefore has zero unexplained
+regressions.
+
+Verification: `cargo test -p buckram -p livery -p genet-livery --offline`;
+`cargo clippy -p buckram --offline --no-deps -- -D warnings`; edition-2024
+Rustfmt on touched files; `git diff --check`; and a release `genet-wpt` build
+all pass. The all-nine runner’s nonzero per-corpus exits represent expected
+failing reftests; each wrote its status map.
+
+Proof directory:
+`C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-28_buckram_k3t`
+
+Commit: `Complete Buckram K3 closure ratchet`
 
 ## Acceptance ladder for every gate
 

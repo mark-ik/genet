@@ -1463,6 +1463,46 @@ the full delta are in
 disposition or correction before a final K3 closure receipt replaces this
 audit.
 
+#### K3 closure receipt - 2026-07-28
+
+K3 closes its selected normal-flow cutover. The final correction makes a
+cross-flow child’s physical inline basis indefinite until its own flow can
+resolve it, maps `inline-size` only after the winning writing mode is known,
+and gives retained `<br>` lines both a forced break and a line-height. It also
+removes a duplicate negative-inline-margin glyph offset. These are normal-flow
+and IFC corrections, not a widening of the Taffy ownership boundary.
+
+The final all-nine Livery reftest maps retain all 16,375 URLs. Against K3s,
+they move 64 failures to passes and 21 passes to failures, for 5,805 passes
+from K3s’s 5,762. Every pass-to-fail is an identified false pass exposed by
+the corrected path:
+
+- two CSS2 retained-IFC cases need empty forced lines and zero-font break
+  opportunities to participate in float constraints;
+- twelve grid static-position cases and two writing-mode absolute-position
+  cases route to K5;
+- two grid cyclic baseline or intrinsic auto-block-size cases remain Taffy
+  grid capability gaps outside K3’s BFC-baseline output;
+- two `text-combine-upright` mismatch cases and one principal-flow pseudo-text
+  orientation case remain named writing-mode gaps.
+
+This closes the ratchet with zero unexplained regressions. K4 continues to own
+table wrappers and table-specific float avoidance. K5 owns relative,
+absolute, fixed, sticky, static-position, and out-of-flow IFC work. K6 owns
+fragmentation and fragmentainer-dependent intrinsic sizes. The retained IFC,
+grid, and writing-mode cases above remain explicit post-cutover capability
+gaps rather than implicit K3 deferrals.
+
+The closure changed
+`components/buckram/src/taffy_adapter.rs`,
+`components/genet-livery/src/{layout.rs,lib.rs,style.rs,text.rs}`,
+`components/genet-livery/tests/paint.rs`,
+`components/livery/properties.toml`,
+`docs/2026-07-28_buckram_k3_completion_execution_plan.md`, and this plan.
+The exact status deltas, final maps, runner logs, test logs, and release-build
+log are under
+`Code/testing/genet/wpt-ledger/2026-07-28_buckram_k3t`.
+
 ### K4. CSS tables
 
 Implement anonymous table fixup, row and column structure, spans, fixed and

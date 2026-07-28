@@ -229,7 +229,6 @@ impl TextSystem {
                 text: &mut text,
                 spans: &mut spans,
                 inline_boxes: &mut inline_boxes,
-                negative_margin_offset: 0.0,
                 percentage_basis: request.width,
             };
             for root in request.roots {
@@ -439,7 +438,6 @@ impl TextSystem {
             owners: Vec::new(),
             style: style.clone(),
             range: 0..text.len(),
-            negative_margin_offset: 0.0,
         }];
         for item in self.shape(text.as_ref(), &mut spans, &[], fragment.width, style, None) {
             let ShapedItem::Text(mut run) = item else {
@@ -493,7 +491,6 @@ impl TextSystem {
                 text: &mut text,
                 spans: &mut spans,
                 inline_boxes: &mut inline_boxes,
-                negative_margin_offset: 0.0,
                 percentage_basis: parent_fragment.width,
             };
             for root in roots {
@@ -755,8 +752,6 @@ impl TextSystem {
                         let parley_run = run.run();
                         let brush = &run.style().brush;
                         let span = spans.get(brush.source_index);
-                        let negative_margin_offset =
-                            span.map_or(0.0, |span| span.negative_margin_offset);
                         let vertical_shift = span.map_or(0.0, |span| {
                             let edge_shift = match span.style.vertical_align {
                                 VerticalAlign::TextTop if has_text_top => edge_leading,
@@ -785,7 +780,7 @@ impl TextSystem {
                             .positioned_glyphs()
                             .map(|glyph| GlyphInstance {
                                 index: glyph.id,
-                                point: LayoutPoint::new(glyph.x + negative_margin_offset, glyph.y),
+                                point: LayoutPoint::new(glyph.x, glyph.y),
                             })
                             .collect::<Vec<_>>();
                         if glyphs.is_empty() {
@@ -801,7 +796,7 @@ impl TextSystem {
                             } else {
                                 vertical_shift
                             };
-                        let mut cluster_x = run.offset() + negative_margin_offset;
+                        let mut cluster_x = run.offset();
                         let mut clusters = Vec::new();
                         for cluster in parley_run.visual_clusters() {
                             let advance = cluster.advance().max(0.0);
@@ -843,13 +838,13 @@ impl TextSystem {
                             line_block_max: source_metrics.block_max_coord,
                             line_y: metrics.block_min_coord,
                             fragment: Fragment {
-                                x: run.offset() + negative_margin_offset,
+                                x: run.offset(),
                                 y: metrics.block_min_coord + vertical_shift,
                                 width: run.advance().max(0.0),
                                 height: paint_height.max(0.0),
                             },
                             line_fragment: Fragment {
-                                x: run.offset() + negative_margin_offset,
+                                x: run.offset(),
                                 y: line_fragment_y,
                                 width: run.advance().max(0.0),
                                 height: metrics.line_height.max(0.0),
@@ -1580,7 +1575,6 @@ struct SourceSpan<Id> {
     owners: Vec<Id>,
     style: ComputedValues,
     range: Range<usize>,
-    negative_margin_offset: f32,
 }
 
 #[derive(Clone)]
@@ -1681,6 +1675,16 @@ where
         })
 }
 
+fn is_forced_line_break<D>(dom: &D, id: D::NodeId) -> bool
+where
+    D: LayoutDom,
+{
+    dom.kind(id) == NodeKind::Element
+        && dom
+            .element_name(id)
+            .is_some_and(|name| name.local.as_ref().eq_ignore_ascii_case("br"))
+}
+
 struct BoxInlineCollector<'a, D, F>
 where
     D: LayoutDom,
@@ -1694,7 +1698,6 @@ where
     text: &'a mut String,
     spans: &'a mut Vec<SourceSpan<BoxId>>,
     inline_boxes: &'a mut Vec<InlineAtom<BoxId>>,
-    negative_margin_offset: f32,
     percentage_basis: f32,
 }
 
@@ -1718,13 +1721,19 @@ where
                     owners: self.owners.clone(),
                     style: inherited.clone(),
                     range: start..self.text.len(),
-                    negative_margin_offset: self.negative_margin_offset,
                 });
             },
             BoxOrigin::Element(node) => {
                 let Some(style) = self.styles.get(node).cloned() else {
                     return;
                 };
+                if style.display == Display::None {
+                    return;
+                }
+                if is_forced_line_break(self.dom, node) {
+                    self.push_forced_line_break(box_id, &style);
+                    return;
+                }
                 let atomic = css_box.replaced
                     || (css_box.display.outside == Some(DisplayOutside::Inline)
                         && css_box.display.inside == Some(DisplayInside::FlowRoot));
@@ -1759,27 +1768,11 @@ where
                 let text_start = self.text.len();
                 self.push_edge(box_id, &style, &ancestor_owners, true);
                 let content_start = self.inline_boxes.len();
-                let previous_negative_margin = self.negative_margin_offset;
-                let leading_negative_margin = inline_margin_px(
-                    style.margin_left,
-                    super::paint::used_font_size(&style),
-                    self.percentage_basis,
-                )
-                .min(0.0);
-                self.negative_margin_offset += leading_negative_margin;
-                let trailing_negative_margin = inline_margin_px(
-                    style.margin_right,
-                    super::paint::used_font_size(&style),
-                    self.percentage_basis,
-                )
-                .min(0.0);
                 self.owners.push(box_id);
                 for child in css_box.children() {
                     self.collect(*child, &style);
                 }
                 self.owners.pop();
-                self.negative_margin_offset =
-                    previous_negative_margin + leading_negative_margin + trailing_negative_margin;
                 let has_inline_content = self.inline_boxes.len() > content_start;
                 self.push_edge(box_id, &style, &ancestor_owners, false);
                 if self.text.len() == text_start && !has_inline_content {
@@ -1798,12 +1791,8 @@ where
     fn push_edge(&mut self, source: BoxId, style: &ComputedValues, owners: &[BoxId], start: bool) {
         let edges = inline_decoration_edges(style, self.percentage_basis);
         let em = super::paint::used_font_size(style);
-        let margin = if start {
-            inline_margin_px(style.margin_left, em, self.percentage_basis)
-        } else {
-            inline_margin_px(style.margin_right, em, self.percentage_basis)
-        };
-        let decoration = if start { edges.left } else { edges.right };
+        let margin = inline_axis_margin(style, start, self.percentage_basis);
+        let decoration = inline_axis_decoration(style, edges, start);
         let mut push = |width: f32, paint: bool| {
             if width.is_finite() && width.abs() > f32::EPSILON {
                 self.inline_boxes.push(InlineAtom {
@@ -1864,6 +1853,26 @@ where
             line_height: height,
         });
     }
+
+    fn push_forced_line_break(&mut self, source: BoxId, style: &ComputedValues) {
+        let index = append_forced_line_break(self.text);
+        let font_size = super::paint::used_font_size(style);
+        self.inline_boxes.push(InlineAtom {
+            source,
+            owners: self.owners.clone(),
+            index,
+            fragment: Fragment::default(),
+            line_width: 0.0,
+            line_box_height: super::layout::line_height_px(&style.line_height, font_size),
+            margin_left: 0.0,
+            margin_top: 0.0,
+            edge: false,
+            paint: false,
+            vertical_align: style.vertical_align,
+            font_size,
+            line_height: super::layout::line_height_px(&style.line_height, font_size),
+        });
+    }
 }
 
 struct InlineCollector<'a, D, F>
@@ -1879,7 +1888,6 @@ where
     text: &'a mut String,
     spans: &'a mut Vec<SourceSpan<D::NodeId>>,
     inline_boxes: &'a mut Vec<InlineAtom<D::NodeId>>,
-    negative_margin_offset: f32,
     percentage_basis: f32,
 }
 
@@ -1905,7 +1913,6 @@ where
                     owners: self.owners.clone(),
                     style: inherited.clone(),
                     range: start..self.text.len(),
-                    negative_margin_offset: self.negative_margin_offset,
                 });
             },
             NodeKind::Element => {
@@ -1913,6 +1920,10 @@ where
                     return;
                 };
                 if style.display == Display::None {
+                    return;
+                }
+                if is_forced_line_break(self.dom, id) {
+                    self.push_forced_line_break(id, &style);
                     return;
                 }
                 if is_replaced_element(self.dom, id) && style.display != Display::InlineBlock {
@@ -1971,20 +1982,6 @@ where
                 let text_start = self.text.len();
                 self.push_edge(id, &style, &ancestor_owners, true);
                 let content_start = self.inline_boxes.len();
-                let previous_negative_margin = self.negative_margin_offset;
-                let leading_negative_margin = inline_margin_px(
-                    style.margin_left,
-                    super::paint::used_font_size(&style),
-                    self.percentage_basis,
-                )
-                .min(0.0);
-                self.negative_margin_offset += leading_negative_margin;
-                let trailing_negative_margin = inline_margin_px(
-                    style.margin_right,
-                    super::paint::used_font_size(&style),
-                    self.percentage_basis,
-                )
-                .min(0.0);
                 self.owners.push(id);
                 for child in self.dom.dom_children(id) {
                     if is_inline(self.dom, self.styles, child) {
@@ -1992,8 +1989,6 @@ where
                     }
                 }
                 self.owners.pop();
-                self.negative_margin_offset =
-                    previous_negative_margin + leading_negative_margin + trailing_negative_margin;
                 let has_inline_content = self.inline_boxes.len() > content_start;
                 self.push_edge(id, &style, &ancestor_owners, false);
                 if self.text.len() == text_start && !has_inline_content {
@@ -2020,12 +2015,8 @@ where
     ) {
         let edges = inline_decoration_edges(style, self.percentage_basis);
         let em = super::paint::used_font_size(style);
-        let margin = if start {
-            inline_margin_px(style.margin_left, em, self.percentage_basis)
-        } else {
-            inline_margin_px(style.margin_right, em, self.percentage_basis)
-        };
-        let decoration = if start { edges.left } else { edges.right };
+        let margin = inline_axis_margin(style, start, self.percentage_basis);
+        let decoration = inline_axis_decoration(style, edges, start);
         let mut push = |width: f32, paint: bool| {
             if width.is_finite() && width.abs() > f32::EPSILON {
                 self.inline_boxes.push(InlineAtom {
@@ -2091,6 +2082,26 @@ where
             line_height: height,
         });
     }
+
+    fn push_forced_line_break(&mut self, source: D::NodeId, style: &ComputedValues) {
+        let index = append_forced_line_break(self.text);
+        let font_size = super::paint::used_font_size(style);
+        self.inline_boxes.push(InlineAtom {
+            source,
+            owners: self.owners.clone(),
+            index,
+            fragment: Fragment::default(),
+            line_width: 0.0,
+            line_box_height: super::layout::line_height_px(&style.line_height, font_size),
+            margin_left: 0.0,
+            margin_top: 0.0,
+            edge: false,
+            paint: false,
+            vertical_align: style.vertical_align,
+            font_size,
+            line_height: super::layout::line_height_px(&style.line_height, font_size),
+        });
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -2099,6 +2110,45 @@ struct InlineDecorationEdges {
     right: f32,
     top: f32,
     bottom: f32,
+}
+
+/// Resolve the physical margin that occupies the inline start or end edge.
+/// Parley's line coordinates follow the CSS inline axis, not always physical
+/// left-to-right, so vertical writing modes use top and bottom margins.
+fn inline_axis_margin(style: &ComputedValues, start: bool, percentage_basis: f32) -> f32 {
+    let margin = if style.writing_mode.is_vertical() {
+        if start {
+            style.margin_top
+        } else {
+            style.margin_bottom
+        }
+    } else if start {
+        style.margin_left
+    } else {
+        style.margin_right
+    };
+    inline_margin_px(
+        margin,
+        super::paint::used_font_size(style),
+        percentage_basis,
+    )
+}
+
+/// Resolve the physical decoration that occupies the inline start or end
+/// edge. Left and right borders belong to the block axis in vertical writing
+/// modes and therefore must not widen the inline line box.
+fn inline_axis_decoration(
+    style: &ComputedValues,
+    edges: InlineDecorationEdges,
+    start: bool,
+) -> f32 {
+    if style.writing_mode.is_vertical() {
+        if start { edges.top } else { edges.bottom }
+    } else if start {
+        edges.left
+    } else {
+        edges.right
+    }
 }
 
 fn inline_decoration_edges(style: &ComputedValues, percentage_basis: f32) -> InlineDecorationEdges {
@@ -2198,14 +2248,17 @@ fn append_inline_text(target: &mut String, source: &str, style: &ComputedValues)
     }
     let collapsed = collapse_css_whitespace(source);
     if !collapsed.is_empty() {
-        if !target.is_empty() && !target.ends_with(char::is_whitespace) && !leading {
-            target.push(' ');
-        }
         target.push_str(&collapsed);
     }
     if trailing && !target.is_empty() && !target.ends_with(char::is_whitespace) {
         target.push(' ');
     }
+}
+
+fn append_forced_line_break(target: &mut String) -> usize {
+    let index = target.len();
+    target.push('\n');
+    index
 }
 
 fn is_css_whitespace(character: char) -> bool {
@@ -2397,4 +2450,32 @@ fn content_key(bytes: &[u8], index: u32) -> FontInstanceKey {
         hash = hash.wrapping_mul(PRIME);
     }
     FontInstanceKey::new(IdNamespace((hash >> 32) as u32), hash as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adjacent_inline_text_nodes_do_not_create_a_collapsed_space() {
+        let style = ComputedValues::default();
+        let mut text = String::new();
+
+        append_inline_text(&mut text, "12", &style);
+        append_inline_text(&mut text, "34", &style);
+
+        assert_eq!(text, "1234");
+    }
+
+    #[test]
+    fn forced_line_break_is_not_collapsed_to_a_space() {
+        let style = ComputedValues::default();
+        let mut text = String::new();
+
+        append_inline_text(&mut text, "12", &style);
+        assert_eq!(append_forced_line_break(&mut text), 2);
+        append_inline_text(&mut text, "34", &style);
+
+        assert_eq!(text, "12\n34");
+    }
 }

@@ -748,7 +748,10 @@ struct BlockChildInput {
     /// different own flow, but its containing-size inputs remain in this
     /// context's coordinate space until the adapter boundary.
     containing_flow: FlowAxes,
-    border_box_inline_size: f32,
+    /// A same-flow parent has already solved this physical dimension through
+    /// its inline-size equation. An orthogonal child must size that physical
+    /// axis in its own formatting context instead.
+    border_box_inline_size: Option<f32>,
     containing_size: LogicalOptionalSize,
     available_size: AlgorithmSize<AlgorithmAvailableSpace>,
 }
@@ -1050,7 +1053,7 @@ where
         let known_dimensions = physical_optional_size(
             input.containing_flow,
             LogicalOptionalSize {
-                inline: Some(input.border_box_inline_size),
+                inline: input.border_box_inline_size,
                 block: None,
             },
         )
@@ -1380,12 +1383,23 @@ where
         {
             outer.width = None;
         }
+        // A horizontal child in an auto-sized vertical containing block (or
+        // the converse) has an indefinite physical width, but orthogonal-flow
+        // sizing supplies the containing context's available physical width
+        // as the percentage fallback. Keep ordinary percentage resolution
+        // tied to the actual containing block; this fallback exists only at a
+        // cross-flow boundary.
+        let width_percentage_basis = parent_physical.width.or_else(|| {
+            (style.flow.is_horizontal() != style.containing_flow.is_horizontal())
+                .then_some(available_physical.width)
+                .flatten()
+        });
         outer.width = outer.width.or_else(|| {
             resolve_outer_dimension(
                 style.size.width,
                 style.min_size.width,
                 style.max_size.width,
-                parent_physical.width,
+                width_percentage_basis,
                 padding_border.left + padding_border.right,
                 style.box_sizing,
             )
@@ -1480,7 +1494,9 @@ where
             let mut float_avoiding_placement = None;
             let default_child_input = BlockChildInput {
                 containing_flow: style.flow,
-                border_box_inline_size: inline.border_box,
+                border_box_inline_size: (style.flow.is_horizontal()
+                    == child_style.flow.is_horizontal())
+                .then_some(inline.border_box),
                 containing_size: LogicalOptionalSize {
                     inline: Some(content_inline),
                     block: content_block,
@@ -1507,7 +1523,7 @@ where
                     let output = self.compute_block_child(
                         child,
                         BlockChildInput {
-                            border_box_inline_size: candidate.inline_size.border_box,
+                            border_box_inline_size: Some(candidate.inline_size.border_box),
                             available_size: AlgorithmSize::new(
                                 AlgorithmAvailableSpace::Definite(candidate.inline_size.border_box),
                                 default_child_input.available_size.height,
@@ -4216,7 +4232,7 @@ mod tests {
         assert_eq!(
             layout_nested(horizontal_parent, vertical_child),
             AlgorithmLayout {
-                width: 200.0,
+                width: 20.0,
                 height: 80.0,
                 ..AlgorithmLayout::default()
             }
@@ -4228,7 +4244,78 @@ mod tests {
             layout_nested(vertical_parent, horizontal_child),
             AlgorithmLayout {
                 width: 80.0,
-                height: 200.0,
+                height: 20.0,
+                ..AlgorithmLayout::default()
+            }
+        );
+    }
+
+    #[test]
+    fn orthogonal_percentage_width_uses_available_physical_fallback() {
+        use crate::{Direction, WritingMode};
+
+        let vertical = FlowAxes::new(WritingMode::VerticalLr, Direction::Ltr);
+        let horizontal = FlowAxes::HORIZONTAL_LTR;
+        let mut tree = AlgorithmTree::<Style, (), u8>::new();
+        let text = tree.new_with_children_and_block_style(
+            AlgorithmKind::Leaf,
+            BlockStyle::anonymous(horizontal, horizontal),
+            Style::default(),
+            &[],
+            2,
+        );
+        let child = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                flow: horizontal,
+                containing_flow: vertical,
+                size: crate::BlockDimensions::new(
+                    BlockSizeValue::Length(FlowLength::percent(0.5)),
+                    BlockSizeValue::Auto,
+                ),
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                ..Style::default()
+            },
+            &[text],
+            1,
+        );
+        let root = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                flow: vertical,
+                containing_flow: vertical,
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                ..Style::default()
+            },
+            &[child],
+            0,
+        );
+
+        tree.compute_layout_with_measure(
+            root,
+            available(300.0, 200.0),
+            |known, _available, _node, _context, _line_constraints| {
+                AlgorithmSize::new(
+                    known.width.unwrap_or_default(),
+                    known.height.unwrap_or(40.0),
+                )
+            },
+        );
+
+        assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Buckram));
+        assert_eq!(tree.block_algorithm(child), Some(BlockAlgorithm::Buckram));
+        assert_eq!(
+            tree.layout(child),
+            AlgorithmLayout {
+                width: 150.0,
+                height: 40.0,
                 ..AlgorithmLayout::default()
             }
         );
