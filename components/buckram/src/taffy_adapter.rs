@@ -16,10 +16,10 @@ use taffy::{
 
 use crate::block::FloatContextState;
 use crate::{
-    BlockBoxSizing, BlockContainingBlock, BlockDeferral, BlockFormattingContext, BlockMarginState,
-    BlockSizeValue, BlockStyle, ClearSide, CollapsedMargin, FloatLineConstraints, FloatSide,
-    FlowAxes, FlowLength, FlowLengthAuto, IntrinsicSizeKind, IntrinsicSizes, LogicalSides,
-    PhysicalSides, PhysicalSize, solve_float_inline_size, solve_in_flow_inline_size,
+    Baselines, BlockBoxSizing, BlockContainingBlock, BlockDeferral, BlockFormattingContext,
+    BlockMarginState, BlockSizeValue, BlockStyle, ClearSide, CollapsedMargin, FloatLineConstraints,
+    FloatSide, FlowAxes, FlowLength, FlowLengthAuto, IntrinsicSizeKind, IntrinsicSizes,
+    LogicalSides, PhysicalSides, PhysicalSize, solve_float_inline_size, solve_in_flow_inline_size,
     solve_shrink_to_fit_inline_size,
 };
 
@@ -132,6 +132,7 @@ struct AlgorithmNode<S, Context, Source> {
     cache: Cache,
     unrounded_layout: Layout,
     final_layout: Layout,
+    baselines: Baselines,
 }
 
 /// A caller-owned arena used only while running layout algorithms.
@@ -236,6 +237,7 @@ impl<S, Context, Source> AlgorithmTree<S, Context, Source> {
             cache: Cache::new(),
             unrounded_layout: Layout::new(),
             final_layout: Layout::new(),
+            baselines: Baselines::default(),
         });
         for child in children {
             let previous = self.nodes[child.index()].parent.replace(id);
@@ -422,6 +424,77 @@ impl<S, Context, Source> AlgorithmTree<S, Context, Source> {
             height: layout.size.height,
         }
     }
+
+    /// First and last baseline outputs produced by this formatting context.
+    /// They are logical offsets from the node's block-start edge.
+    pub fn baselines(&self, id: AlgorithmNodeId) -> Baselines {
+        self.nodes[id.index()].baselines
+    }
+
+    /// Replace a direct formatting-context baseline result before parent
+    /// contexts consume it. The adapter stores the modeled output and never
+    /// asks Taffy to rediscover a descendant baseline later.
+    pub fn set_baselines(&mut self, id: AlgorithmNodeId, baselines: Baselines) {
+        assert!(
+            Baselines::new(baselines.first, baselines.last).is_some(),
+            "formatting-context baselines must be finite logical offsets"
+        );
+        self.nodes[id.index()].baselines = baselines;
+    }
+
+    /// Propagate child formatting-context baseline outputs through the
+    /// standards-owned scratch tree. This consumes each child's declared
+    /// output and parent-relative placement, never Taffy's child traversal.
+    pub fn propagate_baselines(&mut self) {
+        for node in &mut self.nodes {
+            node.baselines = Baselines::synthesized_from_block_end(node.final_layout.size.height);
+        }
+        self.propagate_declared_baselines();
+    }
+
+    /// Re-run parent baseline selection after a caller has supplied direct
+    /// line-formatting baselines for admitted measured contexts.
+    pub fn propagate_declared_baselines(&mut self) {
+        for index in (0..self.nodes.len()).rev() {
+            let children = self.nodes[index].children.clone();
+            let first = children.iter().copied().find_map(|child| {
+                let child_node = &self.nodes[child.index()];
+                (child_node.block_style.float == FloatSide::None)
+                    .then(|| {
+                        child_node
+                            .baselines
+                            .first
+                            .map(|baseline| child_node.final_layout.location.y + baseline)
+                    })
+                    .flatten()
+            });
+            let last = children.iter().rev().copied().find_map(|child| {
+                let child_node = &self.nodes[child.index()];
+                (child_node.block_style.float == FloatSide::None)
+                    .then(|| {
+                        child_node
+                            .baselines
+                            .last
+                            .map(|baseline| child_node.final_layout.location.y + baseline)
+                    })
+                    .flatten()
+            });
+            if first.is_some() || last.is_some() {
+                self.nodes[index].baselines = Baselines::new(first, last)
+                    .expect("child baseline outputs remain finite logical offsets");
+            }
+        }
+    }
+
+    pub fn node_ids(&self) -> impl Iterator<Item = AlgorithmNodeId> + '_ {
+        (0..self.nodes.len()).map(|index| {
+            AlgorithmNodeId(
+                index
+                    .try_into()
+                    .expect("an algorithm scratch tree exceeded u32::MAX nodes"),
+            )
+        })
+    }
 }
 
 impl<S, Context, Source> AlgorithmTree<S, Context, Source>
@@ -456,6 +529,7 @@ where
         };
         compute_root_layout(&mut run, root.into_taffy(), available);
         round_layout(&mut run, root.into_taffy());
+        run.tree.propagate_baselines();
     }
 }
 
@@ -3717,5 +3791,89 @@ mod tests {
         tree.compute_layout_with_measure(root, available(200.0, 200.0), zero_measure);
 
         assert_eq!(tree.block_algorithm(root), Some(BlockAlgorithm::Taffy));
+    }
+
+    #[test]
+    fn adapter_propagates_declared_bfc_baselines_without_backend_child_walks() {
+        let mut tree = AlgorithmTree::<Style, (), u8>::new();
+        let flex = tree.new_with_children_and_block_style(
+            AlgorithmKind::Flex,
+            BlockStyle {
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Flex,
+                size: taffy::Size {
+                    width: Dimension::length(80.0),
+                    height: Dimension::length(20.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            1,
+        );
+        let grid = tree.new_with_children_and_block_style(
+            AlgorithmKind::Grid,
+            BlockStyle {
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Grid,
+                size: taffy::Size {
+                    width: Dimension::length(80.0),
+                    height: Dimension::length(30.0),
+                },
+                ..Style::default()
+            },
+            &[],
+            2,
+        );
+        let root = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                size: taffy::Size {
+                    width: Dimension::length(80.0),
+                    height: Dimension::auto(),
+                },
+                ..Style::default()
+            },
+            &[flex, grid],
+            0,
+        );
+
+        tree.compute_layout_with_measure(root, available(80.0, 200.0), zero_measure);
+        tree.set_baselines(
+            flex,
+            Baselines::new(Some(7.0), Some(9.0)).expect("flex baselines"),
+        );
+        tree.set_baselines(
+            grid,
+            Baselines::new(Some(11.0), Some(13.0)).expect("grid baselines"),
+        );
+        tree.propagate_declared_baselines();
+
+        assert_eq!(
+            tree.baselines(flex),
+            Baselines::new(Some(7.0), Some(9.0)).unwrap()
+        );
+        assert_eq!(
+            tree.baselines(grid),
+            Baselines::new(Some(11.0), Some(13.0)).unwrap()
+        );
+        assert_eq!(
+            tree.baselines(root),
+            Baselines::new(
+                Some(tree.layout(flex).y + 7.0),
+                Some(tree.layout(grid).y + 13.0),
+            )
+            .unwrap()
+        );
     }
 }

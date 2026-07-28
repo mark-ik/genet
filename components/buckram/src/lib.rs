@@ -34,7 +34,10 @@ pub use flow::{
 pub use fragment_tree::{
     Baselines, BreakToken, Fragment, FragmentId, FragmentTree, FragmentationContextId, LayoutResult,
 };
-pub use intrinsic::{IntrinsicSizeCache, IntrinsicSizeKind, IntrinsicSizeQuery, IntrinsicSizes};
+pub use intrinsic::{
+    IntrinsicQueryError, IntrinsicQueryState, IntrinsicSizeCache, IntrinsicSizeKind,
+    IntrinsicSizeQuery, IntrinsicSizes, block_intrinsic_sizes_for_definite_inline,
+};
 pub use taffy_adapter::{
     AlgorithmAvailableSpace, AlgorithmKind, AlgorithmLayout, AlgorithmNodeId, AlgorithmSize,
     AlgorithmStyle, AlgorithmTree, BlockAlgorithm,

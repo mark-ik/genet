@@ -29,8 +29,31 @@ pub struct BreakToken {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Baselines {
+    /// Distance from this fragment's logical block-start edge to its first
+    /// baseline.
     pub first: Option<f32>,
+    /// Distance from this fragment's logical block-start edge to its last
+    /// baseline.
     pub last: Option<f32>,
+}
+
+impl Baselines {
+    /// Construct finite baseline offsets in the fragment's own logical flow.
+    pub fn new(first: Option<f32>, last: Option<f32>) -> Option<Self> {
+        [first, last]
+            .into_iter()
+            .flatten()
+            .all(|baseline| baseline.is_finite() && baseline >= 0.0)
+            .then_some(Self { first, last })
+    }
+
+    /// The synthesized baseline for a formatting context with no line-box
+    /// baseline. CSS uses the block-end edge for that fallback in this
+    /// unfragmented lane.
+    pub fn synthesized_from_block_end(block_size: f32) -> Self {
+        Self::new(Some(block_size.max(0.0)), Some(block_size.max(0.0)))
+            .expect("a finite non-negative block size has a valid synthesized baseline")
+    }
 }
 
 /// One fragment produced by one CSS box.
@@ -116,6 +139,15 @@ impl Fragment {
 
     pub fn physical_rect(&self) -> PhysicalRect {
         self.physical_rect
+    }
+
+    /// Attach formatting-context baseline outputs before the fragment enters
+    /// the tree. The values remain logical offsets and are not derived from
+    /// the physical rectangle.
+    pub fn with_baselines(mut self, baselines: Baselines) -> Self {
+        debug_assert!(Baselines::new(baselines.first, baselines.last).is_some());
+        self.baselines = baselines;
+        self
     }
 }
 
@@ -395,6 +427,43 @@ mod tests {
                 width: 70.0,
                 height: 40.0,
             }
+        );
+    }
+
+    #[test]
+    fn fragment_baselines_are_logical_outputs_not_physical_coordinates() {
+        let mut boxes = CssBoxTree::default();
+        let box_id = boxes.push(
+            CssBox::new(
+                BoxOrigin::Element(1u8),
+                DisplayRole::BLOCK_FLOW,
+                FlowAxes::HORIZONTAL_LTR,
+                PositioningScheme::Static,
+                false,
+                None,
+                ContainingBlock::Initial,
+            ),
+            None,
+            true,
+        );
+        let baselines = Baselines::new(Some(6.0), Some(18.0)).expect("valid baselines");
+        let fragment = Fragment::from_horizontal_physical(
+            box_id,
+            PhysicalRect {
+                x: 40.0,
+                y: 90.0,
+                width: 120.0,
+                height: 30.0,
+            },
+        )
+        .with_baselines(baselines);
+
+        assert_eq!(fragment.baselines, baselines);
+        assert_eq!(fragment.physical_rect().y, 90.0);
+        assert_ne!(fragment.baselines.first, Some(fragment.physical_rect().y));
+        assert_ne!(
+            fragment.baselines.last,
+            Some(fragment.physical_rect().height)
         );
     }
 }

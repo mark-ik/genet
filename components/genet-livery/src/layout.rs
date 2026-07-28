@@ -2,8 +2,8 @@ use std::{collections::HashMap, error::Error, fmt, hash::Hash};
 
 use buckram::{
     AlgorithmAvailableSpace, AlgorithmKind, AlgorithmNodeId, AlgorithmSize, AlgorithmTree,
-    BlockBoxSizing, BlockDimensions, BlockPosition as BuckramBlockPosition, BlockSizeValue,
-    BlockStyle, BoxId, BoxOrigin, ClearSide, CssBox, DisplayInside, DisplayOutside,
+    Baselines, BlockBoxSizing, BlockDimensions, BlockPosition as BuckramBlockPosition,
+    BlockSizeValue, BlockStyle, BoxId, BoxOrigin, ClearSide, CssBox, DisplayInside, DisplayOutside,
     FloatContextProvenance, FloatLineConstraints, FloatSide, FlowAxes, FlowLength, FlowLengthAuto,
     FormattingContextKind, Fragment as TreeFragment, FragmentId, FragmentTree, InternalTableRole,
     IntrinsicSizeCache, IntrinsicSizeKind, IntrinsicSizeQuery, IntrinsicSizes, LayoutResult,
@@ -275,6 +275,28 @@ where
             context.remember(width, constraints, layout)
         })
     })
+}
+
+/// Feed retained IFC line baselines into Buckram before fragment collection.
+/// Parent block, flex, and grid contexts consume these declared outputs
+/// through `AlgorithmTree::propagate_declared_baselines`; no post-layout
+/// traversal of backend children is involved.
+fn populate_inline_baselines(tree: &mut AlgorithmTree<Style, InlineMeasure, Vec<BoxId>>) {
+    let direct = tree
+        .node_ids()
+        .filter_map(|node| {
+            let width = tree.layout(node).width;
+            tree.context(node)
+                .and_then(|context| context.layout_for_width(width))
+                .and_then(|layout| layout.baselines())
+                .and_then(|(first, last)| Baselines::new(Some(first), Some(last)))
+                .map(|baselines| (node, baselines))
+        })
+        .collect::<Vec<_>>();
+    for (node, baselines) in direct {
+        tree.set_baselines(node, baselines);
+    }
+    tree.propagate_declared_baselines();
 }
 
 struct InlineBuildState<'a, D: LayoutDom> {
@@ -982,7 +1004,8 @@ fn merge_atomic_subtrees<Id>(
                 .and_then(|parent_box| fragments.fragment_ids_for_box(parent_box).last().copied())
                 .or(Some(root_id));
             fragments.push(
-                TreeFragment::from_horizontal_physical(*box_id, rect),
+                TreeFragment::from_horizontal_physical(*box_id, rect)
+                    .with_baselines(Baselines::synthesized_from_block_end(rect.height)),
                 parent,
                 parent,
             );
@@ -1123,6 +1146,7 @@ where
             )
         },
     );
+    populate_inline_baselines(&mut state.tree);
     let (buckram_blocks, taffy_blocks) = state.tree.block_algorithm_counts();
 
     let mut text_frame = TextFrame::default();
@@ -1607,6 +1631,29 @@ struct FragmentOutput<'a> {
     fragments: &'a mut FragmentTree,
 }
 
+fn fragment_baselines<Id, Context, Source>(
+    tree: &AlgorithmTree<Style, Context, Source>,
+    boxes: &GeneratedBoxTree<Id>,
+    node: AlgorithmNodeId,
+    box_id: BoxId,
+    rect: Fragment,
+) -> Baselines
+where
+    Id: Copy + Eq + Hash,
+{
+    let css_box = &boxes[box_id];
+    if css_box.display.outside == Some(DisplayOutside::Inline)
+        && css_box.display.inside == Some(DisplayInside::FlowRoot)
+    {
+        // The admitted atomic lane currently has no line-baseline provider of
+        // its own. Its modeled fallback is therefore its block-end edge,
+        // rather than a value inferred from the parent's line rectangle.
+        Baselines::synthesized_from_block_end(rect.height)
+    } else {
+        tree.baselines(node)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct FragmentCursor {
     origin: Point<f32>,
@@ -2007,11 +2054,14 @@ where
                         .copied()
                 });
                 let parent = structural_parent.or(parent_fragment);
-                child_parent = Some(output.fragments.push(
-                    TreeFragment::from_horizontal_physical(box_id, rect),
-                    parent,
-                    parent,
-                ));
+                child_parent = Some(
+                    output.fragments.push(
+                        TreeFragment::from_horizontal_physical(box_id, rect)
+                            .with_baselines(fragment_baselines(tree, boxes, node, box_id, rect)),
+                        parent,
+                        parent,
+                    ),
+                );
                 legacy_origin_node(boxes, box_id)
             },
             None => None,
@@ -2084,7 +2134,14 @@ where
             if let Some(line_fragments) = line_fragments {
                 for line_fragment in line_fragments {
                     let fragment_id = output.fragments.push(
-                        TreeFragment::from_horizontal_physical(box_id, *line_fragment),
+                        TreeFragment::from_horizontal_physical(box_id, *line_fragment)
+                            .with_baselines(fragment_baselines(
+                                tree,
+                                boxes,
+                                node,
+                                box_id,
+                                *line_fragment,
+                            )),
                         parent,
                         parent,
                     );
@@ -2092,7 +2149,8 @@ where
                 }
             } else {
                 let fragment_id = output.fragments.push(
-                    TreeFragment::from_horizontal_physical(box_id, rect),
+                    TreeFragment::from_horizontal_physical(box_id, rect)
+                        .with_baselines(fragment_baselines(tree, boxes, node, box_id, rect)),
                     parent,
                     parent,
                 );
@@ -4459,5 +4517,107 @@ mod tests {
         assert_eq!(atomic_inline_width(30.0), 30.0);
         assert_eq!(atomic_inline_width(80.0), 80.0);
         assert_eq!(atomic_inline_width(200.0), 114.0);
+    }
+
+    #[test]
+    fn live_bfc_fragments_expose_text_flex_grid_and_atomic_baselines() {
+        fn by_id(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+            expected: &str,
+        ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+            if dom.attributes(node).any(|attribute| {
+                attribute.name.ns.as_ref().is_empty()
+                    && attribute.name.local.as_ref() == "id"
+                    && attribute.value == expected
+            }) {
+                return Some(node);
+            }
+            dom.dom_children(node)
+                .find_map(|child| by_id(dom, child, expected))
+        }
+
+        let dom = StaticDocument::parse(
+            "<html><body><div id=\"host\"><span id=\"text\">text</span>\
+             <span id=\"atomic\"></span><div id=\"flex\"><span id=\"flex-text\">flex</span></div>\
+             <div id=\"grid\"><span id=\"grid-text\">grid</span></div></div></body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "html, body, div, span { margin: 0; padding: 0; border: 0; }\
+                 #host { width: 160px; font-family: monospace; font-size: 10px; line-height: 20px; }\
+                 #atomic { display: inline-block; width: 20px; height: 12px; }\
+                 #flex { display: flex; width: 80px; }\
+                 #grid { display: grid; width: 80px; grid-template-columns: 1fr; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let fragment = |id| {
+            layout
+                .get(by_id(&dom, dom.document(), id).expect(id))
+                .expect(id)
+        };
+        let host = fragment("host");
+        let text = fragment("text");
+        let atomic = fragment("atomic");
+        let flex = fragment("flex");
+        let grid = fragment("grid");
+
+        for (name, fragment) in [
+            ("host", host),
+            ("text", text),
+            ("atomic", atomic),
+            ("flex", flex),
+            ("grid", grid),
+        ] {
+            assert!(
+                fragment.baselines.first.is_some() && fragment.baselines.last.is_some(),
+                "{name} must expose modeled first and last baselines"
+            );
+        }
+        assert_eq!(
+            atomic.baselines,
+            Baselines::synthesized_from_block_end(atomic.physical_rect().height),
+            "an admitted atomic context keeps its own block-end fallback"
+        );
+        assert!(
+            host.baselines.first.expect("host first baseline") < host.logical_rect.block_size,
+            "the independent host keeps its IFC first baseline instead of its block-end fallback"
+        );
+        assert!(
+            host.baselines.first.expect("host first baseline")
+                >= text.baselines.first.expect("text baseline"),
+            "the host baseline must retain the text IFC contribution"
+        );
+        assert_eq!(
+            flex.baselines,
+            Baselines::synthesized_from_block_end(flex.physical_rect().height),
+            "the admitted flex BFC returns its own empty-line fallback"
+        );
+        assert_eq!(
+            grid.baselines,
+            Baselines::synthesized_from_block_end(grid.physical_rect().height),
+            "the admitted grid BFC returns its own empty-line fallback"
+        );
+        assert_eq!(
+            host.baselines.last,
+            grid.baselines
+                .last
+                .map(|baseline| { grid.physical_rect().y - host.physical_rect().y + baseline }),
+            "the independent host consumes its admitted grid BFC output"
+        );
     }
 }

@@ -937,6 +937,30 @@ where
         (self.width, self.height)
     }
 
+    /// Return the first and last text-line baselines relative to this inline
+    /// formatting context's block-start edge. Atomic-only lines deliberately
+    /// leave this unset so their formatting context can synthesize the
+    /// block-end fallback instead.
+    pub(crate) fn baselines(&self) -> Option<(f32, f32)> {
+        let mut first = None::<f32>;
+        let mut last = None::<f32>;
+        for item in &self.items {
+            let ShapedItem::Text(run) = item else {
+                continue;
+            };
+            // Parley reports this metric in the inline layout's coordinate
+            // space already. `line_y` locates the painted fragment, not an
+            // extra offset to add to the baseline output.
+            let baseline = run.line_baseline;
+            if !baseline.is_finite() || baseline < 0.0 {
+                continue;
+            }
+            first = Some(first.map_or(baseline, |current| current.min(baseline)));
+            last = Some(last.map_or(baseline, |current| current.max(baseline)));
+        }
+        first.zip(last)
+    }
+
     pub(crate) fn place<Id, Resolve>(
         &self,
         frame: &mut TextFrame<Id>,

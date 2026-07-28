@@ -482,6 +482,45 @@ children.
   formatting context returns.
 - Route fragmentainer-dependent answers to K6.
 
+### K3q receipt - 2026-07-28
+
+Buckram now exposes an explicit unfragmented block-axis intrinsic query seam.
+It requires a finite, definite inline basis and returns one measured block
+contribution for both min-content and max-content. Unsupported axes,
+indefinite bases, query cycles, and fragmentainer-dependent contributions are
+explicit results; failed queries do not enter the cache. Fragmentainer work
+remains K6. Livery's retained intrinsic provider continues to answer inline
+widths, so CSS property admission that needs a fragmentainer-aware block
+contribution has not been implied here.
+
+`Baselines` are finite logical offsets from a fragment's block-start edge.
+`AlgorithmTree` retains each formatting context's declared output, synthesizes
+the block-end fallback where there is no line baseline, and lets parents consume
+that output with the copied child placement. It does not recover a baseline by
+walking Taffy descendants after layout. Retained IFCs supply their first and
+last shaped-text baselines; block, flex, grid, and admitted atomic contexts
+expose a modeled result. The currently admitted atomic, empty flex, and empty
+grid cases use their own block-end fallback. Livery copies those outputs into
+its fragment tree unchanged.
+
+Verification:
+
+- `cargo test -p buckram -p livery -p genet-livery --offline`: pass.
+- `cargo clippy -p buckram -p genet-livery --offline --no-deps -- -D warnings`:
+  pass.
+- `rustfmt --check` on the six changed Rust files and `git diff --check`:
+  pass.
+- Release `genet-wpt --all-features --offline` build: pass under Rust 1.97.
+- Named WPT crash-smoke, not behavioral reftest or testharness evidence:
+  `css-align` 293/297, `css-flexbox` 1321/1358, `css-grid` 1888/1891,
+  `css-sizing` 732/732, and CSS2 vertical-align's `linebox` group 200/249;
+  each completed with zero failed and zero errored files.
+
+Proof directory:
+`C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-28_buckram_k3q`
+
+Commit: `Complete Buckram intrinsic block queries and BFC baselines`
+
 ## K3r. Orthogonal normal-flow finalisation
 
 ### Problem
