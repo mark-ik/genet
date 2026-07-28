@@ -558,7 +558,10 @@ where
             None => genet_scripted::ScriptedDocument::<E>::load(&self.fetcher, &request.address),
         }
         .map_err(SessionError::SpawnFailed)?;
-        let mut session = ScriptedDocumentSession { doc };
+        let mut session = ScriptedDocumentSession {
+            doc,
+            address: request.address.clone(),
+        };
         if request.hidden {
             session.doc.set_hidden(true);
         }
@@ -572,12 +575,20 @@ where
 #[cfg(feature = "scripted")]
 pub struct ScriptedDocumentSession<E: script_engine_api::ScriptEngine> {
     doc: genet_scripted::ScriptedDocument<E>,
+    address: String,
 }
 
 #[cfg(feature = "scripted")]
 impl<E: script_engine_api::ScriptEngine + 'static> ScriptedDocumentSession<E> {
     pub fn new(doc: genet_scripted::ScriptedDocument<E>) -> Self {
-        Self { doc }
+        Self::new_at(doc, "about:blank")
+    }
+
+    pub fn new_at(doc: genet_scripted::ScriptedDocument<E>, address: impl Into<String>) -> Self {
+        Self {
+            doc,
+            address: address.into(),
+        }
     }
 }
 
@@ -603,6 +614,27 @@ impl<E: script_engine_api::ScriptEngine + 'static> DocumentSession<Scene>
             SessionClick::Miss
         }
     }
+    fn pointer_down(&mut self, x: f32, y: f32) -> SessionClick {
+        if self.doc.begin_text_selection(x, y) {
+            SessionClick::Handled
+        } else {
+            self.click_at(x, y)
+        }
+    }
+    fn pointer_move(&mut self, x: f32, y: f32) -> bool {
+        self.doc.extend_text_selection(x, y)
+    }
+    fn pointer_up(&mut self, x: f32, y: f32) -> SessionClick {
+        if self.doc.finish_text_selection(x, y) {
+            SessionClick::Handled
+        } else {
+            self.click_at(x, y)
+        }
+    }
+    fn text_target(&self, text: &str) -> Option<SessionTextTarget> {
+        let (anchor, focus) = self.doc.text_target(text)?;
+        Some(SessionTextTarget { anchor, focus })
+    }
     fn links(&self) -> Vec<SessionLink> {
         self.doc
             .links()
@@ -618,6 +650,19 @@ impl<E: script_engine_api::ScriptEngine + 'static> DocumentSession<Scene>
     }
     fn set_hidden(&mut self, hidden: bool) {
         self.doc.set_hidden(hidden);
+    }
+    fn inspect(&self) -> Option<inker::ContentReport> {
+        let dom = self.doc.dom();
+        Some(genet_render::content_report(&*dom))
+    }
+    fn clip(&self) -> Option<DocumentClip> {
+        let links = self.doc.links();
+        let selection = self.doc.text_selection();
+        let dom = self.doc.dom();
+        match selection {
+            Some(selection) => semantic_clip_from_selection(&self.address, &*dom, selection, links),
+            None => semantic_clip_from_dom(&self.address, &*dom),
+        }
     }
     /// Observation extras (extract, dom_snapshot, dispatch_event, dom stats)
     /// stay on the concrete type until the observation contract lands
@@ -769,6 +814,12 @@ mod tests {
             None
         }
     }
+    #[cfg(feature = "scripted")]
+    impl genet_scripted::ResourceFetcher for NoFetch {
+        fn fetch(&self, _url: &str) -> Option<Vec<u8>> {
+            None
+        }
+    }
 
     #[cfg(feature = "livery")]
     struct ImageFetch {
@@ -880,6 +931,73 @@ mod tests {
         );
 
         let clip = session.clip().expect("selection supplies a clip");
+        assert_eq!(clip.text, "selected link");
+        assert_eq!(clip.links, vec!["/chosen"]);
+        let selector: serde_json::Value =
+            serde_json::from_str(clip.selector.as_deref().expect("range selector"))
+                .expect("selector is typed JSON");
+        assert_eq!(selector["type"], "dom-range");
+        assert_eq!(selector["version"], 1);
+        assert_eq!(selector["quote"], "selected link");
+        assert!(selector["anchor"]["path"].is_array());
+        assert!(selector["focus"]["path"].is_array());
+    }
+
+    #[cfg(feature = "scripted")]
+    #[test]
+    fn scripted_session_selects_and_clips_the_live_dom() {
+        let engine = ScriptedSessionEngine::<script_engine_boa::BoaEngine, _>::new(
+            "genet.scripted",
+            NoFetch,
+        );
+        let request = SessionSpawnRequest::new("https://example.test/report")
+            .with_body(
+                "<html><head><title>Live Page</title></head><body style=\"margin:0\">\
+                 <p style=\"margin:0\">before <a id=\"choice\" href=\"/chosen\"></a> after \
+                 <a href=\"/outside\">outside</a></p>\
+                 <script>document.getElementById('choice').appendChild(\
+                 document.createTextNode('selected link'));</script>\
+                 </body></html>",
+            )
+            .with_viewport(640, 200);
+        let mut session = engine.spawn(&request).expect("scripted lane spawns");
+        let unselected = session.frame(640, 200);
+        let unselected_rects = unselected
+            .ops
+            .iter()
+            .filter(|op| matches!(op, netrender::SceneOp::Rect(_)))
+            .count();
+        let report = session.inspect().expect("live DOM is inspectable");
+        assert_eq!(report.title.as_deref(), Some("Live Page"));
+
+        let target = session
+            .text_target("selected link")
+            .expect("post-script text resolves to pointer endpoints");
+        assert_eq!(
+            session.pointer_down(target.anchor[0], target.anchor[1]),
+            SessionClick::Handled
+        );
+        assert!(
+            session.pointer_move(target.focus[0], target.focus[1]),
+            "the live range extends through ordinary pointer input"
+        );
+        assert_eq!(
+            session.pointer_up(target.focus[0], target.focus[1]),
+            SessionClick::Handled
+        );
+        let selected = session.frame(640, 200);
+        let selected_rects = selected
+            .ops
+            .iter()
+            .filter(|op| matches!(op, netrender::SceneOp::Rect(_)))
+            .count();
+        assert!(
+            selected_rects > unselected_rects,
+            "the retained live range paints selection geometry"
+        );
+
+        let clip = session.clip().expect("live selection supplies a clip");
+        assert_eq!(clip.source_url, "https://example.test/report");
         assert_eq!(clip.text, "selected link");
         assert_eq!(clip.links, vec!["/chosen"]);
         let selector: serde_json::Value =

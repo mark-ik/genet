@@ -43,7 +43,7 @@ use layout_dom_api::{LayoutDom, LocalName, Namespace};
 #[cfg(feature = "render")]
 use netrender::Scene;
 #[cfg(feature = "render")]
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell};
 #[cfg(feature = "render")]
 use std::rc::Rc;
 
@@ -51,11 +51,13 @@ use engine_observables_api::DomArenaStats;
 #[cfg(feature = "render")]
 use engine_observables_api::LayoutBatchStats;
 #[cfg(feature = "render")]
-use genet_layout::{IncrementalLayout, ScrollKey, ScrollOffsets, inline_stylesheets};
+use genet_layout::{
+    IncrementalLayout, ScrollKey, ScrollOffsets, TextRange, TextSelection, inline_stylesheets,
+};
 #[cfg(feature = "render")]
 use genet_render::translated_frame_from_session_dom;
 #[cfg(feature = "render")]
-use genet_scripted_dom::NodeId;
+use genet_scripted_dom::{NodeId, ScriptedDom};
 use genet_static_dom::{StaticDocument, StaticNodeId};
 use script_engine_api::ScriptEngine;
 #[cfg(feature = "render")]
@@ -141,6 +143,14 @@ pub struct ScriptedDocument<E: ScriptEngine> {
     /// so script reads computed values off the most recent cascade.
     #[cfg(feature = "render")]
     layout: RetainedLayout,
+    /// The retained text position where the captured primary-pointer gesture
+    /// began.
+    #[cfg(feature = "render")]
+    selection_anchor: Option<(NodeId, usize)>,
+    /// The current live-DOM text range. A collapsed range is retained during the
+    /// gesture but is not exposed as a clip.
+    #[cfg(feature = "render")]
+    selection_range: Option<TextRange<NodeId>>,
     capture: Option<DomCaptureRecorder>,
     /// Page Visibility state (W3C adoption plan P1): `true` = the document is
     /// not being presented (an unfocused preview card). Hidden documents get
@@ -408,6 +418,10 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
             pending_fragment: None,
             #[cfg(feature = "render")]
             layout,
+            #[cfg(feature = "render")]
+            selection_anchor: None,
+            #[cfg(feature = "render")]
+            selection_range: None,
             capture,
             hidden: false,
             frozen: false,
@@ -541,7 +555,24 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         }
         let scroll = session.viewport_scroll();
         let range = session.scroll_range(dom);
-        let frame = translated_frame_from_session_dom(&session, dom, w, h);
+        let mut frame = translated_frame_from_session_dom(&session, dom, w, h);
+        if let Some(range) = self.selection_range
+            && dom.is_live(range.anchor_node)
+            && dom.is_live(range.focus_node)
+            && let Some(selection) = session.text_selection(dom, range)
+        {
+            for rect in selection.rects {
+                let x0 = (rect.x - scroll.0).max(0.0);
+                let y0 = (rect.y - scroll.1).max(0.0);
+                let x1 = (rect.x + rect.width - scroll.0).min(w as f32);
+                let y1 = (rect.y + rect.height - scroll.1).min(h as f32);
+                if x0 < x1 && y0 < y1 {
+                    frame
+                        .scene
+                        .push_rect(x0, y0, x1, y1, [0.18, 0.46, 0.95, 0.34]);
+                }
+            }
+        }
         drop(host);
 
         // Retain this frame's cascade so the `getComputedStyle` bridge can read
@@ -567,6 +598,107 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
         };
         let host = self.rt.host().borrow();
         session.link_rects(&host.dom)
+    }
+
+    /// Begin a text-selection gesture at viewport point `(x, y)`. Any prior
+    /// range is cleared. Returns whether the point resolved to laid-out text.
+    #[cfg(feature = "render")]
+    pub fn begin_text_selection(&mut self, x: f32, y: f32) -> bool {
+        self.selection_range = None;
+        self.selection_anchor = {
+            let layout = self.layout.borrow();
+            let Some(session) = layout.as_ref() else {
+                return false;
+            };
+            let host = self.rt.host().borrow();
+            session.text_position_at_point(&host.dom, x, y, &ScrollOffsets::default())
+        };
+        self.selection_anchor.is_some()
+    }
+
+    /// Extend the captured selection to `(x, y)`. Returns whether its retained
+    /// range changed.
+    #[cfg(feature = "render")]
+    pub fn extend_text_selection(&mut self, x: f32, y: f32) -> bool {
+        let Some(anchor) = self.selection_anchor else {
+            return false;
+        };
+        let focus = {
+            let layout = self.layout.borrow();
+            let Some(session) = layout.as_ref() else {
+                return false;
+            };
+            let host = self.rt.host().borrow();
+            session.text_position_at_point(&host.dom, x, y, &ScrollOffsets::default())
+        };
+        let Some(focus) = focus else {
+            return false;
+        };
+        let next = TextRange {
+            anchor_node: anchor.0,
+            anchor_offset: anchor.1,
+            focus_node: focus.0,
+            focus_offset: focus.1,
+        };
+        if self.selection_range == Some(next) {
+            return false;
+        }
+        self.selection_range = Some(next);
+        true
+    }
+
+    /// Finish the captured selection. A collapsed gesture clears its range and
+    /// returns `false`, allowing the caller to perform the ordinary click.
+    #[cfg(feature = "render")]
+    pub fn finish_text_selection(&mut self, x: f32, y: f32) -> bool {
+        self.extend_text_selection(x, y);
+        self.selection_anchor = None;
+        if self.text_selection().is_some() {
+            true
+        } else {
+            self.selection_range = None;
+            false
+        }
+    }
+
+    /// The current non-collapsed selection, recomputed through the retained
+    /// layout against the live post-script DOM.
+    #[cfg(feature = "render")]
+    pub fn text_selection(&self) -> Option<TextSelection<NodeId>> {
+        let range = self.selection_range?;
+        let layout = self.layout.borrow();
+        let session = layout.as_ref()?;
+        let host = self.rt.host().borrow();
+        if !host.dom.is_live(range.anchor_node) || !host.dom.is_live(range.focus_node) {
+            return None;
+        }
+        session.text_selection(&host.dom, range)
+    }
+
+    /// Resolve the first retained occurrence of `text` to viewport pointer
+    /// endpoints. Callers still drive the ordinary pointer lifecycle.
+    #[cfg(feature = "render")]
+    pub fn text_target(&self, text: &str) -> Option<([f32; 2], [f32; 2])> {
+        let layout = self.layout.borrow();
+        let session = layout.as_ref()?;
+        let host = self.rt.host().borrow();
+        let range = session
+            .find_text_ranges(&host.dom, text)
+            .into_iter()
+            .next()?;
+        let start = session.caret_rect(&host.dom, range.node, range.start, 1.0)?;
+        let end = session.caret_rect(&host.dom, range.node, range.end, 1.0)?;
+        let (scroll_x, scroll_y) = session.viewport_scroll();
+        Some((
+            [start.x - scroll_x, start.y + start.height * 0.5 - scroll_y],
+            [end.x - scroll_x, end.y + end.height * 0.5 - scroll_y],
+        ))
+    }
+
+    /// Borrow the live post-script DOM for host-neutral inspection and clipping.
+    #[cfg(feature = "render")]
+    pub fn dom(&self) -> Ref<'_, ScriptedDom> {
+        Ref::map(self.rt.host().borrow(), |host| &host.dom)
     }
 
     /// Scroll by a device-px wheel delta, clamped to the last frame's scrollable
