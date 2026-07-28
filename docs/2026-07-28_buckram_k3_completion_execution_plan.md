@@ -1,6 +1,6 @@
 # Buckram K3 completion execution plan
 
-**Status:** ready for serial execution
+**Status:** K3s audit complete; K3 closure blocked by final reftest ratchet
 
 **Base capability receipt:** K3l, commit `4c71a0959b8`
 
@@ -632,6 +632,58 @@ Commit: `Complete Buckram orthogonal normal flow`
 - Complete CSS2, `css/css-sizing`, `css/css-writing-modes`, and the all-nine
   ratchet have zero unexplained regressions against their frozen predecessors.
 - The final receipt states exact changed files, not only aggregate counts.
+
+### K3s receipt - 2026-07-28
+
+Capability: the K3 dispatch audit is complete. Buckram records the
+first CSS-facing `BlockDeferral` on every Taffy block fallback, while an
+already-active fallback's descendants record the adapter-only
+`BackendSizingMode`. A dynamic child fallback now preserves its original
+reason through its parent. `ParentMarginCollapse` is deleted because an
+admitted Buckram block child must return modeled margin output.
+
+Boundary retained: the architecture plan's K3 dispatch audit inventories the
+surviving deferrals and routes table behavior to K4, positioning and the
+out-of-flow IFC participant to K5, fragmentation-dependent answers to K6, and
+the remaining unsupported intrinsic, replaced, containment, nonlinear, and
+orthogonal-float shapes as named post-cutover gaps.
+
+Pure fixture: `taffy_block_fallback_retains_the_css_facing_deferral` proves a
+replaced root preserves `Replaced` while its nested Taffy block records only
+`BackendSizingMode`. `nested_float_state_nonconvergence_remains_deferred`
+proves a dynamic child fallback reaches the root as `NestedFloatState`.
+
+Adapter fixture: `orthogonal_float_continuation_stays_deferred_without_a_logical_transform`
+records `NestedFloatState` rather than copying physical float sides across
+flows. The K3m through K3r structural fixtures remain the owned normal-flow,
+intrinsic, BFC, IFC, baseline, and logical-fragment proofs.
+
+Live fixture: `ordinary_live_block_flow_uses_buckram_without_backend_dispatch`,
+`live_nested_float_state_crosses_ordinary_wrappers_but_stops_at_bfcs`, and
+`live_orthogonal_normal_flow_preserves_logical_fragment_geometry_and_baseline`
+cover the selected Livery path with generated boxes, fragments, float
+boundaries, baselines, and zero accidental Taffy block fallback.
+
+WPT exact movement: all nine fresh Livery reftest maps retain their K3l file
+cardinality, 16,375 URLs total. They move 69 fail-to-pass and 45 pass-to-fail
+statuses: 5,738 to 5,762 passes. The full per-file delta is
+`all-nine-delta-details.txt` in the proof directory. The 45 regressions block
+the final K3 closure receipt; they are not relabelled as accepted forward work.
+
+Verification:
+
+- `cargo test -p buckram -p livery -p genet-livery --offline`: pass, 27 test
+  targets reported success on the final audited source.
+- `cargo clippy -p buckram --offline --no-deps -- -D warnings`: pass. The
+  combined Buckram and Genet-Livery command remains blocked by the unrelated
+  `clippy::implicit_saturating_sub` warning in `components/genet-livery/src/text.rs`.
+- Release `genet-wpt --all-features --offline` build: pass under Rust 1.97.
+- Fresh Livery reftest maps ran all nine K3 directories; their nonzero runner
+  exits reflect expected failing reftests, while the written JSON maps provide
+  the exact status comparison above.
+
+Proof directory:
+`C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-28_buckram_k3s`
 
 K3 closure does not mean complete CSS layout. It means the remaining work is
 truthfully owned by K4, K5, K6, or an explicitly named post-cutover gap.

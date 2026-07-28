@@ -1409,16 +1409,59 @@ Verification:
   release-build log are at
   `Code/testing/genet/wpt-ledger/2026-07-27_buckram_k3l`.
 
-Still open in K3: multi-child and block-content auto floats, inline-block
-shrink-to-fit, automatic inline margins, non-table atomic-inline BFC
-avoidance beside floats, float continuation through generated `Block`
-formatting-context roots and across flow changes, negative-margin and
-split-inline nested floats, nowrap and nested inline contexts beside floats,
-vertical auto block-size finalisation, independent-BFC baselines, intrinsic
-block queries, and the final Taffy block-dispatch audit.
+#### K3s dispatch audit - 2026-07-28 (closure blocked)
 
-Table-specific avoidance is routed to K4. Positioning and the out-of-flow IFC
-participant protected by K3b's cache guard are routed to K5.
+K3's selected normal-flow cutover owns logical normal flow,
+intrinsic inline and unfragmented block queries, margin collapsing, direct and
+same-flow nested floats, clearance, float bands through Livery's retained IFC,
+admitted BFC avoidance, baseline outputs, and orthogonal auto block-size
+finalisation. Livery builds fragments with both flow-relative logical geometry
+and the physical geometry needed by paint. K3 itself does not close on this
+audit: the final all-nine reftest ratchet retains every URL but reports 45
+pass-to-fail changes from the frozen K3l maps. The dispatch inventory below is
+a boundary map, not an acceptance of those regressions.
+
+The remaining Taffy block call is now an explicit boundary, not a silent
+fallback. `AlgorithmTree::block_deferral` retains the CSS-facing
+`BlockDeferral` that selected it. A descendant reached while that fallback is
+already active records `BackendSizingMode`, while the ancestor retains the
+original cause. Dynamic nested-float failure now propagates its
+`NestedFloatState` cause instead of being relabelled as a missing parent margin
+output. `ParentMarginCollapse` is deleted: an admitted Buckram child must
+return its modeled margin state.
+
+| Survivor | K3 admission or retained route |
+|---|---|
+| `Positioning` | K5 owns relative, absolute, fixed, and sticky positioning. |
+| `ShrinkToFit`, `FloatShrinkToFit` | K3 owns admitted horizontal intrinsic subtrees. Percentage and cyclic intrinsic shapes remain a named post-cutover query gap. |
+| `FloatLineExclusion` | K3 owns Livery's retained IFC float-band input. A generic measured leaf that does not opt in remains outside the selected adapter contract. |
+| `FloatFormattingContextAvoidance` | K3 owns admitted static horizontal flow-root, flex, and grid roots. Table wrappers go to K4; positioned, replaced, and untransformed orthogonal roots remain named gaps. |
+| `NestedFloatState` | K3 owns same-flow ordinary-wrapper continuation with a bounded converging fixed point. Inline-origin floats, cross-flow side transforms, and non-converging state remain named gaps. |
+| `IntrinsicSize` | K3 owns the admitted min/max inline and unfragmented block queries. Cycles, percentages without a stable basis, and fragmentainer-dependent answers remain explicit gaps. |
+| `IndependentFormattingContext` | K3 owns the admitted BFC roles. Table-specific roots are K4; unsupported atomic, positioned, replaced, or orthogonal roots retain their named boundary. |
+| `Replaced`, `AspectRatio`, `SizeContainment`, `NonlinearLength` | Named post-cutover capability gaps. They are not treated as ordinary block flow. |
+| `IndefiniteInlineSize` | A named capability gap until a stable containing inline basis is supplied; fragmentainer-dependent cases are K6. |
+| `BackendSizingMode` | Adapter-internal Taffy traversal below an already-recorded fallback, not a second CSS-facing dispatch. |
+
+K4 owns table wrapper behavior and table-specific float avoidance. K5 owns
+positioning and the out-of-flow IFC participant. K6 owns block fragmentation,
+fragmentainer-dependent intrinsic answers, and multi-fragment vertical sizing.
+The named post-cutover gaps above remain visible at dispatch rather than being
+mistaken for completed normal flow.
+
+Exact changed files for this audit: `components/buckram/src/block.rs`,
+`components/buckram/src/taffy_adapter.rs`,
+`docs/2026-07-28_buckram_k3_completion_execution_plan.md`, and this plan.
+
+The fresh all-nine Livery reftest maps retain all 16,375 K3l URLs and move 114
+statuses: 69 fail-to-pass and 45 pass-to-fail, for 5,762 passes versus K3l's
+5,738. The pass-to-fail set is concentrated in CSS2 floats/clearance,
+vertical-align, positioning, flex, grid scrollbar sizing, multicol, and
+writing-mode orthogonal sizing and inline-text cases. Exact per-file maps and
+the full delta are in
+`Code/testing/genet/wpt-ledger/2026-07-28_buckram_k3s`. They need individual
+disposition or correction before a final K3 closure receipt replaces this
+audit.
 
 ### K4. CSS tables
 
