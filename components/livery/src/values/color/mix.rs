@@ -71,31 +71,37 @@ impl HueInterpolation {
     }
 }
 
-/// `color-mix(in <space> [<hue> hue]?, <color> [<percentage>]?, <color> [<percentage>]?)`
+/// `color-mix([in <space> [<hue> hue]?,]? <color> [<percentage>]?, <color> [<percentage>]?)`
 pub fn parse_color_mix<'i>(input: &mut Parser<'i, '_>) -> Result<Color, Failure<'i>> {
-    input.expect_ident_matching("in")?;
+    let interpolation = input
+        .try_parse(|nested| {
+            nested.expect_ident_matching("in")?;
+            let location = nested.current_source_location();
+            let space_name = nested.expect_ident_cloned()?;
+            let space = ColorSpace::from_interpolation_name(&space_name)
+                .ok_or_else(|| location.new_custom_error(()))?;
 
-    let location = input.current_source_location();
-    let space_name = input.expect_ident_cloned()?;
-    let space = ColorSpace::from_interpolation_name(&space_name)
-        .ok_or_else(|| location.new_custom_error(()))?;
+            // The hue interpolation method is only allowed for polar spaces.
+            let hue_method = if space.hue_index().is_some() {
+                nested
+                    .try_parse(|i| {
+                        let name = i.expect_ident_cloned()?;
+                        let method = HueInterpolation::from_name(&name)
+                            .ok_or_else(|| i.new_custom_error::<(), ()>(()))?;
+                        i.expect_ident_matching("hue")?;
+                        Ok::<_, Failure<'i>>(method)
+                    })
+                    .unwrap_or(HueInterpolation::Shorter)
+            } else {
+                HueInterpolation::Shorter
+            };
+            nested.expect_comma()?;
+            Ok::<_, Failure<'i>>((space, hue_method))
+        })
+        .ok();
+    let (space, hue_method) =
+        interpolation.unwrap_or((ColorSpace::Oklab, HueInterpolation::Shorter));
 
-    // The hue interpolation method is only allowed for polar spaces.
-    let hue_method = if space.hue_index().is_some() {
-        input
-            .try_parse(|i| {
-                let name = i.expect_ident_cloned()?;
-                let method = HueInterpolation::from_name(&name)
-                    .ok_or_else(|| i.new_custom_error::<(), ()>(()))?;
-                i.expect_ident_matching("hue")?;
-                Ok::<_, Failure<'i>>(method)
-            })
-            .unwrap_or(HueInterpolation::Shorter)
-    } else {
-        HueInterpolation::Shorter
-    };
-
-    input.expect_comma()?;
     let (first, first_percentage) = parse_mix_operand(input)?;
     input.expect_comma()?;
     let (second, second_percentage) = parse_mix_operand(input)?;
