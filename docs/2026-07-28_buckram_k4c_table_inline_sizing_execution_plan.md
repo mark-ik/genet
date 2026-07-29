@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-28
 
-**Status:** scoped; execution starts after the accepted K4b receipt
+**Status:** ready. The accepted K4b base is `26eda4cd9fe`; K4c1 is next.
 
 **Parent plan:** [Buckram K4 CSS tables execution plan](2026-07-28_buckram_k4_css_tables_execution_plan.md)
 
@@ -46,8 +46,8 @@ K4b must already provide:
   bridge.
 
 The frozen pre-K4 orientation is the K3 closure commit
-`2f1ae56968c` (`Complete Buckram K3 closure ratchet`). K4c records K4b's
-accepted commit as its actual base and produces fresh expectation maps for:
+`2f1ae56968c` (`Complete Buckram K3 closure ratchet`). K4c starts from the
+accepted K4b commit `26eda4cd9fe` and produces fresh expectation maps for:
 
 - `css/CSS2/tables`; and
 - `css/css-tables`.

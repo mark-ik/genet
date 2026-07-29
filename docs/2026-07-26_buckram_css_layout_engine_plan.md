@@ -1,7 +1,8 @@
 # Buckram: a CSS layout engine over reusable algorithms
 
 **Date:** 2026-07-26
-**Status:** active design; implementation starts at K0.
+**Status:** in execution. K0 through K3 are accepted; K4a and K4b are
+accepted, and K4c is next.
 **Decision:** Buckram owns CSS box generation, formatting contexts, intrinsic
 sizing, and fragments. Taffy is an algorithm library for flex and grid, with
 block layout retained only as a migration aid.
@@ -1433,21 +1434,23 @@ return its modeled margin state.
 | Survivor | K3 admission or retained route |
 |---|---|
 | `Positioning` | K5 owns relative, absolute, fixed, and sticky positioning. |
-| `ShrinkToFit`, `FloatShrinkToFit` | K3 owns admitted horizontal intrinsic subtrees. Percentage and cyclic intrinsic shapes remain a named post-cutover query gap. |
+| `ShrinkToFit`, `FloatShrinkToFit` | K3 owns admitted horizontal intrinsic subtrees. K7 owns percentage and cyclic intrinsic shapes that do not depend on a fragmentainer; fragmentainer-dependent answers are K6. |
 | `FloatLineExclusion` | K3 owns Livery's retained IFC float-band input. A generic measured leaf that does not opt in remains outside the selected adapter contract. |
 | `FloatFormattingContextAvoidance` | K3 owns admitted static horizontal flow-root, flex, and grid roots. Table wrappers go to K4; positioned, replaced, and untransformed orthogonal roots remain named gaps. |
 | `NestedFloatState` | K3 owns same-flow ordinary-wrapper continuation with a bounded converging fixed point. Inline-origin floats, cross-flow side transforms, and non-converging state remain named gaps. |
 | `IntrinsicSize` | K3 owns the admitted min/max inline and unfragmented block queries. Cycles, percentages without a stable basis, and fragmentainer-dependent answers remain explicit gaps. |
 | `IndependentFormattingContext` | K3 owns the admitted BFC roles. Table-specific roots are K4; unsupported atomic, positioned, replaced, or orthogonal roots retain their named boundary. |
-| `Replaced`, `AspectRatio`, `SizeContainment`, `NonlinearLength` | Named post-cutover capability gaps. They are not treated as ordinary block flow. |
-| `IndefiniteInlineSize` | A named capability gap until a stable containing inline basis is supplied; fragmentainer-dependent cases are K6. |
+| `Replaced`, `AspectRatio` | K5 owns the subset required by absolute and fixed sizing. K7 owns the general normal-flow and atomic sizing capability. |
+| `SizeContainment`, `NonlinearLength` | K7 owns these foundational sizing gaps. They are not treated as ordinary block flow. |
+| `IndefiniteInlineSize` | K6 owns fragmentainer-dependent cases. K7 owns remaining cases that lack a stable containing inline basis in continuous media. |
 | `BackendSizingMode` | Adapter-internal Taffy traversal below an already-recorded fallback, not a second CSS-facing dispatch. |
 
 K4 owns table wrapper behavior and table-specific float avoidance. K5 owns
 positioning and the out-of-flow IFC participant. K6 owns block fragmentation,
 fragmentainer-dependent intrinsic answers, and multi-fragment vertical sizing.
-The named post-cutover gaps above remain visible at dispatch rather than being
-mistaken for completed normal flow.
+K7 owns the remaining foundational sizing and dispatch gaps above. They remain
+visible at dispatch until their owning gate closes rather than being mistaken
+for completed normal flow.
 
 Exact changed files for this audit: `components/buckram/src/block.rs`,
 `components/buckram/src/taffy_adapter.rs`,
@@ -1491,7 +1494,7 @@ table wrappers and table-specific float avoidance. K5 owns relative,
 absolute, fixed, sticky, static-position, and out-of-flow IFC work. K6 owns
 fragmentation and fragmentainer-dependent intrinsic sizes. The retained IFC,
 grid, and writing-mode cases above remain explicit post-cutover capability
-gaps rather than implicit K3 deferrals.
+gaps routed to K5, K6, or K7 rather than implicit K3 deferrals.
 
 The closure changed
 `components/buckram/src/taffy_adapter.rs`,
@@ -1505,36 +1508,231 @@ log are under
 
 ### K4. CSS tables
 
+**Execution plan:** [Buckram K4 CSS tables execution
+plan](./2026-07-28_buckram_k4_css_tables_execution_plan.md).
+
 Implement anonymous table fixup, row and column structure, spans, fixed and
 auto sizing, captions, separate and collapsed borders, and positioned table
 parts. A Taffy grid call may solve track constraints after Buckram has run the
 CSS table algorithm. Grid auto-sizing is not the table algorithm.
 
+K4a and K4b are accepted. Buckram now has the complete table vocabulary,
+wrapper/grid box generation, ordered anonymous repair, a typed table grid, and
+HTML span normalization. K4c is the next executable gate.
+
 **Receipt:** carry forward the old B3a-c family ledger; remove the
 positioned-row flattening guard and the partial `table-layout` marker only
 when their named limitations are closed.
 
-### K5. Positioning and incremental relayout
+### K5. Positioning and persistent layout state
 
-Implement static-position calculation, relative offsets, absolute and fixed
-containing blocks, sticky constraints, overflow, and dirty-subtree relayout.
+K5 starts implementation only after K4h has exposed table wrappers, grids,
+cells, rows, and captions through their correct containing fragments. Research
+and execution planning may proceed while K4 runs, but K5 must not invent a
+second table-positioning seam.
 
-**Receipt:** named css-position families, fragment-level containing-block
-fixtures, and a dirty-subtree receipt that leaves unaffected fragment
-identities stable.
+[CSS Positioned Layout Level 3](https://www.w3.org/TR/css-position-3/) is the
+primary positioning authority. CSS 2.1 remains evidence for the cases it
+defines, while the flex, grid, table, and overflow specifications own their
+formatting-context-specific static positions and overflow behavior. WPT and
+browser interoperability decide only behavior the applicable specification
+leaves open.
+
+K5 has two coupled outcomes:
+
+1. Buckram owns static, relative, absolute, fixed, and sticky geometry without
+   lowering their distinctions onto Taffy's `Position` enum.
+2. Buckram retains box and fragment identity across an unfragmented
+   continuous-media relayout and can replace one dirty formatting-context
+   subtree without rebuilding unrelated layout state.
+
+Livery already retains computed styles incrementally. That is an input to K5,
+not an incremental-layout receipt: the current layout path regenerates the
+box tree and appends a fresh fragment vector on every uncached frame.
+
+#### K5 execution order
+
+| Gate | Outcome | Relative difficulty |
+|---|---|---|
+| K5a | containing-block graph and complete position inputs | high |
+| K5b | static-position rectangles from every formatting context | very high |
+| K5c | relative positioning and positioned overflow | high |
+| K5d | absolute and fixed sizing and placement | very high |
+| K5e | flex, grid, table, IFC, paint, and overflow integration | very high |
+| K5f | sticky constraints and scroll integration | very high |
+| K5g | persistent box and fragment storage | very high |
+| K5h | dirty-root relayout, fallback deletion, and closure | very high |
+
+Accepted implementation gates land serially. K5b, K5d, and K5g are
+miniature phases and receive separate execution plans before their code
+starts.
+
+#### K5a. Containing-block graph and inputs
+
+- Resolve Buckram's pending normal-flow, absolute, and fixed containing-block
+  rules to box-level relationships.
+- Retain separate absolute and fixed chains and the initial containing block.
+- Represent every implemented containing-block-establishing trigger explicitly.
+  An unimplemented trigger remains a named capability gap rather than being
+  treated as an ordinary positioned ancestor.
+- Carry physical and logical inset values, margins, sizing constraints,
+  alignment inputs, positioning scheme, and writing mode without consulting a
+  backend style enum.
+
+**Removal receipt:** delete any source-side map or backend query that chooses a
+positioned containing block independently of `CssBoxTree`.
+
+#### K5b. Static-position rectangles
+
+- Make block, inline, flex, grid, and table formatting contexts record the
+  position an out-of-flow box would have occupied as an in-flow participant.
+- Give an inline-origin out-of-flow child a line-level static-position
+  rectangle instead of measuring it as an unrelated leaf.
+- Preserve the formatting-context coordinate space even when the selected
+  absolute or fixed containing block is a different ancestor.
+- Consume K4h's table wrapper and internal-table anchors rather than restoring
+  the old positioned-row side list.
+
+**Removal receipt:** delete the out-of-flow IFC cache guard and every
+static-position value recovered from a completed Taffy layout.
+
+#### K5c. Relative positioning
+
+- Lay a relatively positioned box in normal flow, then apply its used logical
+  offset without moving following siblings.
+- Move its fragment subtree and containing-block coordinate space together.
+- Accumulate ink and scrollable overflow from the offset geometry and keep
+  paint, hit testing, accessibility, and CSSOM on the same fragments.
+- Cover relatively positioned table parts through the K4h seam.
+
+#### K5d. Absolute and fixed layout
+
+- Resolve the inset-modified containing block, automatic margins, automatic
+  sizes, min/max constraints, shrink-to-fit contributions, percentages, and
+  over-constrained axes in logical coordinates.
+- Implement the replaced-content and aspect-ratio subset required by absolute
+  and fixed sizing. The general capability remains K7.
+- Distinguish the initial absolute containing block from the initial fixed
+  containing block and from fixed-position containing blocks established by
+  implemented properties.
+- Keep fixed replication in paged media and positioned fragmentation in K6.
+
+**Removal receipt:** delete the live lowering that maps both absolute and fixed
+boxes to Taffy's absolute position.
+
+#### K5e. Cross-format integration and overflow
+
+- Consume the static-position outputs of flex, grid, table, block, and inline
+  contexts without rerunning their parent algorithms.
+- Close the named grid static-position and writing-mode border-offset families
+  exposed by K3's final ratchet.
+- Include positioned descendants in scrollable overflow in their containing
+  coordinate space.
+- Verify that the existing stacking and paint pipeline consumes positioned
+  fragments in CSS order; correct it where fragment geometry exposes a real
+  disagreement.
+
+#### K5f. Sticky positioning
+
+- Produce a scrollport-relative sticky constraint from the box's normal-flow
+  fragment, used insets, containing block, and nearest scrollport.
+- Apply scroll-dependent sticky offsets without rebuilding layout.
+- Keep sticky behavior across fragmentainers and pages in K6.
+
+**Removal receipt:** delete the live lowering that treats sticky positioning
+as ordinary relative positioning.
+
+#### K5g. Persistent box and fragment storage
+
+- Preserve `BoxId` for generated boxes whose provenance and box-generation
+  context did not change.
+- Preserve `FragmentId` outside a replaced formatting-context subtree.
+- Support insertion, replacement, and removal without making identity equal
+  to the current dense vector index.
+- Retain parent, containing-fragment, by-box, and by-node indices as checked
+  invariants after a subtree replacement.
+- Make intrinsic-size and formatting-context caches state their invalidation
+  dependencies.
+
+#### K5h. Dirty-root relayout and closure
+
+- Translate DOM mutation, computed-style difference, resource completion,
+  interaction, and viewport changes into explicit layout damage.
+- Promote damage to the nearest formatting-context or containing-block root
+  whose inputs changed.
+- Recompute that root, replace its fragments, propagate size or overflow
+  changes only as far as required, and retain unrelated identities.
+- Compare every incremental result with a fresh full layout of the same final
+  document.
+- Inventory every remaining positioning and incremental-layout deferral.
+  Fragmentainer-dependent cases route to K6; the named foundational sizing
+  gaps route to K7. An unexplained fallback blocks K5 closure.
+
+**K5 receipt:** structural fixtures cover each containing-block and
+static-position relationship; named CSS2 and `css/css-position` families cover
+relative, absolute, fixed, and sticky geometry; flex, grid, table, writing-mode,
+overflow, paint, hit-testing, and scrolling fixtures cover their integration.
+A mutation matrix proves full-layout equivalence and stable box and fragment
+identities outside each dirty root. Taffy's position enum no longer selects
+browser positioning semantics.
 
 ### K6. Fragmentation
 
-Start with inline fragmentation already seeded at K2. Add block break tokens,
-fragmentainers, multicol, and then pagination. A box continued across two
-columns is the first load-bearing multi-fragment acceptance case.
+K6 extends K5's persistent state across fragmentainers. K5's incremental
+receipt covers unfragmented continuous media only. Inline boxes split across
+line boxes already prove one-to-many fragment identity, but they do not prove
+break-and-resume layout through columns or pages.
 
-Flex and grid fragmentation are a separate sub-gate under the fork policy
-above.
+Execute K6 in this order:
 
-**Receipt:** fragment-tree assertions for continuation, containing fragment,
-and coordinate space; named css-multicol families; paint, hit testing,
-accessibility, and CSSOM all consume the continued fragments.
+1. Define fragmentainers, fragmentation-context ancestry, forced and
+   unforced break decisions, and algorithm-owned break tokens.
+2. Break and resume ordinary block and inline formatting contexts while
+   preserving margin, float, baseline, and containing-fragment state.
+3. Implement multicol. A single box continued across two column boxes is the
+   first load-bearing acceptance case.
+4. Integrate table breaking, repeated headers and footers, split rowspans,
+   positioned descendants, sticky constraints, and scrollable overflow.
+5. Add pagination, including fixed-position replication in paged media.
+6. Add flex and grid fragmentation as separate sub-gates under the fork policy
+   above.
+7. Extend dirty-root relayout so a change can replace the affected
+   continuation chain without invalidating unrelated fragmentainers.
+
+**Receipt:** fragment-tree assertions cover continuation, containing fragment,
+fragmentation context, coordinate space, and stable unaffected identity;
+named `css/css-multicol` and paged-media families cover algorithm behavior;
+paint, hit testing, accessibility, CSSOM, scrolling, and incremental relayout
+all consume the continued fragments.
+
+### K7. Foundational sizing and dispatch closure
+
+K7 closes the foundational deferrals already named by K3 through K6. It is not
+a general bucket for every later CSS module. A new module with its own model
+receives its own plan.
+
+Execute K7 in this order:
+
+1. Implement general replaced-content sizing and aspect-ratio transfer across
+   normal flow, atomic inline boxes, flex/grid integration, and intrinsic
+   queries. Reuse the positioned subset proven by K5.
+2. Implement size-containment inputs and outputs without returning a completed
+   backend rectangle as an intrinsic contribution.
+3. Resolve nonlinear lengths, percentage and cyclic intrinsic queries, and
+   continuous-media indefinite inline sizes through explicit dependency and
+   cycle rules. Fragmentainer-dependent cases must already have closed in K6.
+4. Close the retained flex/grid cyclic baseline and intrinsic auto-block-size
+   gaps, plus the writing-mode and text-orientation integration gaps named by
+   the K3 closure receipt.
+5. Audit every `BlockDeferral` and equivalent adapter route. Delete Taffy's
+   block dispatch and prove that Taffy is reachable only through Buckram's
+   low-level flex and grid algorithm adapter.
+
+**Receipt:** each formerly named deferral has a structural fixture and focused
+corpus receipt; the final dispatch inventory contains no Taffy block route and
+no unowned foundational sizing gap. Any surviving unsupported CSS feature is
+named under its actual module and plan rather than hidden behind `auto`,
+principal-fragment geometry, or a backend fallback.
 
 ## Cutover and deletion
 
@@ -1543,6 +1741,9 @@ accessibility, and CSSOM all consume the continued fragments.
   the existing cutover receipts pass.
 - F5 does not delete Taffy merely because Stylo is gone. Buckram owns that
   dependency and its fork ledger.
+- K4 through K7 are standards-ownership milestones. F4 and F5 remain separate
+  compatibility and retirement gates: they may pass before K7 if their own
+  receipts pass, and they do not close K7's standards gaps.
 - `genet-layout` remains an oracle during the differential period, never a
   source of browser semantics. Lifted code must be re-expressed through
   Buckram's box and fragment contracts.
@@ -1565,8 +1766,10 @@ accessibility, and CSSOM all consume the continued fragments.
 ## Done condition
 
 Buckram is the only CSS layout engine in Genet. Livery supplies computed
-values; Buckram owns box generation, formatting contexts, intrinsic sizing,
-logical geometry, and a one-to-many `FragmentTree`; Taffy is reachable only
-through the low-level flex/grid adapter; every fragment consumer uses fragment
-identity; the old fragment planes and two-pass inline workaround are deleted;
-and Stylo retirement leaves no gap in the standards-owned layout model.
+values; Buckram owns box generation, formatting contexts, positioning,
+intrinsic sizing, logical geometry, fragmentation, persistent relayout, and a
+one-to-many `FragmentTree`; Taffy is reachable only through the low-level
+flex/grid adapter; every fragment consumer uses fragment identity; the old
+fragment planes and two-pass inline workaround are deleted; the final dispatch
+inventory has no unowned foundational gap; and Stylo retirement leaves no gap
+in the standards-owned layout model.

@@ -2,8 +2,7 @@
 
 **Date:** 2026-07-28
 
-**Status:** scoped; execution starts from the accepted K3 closure commit and
-receipt
+**Status:** in execution. K4a and K4b are accepted; K4c1 is next.
 
 **Architectural authority:** [Buckram CSS layout engine plan](2026-07-26_buckram_css_layout_engine_plan.md)
 
@@ -623,22 +622,18 @@ Generated WPT expectations, screenshots, and logs remain outside Git.
   boundary evidence in the receipt.
 - Do not rewrite the accepted K3 closure baseline.
 
-## First executable task
+## Current executable task
 
-The K4a handoff is:
+K4a and K4b are accepted below. The current handoff is K4c1 from the
+[K4c execution plan](2026-07-28_buckram_k4c_table_inline_sizing_execution_plan.md):
 
-> Read this plan, the architecture plan's accepted K3 closure receipt, CSS 2.1
-> sections 17.2 through 17.4, and the HTML table rendering defaults. Freeze
-> fresh `css/CSS2/tables` and `css/css-tables` maps at the accepted K3 commit.
-> Execute K4a only: complete table display and property vocabulary, generate
-> distinct wrapper and grid boxes, and implement the ordered anonymous-table
-> fixup. Preserve the current live layout bridge. Stop after the model,
-> adapter, property, focused-corpus, and build receipts pass. Append the K4a
-> receipt, stage only K4a paths, and commit.
-
-K4a is the right first slice because it corrects the input model without
-mixing in track sizing. K4b can then build one table grid from stable box
-roles instead of compensating for missing structure inside an algorithm.
+> Read the K4c plan, the accepted K4b receipt, CSS 2.1 sections 17.5.2.1 and
+> 17.5.2.2, and the live seams named under K4c1. Execute K4c1 only. Record
+> `26eda4cd9fe` as the accepted K4b base and produce fresh
+> `css/CSS2/tables` and `css/css-tables` maps before changing layout behavior.
+> Stop after K4c1 passes its verification ladder, append its receipt to the
+> K4c plan, stage only K4c1 paths, and commit. Do not begin K4c2 in the same
+> task.
 
 ## K4a execution receipt (2026-07-28)
 
