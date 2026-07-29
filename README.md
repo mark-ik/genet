@@ -16,8 +16,8 @@ servoshell).
 **Made with AI**
 
 <p align="center">
-  <img src="assets/screenshots/pelt-gemini.png" alt="Pelt rendering a Gemini document beside its graph context" width="900"><br>
-  <sub>Pelt, genet's reference browser, rendering a Gemini document beside its graph context.</sub>
+  <img src="assets/screenshots/pelt-chrome.png" alt="Pelt showing its native chrome around a local document" width="900"><br>
+  <sub>Pelt, genet's reference browser, driving a local document through its native chrome.</sub>
 </p>
 
 ## How genet differs from Servo
