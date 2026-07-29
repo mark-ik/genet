@@ -133,6 +133,7 @@ pub struct TableInlineSizingInput<'a> {
     pub table_constraints: TableInlineConstraints,
     pub border_metrics: TableInlineBorderMetrics,
     pub caption_min: CaptionMinContribution,
+    pub track_visibility: TableTrackVisibility,
 }
 
 pub struct TableCellInlineMeasure {
@@ -171,9 +172,12 @@ The types must preserve these distinctions:
 4. `CaptionMinContribution` distinguishes no caption, a measured
    contribution, and a named K4e deferral. An unknown caption contribution
    must not silently become zero.
-5. A result has exactly one non-negative finite size per K4b column.
-6. `IntrinsicSizes::min_content <= IntrinsicSizes::max_content`.
-7. The used grid size equals the sum of used column sizes plus the
+5. `TableTrackVisibility` defaults every track to visible. K4f can collapse
+   tracks without deleting the constraints that produced their pre-collapse
+   measures.
+6. A result has exactly one non-negative finite size per K4b column.
+7. `IntrinsicSizes::min_content <= IntrinsicSizes::max_content`.
+8. The used grid size equals the sum of used column sizes plus the
    undistributable border-model space, within an explicitly tested subpixel
    tolerance.
 
@@ -243,6 +247,8 @@ completed layout.
   out of `taffy_adapter.rs`.
 - Define the input, measure, result, border-metric, caption, constraint, and
   deferral types described above.
+- Define an all-visible `TableTrackVisibility` input that K4f can later
+  replace without forking the sizing algorithm.
 - Query each cell content box through Buckram's `IntrinsicSizeQuery` contract
   for one cached min-content and max-content pair.
 - Normalize computed `width`, `min-width`, `max-width`, and `box-sizing` into
@@ -479,15 +485,15 @@ table bridge as a placement consumer only.
   when the caption contribution is absent or measured, to block flow, floats,
   inline tables, flex items, and grid items through Buckram's intrinsic query
   contract.
-- Preserve named `CaptionMinPendingK4e` and
+- Preserve named `CaptionMinPendingK4e`, `TrackVisibilityPendingK4f`, and
   `CollapsedBorderMetricsPendingK4g` counters in live fixtures.
 - Delete Livery's `fixed_column_widths`.
 - Delete table-only `horizontal_edges`, or rename and retain a genuinely
   shared logical edge helper if another live consumer is proved.
 - Narrow the `table-layout` partial marker to the collapsed-border geometry
   still owned by K4g. Do not remove the marker in K4c.
-- Record the exact remaining Grid/Flex compatibility bridge count. K4d and
-  K4h own its final retirement.
+- Record the exact remaining Grid/Flex compatibility bridge count. K4d owns
+  its retirement; K4h audits that it remains absent at closure.
 
 ### Evidence
 
@@ -521,7 +527,8 @@ The accepted K4c5 tree contains:
 - no table-specific physical `horizontal_edges`;
 - no Taffy-derived table or column width;
 - one Buckram sizing path for fixed and automatic tables; and
-- only the named K4e caption and K4g collapsed-border inputs still pending.
+- only the named K4e caption, K4f track-visibility, and K4g collapsed-border
+  inputs still pending.
 
 The `table-layout` partial marker remains narrowed until K4g supplies
 collapsed-border metrics and reruns the collapsed fixed-layout families.
@@ -532,9 +539,9 @@ collapsed-border metrics and reruns the collapsed fixed-layout families.
 |---|---|
 | K4d row layout | consumes final column sizes when laying out cell contents and rows |
 | K4e captions | supplies `CaptionMinContribution`; consumes table and wrapper intrinsic widths |
-| K4f separated rendering | uses the same separated spacing and cell offsets accepted by K4c |
+| K4f separated rendering | supplies the track-visibility mask and uses K4c's accepted spacing and cell offsets |
 | K4g collapsed borders | supplies winning logical half-border metrics, then reruns K4c sizing |
-| K4h closure | deletes the placement bridge after dedicated table dispatch and positioned-table integration |
+| K4h closure | verifies the K4d bridge deletion and closes positioned-table integration |
 | K5 positioning | consumes table fragments and containing blocks, not K4c sizing internals |
 | K6 fragmentation | may split table fragments, but does not replace intrinsic column measures |
 

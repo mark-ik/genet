@@ -195,7 +195,7 @@ bridge.
 | K4e | wrapper flow, inline-table, captions, and float avoidance | high |
 | K4f | separated-border rendering, backgrounds, empty cells, and collapsed tracks | high |
 | K4g | collapsed-border conflict resolution, geometry, and paint | very high |
-| K4h | positioned-table seam, bridge deletion, and K4 closure | medium |
+| K4h | positioned-table seam and K4 closure audit | medium |
 
 Accepted implementation gates land serially. Research for an upcoming gate can
 run separately, but K4b through K4g repeatedly touch the same table model,
@@ -355,6 +355,9 @@ only after winning collapsed-border geometry feeds the same sizing algorithm.
 
 ## K4d. Row layout, cell alignment, and dedicated table dispatch
 
+**Execution plan:** [Buckram K4d table row layout execution
+plan](2026-07-28_buckram_k4d_table_row_layout_execution_plan.md)
+
 ### Outcome
 
 Produce the table's used block size, baselines, and fragments through a
@@ -455,8 +458,9 @@ Complete the separated-border model and table-specific rendering order.
 
 ### Work
 
-- Apply horizontal and vertical `border-spacing` to track geometry and table
-  intrinsic offsets.
+- Consume the horizontal and vertical `border-spacing` already accounted for
+  by K4c and K4d when painting table gaps. Do not add it to track or intrinsic
+  geometry a second time.
 - Implement table, column-group, column, row-group, row, and cell background
   layers through table fragments.
 - Paint cells in DOM order even when span placement changes their grid
@@ -464,7 +468,8 @@ Complete the separated-border model and table-specific rendering order.
 - Implement `empty-cells: show | hide` from actual in-flow and floated cell
   content.
 - Implement `visibility: collapse` for rows, row groups, columns, and column
-  groups while retaining the track constraints required by the table model.
+  groups by supplying a track-visibility mask to the accepted K4c and K4d
+  algorithms while retaining the constraints required by the table model.
 - Account for table box shadow, overflow, and background clipping at the
   wrapper/grid boundary.
 
@@ -489,6 +494,9 @@ Delete generic block paint assumptions for table-internal fragments where
 table paint order overrides them.
 
 ## K4g. Collapsed-border conflict resolution and paint
+
+**Execution plan:** [Buckram K4g collapsed border execution
+plan](2026-07-28_buckram_k4g_collapsed_border_execution_plan.md)
 
 ### Outcome
 
@@ -536,8 +544,8 @@ metrics feed K4c's fixed and automatic sizing algorithms.
 
 ### Outcome
 
-Remove the remaining table compatibility bridge, prove every surviving gap is
-owned, and close K4.
+Remove the remaining positioned-table compatibility seams, prove every
+surviving gap is owned, and close K4.
 
 ### Work
 
@@ -550,8 +558,9 @@ owned, and close K4.
   remaining Taffy dispatch.
 - Route absolute/fixed/sticky positioning to K5 and table fragmentation,
   repeated headers, and split rowspans to K6.
-- Delete the Grid/Flex bridge, its counter, its diagnostic switches, and every
-  obsolete deferral.
+- Prove the Grid/Flex bridge deleted by K4d has not been reintroduced.
+- Delete positioned-table compatibility counters, diagnostic switches, and
+  every obsolete deferral.
 - Append the final K4 receipt to the architecture plan and replace its K4
   paragraph with the exact K5 and K6 routes.
 
