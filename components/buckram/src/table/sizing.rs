@@ -352,6 +352,12 @@ pub struct TableInlineSizingResult {
     pub intrinsic_sizes: IntrinsicSizes,
     pub used_table_inline_size: f32,
     pub used_grid_inline_size: f32,
+    /// The portion of the used grid width assigned to K4b column tracks.
+    /// This is intentionally distinct from table borders, padding, and
+    /// separated border spacing.
+    pub assignable_column_inline_size: f32,
+    /// Table border, padding, and separated spacing outside the column tracks.
+    pub undistributable_inline_size: f32,
     pub column_sizes: Vec<f32>,
 }
 
@@ -385,8 +391,9 @@ impl TableInlineSizingResult {
         {
             return Err(TableInlineSizingError::InvalidResultSize);
         }
-        let expected_grid =
-            column_sizes.iter().sum::<f32>() + input.separated_undistributable_inline_size()?;
+        let assignable_column_inline_size = column_sizes.iter().sum::<f32>();
+        let undistributable_inline_size = input.separated_undistributable_inline_size()?;
+        let expected_grid = assignable_column_inline_size + undistributable_inline_size;
         if (expected_grid - used_grid_inline_size).abs() > Self::SUBPIXEL_TOLERANCE {
             return Err(TableInlineSizingError::GridSizeMismatch {
                 expected: expected_grid,
@@ -397,6 +404,8 @@ impl TableInlineSizingResult {
             intrinsic_sizes,
             used_table_inline_size,
             used_grid_inline_size,
+            assignable_column_inline_size,
+            undistributable_inline_size,
             column_sizes,
         })
     }

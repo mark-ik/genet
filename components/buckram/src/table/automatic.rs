@@ -174,7 +174,7 @@ impl TableColumnMeasure {
         }
     }
 
-    fn validate(self) -> Result<Self, TableInlineSizingError> {
+    pub(super) fn validate(self) -> Result<Self, TableInlineSizingError> {
         if !self.min_content.is_finite()
             || !self.max_content.is_finite()
             || !self.percentage.is_finite()

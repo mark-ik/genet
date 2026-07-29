@@ -579,6 +579,9 @@ gate receives no live WPT acceptance credit.
 - `cargo test -p buckram`: 108 passed.
 - `cargo test -p genet-livery`: passed, including automatic track lowering.
 - `cargo clippy -p buckram --lib -- -D warnings`: passed.
+- Strict Buckram all-target Clippy remains blocked only by the pre-existing
+  `components/buckram/src/taffy_adapter.rs:3910`
+  `manual_is_multiple_of` lint; it does not reach a K4c4 seam.
 - Strict Buckram all-target Clippy is blocked only by the existing
   `taffy_adapter.rs:3910` `manual_is_multiple_of` warning. Strict
   `genet-livery` all-target Clippy reaches pre-existing warnings in the
@@ -658,6 +661,88 @@ K4c3 column measures.
 Delete any Taffy-derived table intrinsic width. The K4c4 result becomes the
 only source for table and column inline sizes, subject to the two named K4e
 and K4g inputs.
+
+### K4c4 receipt - 2026-07-29
+
+**Base commit:** `b5e47279b92` (accepted K4c3).
+
+**Capability:** `buckram::table::automatic_used` now selects a used automatic
+table width from K4c3's logical `TableColumnMeasure` vector and returns either
+a complete `TableInlineSizingResult` or a named indefinite result. The result
+separates used table width, used grid width, assignable column width, and
+undistributable border/padding/spacing. It derives and publishes the grid's
+`IntrinsicSizes` under `TableGrid::grid` through Buckram's box-keyed cache.
+Caption-sensitive wrapper work remains outside that cache.
+
+**Policy:** a definite table width uses
+`max(clamp(W, min-width, max-width), CAPMIN, GRIDMIN)`. An automatic width
+with definite available inline size uses
+`max(clamp(min(GRIDMAX, A), min-width, max-width), CAPMIN, GRIDMIN)`.
+Intrinsic keywords and affine `fit-content()` remain CSS constraints. Missing
+containing width and missing percentage bases return
+`TableAutomaticInlineSizingIndefinite`; they never use a viewport fallback.
+Column percentages resolve only after used table width is known. Percentage
+demands share an insufficient logical remainder proportionally; then
+unconstrained, non-percentage columns receive remaining room by CSS 2
+`max-content - min-content` slack, and above the upper guess by max-content
+weight. The final logical column receives float remainder, preserving the
+sum invariant without an RTL tie-break.
+
+**Interop matrix:** local headless Chrome `150.0.7871.187` and Firefox
+`153.0.1`, with zero cell padding/border and zero border-spacing. The ordinary
+three-column fixture has minima `71.1875, 71.1875, 64` in Chrome and
+`71.2, 71.2, 64` in Firefox; its maxima are `146.828125, 222.453125,
+269.34375` and `146.85, 222.5, 269.35`. At 300px both distribute the
+min-to-max remainder proportionally to those three slacks: Chrome
+`87.5625, 103.9375, 108.5`; Firefox `87.58333, 103.95001, 108.46666`.
+At 400px they give `105.0625, 138.9375, 156` and
+`105.08333, 138.95001, 155.96666`. A 60% first column at 300px preserves
+the other minima and receives the remaining `164.8125`/`164.8` pixels. A
+30% first column at 400px stays exactly 120px while the remaining two columns
+receive the slack. An 80px constrained first column stays 80px. Three 60%
+columns produce Chrome `135.8125, 100.171875, 64.015625` and Firefox
+`135.81667, 100.18333, 64`, selecting proportional percentage demand under
+over-constraint. CSS Tables Level 3's four-guess interpolation was not
+adopted.
+
+**Boundary retained:** this is pure Buckram arithmetic. It receives no Taffy
+tracks, fragments, viewport substitute, or Livery layout state. K4c5 alone
+may route `size_automatic_table_inline` into the live compatibility bridge.
+K4e caption measurement, K4f collapsed-track handling, and K4g collapsed
+border winners remain named deferrals.
+
+**Fixtures:** ten K4c4 Buckram tests cover automatic widths below, at,
+between, and above intrinsic bounds; definite widths; min/max, captions,
+min-content, max-content, and affine fit-content constraints; indefinite and
+percentage bases; percentage and constrained tracks; over-constrained
+percentages; empty, single, and many-column sums; separated geometry,
+subpixels, cache identity, caption deferral, and LTR/RTL invariance.
+
+**Focused WPT:** fresh release output is in
+`C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-29_buckram_k4c4`.
+`width-distribution` remains 2 all-pass / 13 with-failures, 2/35 subtests;
+`fractional-percent-width` remains 0/3 and tentative
+`colspan-redistribution` remains 0/31. The Livery
+`table-colspan-percent-auto` reftest remains its one pass. The four
+`table-intrinsic-size-*` reftests and
+`min-max-size-table-content-box` remain local failures. This is unchanged
+compatibility-path evidence, not live K4c4 acceptance credit.
+
+**Verification:**
+
+- `cargo test -p buckram --lib`: 118 passed.
+- `cargo clippy -p buckram --lib -- -D warnings`: passed.
+- `cargo build -p genet-wpt --release --all-features --offline`: passed,
+  with pre-existing warnings in unrelated upstream crates.
+- `cargo test -p genet-livery`: passed (95 tests across unit and integration
+  targets, plus doc-tests).
+- `git diff --check` and touched-file Rustfmt: passed.
+
+**Removal:** no live Livery helper is removed in this model-only gate. K4c5
+owns deletion of the compatibility bridge's table-width choices after it
+consumes this result.
+
+**Commit:** this commit.
 
 ## K4c5. Parent integration, live bridge, and cleanup
 

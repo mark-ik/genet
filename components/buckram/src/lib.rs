@@ -42,16 +42,18 @@ pub use intrinsic::{
 pub use table::{
     AffineLengthPercentage, CaptionMinContribution, CellInlineOffsets, InlineSizeConstraint,
     TableAutomaticColumnGroupInput, TableAutomaticColumnInput, TableAutomaticColumnMeasureInput,
-    TableAutomaticColumnMeasures, TableBoxSizing, TableCell, TableCellInlineMeasure,
-    TableCellInlineStyle, TableCellInput, TableColumnMeasure, TableDeferral,
-    TableFixedColumnGroupInput, TableFixedColumnInput, TableFixedInlineSizingInput,
+    TableAutomaticColumnMeasures, TableAutomaticInlineSizingIndefinite,
+    TableAutomaticInlineSizingInput, TableAutomaticInlineSizingOutcome, TableBoxSizing, TableCell,
+    TableCellInlineMeasure, TableCellInlineStyle, TableCellInput, TableColumnMeasure,
+    TableDeferral, TableFixedColumnGroupInput, TableFixedColumnInput, TableFixedInlineSizingInput,
     TableFixedInlineSizingOutcome, TableFixedLayoutFallback, TableGrid, TableGridError,
     TableGridInputs, TableInlineBorderMetrics, TableInlineConstraints, TableInlineProperty,
     TableInlineSizingError, TableInlineSizingInput, TableInlineSizingResult,
     TableIntrinsicMeasureProvider, TableRowSpan, TableSeparatedBorderMetrics, TableSlot,
     TableSpanMeasureDistribution, TableTrack, TableTrackGroup, TableTrackGroupKind,
     TableTrackInput, TableTrackVisibility, TableTrackVisibilityState,
-    collect_table_cell_inline_measures, measure_automatic_columns, query_table_cell_inline_sizes,
+    cache_automatic_table_grid_intrinsic_sizes, collect_table_cell_inline_measures,
+    measure_automatic_columns, query_table_cell_inline_sizes, size_automatic_table_inline,
     size_fixed_table_inline,
 };
 pub use taffy_adapter::{
