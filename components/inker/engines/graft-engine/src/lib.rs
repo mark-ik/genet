@@ -4,7 +4,7 @@
 //! # graft-engine
 //!
 //! `inker::SurfaceEngine` implementation backed by the
-//! [`wgpu-graft`](https://github.com/mark-ik/wgpu-graft) Servo embedding: an
+//! [`wgpu-graft`](https://github.com/merely-made/wgpu-graft) Servo embedding: an
 //! embedded Servo instance renders offscreen and its GL framebuffer is imported
 //! into a host `wgpu` texture (Vulkan external memory on Linux, IOSurface/Metal
 //! on macOS, ANGLE-D3D11 -> DX12 shared texture on Windows).

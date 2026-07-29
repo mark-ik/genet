@@ -17,7 +17,7 @@ publish = false
 #   python -m http.server -d examples/genet_web_smoke 8000
 # then open http://localhost:8000 in a WebGPU browser (Chrome/Edge).
 #
-# netrender crates come from mark-ik/netrender git (converted from the
+# netrender crates come from merely-made/netrender git (converted from the
 # first receipt's sibling path deps once the per-target-webgpu commit
 # landed on main, per the netrender_smoke pattern).
 
@@ -44,10 +44,10 @@ genet-layout = { path = "../../components/genet-layout" }
 # rasterizer stack — git deps matching the genet workspace's own
 # netrender source, so paint_list_api unifies with genet-layout's copy
 # (the per-target-webgpu commit is on main; the netrender_smoke pattern).
-netrender = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
-netrender_device = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
-paint_list_api = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
-paint_list_render = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
+netrender = { git = "https://github.com/merely-made/netrender.git", branch = "main" }
+netrender_device = { git = "https://github.com/merely-made/netrender.git", branch = "main" }
+paint_list_api = { git = "https://github.com/merely-made/netrender.git", branch = "main" }
+paint_list_render = { git = "https://github.com/merely-made/netrender.git", branch = "main" }
 
 wgpu = { version = "29", default-features = false, features = ["std", "wgsl", "webgpu"] }
 

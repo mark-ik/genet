@@ -13,7 +13,7 @@ direction-neutral pieces are stable.
    handles. Each platform was its own bespoke surface; no shared
    abstraction.
 
-2. **`wgpu-graft`** ([github.com/mark-ik/wgpu-graft](https://github.com/mark-ik/wgpu-graft)).
+2. **`wgpu-graft`** ([github.com/merely-made/wgpu-graft](https://github.com/merely-made/wgpu-graft)).
    Moved off raw GL onto wgpu-native texture interop. First
    shaping pass for the per-platform sync into a uniform
    `InteropSynchronizer` trait — Vulkan timeline semaphore,

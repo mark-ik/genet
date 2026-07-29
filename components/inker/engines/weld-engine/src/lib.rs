@@ -4,7 +4,7 @@
 //! # weld-engine
 //!
 //! `inker::SurfaceEngine` implementation backed by the
-//! [`wgpu-weld`](https://github.com/mark-ik/wgpu-weld) CEF embedding: a bundled
+//! [`wgpu-weld`](https://github.com/merely-made/wgpu-weld) CEF embedding: a bundled
 //! Chromium (via CEF) renders in accelerated off-screen-rendering (OSR) mode and
 //! its `OnAcceleratedPaint` output is imported into a host `wgpu` texture
 //! (D3D12-shared on Windows, IOSurface/Metal on macOS, DMABUF/Vulkan on Linux).

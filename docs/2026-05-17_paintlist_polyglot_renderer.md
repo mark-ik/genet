@@ -365,7 +365,7 @@ The first draft conflated options 2 and 3 by proposing extensions paint into Vel
 
 ### PM-3: `DrawExternalTexture` lowering contract
 
-**The lowering for `DrawExternalTexture` is the per-frame compositor pass** ([`ExternalTextureComposite`](https://github.com/mark-ik/netrender/blob/main/netrender/src/external_texture.rs) + `scene_op_boundary` + [`VelloTileRasterizer::render_overlay_fragment`](https://github.com/mark-ik/netrender/blob/main/netrender/src/vello_tile_rasterizer.rs), landed in netrender 2026-05-16), **not vello `SceneOp::Image`**. This is a load-bearing architectural commitment, not an impl detail.
+**The lowering for `DrawExternalTexture` is the per-frame compositor pass** ([`ExternalTextureComposite`](https://github.com/merely-made/netrender/blob/main/netrender/src/external_texture.rs) + `scene_op_boundary` + [`VelloTileRasterizer::render_overlay_fragment`](https://github.com/merely-made/netrender/blob/main/netrender/src/vello_tile_rasterizer.rs), landed in netrender 2026-05-16), **not vello `SceneOp::Image`**. This is a load-bearing architectural commitment, not an impl detail.
 
 **Why this matters:** the compositor pass reads the texture view at frame composite time. If the WebGL canvas (or any other external texture producer) redraws between frames, the next frame's composite picks up new pixels with no Scene mutation and no tile-cache invalidation needed. Tile cache hashes vello rasterization, which is unchanged; external textures composite *over* the rasterized master via a per-frame pipeline pass. **No `content_generation` is needed for this lowering** — the invalidation problem is sidestepped by construction.
 

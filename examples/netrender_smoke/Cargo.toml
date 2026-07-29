@@ -24,6 +24,6 @@ path = "src/main.rs"
 # netrender lives in the sibling netrender/ workspace. Git dep (not a path dep)
 # so this standalone example clones-and-builds anywhere; a local netrender
 # checkout is picked up via the gitignored `.cargo/config.toml` `paths` override.
-netrender = { git = "https://github.com/mark-ik/netrender.git", branch = "main" }
+netrender = { git = "https://github.com/merely-made/netrender.git", branch = "main" }
 wgpu = "29"
 pollster = "0.4"

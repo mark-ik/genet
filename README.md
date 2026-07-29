@@ -192,7 +192,7 @@ engine-rendered form controls) and the scripted-tier consumer wiring.
 
 ## Relationship to sibling repos
 
-- **netrender** (`github.com/mark-ik/netrender`) — the vello-based renderer
+- **netrender** (`github.com/merely-made/netrender`) — the vello-based renderer
   genet emits into. Pulled as a git dependency (`branch = "main"`), and it owns
   the engine-agnostic `paint_list_api` / `paint_list_render` crates.
 - **Forks** consumed as git deps: Vano's `nova_vm` package (local checkout at
@@ -200,7 +200,7 @@ engine-rendered form controls) and the scripted-tier consumer wiring.
   `boa_engine` / `boa_gc` (mark-ik/boa, `genet` branch), each carrying additive
   reflector-liveness patches. The Stylo crates track the servo/stylo v0.18.0
   release tag by git rev.
-- **smolweb** (`github.com/mark-ik/smolweb`) — the small-web wire layer.
+- **smolweb** (`github.com/merely-made/smolweb`) — the small-web wire layer.
   `components/errand` (the client integration) and `components/nematic` (the
   document engine) live here and consume `misfin`, `spartan-protocol`,
   `nex-protocol`, and `guppy-protocol` from crates.io. The protocol crates
