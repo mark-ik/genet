@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-28
 
-**Status:** K4c1 is complete on the accepted K4b base `26eda4cd9fe`; K4c2 is next.
+**Status:** K4c2 is complete on the accepted K4b base `26eda4cd9fe`; K4c3 is next.
 
 **Parent plan:** [Buckram K4 CSS tables execution plan](2026-07-28_buckram_k4_css_tables_execution_plan.md)
 
@@ -395,6 +395,65 @@ Delete the fixed arithmetic from `genet-livery::layout::fixed_column_widths`
 only after the live bridge consumes Buckram's fixed result. If live wiring is
 intentionally deferred to K4c5, mark the helper as a shadow assertion and
 delete its decision-making branch in K4c5.
+
+### K4c2 receipt - 2026-07-29
+
+**Base commit:** `8ef729852a1` (accepted K4c1).
+
+**Capability:** `buckram::table::fixed` now computes separated-mode fixed
+inline sizing from K4b topology and K4c1 logical constraints. It preserves
+column and column-group box identities, applies explicit columns and normalized
+column-group ranges before first-row cells, divides spanning first-row cell
+constraints, then assigns unresolved tracks equally. Table and cell
+content-box versus border-box sizes, table minimums, subpixel shares, table
+padding and borders, and every separated border-spacing interval are explicit.
+
+**Policy:** `table-layout: fixed` with `width: auto` returns the automatic
+layout outcome. This is the CSS 2 permitted conservative policy. Intrinsic and
+fit-content table widths take the same non-fixed outcome; an unresolved
+percentage or unreduced expression remains an explicit sizing error.
+
+**Boundary retained:** the live Grid/Flex bridge remains unchanged and does
+not consume the Buckram result. The existing live fixture still records one
+bridge grid for one table; there remain two static construction seams. Caption
+(K4e), track visibility (K4f), and collapsed borders (K4g) return named
+deferrals rather than approximations.
+
+**Fixtures:** Buckram covers precedence, normalized colgroup ranges, first-row
+spans, content and border boxes, spacing, insufficient and excess width,
+table min-width, subpixel division, later-row invariance, `width: auto`, and
+collapsed-border deferral. Livery proves fixed track inputs preserve K4b order
+and BoxIds without DOM traversal or Taffy tracks.
+
+**Interop decision:** none beyond the recorded `width: auto` policy. K4c2
+does not wire behavior, so the CSS2 fixed-layout WPTs receive no acceptance
+credit yet.
+
+**WPT movement:** the fresh complete `css/CSS2/tables` map is canonically
+unchanged from K4c1: 67 pass, 183 fail, 889 skip (1,139 total). The complete
+`fixed-table-layout-*` family is also unchanged: 1 pass, 66 fail, 15 skip
+(82 total). `003a` (6), `003b` (12), and `003c` (8) all remain failures on the
+unwired bridge. `003d` (6), `003e` (12), and `003f` (8) remain K4g deferred
+collapsed-border cases.
+
+**Verification:**
+
+- `cargo test -p buckram --offline`: 98 passed.
+- `cargo test -p genet-livery --offline`: passed, including fixed track
+  lowering.
+- `cargo clippy -p buckram --lib --offline -- -D warnings`: passed.
+- Strict all-target clippy retains the same external blockers: Buckram
+  `taffy_adapter.rs:3910` (`manual_is_multiple_of`) and Livery `text.rs:1399`
+  (`implicit_saturating_sub`).
+- Fresh release WPT output is in
+  `testing/genet/wpt-ledger/2026-07-29_buckram_k4c2/`; both isolated targets
+  used for this gate were removed after verification.
+
+**Removal:** no live helper is deleted. `genet-livery::layout::fixed_column_widths`
+remains the compatibility-path decision maker until K4c5 consumes Buckram's
+result. K4d still owns removal of the Grid/Flex bridge.
+
+**Commit:** this commit.
 
 ## K4c3. Automatic column measures
 

@@ -8,8 +8,13 @@ use std::hash::Hash;
 
 use crate::{BoxId, CssBoxTree, InternalTableRole};
 
+mod fixed;
 mod sizing;
 
+pub use fixed::{
+    TableFixedColumnGroupInput, TableFixedColumnInput, TableFixedInlineSizingInput,
+    TableFixedInlineSizingOutcome, TableFixedLayoutFallback, size_fixed_table_inline,
+};
 pub use sizing::{
     AffineLengthPercentage, CaptionMinContribution, CellInlineOffsets, InlineSizeConstraint,
     TableBoxSizing, TableCellInlineMeasure, TableCellInlineStyle, TableDeferral,

@@ -6,8 +6,8 @@
 
 use buckram::{
     AffineLengthPercentage, CellInlineOffsets, FlowAxes, InlineSizeConstraint, PhysicalSide,
-    TableBoxSizing, TableCellInlineStyle, TableInlineConstraints, TableInlineProperty,
-    TableInlineSizingError,
+    TableBoxSizing, TableCellInlineStyle, TableFixedColumnGroupInput, TableFixedColumnInput,
+    TableGrid, TableInlineConstraints, TableInlineProperty, TableInlineSizingError,
 };
 use livery::{
     ComputedValues,
@@ -66,6 +66,33 @@ pub(crate) fn table_inline_constraints(
             BoxSizing::BorderBox => TableBoxSizing::BorderBox,
         },
     }
+}
+
+/// Lower explicit K4b column and column-group boxes in their normalized table
+/// order. Implicit columns deliberately retain automatic constraints. This is
+/// a non-live adapter seam for K4c2: neither DOM traversal nor backend grid
+/// tracks can influence the Buckram fixed-sizing input.
+pub(crate) fn fixed_table_track_inputs(
+    grid: &TableGrid,
+    mut constraints_for: impl FnMut(buckram::BoxId) -> TableInlineConstraints,
+) -> (Vec<TableFixedColumnInput>, Vec<TableFixedColumnGroupInput>) {
+    let columns = grid
+        .columns
+        .iter()
+        .map(|column| TableFixedColumnInput {
+            source: column.source,
+            constraints: column.source.map(&mut constraints_for).unwrap_or_default(),
+        })
+        .collect();
+    let column_groups = grid
+        .column_groups
+        .iter()
+        .map(|group| TableFixedColumnGroupInput {
+            source: group.source,
+            constraints: constraints_for(group.source),
+        })
+        .collect();
+    (columns, column_groups)
 }
 
 fn inline_size_constraint(size: Size, font_size: f32, root_font_size: f32) -> InlineSizeConstraint {
@@ -149,7 +176,72 @@ fn logical_border(computed: &ComputedValues, side: PhysicalSide, font_size: f32)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use buckram::{Direction, WritingMode};
+    use buckram::{
+        BoxGeneration, BoxOrigin, BoxTreeInput, CssBoxTree, Direction, DisplayInside,
+        DisplayOutside, DisplayRole, InternalTableRole, PositioningScheme, TableGridInputs,
+        WritingMode, generate_box_tree,
+    };
+
+    fn table_role(role: InternalTableRole) -> DisplayRole {
+        DisplayRole {
+            generation: BoxGeneration::Normal,
+            outside: None,
+            inside: None,
+            list_item: false,
+            internal_table: Some(role),
+        }
+    }
+
+    fn node(id: u8, role: InternalTableRole, children: Vec<BoxTreeInput<u8>>) -> BoxTreeInput<u8> {
+        BoxTreeInput::new(
+            BoxOrigin::Element(id),
+            table_role(role),
+            FlowAxes::HORIZONTAL_LTR,
+            PositioningScheme::Static,
+            false,
+            children,
+        )
+    }
+
+    fn k4b_grid() -> TableGrid {
+        let tree: CssBoxTree<u8> = generate_box_tree([BoxTreeInput::new(
+            BoxOrigin::Element(1),
+            DisplayRole {
+                generation: BoxGeneration::Normal,
+                outside: Some(DisplayOutside::Block),
+                inside: Some(DisplayInside::Table),
+                list_item: false,
+                internal_table: None,
+            },
+            FlowAxes::HORIZONTAL_LTR,
+            PositioningScheme::Static,
+            false,
+            vec![
+                node(
+                    2,
+                    InternalTableRole::ColumnGroup,
+                    vec![
+                        node(3, InternalTableRole::Column, vec![]),
+                        node(4, InternalTableRole::Column, vec![]),
+                    ],
+                ),
+                node(
+                    5,
+                    InternalTableRole::RowGroup,
+                    vec![node(
+                        6,
+                        InternalTableRole::Row,
+                        vec![
+                            node(7, InternalTableRole::Cell, vec![]),
+                            node(8, InternalTableRole::Cell, vec![]),
+                        ],
+                    )],
+                ),
+            ],
+        )]);
+        let table = tree.principal_box(1).expect("table grid");
+        TableGrid::from_box_tree(&tree, table, &TableGridInputs::default())
+    }
 
     #[test]
     fn computed_size_constraints_preserve_affine_percentages_and_box_sizing() {
@@ -214,5 +306,37 @@ mod tests {
         let style = table_cell_inline_style(&computed, FlowAxes::HORIZONTAL_LTR, 16.0, 16.0)
             .expect("unreduced math is retained on the constraint");
         assert_eq!(style.constraints.preferred, InlineSizeConstraint::Unreduced);
+    }
+
+    #[test]
+    fn fixed_track_lowering_preserves_k4b_order_and_box_identity() {
+        let grid = k4b_grid();
+        let (columns, groups) = fixed_table_track_inputs(&grid, |source| TableInlineConstraints {
+            preferred: InlineSizeConstraint::Value(
+                AffineLengthPercentage::new(source.index() as f32, 0.0).expect("finite width"),
+            ),
+            ..TableInlineConstraints::default()
+        });
+
+        assert_eq!(columns.len(), grid.columns.len());
+        assert_eq!(groups.len(), grid.column_groups.len());
+        assert_eq!(
+            columns
+                .iter()
+                .map(|column| column.source)
+                .collect::<Vec<_>>(),
+            grid.columns
+                .iter()
+                .map(|column| column.source)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(groups[0].source, grid.column_groups[0].source);
+        assert_eq!(
+            columns[0].constraints.preferred,
+            InlineSizeConstraint::Value(
+                AffineLengthPercentage::new(columns[0].source.unwrap().index() as f32, 0.0)
+                    .unwrap()
+            )
+        );
     }
 }

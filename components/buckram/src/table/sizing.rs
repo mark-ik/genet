@@ -67,7 +67,7 @@ impl InlineSizeConstraint {
         }
     }
 
-    fn resolve_definite(
+    pub(super) fn resolve_definite(
         self,
         percentage_basis: Option<f32>,
         box_id: Option<BoxId>,
@@ -523,6 +523,38 @@ pub enum TableInlineSizingError {
     },
     InvalidBorderMetrics,
     TrackVisibilityShape,
+    FixedColumnInputCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    FixedColumnSourceMismatch {
+        index: usize,
+        expected: Option<BoxId>,
+        actual: Option<BoxId>,
+    },
+    FixedColumnGroupInputCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    FixedColumnGroupSourceMismatch {
+        index: usize,
+        expected: BoxId,
+        actual: BoxId,
+    },
+    FixedCellInputCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    FixedCellSourceMismatch {
+        index: usize,
+        expected: BoxId,
+        actual: BoxId,
+    },
+    InvalidColumnGroupRange {
+        start: usize,
+        span: usize,
+    },
+    FixedLayoutWithoutColumns,
     ColumnCountMismatch {
         expected: usize,
         actual: usize,
