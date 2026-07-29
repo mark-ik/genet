@@ -566,7 +566,7 @@ deferrals. Livery proves automatic track lowering preserves K4b order and box
 identity.
 
 **Focused WPT:** fresh release output is in
-`C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-29_buckram_k4c3`.
+`<workspace>\testing\genet\wpt-ledger\2026-07-29_buckram_k4c3`.
 `width-distribution` is 2 all-pass / 13 with-failures, with 2/35 subtests;
 `computing-column-measure-0/1/2` remain 0/9 and `td-min-width-auto-layout`
 plus `td-max-width-auto-layout` remain 0/8. `table-colspan-percent-auto`
@@ -719,7 +719,7 @@ percentages; empty, single, and many-column sums; separated geometry,
 subpixels, cache identity, caption deferral, and LTR/RTL invariance.
 
 **Focused WPT:** fresh release output is in
-`C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-29_buckram_k4c4`.
+`<workspace>\testing\genet\wpt-ledger\2026-07-29_buckram_k4c4`.
 `width-distribution` remains 2 all-pass / 13 with-failures, 2/35 subtests;
 `fractional-percent-width` remains 0/3 and tentative
 `colspan-redistribution` remains 0/31. The Livery
@@ -871,7 +871,7 @@ as the combined command passing.
 
 Store generated expectation maps and browser measurements under:
 
-`C:\Users\mark_\Code\testing\genet\wpt-ledger\<date>_buckram_k4c<gate>`
+`<workspace>\testing\genet\wpt-ledger\<date>_buckram_k4c<gate>`
 
 Keep proof outputs out of Git.
 

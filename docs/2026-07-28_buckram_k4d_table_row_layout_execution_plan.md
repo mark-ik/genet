@@ -649,7 +649,7 @@ separately and record the exact blocker.
 
 Store generated expectation maps and browser measurements under:
 
-`C:\Users\mark_\Code\testing\genet\wpt-ledger\<date>_buckram_k4d<gate>`
+`<workspace>\testing\genet\wpt-ledger\<date>_buckram_k4d<gate>`
 
 Keep proof outputs out of Git.
 

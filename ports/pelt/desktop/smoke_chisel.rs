@@ -214,10 +214,8 @@ mod tests {
     /// the PNG receipt to the shared testing media tree.
     #[test]
     fn chisel_leaves_render_to_pixels() {
-        let receipt = std::path::Path::new(
-            "C:/Users/mark_/Code/testing/genet/images/2026-07-08_chisel_first_pixels.png",
-        );
-        let out = run_chisel_smoke(Some(receipt)).expect("smoke renders");
+        let receipt = std::env::temp_dir().join("genet-chisel-first-pixels.png");
+        let out = run_chisel_smoke(Some(&receipt)).expect("smoke renders");
         assert_eq!(out.leaf_boxes, 3, "layout seam found all leaves: {out:?}");
         assert_eq!(
             out.leaves_painted, 3,

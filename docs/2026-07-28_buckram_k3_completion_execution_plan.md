@@ -210,7 +210,7 @@ Verification: `cargo test -p buckram -p livery -p genet-livery --offline`;
 `cargo clippy -p buckram -p genet-livery --offline --no-deps -- -D warnings`;
 `rustfmt --check`; `git diff --check`; release `genet-wpt` build.
 
-Proof directory: `C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-28_buckram_k3m`
+Proof directory: `<workspace>\testing\genet\wpt-ledger\2026-07-28_buckram_k3m`
 
 Commit: `Expand Buckram intrinsic shrink-to-fit queries`
 
@@ -283,7 +283,7 @@ Verification: `cargo test -p buckram -p livery -p genet-livery --offline`;
 `cargo clippy -p buckram -p genet-livery --offline --no-deps -- -D warnings`;
 `rustfmt --check`; `git diff --check`; release `genet-wpt` build.
 
-Proof directory: `C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-28_buckram_k3n`
+Proof directory: `<workspace>\testing\genet\wpt-ledger\2026-07-28_buckram_k3n`
 
 Commit: `Prove Buckram float-band auto margins`
 
@@ -366,7 +366,7 @@ edition-2024 `rustfmt --check` on touched Rust files, `git diff --check`, and
 `cargo build -p genet-wpt --release --all-features --offline` all passed from
 an isolated K3o target.
 
-Proof directory: `C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-28_buckram_k3o`
+Proof directory: `<workspace>\testing\genet\wpt-ledger\2026-07-28_buckram_k3o`
 
 Commit: `Preserve Buckram float-context provenance`
 
@@ -440,7 +440,7 @@ WPT crash-smoke: `negative-margin-float-positioning.html`,
 passed, 0 failed, 0 errored. These are parser/layout crash-smoke results, not
 behavioral reftest or testharness claims.
 
-Proof directory: `C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-28_buckram_k3p`
+Proof directory: `<workspace>\testing\genet\wpt-ledger\2026-07-28_buckram_k3p`
 
 Commit: `Complete Buckram nested float state and nowrap bands`
 
@@ -517,7 +517,7 @@ Verification:
   each completed with zero failed and zero errored files.
 
 Proof directory:
-`C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-28_buckram_k3q`
+`<workspace>\testing\genet\wpt-ledger\2026-07-28_buckram_k3q`
 
 Commit: `Complete Buckram intrinsic block queries and BFC baselines`
 
@@ -600,7 +600,7 @@ Verification:
   6383/9254; each completed with zero failed and zero errored files.
 
 Proof directory:
-`C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-28_buckram_k3r`
+`<workspace>\testing\genet\wpt-ledger\2026-07-28_buckram_k3r`
 
 Commit: `Complete Buckram orthogonal normal flow`
 
@@ -683,7 +683,7 @@ Verification:
   the exact status comparison above.
 
 Proof directory:
-`C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-28_buckram_k3s`
+`<workspace>\testing\genet\wpt-ledger\2026-07-28_buckram_k3s`
 
 K3 closure does not mean complete CSS layout. It means the remaining work is
 truthfully owned by K4, K5, K6, or an explicitly named post-cutover gap.
@@ -732,7 +732,7 @@ all pass. The all-nine runner’s nonzero per-corpus exits represent expected
 failing reftests; each wrote its status map.
 
 Proof directory:
-`C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-28_buckram_k3t`
+`<workspace>\testing\genet\wpt-ledger\2026-07-28_buckram_k3t`
 
 Commit: `Complete Buckram K3 closure ratchet`
 

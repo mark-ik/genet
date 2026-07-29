@@ -82,8 +82,8 @@ Earlier versions of this doc blurred three distinct layers. They must stay disti
 | Layer | What it is | Today | Requirement |
 | --- | --- | --- | --- |
 | **(1) Producer-facing paint surface** | The trait engines implement to publish paint output | (not yet abstracted; concrete `GenetDisplayList`) | Engine-friendly; allows engine-specific items |
-| **(2) Transport / wire payload** | Serializable form that crosses IPC / file caches | [`PaintMessage::SendDisplayList(GenetDisplayList)`](c:/Users/mark_/Code/repos/genet/components/shared/paint/lib.rs#L135) | **Must be `Serialize + Deserialize + Clone + MallocSizeOf`**. No `dyn` trait objects. |
-| **(3) Renderer scene** | NetRender's internal optimized form | [`netrender::Scene` via `components/paint/translator.rs`](c:/Users/mark_/Code/repos/genet/components/paint/translator.rs) | Renderer-private. Engines never see this. |
+| **(2) Transport / wire payload** | Serializable form that crosses IPC / file caches | [`PaintMessage::SendDisplayList(GenetDisplayList)`](<workspace>/repos/genet/components/shared/paint/lib.rs#L135) | **Must be `Serialize + Deserialize + Clone + MallocSizeOf`**. No `dyn` trait objects. |
+| **(3) Renderer scene** | NetRender's internal optimized form | [`netrender::Scene` via `components/paint/translator.rs`](<workspace>/repos/genet/components/paint/translator.rs) | Renderer-private. Engines never see this. |
 
 The first version of this doc conflated layers 1 and 3 — proposing `PaintExtension::paint(&mut PaintContext { scene: &mut vello::Scene })`. That makes the producer surface depend on Vello and forces layer 3 details into engines' code. It also makes the layer-1 trait fundamentally non-transportable, since `dyn PaintExtension` is not `Serialize`.
 

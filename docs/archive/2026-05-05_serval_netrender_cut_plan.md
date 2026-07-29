@@ -221,7 +221,7 @@ root for Serval/Pelt work.
 Pelt validation should stay on the script-free path:
 
 ```bat
-cd /d C:\Users\mark_\Code\repos\serval
+cd /d <workspace>\repos\serval
 cargo check -p pelt
 cargo run -p pelt -- --engine viewer --netrender-smoke about:blank
 ```
@@ -232,7 +232,7 @@ that route is:
 
 ```bat
 "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\LaunchDevCmd.bat" -arch=x64
-cd /d C:\Users\mark_\Code\repos\serval
+cd /d <workspace>\repos\serval
 set LINKER=link.exe
 set HOST_LINKER=link.exe
 cargo clean -p mozjs_sys

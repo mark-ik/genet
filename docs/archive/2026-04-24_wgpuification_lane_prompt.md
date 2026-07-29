@@ -12,9 +12,9 @@
 
 ## 1. Context
 
-- Repo: `C:\Users\mark_\Code\repos\servo-wgpu`, branch `webrender-wgpu-patch`.
+- Repo: `<workspace>\repos\servo-wgpu`, branch `webrender-wgpu-patch`.
 - This is a research fork. Not upstream-mergeable under current Servo policy. Success is measured by demonstrable architectural benefit, not immediate landability.
-- Companion repo: `C:\Users\mark_\Code\repos\webrender-wgpu` on `spirv-shader-pipeline`, consumed here via Cargo path override. Do not push Servo-side lifecycle policy into `webrender-wgpu`.
+- Companion repo: `<workspace>\repos\webrender-wgpu` on `spirv-shader-pipeline`, consumed here via Cargo path override. Do not push Servo-side lifecycle policy into `webrender-wgpu`.
 - Canonical plan: [`2026-04-18_servo_wgpuification_plan.md`](2026-04-18_servo_wgpuification_plan.md). Read its **Working Thesis**, **Design Rules**, and the phase section matching your lane. Do not re-derive decisions the plan has already made.
 - Phase A audit & trait design: [`2026-04-18_phase_a_rendering_context_audit.md`](2026-04-18_phase_a_rendering_context_audit.md), [`2026-04-18_phase_a_trait_design.md`](2026-04-18_phase_a_trait_design.md), [`2026-04-18_phase_a_toy_embedder.md`](2026-04-18_phase_a_toy_embedder.md).
 

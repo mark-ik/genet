@@ -157,7 +157,7 @@ one-time admin step, run once on this machine:
 # elevated PowerShell
 $hosts = "$env:windir\System32\drivers\etc\hosts"
 Copy-Item $hosts "$hosts.bak-$(Get-Date -Format yyyyMMdd)"
-cd C:\Users\mark_\Code\repos\genet\tests\wpt\tests
+cd <workspace>\repos\genet\tests\wpt\tests
 python wpt make-hosts-file | Add-Content -Encoding ascii $hosts
 ```
 

@@ -678,7 +678,7 @@ commit.
 Store generated maps, winner ledgers, browser measurements, commands, and
 images under:
 
-`C:\Users\mark_\Code\testing\genet\wpt-ledger\<date>_buckram_k4g<gate>`
+`<workspace>\testing\genet\wpt-ledger\<date>_buckram_k4g<gate>`
 
 Keep proof outputs out of Git.
 

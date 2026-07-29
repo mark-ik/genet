@@ -22,7 +22,7 @@ Commits: genet `7383cb73dfb`; stylo fork main `3703b212f6`; netrender
 `1040835e7`; mere `2fb78c4`, turnstone `37e536f`, woodshed `dab7595`,
 strophe `f53f8c4`, isometry `d5e2e1e`.
 
-**Residual — the local folder.** `C:\Users\mark_\Code\repos\serval` could
+**Residual — the local folder.** `<workspace>\repos\serval` could
 not be renamed to `genet`: Windows held the directory (VS Code +
 rust-analyzer + another lane's processes), and killing the user's editor was
 not an acceptable price. The five consumers' gitignored

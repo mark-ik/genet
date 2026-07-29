@@ -116,9 +116,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         DIM,
         TARGET_FORMAT,
     );
-    let log_path = "C:/Users/mark_/Code/repos/netrender/netrender-notes/logs/2026-04-30_netrender_embedder_hookup.log";
-    std::fs::write(log_path, &log)?;
-    println!("log written to {}", log_path);
+    let log_path = std::env::var_os("NETRENDER_SMOKE_LOG")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("netrender-smoke.log"));
+    std::fs::write(&log_path, &log)?;
+    println!("log written to {}", log_path.display());
 
     Ok(())
 }

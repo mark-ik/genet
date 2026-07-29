@@ -97,7 +97,7 @@ What's deferred (each marked with a `warn!` in the translator):
 Reproduces in [`.cargo-check-logs/cargo-check-env.ps1`](../.cargo-check-logs/cargo-check-env.ps1).
 
 ```powershell
-$env:Path = "C:\Users\mark_\AppData\Local\bin\NASM;$env:Path"
+$env:Path = "<user-home>\AppData\Local\bin\NASM;$env:Path"
 $env:CFLAGS = "-utf-8"   # dash form; msys2 mangles /utf-8 into a path
 $env:CXXFLAGS = "-utf-8"
 $env:CC = "clang-cl"     # mozjs 140 fmt 11.x has unprotected GCC syntax — MSVC cl.exe rejects

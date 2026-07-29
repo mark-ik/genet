@@ -11,7 +11,7 @@
 #   . .\.cargo-check-logs\cargo-check-env.ps1
 #   cmd /c '"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" 1>nul 2>&1 && cargo check -p servo-layout'
 
-$env:Path = "C:\Users\mark_\AppData\Local\bin\NASM;$env:Path"
+$env:Path = "$env:LOCALAPPDATA\bin\NASM;$env:Path"
 $env:CFLAGS = "-utf-8"
 $env:CXXFLAGS = "-utf-8"
 $env:CC = "clang-cl"
