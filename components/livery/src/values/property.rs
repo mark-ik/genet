@@ -934,9 +934,14 @@ keyword_value! {
         Flex => "flex",
         Grid => "grid",
         Table => "table",
+        InlineTable => "inline-table",
         TableRowGroup => "table-row-group",
+        TableHeaderGroup => "table-header-group",
+        TableFooterGroup => "table-footer-group",
         TableRow => "table-row",
         TableCell => "table-cell",
+        TableColumnGroup => "table-column-group",
+        TableColumn => "table-column",
         TableCaption => "table-caption",
     }
 }
@@ -974,6 +979,30 @@ keyword_value! {
     pub enum TableLayout {
         Auto => "auto",
         Fixed => "fixed",
+    }
+}
+
+keyword_value! {
+    /// CSS 2.1's separate and collapsed table border models.
+    pub enum BorderCollapse {
+        Separate => "separate",
+        Collapse => "collapse",
+    }
+}
+
+keyword_value! {
+    /// Caption placement relative to its table grid.
+    pub enum CaptionSide {
+        Top => "top",
+        Bottom => "bottom",
+    }
+}
+
+keyword_value! {
+    /// Whether an empty table cell retains its background and border.
+    pub enum EmptyCells {
+        Show => "show",
+        Hide => "hide",
     }
 }
 
@@ -1905,6 +1934,54 @@ impl FromStr for Gap {
 impl fmt::Display for Gap {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
+    }
+}
+
+/// The horizontal and vertical distances in CSS 2.1's separated-border
+/// model. Percentages and negative values are invalid for `border-spacing`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TableBorderSpacing {
+    pub horizontal: Length,
+    pub vertical: Length,
+}
+
+impl TableBorderSpacing {
+    pub const ZERO: Self = Self {
+        horizontal: Length::ZERO,
+        vertical: Length::ZERO,
+    };
+}
+
+impl FromStr for TableBorderSpacing {
+    type Err = ParseError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let values = input.split_ascii_whitespace().collect::<Vec<_>>();
+        let (horizontal, vertical) = match values.as_slice() {
+            [horizontal] => {
+                let horizontal = horizontal.parse::<Length>()?;
+                (horizontal, horizontal)
+            },
+            [horizontal, vertical] => (horizontal.parse::<Length>()?, vertical.parse::<Length>()?),
+            _ => return Err(ParseError::expected("one or two non-negative lengths")),
+        };
+        if horizontal.value < 0.0 || vertical.value < 0.0 {
+            return Err(ParseError::expected("one or two non-negative lengths"));
+        }
+        Ok(Self {
+            horizontal,
+            vertical,
+        })
+    }
+}
+
+impl fmt::Display for TableBorderSpacing {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.horizontal.fmt(formatter)?;
+        if self.vertical != self.horizontal {
+            write!(formatter, " {}", self.vertical)?;
+        }
+        Ok(())
     }
 }
 

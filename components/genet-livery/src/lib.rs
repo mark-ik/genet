@@ -48,10 +48,14 @@ div, blockquote, h1, h2, h3, h4, h5, h6, p, ul, ol, pre {
 }
 li { display: list-item; }
 
-table { display: table; }
-thead, tbody, tfoot { display: table-row-group; }
+table { display: table; border-collapse: separate; border-spacing: 2px; }
+thead { display: table-header-group; vertical-align: middle; }
+tbody { display: table-row-group; vertical-align: middle; }
+tfoot { display: table-footer-group; vertical-align: middle; }
+colgroup { display: table-column-group; }
+col { display: table-column; }
 tr { display: table-row; }
-td, th { display: table-cell; }
+td, th { display: table-cell; padding: 1px; vertical-align: inherit; }
 caption { display: table-caption; }
 
 button, input, select, textarea {

@@ -1263,6 +1263,18 @@ where
                     .map(Some)
             },
             BoxOrigin::Pseudo { .. } | BoxOrigin::Anonymous { .. } => {
+                if self.boxes[box_id].display.internal_table == Some(InternalTableRole::Wrapper) {
+                    let children = self.boxes[box_id].children();
+                    if let [grid] = children
+                        && self.boxes[*grid].display.internal_table == Some(InternalTableRole::Grid)
+                    {
+                        // K4a exposes the CSS wrapper in Buckram's tree, but
+                        // K4e owns its flow, captions, and float avoidance.
+                        // Keep the existing table-as-grid bridge attached to
+                        // the grid until that dispatcher replaces it.
+                        return self.build_box(*grid, inherited, parent_font_size);
+                    }
+                }
                 let computed = inherited.cloned().unwrap_or_default();
                 let children = self.build_children(box_id, &computed, parent_font_size)?;
                 let block_style = anonymous_block_style(self.boxes, box_id);
@@ -1612,6 +1624,15 @@ where
                 Ok(Some(node))
             },
             BoxOrigin::Pseudo { .. } | BoxOrigin::Anonymous { .. } => {
+                if self.boxes[box_id].display.internal_table == Some(InternalTableRole::Wrapper) {
+                    let children = self.boxes[box_id].children();
+                    if let [grid] = children
+                        && self.boxes[*grid].display.internal_table == Some(InternalTableRole::Grid)
+                    {
+                        // See InlineBuildState's corresponding K4a bridge.
+                        return self.build_box(*grid, inherited, parent_font_size, containing_size);
+                    }
+                }
                 let computed = inherited.cloned().unwrap_or_default();
                 let children = self.boxes[box_id]
                     .children()
@@ -1702,6 +1723,12 @@ where
 {
     let css_box = &boxes[box_id];
     css_box.display.outside == Some(DisplayOutside::Inline)
+        // K4a preserves the existing block-flow bridge for the wrapper/grid
+        // pair. K4e replaces this compatibility route with table dispatch.
+        && !matches!(
+            css_box.display.internal_table,
+            Some(InternalTableRole::Wrapper | InternalTableRole::Grid)
+        )
         && css_box.float == FloatSide::None
         && matches!(
             css_box.positioning,
@@ -2301,7 +2328,11 @@ where
                     }
                     *row += 1;
                 },
-                Some(CssDisplay::TableRowGroup) => walk(dom, styles, child, row, out),
+                Some(
+                    CssDisplay::TableRowGroup
+                    | CssDisplay::TableHeaderGroup
+                    | CssDisplay::TableFooterGroup,
+                ) => walk(dom, styles, child, row, out),
                 // Captions, colgroups, and stray content are not placed in
                 // the first-cut grid.
                 _ => {},
@@ -2355,9 +2386,11 @@ where
                         return false;
                     }
                 },
-                Some(CssDisplay::TableRowGroup)
-                    if positioned::<D>(styles, child) || !walk(dom, styles, child) =>
-                {
+                Some(
+                    CssDisplay::TableRowGroup
+                    | CssDisplay::TableHeaderGroup
+                    | CssDisplay::TableFooterGroup,
+                ) if positioned::<D>(styles, child) || !walk(dom, styles, child) => {
                     return false;
                 },
                 _ => {},

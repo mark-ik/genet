@@ -3,16 +3,18 @@ use std::fmt::Debug;
 use livery::media::{ViewportSize, ViewportSizes};
 use livery::values::{
     Alignment, AnimationDelay, AnimationName, AspectRatio, BackgroundImage, BackgroundPosition,
-    BackgroundRepeat, BorderStyle, BorderWidth, BoxShadow, BoxSizing, Clear, Color, Contain,
-    CssValue, Direction, Display, Duration, FlexDirection, FlexFactor, FlexWrap, Float, FontFamily,
-    FontSize, FontStyle, FontWeight, Gap, Inset, LengthPercentage, LengthUnit, LineHeight,
-    ListStyleType, Margin, Opacity, Order, Overflow, Padding, PointerEvents, Position, Radius,
-    RelativeLengthEnvironment, ResolveViewport, Rotate, Scale, Size, Spacing, TextAlign,
-    TextDecorationLine, TextWrapMode, TimingFunction, Transform, TransitionProperty, TreeCounts,
-    VerticalAlign, Visibility, WhiteSpaceCollapse, ZIndex,
+    BackgroundRepeat, BorderCollapse, BorderStyle, BorderWidth, BoxShadow, BoxSizing, CaptionSide,
+    Clear, Color, Contain, CssValue, Direction, Display, Duration, EmptyCells, FlexDirection,
+    FlexFactor, FlexWrap, Float, FontFamily, FontSize, FontStyle, FontWeight, Gap, Inset,
+    LengthPercentage, LengthUnit, LineHeight, ListStyleType, Margin, Opacity, Order, Overflow,
+    Padding, PointerEvents, Position, Radius, RelativeLengthEnvironment, ResolveViewport, Rotate,
+    Scale, Size, Spacing, TableBorderSpacing, TextAlign, TextDecorationLine, TextWrapMode,
+    TimingFunction, Transform, TransitionProperty, TreeCounts, VerticalAlign, Visibility,
+    WhiteSpaceCollapse, ZIndex,
 };
 use livery::{
-    AnimationClass, PropertyId, canonicalize_specified_longhand, canonicalize_specified_value,
+    AnimationClass, ComputedValues, PropertyId, canonicalize_specified_longhand,
+    canonicalize_specified_value,
 };
 
 fn assert_round_trip<T>(css: &str)
@@ -122,6 +124,11 @@ fn color_values_round_trip() {
 fn catalog_property_values_round_trip() {
     assert_round_trip::<AnimationDelay>("-500000s");
     assert_round_trip::<Display>("inline-block");
+    assert_round_trip::<Display>("inline-table");
+    assert_round_trip::<Display>("table-header-group");
+    assert_round_trip::<Display>("table-footer-group");
+    assert_round_trip::<Display>("table-column-group");
+    assert_round_trip::<Display>("table-column");
     assert_round_trip::<Display>("contents");
     assert_round_trip::<Display>("list-item");
     assert_round_trip::<Contain>("none");
@@ -200,6 +207,10 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<TextAlign>("center");
     assert_round_trip::<BorderStyle>("solid");
     assert_round_trip::<BorderWidth>("1px");
+    assert_round_trip::<BorderCollapse>("collapse");
+    assert_round_trip::<CaptionSide>("bottom");
+    assert_round_trip::<EmptyCells>("hide");
+    assert_round_trip::<TableBorderSpacing>("2px 3px");
     assert_round_trip::<TextDecorationLine>("underline overline");
     assert_round_trip::<TextWrapMode>("nowrap");
     assert_round_trip::<Visibility>("hidden");
@@ -207,6 +218,34 @@ fn catalog_property_values_round_trip() {
     assert_round_trip::<VerticalAlign>("-2px");
     assert_round_trip::<WhiteSpaceCollapse>("preserve");
     assert_round_trip::<ZIndex>("10");
+}
+
+#[test]
+fn table_properties_parse_serialize_and_inherit() {
+    let mut parent = ComputedValues::default();
+    parent.border_collapse = BorderCollapse::Collapse;
+    parent.border_spacing = "2px 3px".parse().expect("border spacing");
+    parent.caption_side = CaptionSide::Bottom;
+    parent.empty_cells = EmptyCells::Hide;
+    let child = ComputedValues::for_child(&parent);
+
+    assert_eq!(child.border_collapse, BorderCollapse::Collapse);
+    assert_eq!(child.border_spacing.to_string(), "2px 3px");
+    assert_eq!(child.caption_side, CaptionSide::Bottom);
+    assert_eq!(child.empty_cells, EmptyCells::Hide);
+    assert_eq!(ComputedValues::default().border_spacing.to_string(), "0");
+    assert_eq!(
+        canonicalize_specified_longhand("border-spacing", "2px 3px").as_deref(),
+        Some("2px 3px")
+    );
+    assert_eq!(
+        canonicalize_specified_longhand("border-spacing", "-1px"),
+        None
+    );
+    assert_eq!(
+        canonicalize_specified_longhand("caption-side", "sideways"),
+        None
+    );
 }
 
 #[test]

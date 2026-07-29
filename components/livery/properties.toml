@@ -67,6 +67,9 @@ url = "https://www.w3.org/TR/css-grid-1/"
 [sources.css_tables_3]
 url = "https://www.w3.org/TR/css-tables-3/"
 
+[sources.css2_tables]
+url = "https://www.w3.org/TR/CSS2/tables.html"
+
 [sources.css_conditional_5]
 url = "https://www.w3.org/TR/css-contain-3/"
 
@@ -450,6 +453,46 @@ animation = "by-computed-value"
 source = "css_backgrounds_3"
 
 [[property]]
+name = "border-collapse"
+value_type = "border-collapse"
+inherited = true
+initial = "separate"
+grammar = "collapse | separate"
+seed_values = ["collapse", "separate"]
+animation = "discrete"
+source = "css2_tables"
+
+[[property]]
+name = "border-spacing"
+value_type = "table-border-spacing"
+inherited = true
+initial = "0"
+grammar = "<length>{1,2}"
+seed_values = ["zero", "px"]
+animation = "by-computed-value"
+source = "css2_tables"
+
+[[property]]
+name = "caption-side"
+value_type = "caption-side"
+inherited = true
+initial = "top"
+grammar = "top | bottom"
+seed_values = ["top", "bottom"]
+animation = "discrete"
+source = "css2_tables"
+
+[[property]]
+name = "empty-cells"
+value_type = "empty-cells"
+inherited = true
+initial = "show"
+grammar = "show | hide"
+seed_values = ["show", "hide"]
+animation = "discrete"
+source = "css2_tables"
+
+[[property]]
 name = "table-layout"
 value_type = "table-layout"
 inherited = false
@@ -457,7 +500,7 @@ initial = "auto"
 grammar = "auto | fixed"
 seed_values = ["auto", "fixed"]
 animation = "discrete"
-source = "css_tables_3"
+source = "css2_tables"
 partial = "fixed sizing from first-row cell widths only (CSS 2.1 17.5.2.1); no <col>/<colgroup> contribution, no row or column spans, no border-spacing in the width calculation, and the auto algorithm (17.5.2.2) is not built"
 
 [[property]]
@@ -558,7 +601,7 @@ value_type = "display"
 inherited = false
 initial = "inline"
 grammar = "[ <display-outside> || <display-inside> ] | <display-listitem> | <display-internal> | <display-box> | <display-legacy>"
-seed_values = ["inline", "block", "list-item", "inline-block", "none", "contents", "flex", "grid", "table", "table-row-group", "table-row", "table-cell", "table-caption"]
+seed_values = ["inline", "block", "list-item", "inline-block", "none", "contents", "flex", "grid", "table", "inline-table", "table-row-group", "table-header-group", "table-footer-group", "table-row", "table-cell", "table-column-group", "table-column", "table-caption"]
 animation = "discrete"
 source = "css_display_3"
 
@@ -1871,35 +1914,6 @@ group = "inherited_box"
 inherited = true
 animation = "discrete"
 spec = "https://drafts.csswg.org/css-images/#propdef-image-rendering"
-
-# group: inherited_table
-[[unimplemented]]
-name = "border-collapse"
-group = "inherited_table"
-inherited = true
-animation = "discrete"
-spec = "https://drafts.csswg.org/css-tables/#propdef-border-collapse"
-
-[[unimplemented]]
-name = "border-spacing"
-group = "inherited_table"
-inherited = true
-animation = "by-computed-value"
-spec = "https://drafts.csswg.org/css-tables/#propdef-border-spacing"
-
-[[unimplemented]]
-name = "caption-side"
-group = "inherited_table"
-inherited = true
-animation = "discrete"
-spec = "https://drafts.csswg.org/css-tables/#propdef-caption-side"
-
-[[unimplemented]]
-name = "empty-cells"
-group = "inherited_table"
-inherited = true
-animation = "discrete"
-spec = "https://drafts.csswg.org/css-tables/#propdef-empty-cells"
 
 # group: inherited_text
 [[unimplemented]]

@@ -146,9 +146,16 @@ fn display_role(display: ComputedDisplay) -> DisplayRole {
         ComputedDisplay::Flex => normal(Some(DisplayOutside::Block), Some(DisplayInside::Flex)),
         ComputedDisplay::Grid => normal(Some(DisplayOutside::Block), Some(DisplayInside::Grid)),
         ComputedDisplay::Table => normal(Some(DisplayOutside::Block), Some(DisplayInside::Table)),
+        ComputedDisplay::InlineTable => {
+            normal(Some(DisplayOutside::Inline), Some(DisplayInside::Table))
+        },
         ComputedDisplay::TableRowGroup => internal(InternalTableRole::RowGroup),
+        ComputedDisplay::TableHeaderGroup => internal(InternalTableRole::HeaderGroup),
+        ComputedDisplay::TableFooterGroup => internal(InternalTableRole::FooterGroup),
         ComputedDisplay::TableRow => internal(InternalTableRole::Row),
         ComputedDisplay::TableCell => internal(InternalTableRole::Cell),
+        ComputedDisplay::TableColumnGroup => internal(InternalTableRole::ColumnGroup),
+        ComputedDisplay::TableColumn => internal(InternalTableRole::Column),
         ComputedDisplay::TableCaption => internal(InternalTableRole::Caption),
     }
 }
@@ -202,6 +209,20 @@ mod tests {
     use crate::{Device, InteractionStates, StyleSet, resolve_styles};
     use genet_static_dom::StaticDocument;
     use layout_dom_api::{LocalName, Namespace};
+
+    fn find(
+        dom: &StaticDocument,
+        node: <StaticDocument as LayoutDom>::NodeId,
+        needle: &str,
+    ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+        if dom.kind(node) == NodeKind::Element
+            && dom.attribute(node, &Namespace::from(""), &LocalName::from("id")) == Some(needle)
+        {
+            return Some(node);
+        }
+        dom.dom_children(node)
+            .find_map(|child| find(dom, child, needle))
+    }
 
     #[test]
     fn generated_tree_applies_suppression_contents_and_comment_rules() {
@@ -297,5 +318,55 @@ mod tests {
                 .iter()
                 .all(|box_id| generated[*box_id].flow == expected)
         );
+    }
+
+    #[test]
+    fn table_display_vocabulary_and_html_ua_roles_reach_buckram() {
+        assert_eq!(
+            display_role(ComputedDisplay::InlineTable).outside,
+            Some(DisplayOutside::Inline)
+        );
+        for (display, role) in [
+            (
+                ComputedDisplay::TableHeaderGroup,
+                InternalTableRole::HeaderGroup,
+            ),
+            (
+                ComputedDisplay::TableFooterGroup,
+                InternalTableRole::FooterGroup,
+            ),
+            (
+                ComputedDisplay::TableColumnGroup,
+                InternalTableRole::ColumnGroup,
+            ),
+            (ComputedDisplay::TableColumn, InternalTableRole::Column),
+        ] {
+            assert_eq!(display_role(display).internal_table, Some(role));
+        }
+
+        let dom = StaticDocument::parse(
+            "<html><body><table><thead id=\"head\"><tr><th>h</th></tr></thead>\
+             <tbody id=\"body\"><tr><td>d</td></tr></tbody><tfoot id=\"foot\">\
+             <tr><td>f</td></tr></tfoot><colgroup id=\"group\"><col id=\"column\"></colgroup>\
+             </table></body></html>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[]),
+            &Device::screen(800.0, 600.0),
+            &InteractionStates::default(),
+        );
+        let generated = GeneratedBoxTree::from_dom(&dom, &styles);
+        for (needle, role) in [
+            ("head", InternalTableRole::HeaderGroup),
+            ("body", InternalTableRole::RowGroup),
+            ("foot", InternalTableRole::FooterGroup),
+            ("group", InternalTableRole::ColumnGroup),
+            ("column", InternalTableRole::Column),
+        ] {
+            let node = find(&dom, dom.document(), needle).expect(needle);
+            let box_id = generated.principal_box(node).expect(needle);
+            assert_eq!(generated[box_id].display.internal_table, Some(role));
+        }
     }
 }

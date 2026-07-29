@@ -639,3 +639,53 @@ The K4a handoff is:
 K4a is the right first slice because it corrects the input model without
 mixing in track sizing. K4b can then build one table grid from stable box
 roles instead of compensating for missing structure inside an algorithm.
+
+## K4a execution receipt (2026-07-28)
+
+K4a began from the accepted K3 closure `2f1ae56968c`; the fresh maps were made
+from the unchanged code checkout carrying the K4 plan. Before the code change,
+the Livery reftest maps were:
+
+| Corpus | Pass | Fail | Skip | Error |
+|---|---:|---:|---:|---:|
+| `css/CSS2/tables` | 66 | 184 | 889 | 0 |
+| `css/css-tables` | 50 | 80 | 198 | 0 |
+
+### Model and adapter proof
+
+- Buckram now distinguishes the anonymous wrapper from the principal grid and
+  retains independent provenance for both. Ordered repair covers improper
+  children, missing row and row-group children, missing table parents,
+  collapsible whitespace, and out-of-flow descendants.
+- Livery computes `inline-table`, header/footer groups, column groups, and
+  columns, and owns CSS 2.1 values for `border-collapse`, `border-spacing`,
+  `caption-side`, and `empty-cells`. The HTML UA sheet gives `thead`, `tbody`,
+  `tfoot`, `colgroup`, and `col` their distinct table roles.
+- Buckram's pure model tests, Livery value tests, and the DOM-to-Buckram role
+  test cover these distinctions. `cargo test -p buckram --offline` passed 76
+  tests; `cargo test -p livery --offline` passed 32 tests; the full
+  `cargo test -p genet-livery --offline` suite passed after the final bridge
+  adjustment.
+
+### Bridge and regression proof
+
+The legacy Grid/Flex compatibility bridge stays attached to the grid. Its
+temporary wrapper/grid route keeps the pair in block flow, including an
+`inline-table`, until K4e supplies table dispatch, caption flow, and float
+avoidance. This preserves the renderer's prior behavior while the CSS box tree
+retains the correct inline outer role; it is not a claim that K4a implements
+inline-table sizing or placement.
+
+`cargo build -p genet-wpt --release --all-features --offline` succeeded. The
+post-change reftest maps recorded no regressions:
+
+| Corpus | Pass | Fail | Skip | Error | Delta |
+|---|---:|---:|---:|---:|---|
+| `css/CSS2/tables` | 67 | 183 | 889 | 0 | `border-collapse-empty-row.html` passed |
+| `css/css-tables` | 53 | 77 | 198 | 0 | caption-relative-positioning and two percentage-grandchildren quirks tests passed |
+
+The combined strict Clippy admission remains blocked by 147 pre-existing
+Livery diagnostics, including `color/space/mod.rs:234` (`wrong_self_convention`);
+it emitted no diagnostic for a K4a-changed path. Generated maps and command
+logs are retained under `testing/genet/wpt-ledger/2026-07-28_buckram_k4a` and
+remain outside Git.

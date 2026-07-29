@@ -15,11 +15,12 @@ pub use length::{
 };
 pub use property::{
     Alignment, AnimationDelay, AnimationName, AspectRatio, BackgroundImage, BackgroundPosition,
-    BackgroundRepeat, BorderStyle, BorderWidth, BoxShadow, BoxShadowValue, BoxSizing, Clear,
-    Contain, ContainerName, ContainerType, Direction, Display, Duration, FlexDirection, FlexFactor,
-    FlexWrap, Float, FontFamily, FontSize, FontStyle, FontWeight, Gap, GridAutoFlow, GridPlacement,
-    GridTemplate, GridTrack, Inset, LineHeight, ListStyleType, Margin, Opacity, Order, Overflow,
-    Padding, PointerEvents, Position, Radius, Rotate, Scale, Size, Spacing, TableLayout, TextAlign,
+    BackgroundRepeat, BorderCollapse, BorderStyle, BorderWidth, BoxShadow, BoxShadowValue,
+    BoxSizing, CaptionSide, Clear, Contain, ContainerName, ContainerType, Direction, Display,
+    Duration, EmptyCells, FlexDirection, FlexFactor, FlexWrap, Float, FontFamily, FontSize,
+    FontStyle, FontWeight, Gap, GridAutoFlow, GridPlacement, GridTemplate, GridTrack, Inset,
+    LineHeight, ListStyleType, Margin, Opacity, Order, Overflow, Padding, PointerEvents, Position,
+    Radius, Rotate, Scale, Size, Spacing, TableBorderSpacing, TableLayout, TextAlign,
     TextDecorationColor, TextDecorationLine, TextWrapMode, TimingFunction, Transform,
     TransformFunction, TransitionProperty, VerticalAlign, Visibility, WhiteSpaceCollapse,
     WritingMode, ZIndex,
@@ -91,8 +92,10 @@ unchanged_viewport_resolution!(
     AspectRatio,
     BackgroundImage,
     BackgroundRepeat,
+    BorderCollapse,
     BorderStyle,
     BoxSizing,
+    CaptionSide,
     Clear,
     Contain,
     ContainerName,
@@ -101,6 +104,7 @@ unchanged_viewport_resolution!(
     Direction,
     Display,
     Duration,
+    EmptyCells,
     FlexDirection,
     FlexFactor,
     FlexWrap,
@@ -211,6 +215,15 @@ impl ResolveViewport for FontSize {
 impl ResolveViewport for Gap {
     fn resolve_relative_lengths(&self, environment: RelativeLengthEnvironment) -> Self {
         Self(self.0.resolve_relative(environment))
+    }
+}
+
+impl ResolveViewport for TableBorderSpacing {
+    fn resolve_relative_lengths(&self, environment: RelativeLengthEnvironment) -> Self {
+        Self {
+            horizontal: self.horizontal.resolve_relative(environment),
+            vertical: self.vertical.resolve_relative(environment),
+        }
     }
 }
 
@@ -329,7 +342,9 @@ discrete_interpolation!(
     AnimationDelay,
     AnimationName,
     AspectRatio,
+    BorderCollapse,
     BoxSizing,
+    CaptionSide,
     Clear,
     Contain,
     ContainerName,
@@ -337,6 +352,7 @@ discrete_interpolation!(
     Direction,
     Display,
     Duration,
+    EmptyCells,
     FlexDirection,
     FlexFactor,
     FlexWrap,
@@ -360,6 +376,7 @@ discrete_interpolation!(
     Position,
     Size,
     Spacing,
+    TableBorderSpacing,
     TableLayout,
     TextAlign,
     TextDecorationLine,
