@@ -689,3 +689,40 @@ Livery diagnostics, including `color/space/mod.rs:234` (`wrong_self_convention`)
 it emitted no diagnostic for a K4a-changed path. Generated maps and command
 logs are retained under `testing/genet/wpt-ledger/2026-07-28_buckram_k4a` and
 remain outside Git.
+
+## K4b execution receipt (2026-07-28)
+
+K4b adds Buckram's typed `TableGrid`: wrapper and grid identity, visual-order
+row groups, source-order column groups, tracks, cells, captions, slot
+occupancy, and deterministic input errors. Header rows are placed before body
+rows and footer rows after them without rewriting source boxes. Explicit and
+implicit columns are tracks only, never invented CSS cell boxes.
+
+Livery normalizes HTML attributes before this boundary: `colspan`, positive
+`rowspan`, `rowspan="0"`, `col span`, and `colgroup span`, with HTML bounds of
+1000 for column spans and 65534 for positive row spans. CSS-display tables do
+not consume DOM span attributes. The old `table_cells` collector is deleted;
+the temporary `place_table_cell` bridge receives only `TableGrid` start slots.
+It intentionally does not translate a span into a Taffy `GridPlacement`.
+K4c owns span sizing and K4d replaces the bridge.
+
+### Evidence
+
+- `cargo test -p buckram --offline` passed 82 tests, including simple rows,
+  column and row spans, `rowspan="0"`, malformed duplicate input,
+  columns/column groups, and header/body/footer order.
+- K4b adapter tests prove HTML normalization and that CSS-display tables keep
+  default spans. The full `cargo test -p genet-livery --offline` suite passed.
+- `cargo build -p genet-wpt --release --all-features --offline` succeeded.
+  Exact-source maps are unchanged from K4a: `css/CSS2/tables` is 67 pass, 183
+  fail, 889 skip, 0 error; `css/css-tables` is 53 pass, 77 fail, 198 skip, 0
+  error. There are no K4a-to-K4b status changes.
+- Focused reftests pass for `zero-rowspan-001.html` and `row-group-order.html`.
+  `table_grid_size_col_colspan.html` remains an existing local failure, and
+  `colspan-001.html` plus `column-track-merging.html` are non-reftest skips.
+- Strict Buckram Clippy reports no K4b diagnostic. The admission remains
+  blocked by pre-existing `taffy_adapter.rs:3910` test code
+  (`manual_is_multiple_of`); the broader Livery block remains recorded above.
+
+Generated maps and command logs are retained under
+`testing/genet/wpt-ledger/2026-07-28_buckram_k4b` and remain outside Git.

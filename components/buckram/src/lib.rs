@@ -11,6 +11,7 @@ mod box_tree;
 mod flow;
 mod fragment_tree;
 mod intrinsic;
+mod table;
 mod taffy_adapter;
 
 pub use block::{
@@ -37,6 +38,10 @@ pub use fragment_tree::{
 pub use intrinsic::{
     IntrinsicQueryError, IntrinsicQueryState, IntrinsicSizeCache, IntrinsicSizeKind,
     IntrinsicSizeQuery, IntrinsicSizes, block_intrinsic_sizes_for_definite_inline,
+};
+pub use table::{
+    TableCell, TableCellInput, TableGrid, TableGridError, TableGridInputs, TableRowSpan, TableSlot,
+    TableTrack, TableTrackGroup, TableTrackGroupKind, TableTrackInput,
 };
 pub use taffy_adapter::{
     AlgorithmAvailableSpace, AlgorithmKind, AlgorithmLayout, AlgorithmNodeId, AlgorithmSize,

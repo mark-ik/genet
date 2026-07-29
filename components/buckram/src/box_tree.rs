@@ -644,6 +644,7 @@ fn parent_accepts_table_parts(display: DisplayRole) -> bool {
                     | InternalTableRole::HeaderGroup
                     | InternalTableRole::FooterGroup
                     | InternalTableRole::Row
+                    | InternalTableRole::ColumnGroup
             )
         )
 }

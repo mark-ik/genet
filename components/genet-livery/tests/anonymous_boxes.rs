@@ -278,13 +278,13 @@ fn block_flow_whitespace_does_not_change_sibling_placement() {
 /// A `display: table` box lays its cells out as a grid.
 ///
 /// Neither lane implements real table layout: taffy has no table algorithm
-/// and `stylo_taffy` says so outright. The incumbent renders tables by
-/// flattening the row-group and row nesting and giving every cell an explicit
-/// grid position, and Livery now does the same. Before this a table mapped to
+/// and `stylo_taffy` says so outright. Buckram's `TableGrid` flattens the
+/// compatibility bridge's row-group and row nesting and gives every cell an
+/// explicit start slot. Before this a table mapped to
 /// a flex row with no row or column structure, so every cell landed on one
 /// line.
 #[test]
-fn table_cells_are_placed_on_a_grid() {
+fn table_grid_places_cells_on_the_compatibility_bridge() {
     // The UA sheet supplies the table display values; author CSS only sizes
     // the cells so the assertions can be exact.
     let html = "<html><body><table id=\"t\">        <tr><td id=\"a\">a</td><td id=\"b\">b</td></tr>        <tr><td id=\"c\">c</td><td id=\"d\">d</td></tr>        </table></body></html>";

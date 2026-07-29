@@ -7,9 +7,10 @@ use buckram::{
     FloatContextProvenance, FloatLineConstraints, FloatSide, FlowAxes, FlowLength, FlowLengthAuto,
     FormattingContextKind, Fragment as TreeFragment, FragmentId, FragmentTree, InternalTableRole,
     IntrinsicSizeCache, IntrinsicSizeKind, IntrinsicSizeQuery, IntrinsicSizes, LayoutResult,
-    LogicalAxis, PhysicalRect, PhysicalSides, PhysicalSize, PositioningScheme,
+    LogicalAxis, PhysicalRect, PhysicalSides, PhysicalSize, PositioningScheme, TableCell,
+    TableCellInput, TableGrid, TableGridInputs, TableRowSpan, TableTrackInput,
 };
-use layout_dom_api::{LayoutDom, NodeKind};
+use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
 use livery::{
     ComputedValues,
     media::{Device, ViewportSizes},
@@ -1308,20 +1309,15 @@ where
                 .origin_node(parent)
                 .is_some_and(|node| table_is_flattenable(self.dom, self.styles, node))
         {
-            let table = self
-                .boxes
-                .origin_node(parent)
-                .expect("an element box has an origin node");
-            let cells = table_cells(self.dom, self.styles, table);
-            let mut children = Vec::with_capacity(cells.len());
-            for (cell_node, row, column) in cells {
-                let Some(cell) = self.boxes.principal_box(cell_node) else {
+            let table = build_table_grid(self.boxes, self.dom, parent);
+            let mut children = Vec::with_capacity(table.cells.len());
+            for cell in &table.cells {
+                let Some(node) =
+                    self.build_box(cell.source, Some(parent_style), parent_font_size)?
+                else {
                     continue;
                 };
-                let Some(node) = self.build_box(cell, Some(parent_style), parent_font_size)? else {
-                    continue;
-                };
-                place_table_cell(self.tree.style_mut(node), row, column);
+                place_table_cell(self.tree.style_mut(node), cell);
                 children.push(node);
             }
             return Ok(children);
@@ -1469,17 +1465,14 @@ where
                 }
                 // A `display: table` box takes its flattened cells directly,
                 // so the row-group and row boxes never enter the tree.
-                let children = if computed.display == CssDisplay::Table
-                    && table_is_flattenable(self.dom, self.styles, node)
-                {
-                    let cells = table_cells(self.dom, self.styles, node);
-                    let mut children = Vec::with_capacity(cells.len());
-                    for (cell_node, row, column) in cells {
-                        let Some(cell) = self.boxes.principal_box(cell_node) else {
-                            continue;
-                        };
+                let table = (computed.display == CssDisplay::Table
+                    && table_is_flattenable(self.dom, self.styles, node))
+                .then(|| build_table_grid(self.boxes, self.dom, box_id));
+                let children = if let Some(table) = table.as_ref() {
+                    let mut children = Vec::with_capacity(table.cells.len());
+                    for cell in &table.cells {
                         let Some(taffy_node) = self.build_box(
-                            cell,
+                            cell.source,
                             Some(&computed),
                             font_size,
                             child_containing_size,
@@ -1487,7 +1480,7 @@ where
                         else {
                             continue;
                         };
-                        place_table_cell(self.tree.style_mut(taffy_node), row, column);
+                        place_table_cell(self.tree.style_mut(taffy_node), cell);
                         children.push(taffy_node);
                     }
                     children
@@ -1510,14 +1503,16 @@ where
                 // CSS 2.1 section 17.5.2.1: a fixed table's columns are sized
                 // from the first row, so they can be pinned as explicit grid
                 // tracks before anything is measured.
-                if let Some(columns) = fixed_column_widths(
-                    self.dom,
-                    self.styles,
-                    node,
-                    &computed,
-                    font_size,
-                    containing_size.0,
-                ) {
+                if let Some(columns) = table.as_ref().and_then(|table| {
+                    fixed_column_widths(
+                        self.boxes,
+                        self.styles,
+                        table,
+                        &computed,
+                        font_size,
+                        containing_size.0,
+                    )
+                }) {
                     taffy_style.grid_template_columns = columns.into_iter().map(length).collect();
                 }
                 taffy_style.size.width =
@@ -2277,73 +2272,99 @@ where
     Ok(())
 }
 
-/// The cells of a `display: table` box, flattened to `(cell, row, column)`.
-///
-/// Livery lays a table out as a grid: the row-group and row nesting collapses
-/// away and every cell carries an explicit grid position. That is the same
-/// shape the incumbent lane uses (`genet-layout`'s `box_tree` builds the
-/// identical structure), which is why a table renders at all without a table
-/// algorithm in taffy.
-///
-/// Deferred here exactly as in the incumbent: `border-collapse`, caption
-/// placement, `colgroup`, row and column spans, and real fixed or auto table
-/// sizing. Tracks are implicit and auto-sized, so column widths come from
-/// content rather than from the first row.
-fn table_cells<D>(
-    dom: &D,
-    styles: &StylePlane<D::NodeId>,
-    table: D::NodeId,
-) -> Vec<(D::NodeId, u16, u16)>
+/// Normalize HTML table attributes at the Livery boundary, then ask Buckram
+/// to derive one topology from the generated CSS boxes. CSS-display tables
+/// receive the same model with the default one-by-one spans.
+fn build_table_grid<D>(boxes: &GeneratedBoxTree<D::NodeId>, dom: &D, grid: BoxId) -> TableGrid
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    fn display_of<D>(styles: &StylePlane<D::NodeId>, id: D::NodeId) -> Option<CssDisplay>
-    where
-        D: LayoutDom,
-        D::NodeId: Copy + Eq + Hash,
-    {
-        styles.get(id).map(|style| style.display)
-    }
-
-    fn walk<D>(
+    fn visit<D>(
+        boxes: &GeneratedBoxTree<D::NodeId>,
         dom: &D,
-        styles: &StylePlane<D::NodeId>,
-        container: D::NodeId,
-        row: &mut u16,
-        out: &mut Vec<(D::NodeId, u16, u16)>,
+        box_id: BoxId,
+        inputs: &mut TableGridInputs,
     ) where
         D: LayoutDom,
         D::NodeId: Copy + Eq + Hash,
     {
-        for child in dom.dom_children(container) {
-            match display_of::<D>(styles, child) {
-                Some(CssDisplay::TableRow) => {
-                    let mut column = 0u16;
-                    for cell in dom.dom_children(child) {
-                        if display_of::<D>(styles, cell) == Some(CssDisplay::TableCell) {
-                            out.push((cell, *row, column));
-                            column += 1;
-                        }
-                    }
-                    *row += 1;
+        if let Some(node) = boxes.origin_node(box_id) {
+            match boxes[box_id].display.internal_table {
+                Some(InternalTableRole::Cell) if html_element(dom, node, &["td", "th"]) => {
+                    inputs.set_cell(box_id, html_cell_input(dom, node));
                 },
-                Some(
-                    CssDisplay::TableRowGroup
-                    | CssDisplay::TableHeaderGroup
-                    | CssDisplay::TableFooterGroup,
-                ) => walk(dom, styles, child, row, out),
-                // Captions, colgroups, and stray content are not placed in
-                // the first-cut grid.
+                Some(InternalTableRole::Column) if html_element(dom, node, &["col"]) => {
+                    inputs.set_column(
+                        box_id,
+                        TableTrackInput {
+                            span: html_limited_span(html_attribute(dom, node, "span"), 1_000),
+                        },
+                    );
+                },
+                Some(InternalTableRole::ColumnGroup) if html_element(dom, node, &["colgroup"]) => {
+                    inputs.set_column_group(
+                        box_id,
+                        TableTrackInput {
+                            span: html_limited_span(html_attribute(dom, node, "span"), 1_000),
+                        },
+                    );
+                },
                 _ => {},
             }
         }
+        for child in boxes[box_id].children() {
+            visit(boxes, dom, *child, inputs);
+        }
     }
 
-    let mut out = Vec::new();
-    let mut row = 0u16;
-    walk(dom, styles, table, &mut row, &mut out);
-    out
+    let mut inputs = TableGridInputs::default();
+    visit(boxes, dom, grid, &mut inputs);
+    TableGrid::from_box_tree(&**boxes, grid, &inputs)
+}
+
+fn html_element<D>(dom: &D, node: D::NodeId, names: &[&str]) -> bool
+where
+    D: LayoutDom,
+{
+    dom.element_name(node).is_some_and(|name| {
+        name.ns.as_ref() == "http://www.w3.org/1999/xhtml"
+            && names
+                .iter()
+                .any(|candidate| name.local.as_ref().eq_ignore_ascii_case(candidate))
+    })
+}
+
+fn html_attribute<'dom, D>(dom: &'dom D, node: D::NodeId, local: &str) -> Option<&'dom str>
+where
+    D: LayoutDom,
+{
+    dom.attribute(node, &Namespace::from(""), &LocalName::from(local))
+}
+
+fn html_limited_span(value: Option<&str>, maximum: usize) -> usize {
+    value
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .map(|value| value.min(maximum))
+        .unwrap_or(1)
+}
+
+fn html_cell_input<D>(dom: &D, node: D::NodeId) -> TableCellInput
+where
+    D: LayoutDom,
+{
+    let row_span = match html_attribute(dom, node, "rowspan")
+        .and_then(|value| value.trim().parse::<usize>().ok())
+    {
+        Some(0) => TableRowSpan::ToEndOfGroup,
+        Some(value) => TableRowSpan::Count(value.min(65_534)),
+        None => TableRowSpan::Count(1),
+    };
+    TableCellInput {
+        column_span: html_limited_span(html_attribute(dom, node, "colspan"), 1_000),
+        row_span,
+    }
 }
 
 /// Whether a table's row-group and row boxes may be flattened away.
@@ -2415,23 +2436,24 @@ where
 /// Returns `None` when the algorithm does not apply, which leaves the table
 /// on auto-sized implicit tracks: no `table-layout: fixed`, no definite
 /// table width, or no cells to read.
-fn fixed_column_widths<D>(
-    dom: &D,
-    styles: &StylePlane<D::NodeId>,
-    table: D::NodeId,
+fn fixed_column_widths<Id>(
+    boxes: &GeneratedBoxTree<Id>,
+    styles: &StylePlane<Id>,
+    table: &TableGrid,
     computed: &ComputedValues,
     font_size: f32,
     containing_width: Option<f32>,
 ) -> Option<Vec<f32>>
 where
-    D: LayoutDom,
-    D::NodeId: Copy + Eq + Hash,
+    Id: Copy + Eq + Hash,
 {
     if computed.table_layout != CssTableLayout::Fixed {
         return None;
     }
-    let cells = table_cells(dom, styles, table);
-    let columns = cells.iter().map(|(_, _, col)| *col + 1).max()? as usize;
+    let columns = table.columns.len();
+    if columns == 0 {
+        return None;
+    }
 
     // The table's own content width: its used width less its border and
     // padding, since the column widths fill the content box.
@@ -2449,11 +2471,14 @@ where
     // First-row cells set the columns; later rows are ignored by the
     // algorithm, which is the point of it.
     let mut widths: Vec<Option<f32>> = vec![None; columns];
-    for (cell, row, column) in &cells {
-        if *row != 0 {
+    for cell in &table.cells {
+        if cell.row != 0 || cell.column_span != 1 {
             continue;
         }
-        let Some(cell_style) = styles.get(*cell) else {
+        let Some(cell_node) = boxes.origin_node(cell.source) else {
+            continue;
+        };
+        let Some(cell_style) = styles.get(cell_node) else {
             continue;
         };
         let Some(width) = resolved_explicit_size(cell_style.width, font_size, Some(inner)) else {
@@ -2465,7 +2490,7 @@ where
                 width + horizontal_edges(cell_style, font_size, Some(inner))
             },
         };
-        widths[*column as usize] = Some(border_box.max(0.0));
+        widths[cell.column] = Some(border_box.max(0.0));
     }
 
     let fixed: f32 = widths.iter().flatten().sum();
@@ -2500,14 +2525,15 @@ fn horizontal_edges(computed: &ComputedValues, font_size: f32, basis: Option<f32
         )
 }
 
-/// Pin a cell's taffy style to its flattened grid position.
-fn place_table_cell(style: &mut Style, row: u16, column: u16) {
+/// Pin a cell's temporary bridge style to its TableGrid start slot. Buckram
+/// retains the spans; K4d replaces this Grid bridge before span layout runs.
+fn place_table_cell(style: &mut Style, cell: &TableCell) {
     style.grid_row = Line {
-        start: line(row as i16 + 1),
+        start: line(cell.row as i16 + 1),
         end: GridPlacement::Auto,
     };
     style.grid_column = Line {
-        start: line(column as i16 + 1),
+        start: line(cell.column as i16 + 1),
         end: GridPlacement::Auto,
     };
 }
@@ -2919,7 +2945,7 @@ fn to_taffy_style(computed: &ComputedValues, font_size: f32) -> Style {
         CssDisplay::Flex => Display::Flex,
         CssDisplay::Grid => Display::Grid,
         // A table box is laid out as a grid whose children are its
-        // flattened cells; see `table_cells`.
+        // TableGrid starts; K4d replaces this compatibility bridge.
         CssDisplay::Table => Display::Grid,
         CssDisplay::TableRow => Display::Flex,
         _ => Display::Block,
@@ -3349,6 +3375,85 @@ mod tests {
     };
     use genet_static_dom::StaticDocument;
     use paint_list_api::DeviceIntSize;
+
+    fn node_by_id(
+        dom: &StaticDocument,
+        node: <StaticDocument as LayoutDom>::NodeId,
+        id: &str,
+    ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+        if dom.attribute(node, &Namespace::from(""), &LocalName::from("id")) == Some(id) {
+            return Some(node);
+        }
+        dom.dom_children(node)
+            .find_map(|child| node_by_id(dom, child, id))
+    }
+
+    #[test]
+    fn html_table_spans_are_normalized_before_buckram_receives_them() {
+        let dom = StaticDocument::parse(
+            "<table id=table><tbody><tr><td id=first colspan=9001 rowspan=0></td></tr><tr><td id=second></td></tr></tbody></table>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "table { display: table; } tbody { display: table-row-group; } tr { display: table-row; } td { display: table-cell; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let boxes = GeneratedBoxTree::from_dom(&dom, &styles);
+        let table = node_by_id(&dom, dom.document(), "table").expect("table");
+        let grid = boxes.principal_box(table).expect("table grid");
+        let model = build_table_grid(&boxes, &dom, grid);
+
+        assert_eq!(model.cells[0].column_span, 1_000);
+        assert_eq!(model.cells[0].row_span, 2);
+        assert_eq!(model.cells[1].column, 1_000);
+    }
+
+    #[test]
+    fn css_display_tables_do_not_consume_html_span_attributes() {
+        let dom = StaticDocument::parse(
+            "<div id=table><div id=row><div id=cell colspan=9 rowspan=0></div></div></div>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "#table { display: table; } #row { display: table-row; } #cell { display: table-cell; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let boxes = GeneratedBoxTree::from_dom(&dom, &styles);
+        let table = node_by_id(&dom, dom.document(), "table").expect("table");
+        let grid = boxes.principal_box(table).expect("table grid");
+        let model = build_table_grid(&boxes, &dom, grid);
+
+        assert_eq!(model.cells[0].column_span, 1);
+        assert_eq!(model.cells[0].row_span, 1);
+    }
+
+    #[test]
+    fn html_column_and_column_group_spans_are_bounded_at_the_adapter() {
+        let dom = StaticDocument::parse(
+            "<table id=table><colgroup span=9001></colgroup><col span=9001><tbody><tr><td></td></tr></tbody></table>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "table { display: table; } colgroup { display: table-column-group; } col { display: table-column; } tbody { display: table-row-group; } tr { display: table-row; } td { display: table-cell; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let boxes = GeneratedBoxTree::from_dom(&dom, &styles);
+        let table = node_by_id(&dom, dom.document(), "table").expect("table");
+        let grid = boxes.principal_box(table).expect("table grid");
+        let model = build_table_grid(&boxes, &dom, grid);
+
+        assert_eq!(model.column_groups[0].span, 1_000);
+        assert_eq!(model.columns.len(), 2_000);
+    }
 
     #[test]
     fn retained_inline_format_is_not_shaped_again_for_paint() {
