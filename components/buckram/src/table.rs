@@ -8,9 +8,15 @@ use std::hash::Hash;
 
 use crate::{BoxId, CssBoxTree, InternalTableRole};
 
+mod automatic;
 mod fixed;
 mod sizing;
 
+pub use automatic::{
+    TableAutomaticColumnGroupInput, TableAutomaticColumnInput, TableAutomaticColumnMeasureInput,
+    TableAutomaticColumnMeasures, TableColumnMeasure, TableSpanMeasureDistribution,
+    measure_automatic_columns,
+};
 pub use fixed::{
     TableFixedColumnGroupInput, TableFixedColumnInput, TableFixedInlineSizingInput,
     TableFixedInlineSizingOutcome, TableFixedLayoutFallback, size_fixed_table_inline,

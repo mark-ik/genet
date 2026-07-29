@@ -550,11 +550,39 @@ pub enum TableInlineSizingError {
         expected: BoxId,
         actual: BoxId,
     },
+    AutomaticColumnInputCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    AutomaticColumnSourceMismatch {
+        index: usize,
+        expected: Option<BoxId>,
+        actual: Option<BoxId>,
+    },
+    AutomaticColumnGroupInputCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    AutomaticColumnGroupSourceMismatch {
+        index: usize,
+        expected: BoxId,
+        actual: BoxId,
+    },
+    AutomaticCellInputCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    AutomaticCellSourceMismatch {
+        index: usize,
+        expected: BoxId,
+        actual: BoxId,
+    },
     InvalidColumnGroupRange {
         start: usize,
         span: usize,
     },
     FixedLayoutWithoutColumns,
+    InvalidColumnMeasure,
     ColumnCountMismatch {
         expected: usize,
         actual: usize,

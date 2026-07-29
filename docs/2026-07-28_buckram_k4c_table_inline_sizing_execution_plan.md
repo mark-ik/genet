@@ -457,6 +457,8 @@ result. K4d still owns removal of the Grid/Flex bridge.
 
 ## K4c3. Automatic column measures
 
+**Status:** complete as a model-only gate on 2026-07-29. K4c4 is next.
+
 ### Outcome
 
 Compute the minimum, maximum, percentage, and constrained measures of every
@@ -514,6 +516,82 @@ column before choosing a used table width.
 Delete any adapter-side cell or column intrinsic aggregation introduced by
 the compatibility bridge. Buckram's `TableColumnMeasure` vector is the only
 automatic column-measure source after this gate.
+
+### K4c3 receipt - 2026-07-29
+
+**Base commit:** `03d8dce3041` (accepted K4c2).
+
+**Capability:** `buckram::table::automatic` now computes one logical
+`TableColumnMeasure` per K4b column. A measure retains min-content,
+max-content, an unresolved bounded percentage, and whether a non-percentage
+width constrained the track. It processes direct cells, normalized columns and
+column groups, then spans in increasing span order. Every spanning cell retains
+the exact min/max increment vectors it applied. No used table width, viewport
+basis, Taffy track, or completed fragment enters the algorithm.
+
+**Policy:** competing intrinsic percentages consume the remaining aggregate in
+logical K4b column order. Span excess first targets unconstrained automatic
+tracks and follows their existing corresponding min/max contribution, using
+equal shares only when all eligible contributions are zero. A pure percentage
+stays distinct from a definite constraint. The fixed-plus-percentage span
+probe is a K4c4 boundary: its percentage is retained here, while selecting its
+used 180px track is deferred until a table basis exists.
+
+**Interop matrix:** Chrome `150.0.7871.187` and Firefox `153.0.1`, headless
+with zero cell padding/border and zero border-spacing. Values are logical
+column widths in source order. Firefox's subpixel differences are retained
+instead of rounded.
+
+| Choice | Fixture | Chrome | Firefox | K4c3 rule |
+| --- | --- | --- | --- | --- |
+| Competing percentages | 300px table, `60%`, `60%`, auto | `180, 120, 0` | `180, 119.983337, 0.016663` | reserve each logical percentage up to the remaining aggregate |
+| Zero-weight span | `20px`, auto, auto; 300px span | `20, 140, 140` | `20, 140, 140` | equal fallback among eligible automatic tracks |
+| Lower-span first | `20px`, auto, auto; 150px two-span then 300px three-span | `20, 280, 0` | `20, 280, 0` | increasing span, then existing-measure weighting |
+| Existing max weighting | `20px`, auto 100px, auto 50px; 300px span | `20, 186.65625, 93.34375` | `20, 186.666672, 93.333328` | proportional maximum-excess distribution |
+| Fixed plus percentage span | `20px`, `60%`, auto; 300px span | `20, 180, 100` | `20, 180, 100` | preserve the percentage for K4c4; do not resolve it intrinsically |
+
+This matrix selected the model's deterministic rules. The CSS Tables 3 draft
+was consulted only as a gap map; no tentative WPT or draft text supplies
+acceptance on its own.
+
+**Boundary retained:** Livery only lowers explicit K4b column and column-group
+constraints with their `BoxId`s. It does not aggregate intrinsic values and the
+live Grid/Flex compatibility table route remains unchanged. Captions (K4e),
+collapsed borders (K4g), and collapsed tracks (K4f) remain named deferrals.
+
+**Fixtures:** Buckram covers empty and one-cell grids, content above and below
+specified constraints, normalized groups, nested spans, a fixed-plus-percentage
+span, over-constrained percentages, logical RTL invariance, and K4f/K4g
+deferrals. Livery proves automatic track lowering preserves K4b order and box
+identity.
+
+**Focused WPT:** fresh release output is in
+`C:\Users\mark_\Code\testing\genet\wpt-ledger\2026-07-29_buckram_k4c3`.
+`width-distribution` is 2 all-pass / 13 with-failures, with 2/35 subtests;
+`computing-column-measure-0/1/2` remain 0/9 and `td-min-width-auto-layout`
+plus `td-max-width-auto-layout` remain 0/8. `table-colspan-percent-auto`
+passes its one Livery reftest. `fractional-percent-width` remains 0/3 and the
+explicitly tentative `colspan-redistribution` remains 0/31. This model-only
+gate receives no live WPT acceptance credit.
+
+**Verification:**
+
+- `cargo test -p buckram`: 108 passed.
+- `cargo test -p genet-livery`: passed, including automatic track lowering.
+- `cargo clippy -p buckram --lib -- -D warnings`: passed.
+- Strict Buckram all-target Clippy is blocked only by the existing
+  `taffy_adapter.rs:3910` `manual_is_multiple_of` warning. Strict
+  `genet-livery` all-target Clippy reaches pre-existing warnings in the
+  upstream `livery` crate (147 failures in the current toolchain), before
+  changing this K4c3 seam.
+- Both isolated Cargo targets were removed after verification. The generated
+  WPT ledger remains outside Git.
+
+**Removal:** no adapter-side intrinsic aggregation existed to delete. The new
+Buckram vector is the only K4c3 automatic-measure source; the compatibility
+path's fixed-width decision remains until K4c5 consumes a Buckram result.
+
+**Commit:** this commit.
 
 ## K4c4. Automatic used width and column distribution
 

@@ -6,8 +6,9 @@
 
 use buckram::{
     AffineLengthPercentage, CellInlineOffsets, FlowAxes, InlineSizeConstraint, PhysicalSide,
-    TableBoxSizing, TableCellInlineStyle, TableFixedColumnGroupInput, TableFixedColumnInput,
-    TableGrid, TableInlineConstraints, TableInlineProperty, TableInlineSizingError,
+    TableAutomaticColumnGroupInput, TableAutomaticColumnInput, TableBoxSizing,
+    TableCellInlineStyle, TableFixedColumnGroupInput, TableFixedColumnInput, TableGrid,
+    TableInlineConstraints, TableInlineProperty, TableInlineSizingError,
 };
 use livery::{
     ComputedValues,
@@ -88,6 +89,35 @@ pub(crate) fn fixed_table_track_inputs(
         .column_groups
         .iter()
         .map(|group| TableFixedColumnGroupInput {
+            source: group.source,
+            constraints: constraints_for(group.source),
+        })
+        .collect();
+    (columns, column_groups)
+}
+
+/// Lower explicit K4b column and column-group boxes for K4c3's automatic
+/// measures. This is a model-only seam: intrinsic aggregation remains in
+/// Buckram, and no Grid/Flex bridge state enters the result.
+pub(crate) fn automatic_table_track_inputs(
+    grid: &TableGrid,
+    mut constraints_for: impl FnMut(buckram::BoxId) -> TableInlineConstraints,
+) -> (
+    Vec<TableAutomaticColumnInput>,
+    Vec<TableAutomaticColumnGroupInput>,
+) {
+    let columns = grid
+        .columns
+        .iter()
+        .map(|column| TableAutomaticColumnInput {
+            source: column.source,
+            constraints: column.source.map(&mut constraints_for).unwrap_or_default(),
+        })
+        .collect();
+    let column_groups = grid
+        .column_groups
+        .iter()
+        .map(|group| TableAutomaticColumnGroupInput {
             source: group.source,
             constraints: constraints_for(group.source),
         })
@@ -330,6 +360,38 @@ mod tests {
                 .map(|column| column.source)
                 .collect::<Vec<_>>()
         );
+        assert_eq!(groups[0].source, grid.column_groups[0].source);
+        assert_eq!(
+            columns[0].constraints.preferred,
+            InlineSizeConstraint::Value(
+                AffineLengthPercentage::new(columns[0].source.unwrap().index() as f32, 0.0)
+                    .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn automatic_track_lowering_preserves_k4b_order_and_box_identity() {
+        let grid = k4b_grid();
+        let (columns, groups) =
+            automatic_table_track_inputs(&grid, |source| TableInlineConstraints {
+                preferred: InlineSizeConstraint::Value(
+                    AffineLengthPercentage::new(source.index() as f32, 0.0).expect("finite width"),
+                ),
+                ..TableInlineConstraints::default()
+            });
+
+        assert_eq!(
+            columns
+                .iter()
+                .map(|column| column.source)
+                .collect::<Vec<_>>(),
+            grid.columns
+                .iter()
+                .map(|column| column.source)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(groups.len(), grid.column_groups.len());
         assert_eq!(groups[0].source, grid.column_groups[0].source);
         assert_eq!(
             columns[0].constraints.preferred,
