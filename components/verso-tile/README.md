@@ -4,7 +4,7 @@ The engine-flip machinery for the genet engine family: carry a live page's
 state (cookies, scroll, form values) across an engine swap — the dynamic
 counterpart of inker's engine multiplexer.
 
-> **Home:** [`mark-ik/genet`](https://github.com/mark-ik/genet), at
+> **Home:** [`merely-made/genet`](https://github.com/merely-made/genet), at
 > `components/verso-tile`. Consolidated 2026-07-10 from the four mere-side
 > verso crates (verso, verso-api, verso-scry, verso-genet) into one
 > feature-layered component under the family's crates.io name.

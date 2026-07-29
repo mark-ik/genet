@@ -4,7 +4,7 @@ Genet's retained document sessions: the static, scripted, and smolweb
 content lanes as inker **session engines** (the third engine kind — spawn a
 session, take paint frames, scroll, click, settle).
 
-> **Home:** [`mark-ik/genet`](https://github.com/mark-ik/genet), at
+> **Home:** [`merely-made/genet`](https://github.com/merely-made/genet), at
 > `components/genet-documents`. Born 2026-07-10 in the session-engines
 > plan: these types began as pelt's convenience lanes and were promoted to
 > an engine-grade component; pelt is now one consumer among hosts

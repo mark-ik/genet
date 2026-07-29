@@ -5,7 +5,7 @@
 [package]
 name = "script-engine-api"
 version = "0.1.0"
-repository = "https://github.com/mark-ik/genet"
+repository = "https://github.com/merely-made/genet"
 publish = true
 description = "Engine-neutral scripting contract for the genet engine family: the ScriptEngine trait, native-callback surface, and host-data plumbing a JS engine implements (Boa, Nova) and a scripted document drives."
 edition = "2021"

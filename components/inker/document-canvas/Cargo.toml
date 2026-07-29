@@ -7,7 +7,7 @@ authors = ["Mark AB (markik)"]
 # license rather than inheriting genet's MPL-2.0.
 license = "MIT OR Apache-2.0"
 # Not workspace: genet's workspace repository still points at upstream servo.
-repository = "https://github.com/mark-ik/genet"
+repository = "https://github.com/merely-made/genet"
 description = "Document-view canvas — parley-driven layout for inker::EngineDocument; emits portable render packets parallel to graph-canvas."
 documentation = "https://docs.rs/document-canvas"
 readme = "README.md"

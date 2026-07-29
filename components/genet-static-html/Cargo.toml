@@ -1,7 +1,7 @@
 [package]
 name = "genet-static-html"
 version = "0.1.0"
-repository = "https://github.com/mark-ik/genet"
+repository = "https://github.com/merely-made/genet"
 # Ring 3, not ring 0 (2026-07-11): this crate deps servo-layout-api, a
 # MODIFIED Servo component whose name+version collide with Servo's published
 # crate — a registry build silently resolves upstream and loses the fork's

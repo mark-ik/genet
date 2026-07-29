@@ -9,7 +9,7 @@ authors = ["Mark AB (markik)"]
 # license rather than inheriting genet's MPL-2.0.
 license = "MIT OR Apache-2.0"
 # Not workspace: genet's workspace repository still points at upstream servo.
-repository = "https://github.com/mark-ik/genet"
+repository = "https://github.com/merely-made/genet"
 description = "Modular engine/renderer controller — selects and orchestrates content engines (genet HTML lanes, nematic smolweb, scrying/graft/weld surface engines)."
 documentation = "https://docs.rs/inker"
 readme = "README.md"

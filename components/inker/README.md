@@ -11,7 +11,7 @@ HTML lanes, smolweb native), and **surface engines** (external GPU-texture
 producers: scrying / graft / weld). One registry pattern, one routing
 vocabulary, one a11y-capability declaration across all three.
 
-> **Home:** [`mark-ik/genet`](https://github.com/mark-ik/genet), at
+> **Home:** [`merely-made/genet`](https://github.com/merely-made/genet), at
 > `components/inker` (adopted 2026-07). The former standalone repository is archived
 > and links here.
 

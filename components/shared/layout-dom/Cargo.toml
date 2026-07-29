@@ -1,7 +1,7 @@
 [package]
 name = "layout-dom-api"
 version = "0.1.0"
-repository = "https://github.com/mark-ik/genet"
+repository = "https://github.com/merely-made/genet"
 publish = true
 authors.workspace = true
 license.workspace = true

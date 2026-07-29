@@ -86,7 +86,7 @@ with inker.
 
 Genet's workspace sets `publish = false`; inker and nematic carry per-crate
 `publish = true` overrides, updated `repository` fields
-(mark-ik/genet), and a version bump (0.0.1 placeholder to 0.1.0 on first
+(merely-made/genet), and a version bump (0.0.1 placeholder to 0.1.0 on first
 publish from the new home). document-canvas, knot-editor-host, and the three
 surface-engine adapters follow the same pattern if/when publishing them is
 useful; nothing forces it.
@@ -213,7 +213,7 @@ changed.
    genet's default and per-feature builds. **DONE 2026-07-10** (genet
    af674dbad): nematic at components/nematic (top-level), the rest under
    components/inker; inker + nematic publish = true at 0.1.0 with
-   repository = mark-ik/genet; document-canvas's netrender deps unified
+   repository = merely-made/genet; document-canvas's netrender deps unified
    onto the workspace git pins (resolved question above); 314 family tests
    green + document-canvas --features netrender checks. Two test-only
    fixes for netrender's FontRecord Arc change (latent; libs were fine).
@@ -258,7 +258,7 @@ changed.
    errand/nematic reorg folded in). "Document engines" was the wrong shape
    for the genet lanes: forcing them through EngineDocument is the block
    mash already rejected.
-7. crates.io: inker + nematic republished from mark-ik/genet.
+7. crates.io: inker + nematic republished from merely-made/genet.
    **PREPARED + PARTIALLY BLOCKED, 2026-07-11** (genet 66d88be5efa):
    versions bumped and package-verified for inker 0.1.0, illume 0.0.2,
    tinct 0.1.2, nex/spartan/guppy-protocol 0.1.1, then errand 0.1.3 (its

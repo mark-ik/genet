@@ -196,7 +196,7 @@ Gecko line — the correct rebase base is the fork's own boundary. That
 boundary was exactly the **v0.18.0 tag** (`8bde0e96db`): the old fork line was
 v0.18.0 + 11 Mark commits (tiers + pointer/hover + forced-color-adjust
 pair + animation fix + the ring-3 rename). At probe time nobody pinned
-`main`: genet pinned `mark-ik/genet-publish-names`, while mere pinned
+`main`: genet pinned `merely-made/genet-publish-names`, while mere pinned
 `mark-ik/servo-media-features`. That gave the realignment a zero-breakage
 window; both consumers now deliberately pin `main`.
 

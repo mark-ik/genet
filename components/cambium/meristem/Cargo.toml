@@ -8,7 +8,7 @@ description = "The reactive diff and message core of the Cambium GUI toolkit"
 edition.workspace = true
 rust-version = "1.92"
 license = "Apache-2.0"
-repository = "https://github.com/mark-ik/genet"
+repository = "https://github.com/merely-made/genet"
 publish = true
 
 [lib]

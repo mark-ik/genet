@@ -3,7 +3,7 @@ name = "livery"
 version = "0.0.2"
 edition = "2024"
 license = "MPL-2.0"
-repository = "https://github.com/mark-ik/genet"
+repository = "https://github.com/merely-made/genet"
 description = "Generated CSS property and cascade engine for Genet."
 readme = "README.md"
 

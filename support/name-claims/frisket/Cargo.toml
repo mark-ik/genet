@@ -3,7 +3,7 @@ name = "frisket"
 version = "0.0.2"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/mark-ik/genet"
+repository = "https://github.com/merely-made/genet"
 description = "Frisket: the pane frame for Genet applications — splits, tab-stacks, dividers, and per-tile content holes over the genet-host-api tile contract. NAME CLAIM: the real thing is the `frisket` module of the `cambium` crate (0.3.2+); this package holds the name. 0.0.1 was Turnstone's pane-model crate, since folded into that app."
 
 [workspace]

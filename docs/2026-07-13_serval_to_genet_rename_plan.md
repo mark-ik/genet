@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-13
 **Status:** **LANDED.** Engine, fork family, and all five consumers renamed,
-verified, and pushed. GitHub repo is `mark-ik/genet` (old URLs redirect).
+verified, and pushed. GitHub repo is `merely-made/genet` (old URLs redirect).
 One residual, below: the local checkout *folder* is still `repos/serval`.
 
 ## Receipts
@@ -138,7 +138,7 @@ step, as always.
    (Track U already realigned it onto v0.19.0), plus the vendored taffy.
 4. **P3 — Consumers.** mere, turnstone, woodshed, strophe, isometry: manifests,
    imports, and the gitignored local `.cargo/config.toml` patch tables.
-5. **P4 — Remotes.** Rename `mark-ik/serval` → `mark-ik/genet` on GitHub
+5. **P4 — Remotes.** Rename `mark-ik/serval` → `merely-made/genet` on GitHub
    (its redirects keep existing git deps resolving, so this is not a flag
    day), rename the local checkout directory, push everything.
 

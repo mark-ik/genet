@@ -5,7 +5,7 @@ description = "AccessKit hosting for genet-backed Cambium applications on winit"
 edition.workspace = true
 rust-version = "1.92"
 license = "MPL-2.0"
-repository = "https://github.com/mark-ik/genet"
+repository = "https://github.com/merely-made/genet"
 # Can never be published, and that is the reason this crate exists. It needs the
 # laid-out genet DOM (`genet-layout`) and the platform adapter
 # (`genet-winit-host`), both of which inherit genet's `publish = false`. Holding

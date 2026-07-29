@@ -6,7 +6,7 @@ into Inker's `EngineDocument` model for stored, authored, and worker-shippable
 content. Cambium-native projections over Errand's protocol ASTs live
 separately in `cambium-nematic`.
 
-> **Home:** [`mark-ik/genet`](https://github.com/mark-ik/genet), at
+> **Home:** [`merely-made/genet`](https://github.com/merely-made/genet), at
 > `components/nematic` (adopted 2026-07). The former standalone repository is archived
 > and links here.
 

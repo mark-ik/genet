@@ -3,7 +3,7 @@ name = "genet-livery"
 version = "0.0.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/mark-ik/genet"
+repository = "https://github.com/merely-made/genet"
 description = "Genet integration for the clean-room Livery CSS engine."
 readme = "README.md"
 

@@ -3,7 +3,7 @@
 Perceptual seed-to-palette derivation for the Merely family (Woodshed,
 Hocket, turnstone's mere).
 
-> **Home:** [`mark-ik/genet`](https://github.com/mark-ik/genet), at
+> **Home:** [`merely-made/genet`](https://github.com/merely-made/genet), at
 > `components/tinct` (adopted 2026-07). The former standalone repository is archived
 > and links here.
 

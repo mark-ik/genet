@@ -4,7 +4,7 @@
 **Status:** **T0, T1, T2, and T3 landed.**
 genet's workspace now builds, tests, and passes all nine WPT baselines
 against: taffy re-vendored to stable 0.12.1 (T0), the renamed stylo fork
-family on branch `mark-ik/genet-publish-names` (T1, commit `efaa436663`),
+family on branch `merely-made/genet-publish-names` (T1, commit `efaa436663`),
 a vendored + renamed-dependency `stylo_taffy` (T2), and every internal
 consumer's manifest swept onto the renamed deps. On 2026-07-13 the complete
 Stylo type family was published to crates.io at `0.19.0`: `genet-stylo`,
@@ -99,7 +99,7 @@ three merged + released ⇒ retire the taffy vendor entirely.
 
 ### T1 — stylo family rename (in `repos/stylo`, the fork branch) — landed 2026-07-12
 
-Branch `mark-ik/genet-publish-names` (commit `efaa436663`, pushed):
+Branch `merely-made/genet-publish-names` (commit `efaa436663`, pushed):
 `genet-stylo` / `genet-stylo-atoms` / `genet-stylo-dom` /
 `genet-stylo-static-prefs`. Workspace checks clean, both standalone and
 (later, per T3) as consumed by genet.

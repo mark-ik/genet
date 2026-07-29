@@ -8,7 +8,7 @@ authors = ["Mark AB (markik)"]
 # workspace repository that still points at upstream servo. Matches illume, the
 # portable half of the same pair.
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/mark-ik/genet"
+repository = "https://github.com/merely-made/genet"
 description = "Host-side reuse-lexers for the knot editor: precise inner-language injection over parsers the workspace already ships, layered as overrides on the portable illume pack. Markdown via pulldown-cmark today; CSS/HTML/JS/Turtle to follow."
 readme = "README.md"
 documentation = "https://docs.rs/knot-editor-host"
