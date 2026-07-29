@@ -13,6 +13,10 @@ mod invalidation;
 mod layout;
 mod paint;
 mod style;
+// K4c1 validates the lowering without wiring it into the temporary table
+// Grid/Flex bridge. K4c5 consumes it and removes this scoped allowance.
+#[allow(dead_code)]
+mod table_sizing;
 mod text;
 
 pub use buckram::{
@@ -26,8 +30,8 @@ pub use dom::{ElementRef, InteractionStates, SelectorTree};
 pub use invalidation::{AttributeSnapshot, ElementSnapshot, IncrementalStyle, RestyleStats};
 pub(crate) use layout::hit_test_with_scroll;
 pub use layout::{
-    BlockAlgorithmCounts, LayoutError, LiveryLayout, content_box_size, hit_test, layout,
-    resolve_container_query_styles, resolve_container_relative_styles, used_value_context,
+    BlockAlgorithmCounts, LayoutError, LiveryLayout, TableBridgeCounts, content_box_size, hit_test,
+    layout, resolve_container_query_styles, resolve_container_relative_styles, used_value_context,
 };
 pub use livery::media::{Device, ViewportSize, ViewportSizes};
 pub use livery::stylesheet::RuleMutationError;

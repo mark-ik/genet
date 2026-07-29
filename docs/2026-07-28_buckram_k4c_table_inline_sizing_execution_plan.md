@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-28
 
-**Status:** ready. The accepted K4b base is `26eda4cd9fe`; K4c1 is next.
+**Status:** K4c1 is complete on the accepted K4b base `26eda4cd9fe`; K4c2 is next.
 
 **Parent plan:** [Buckram K4 CSS tables execution plan](2026-07-28_buckram_k4_css_tables_execution_plan.md)
 
@@ -285,6 +285,60 @@ completed layout.
 
 No live helper is deleted in K4c1. Record the exact new types and the old
 helpers they are intended to replace.
+
+### K4c1 receipt - 2026-07-29
+
+**Base commit:** `26eda4cd9fe` (accepted K4b).
+
+**Capability:** `buckram::table::sizing` now owns logical table-sizing
+contracts: affine length-percentage constraints, table and cell box sizing,
+logical inline offsets, separated and deferred-collapsed border metrics,
+caption contribution, track visibility, explicit deferrals, intrinsic cell
+measures, and the table input/result. `IntrinsicSizeQuery` is invoked once per
+`(BoxId, LogicalAxis)` and caches only successful min/max pairs. Livery lowers
+computed table and cell values into that model without inspecting Taffy nodes,
+grid tracks, or completed fragments.
+
+**Boundary retained:** the live renderer still uses its Grid/Flex compatibility
+route. The explicit live fixture reports one grid for one table; the normal and
+retained-inline builders are the two static compatibility construction seams.
+The new sizing result is not wired into live layout. Captions (K4e), track
+visibility (K4f), and collapsed borders (K4g) remain named, non-live
+deferrals.
+
+**Fixtures:** Buckram covers content and border boxes, logical padding and
+borders, zero content, min/max constraints, affine percentages, LTR/RTL,
+invalid pairs, cycle reporting, invalidation, and failed-query non-caching.
+Livery covers physical-to-logical lowering and unresolved percentage bases.
+The existing first-row fixed-width characterization remains in place.
+
+**Interop decision:** none. K4c1 introduces the model only; it does not select
+an algorithm or change table behavior.
+
+**WPT movement:** canonical expectation-map delta from K4b is zero.
+`css/CSS2/tables` remains 67 pass, 183 fail, 889 skip (1,139 total).
+`css/css-tables` remains 53 pass, 77 fail, 198 skip (328 total).
+
+**Verification:**
+
+- `cargo test -p buckram --offline`: 91 passed.
+- `cargo test -p livery --offline`: 32 passed.
+- `cargo test -p genet-livery --offline`: passed, including the bridge-count
+  fixture and three lowering fixtures.
+- `cargo clippy -p buckram --lib --offline -- -D warnings`: passed.
+- Strict all-target clippy retains two pre-existing blockers outside K4c1:
+  Buckram `taffy_adapter.rs:3910` (`manual_is_multiple_of`) and Livery
+  `text.rs:1399` (`implicit_saturating_sub`).
+- Fresh release WPT maps are in
+  `testing/genet/wpt-ledger/2026-07-29_buckram_k4c1/`; both isolated targets
+  used for this gate were removed after verification.
+
+**Removal:** no compatibility helper is deleted here. K4c5 must remove
+`genet-livery::layout::fixed_column_widths` and its table-specific horizontal
+edge logic only after live Buckram sizing consumes the result. K4d must remove
+the Grid/Flex table bridge after the same live route is complete.
+
+**Commit:** this commit.
 
 ## K4c2. Fixed inline sizing in separated mode
 

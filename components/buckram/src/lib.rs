@@ -40,8 +40,14 @@ pub use intrinsic::{
     IntrinsicSizeQuery, IntrinsicSizes, block_intrinsic_sizes_for_definite_inline,
 };
 pub use table::{
-    TableCell, TableCellInput, TableGrid, TableGridError, TableGridInputs, TableRowSpan, TableSlot,
-    TableTrack, TableTrackGroup, TableTrackGroupKind, TableTrackInput,
+    AffineLengthPercentage, CaptionMinContribution, CellInlineOffsets, InlineSizeConstraint,
+    TableBoxSizing, TableCell, TableCellInlineMeasure, TableCellInlineStyle, TableCellInput,
+    TableDeferral, TableGrid, TableGridError, TableGridInputs, TableInlineBorderMetrics,
+    TableInlineConstraints, TableInlineProperty, TableInlineSizingError, TableInlineSizingInput,
+    TableInlineSizingResult, TableIntrinsicMeasureProvider, TableRowSpan,
+    TableSeparatedBorderMetrics, TableSlot, TableTrack, TableTrackGroup, TableTrackGroupKind,
+    TableTrackInput, TableTrackVisibility, TableTrackVisibilityState,
+    collect_table_cell_inline_measures, query_table_cell_inline_sizes,
 };
 pub use taffy_adapter::{
     AlgorithmAvailableSpace, AlgorithmKind, AlgorithmLayout, AlgorithmNodeId, AlgorithmSize,

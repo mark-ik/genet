@@ -8,6 +8,17 @@ use std::hash::Hash;
 
 use crate::{BoxId, CssBoxTree, InternalTableRole};
 
+mod sizing;
+
+pub use sizing::{
+    AffineLengthPercentage, CaptionMinContribution, CellInlineOffsets, InlineSizeConstraint,
+    TableBoxSizing, TableCellInlineMeasure, TableCellInlineStyle, TableDeferral,
+    TableInlineBorderMetrics, TableInlineConstraints, TableInlineProperty, TableInlineSizingError,
+    TableInlineSizingInput, TableInlineSizingResult, TableIntrinsicMeasureProvider,
+    TableSeparatedBorderMetrics, TableTrackVisibility, TableTrackVisibilityState,
+    collect_table_cell_inline_measures, query_table_cell_inline_sizes,
+};
+
 /// The table topology needed by the temporary layout bridge and later table
 /// sizing and fragment algorithms.
 #[derive(Clone, Debug, Eq, PartialEq)]

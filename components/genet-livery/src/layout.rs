@@ -88,12 +88,21 @@ pub struct LiveryLayout<Id> {
     buckram: LayoutResult<Id>,
     text_frame: Option<TextFrame<Id>>,
     block_algorithms: BlockAlgorithmCounts,
+    table_bridges: TableBridgeCounts,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct BlockAlgorithmCounts {
     pub buckram: usize,
     pub taffy: usize,
+}
+
+/// Live tables still routed through Livery's temporary Grid/Flex bridge.
+/// K4c5 replaces this count with Buckram table dispatch and removes the
+/// compatibility route.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TableBridgeCounts {
+    pub grids: usize,
 }
 
 impl<Id> LiveryLayout<Id>
@@ -104,11 +113,13 @@ where
         buckram: LayoutResult<Id>,
         text_frame: Option<TextFrame<Id>>,
         block_algorithms: BlockAlgorithmCounts,
+        table_bridges: TableBridgeCounts,
     ) -> Self {
         Self {
             buckram,
             text_frame,
             block_algorithms,
+            table_bridges,
         }
     }
 
@@ -144,6 +155,10 @@ where
         self.block_algorithms
     }
 
+    pub fn table_bridge_counts(&self) -> TableBridgeCounts {
+        self.table_bridges
+    }
+
     pub(crate) fn text_frame(&self) -> Option<&TextFrame<Id>> {
         self.text_frame.as_ref()
     }
@@ -173,6 +188,7 @@ struct BuildState<'a, D: LayoutDom> {
     boxes: &'a GeneratedBoxTree<D::NodeId>,
     tree: AlgorithmTree<Style, TextMeasure, Option<BoxId>>,
     image_sources: &'a ImageSources,
+    table_bridge_count: usize,
 }
 
 struct InlineMeasure {
@@ -307,6 +323,7 @@ struct InlineBuildState<'a, D: LayoutDom> {
     atomic: &'a AtomicLayoutPlane,
     tree: AlgorithmTree<Style, InlineMeasure, Vec<BoxId>>,
     image_sources: &'a ImageSources,
+    table_bridge_count: usize,
 }
 
 type ResolvedLayout<Id> = (StylePlane<Id>, LiveryLayout<Id>);
@@ -730,6 +747,7 @@ where
         boxes: &boxes,
         tree: AlgorithmTree::new(),
         image_sources,
+        table_bridge_count: 0,
     };
     let children = boxes
         .roots()
@@ -794,6 +812,9 @@ where
         },
     );
     let (buckram_blocks, taffy_blocks) = state.tree.block_algorithm_counts();
+    let table_bridges = TableBridgeCounts {
+        grids: state.table_bridge_count,
+    };
 
     let mut fragments = FragmentTree::default();
     let mut output = FragmentOutput {
@@ -821,6 +842,7 @@ where
             buckram: buckram_blocks,
             taffy: taffy_blocks,
         },
+        table_bridges,
     ))
 }
 
@@ -860,6 +882,7 @@ where
             boxes,
             tree: AlgorithmTree::new(),
             image_sources,
+            table_bridge_count: 0,
         };
         let Some(atomic_root) = state.build_box(
             box_id,
@@ -1041,6 +1064,7 @@ where
         atomic,
         tree: AlgorithmTree::new(),
         image_sources,
+        table_bridge_count: 0,
     };
     let children = boxes
         .roots()
@@ -1155,6 +1179,9 @@ where
     );
     populate_inline_baselines(&mut state.tree);
     let (buckram_blocks, taffy_blocks) = state.tree.block_algorithm_counts();
+    let table_bridges = TableBridgeCounts {
+        grids: state.table_bridge_count,
+    };
 
     let mut text_frame = TextFrame::default();
     let mut fragments = FragmentTree::default();
@@ -1188,6 +1215,7 @@ where
             buckram: buckram_blocks,
             taffy: taffy_blocks,
         },
+        table_bridges,
     ))
 }
 
@@ -1205,6 +1233,9 @@ where
         match self.boxes[box_id].origin {
             BoxOrigin::Element(node) => {
                 let computed = self.styles.get(node).cloned().unwrap_or_default();
+                if computed.display == CssDisplay::Table {
+                    self.table_bridge_count += 1;
+                }
                 let font_size = font_size_px(&computed.font_size, parent_font_size);
                 let mut inline_container_style = computed.clone();
                 if matches!(
@@ -1449,6 +1480,9 @@ where
         match self.boxes[box_id].origin {
             BoxOrigin::Element(node) => {
                 let computed = self.styles.get(node).cloned().unwrap_or_default();
+                if computed.display == CssDisplay::Table {
+                    self.table_bridge_count += 1;
+                }
                 let font_size = font_size_px(&computed.font_size, parent_font_size);
                 let mut child_containing_size =
                     resolved_child_containing_size(&computed, font_size, containing_size);
@@ -3431,6 +3465,28 @@ mod tests {
 
         assert_eq!(model.cells[0].column_span, 1);
         assert_eq!(model.cells[0].row_span, 1);
+    }
+
+    #[test]
+    fn live_table_bridge_count_reports_each_grid_route_once() {
+        let dom = StaticDocument::parse(
+            "<table><tbody><tr><td>one</td><td>two</td></tr></tbody></table>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "table { display: table; } tbody { display: table-row-group; } tr { display: table-row; } td { display: table-cell; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+
+        let layout = layout(&dom, &styles, 320.0, 240.0).expect("layout");
+        assert_eq!(
+            layout.table_bridge_counts(),
+            TableBridgeCounts { grids: 1 },
+            "the table's Grid/Flex compatibility route is counted once at its grid"
+        );
     }
 
     #[test]
