@@ -30,7 +30,7 @@ in CI; there is no CI in the repo yet. The blocker is dependency resolution:
 engines as **external path deps** outside the repo:
 
 - `nova_vm = { path = "../../crates/vano/nova_vm" }` (git form, per the root
-  `Cargo.toml` patch comment: `git = "https://github.com/mark-ik/vano", branch = "genet-embedder"`)
+  `Cargo.toml` patch comment: `git = "https://github.com/merely-made/vano", branch = "genet-embedder"`)
 - `boa_engine = { path = "../../crates/boa/core/engine" }` (no git form recorded)
 
 So a runner must materialize those sibling checkouts (or the manifest must switch

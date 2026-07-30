@@ -196,7 +196,7 @@ engine-rendered form controls) and the scripted-tier consumer wiring.
   genet emits into. Pulled as a git dependency (`branch = "main"`), and it owns
   the engine-agnostic `paint_list_api` / `paint_list_render` crates.
 - **Forks** consumed as git deps: Vano's `nova_vm` package (local checkout at
-  `crates/vano`, git fallback `mark-ik/vano`, `genet-embedder` branch) and
+  `crates/vano`, git fallback `merely-made/vano`, `genet-embedder` branch) and
   `boa_engine` / `boa_gc` (mark-ik/boa, `genet` branch), each carrying additive
   reflector-liveness patches. The Stylo crates track the servo/stylo v0.18.0
   release tag by git rev.

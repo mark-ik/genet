@@ -496,7 +496,7 @@ front-loads visible wins.
   pumps, asserts the pin survives — the fallback as the documented mode); all
   green across script-engine-api / script-engine-boa / genet-scripted, rule 1
   consumers unchanged. **Open decision for Mark:** do the two fork hooks now
-  (real-GC reclamation, but cross-repo churn on mark-ik/boa + mark-ik/vano),
+  (real-GC reclamation, but cross-repo churn on mark-ik/boa + merely-made/vano),
   or stay on the documented fallback until the scripted lane matures (G3's
   payoff window). Next: G4 (piccolo backend, independent of this decision).
 - **2026-06-11** — **G4 clean surface landed.** New crate

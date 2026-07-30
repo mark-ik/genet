@@ -925,7 +925,7 @@ Direction set (2026-05-21, Part 6):
   build/validate the `ScriptEngineLive` reflector against Boa's complete `JsClass` +
   captures API (Boa needs a reflector impl anyway as oracle); this validates the trait
   design. **Track B — patch Nova** via `[patch.crates-io]` → a thin `genet-embedder` branch on
-  `github.com/mark-ik/vano` adding a `NodeId` slot to `EmbedderObject` + `InternalSlots`
+  `github.com/merely-made/vano` adding a `NodeId` slot to `EmbedderObject` + `InternalSlots`
   delegation to its backing object (+ the usdt wasm gate); **no trace-hook surgery**
   (handlers live on the backing object Nova already traces). Build `script-engine-nova`
   against the patch; upstream the diff so the branch disappears. Not a heavy fork. Both tracks share `ScriptEngineLive`;
@@ -983,7 +983,7 @@ Direction set (2026-05-21, Part 6):
   carrying a `NodeId` as native data, rooted via a plain-Rust `Global`, survives forced
   GCs and reads its `NodeId` back. **Finding 2 validated on Nova — and the full bet now
   holds end-to-end:** native-data reflector + `Global` rooting from the plain-Rust DOM
-  arena, no traced-container dance. Branch **pushed to `github.com/mark-ik/vano`**
+  arena, no traced-container dance. Branch **pushed to `github.com/merely-made/vano`**
   (`genet-embedder`); upstream PR to trynova/nova is the remaining step. (No `usdt` wasm
   gate in this branch yet — orthogonal; separate commit.)
 - **Part 3 — probes lifted to real genet crates (2026-05-23).** Three crates under
@@ -1433,8 +1433,8 @@ OrdinaryObject interim), but the change is small and consumed cleanly:
   traces it via `mark_values`/`sweep_values`) and the native data as a plain integer
   (nothing to trace); the crate-private trace hook only matters if native data holds
   `Value`s directly, which we avoid; (c) the **`usdt` target-gate** for wasm (Appendix B).
-- **Mechanism:** the diff lives on a thin branch of `github.com/mark-ik/vano` (e.g.
-  `genet-embedder`), consumed via `[patch.crates-io] nova_vm = { git = "...mark-ik/vano",
+- **Mechanism:** the diff lives on a thin branch of `github.com/merely-made/vano` (e.g.
+  `genet-embedder`), consumed via `[patch.crates-io] nova_vm = { git = "...merely-made/vano",
   branch = "genet-embedder" }` in the workspace root. Small, rebasable on upstream,
   **upstreamed as a PR** so the branch eventually disappears. Not a vendored in-tree fork.
 
