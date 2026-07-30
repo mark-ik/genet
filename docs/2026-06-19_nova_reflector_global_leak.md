@@ -72,7 +72,7 @@ trigger GC" — exactly the native-call case.
 
 So there is **no `nova_vm` bug to patch**: `Global` having no `Drop` is by
 design, and `Scoped` is nova's intended answer for call-scoped rooting. The fork
-(`mark-ik/nova`, branch `genet-embedder`) is patchable, but a patch is not the
+(`mark-ik/vano`, branch `genet-embedder`) is patchable, but a patch is not the
 right layer — the misuse is in genet's adapter/API. (If a future fix wants a
 nova-side convenience it would be additive, not a bug fix.)
 

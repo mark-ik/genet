@@ -6,7 +6,7 @@ backs Genet's scripted-nova path; the WebGL `gl-clear.html` harness receipt is
 green through that backend.
 **Scope**: the strategic frame for **vano**, Mark's fork of trynova/nova (the
 data-oriented JS engine), consumed by `script-engine-nova` as
-`nova_vm = { git = "mark-ik/nova", branch = "genet-embedder" }` (the fork's
+`nova_vm = { git = "mark-ik/vano", branch = "genet-embedder" }` (the fork's
 working checkout is `Code/crates/vano`; the package remains `nova_vm`). Until
 now this lived only in Cargo.toml comments and conversation.
 

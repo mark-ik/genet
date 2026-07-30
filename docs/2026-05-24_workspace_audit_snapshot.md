@@ -33,7 +33,7 @@ Members = the 2026-05-16 set **plus four scripting crates** (`script-engine-api`
   the local clone at **`../../crates/nova/nova_vm`** (moved here from `repos/nova` on
   2026-05-24 alongside the other linebender forks; patch path updated, workspace
   resolves — verified via `cargo tree`). Clone is on branch `genet-embedder` (the
-  `EmbedderObject` native-data patch, `fbca54b`), pushed to `github.com/mark-ik/nova`.
+  `EmbedderObject` native-data patch, `fbca54b`), pushed to `github.com/mark-ik/vano`.
   Upstream PR to trynova/nova pending.
 - **Paint-list extraction (landed):** `paint_list_api` + the `PaintCmd→Scene`
   translator moved to the netrender workspace (`paint_list_api`/`paint_list_render =

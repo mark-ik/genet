@@ -12,7 +12,7 @@ hack" ask.
 
 ## 1. Nova — an embedder native-data slot (`EmbedderObject`)
 
-- **Fork:** `github.com/mark-ik/nova`, branch `genet-embedder`, commit `fbca54b`
+- **Fork:** `github.com/mark-ik/vano`, branch `genet-embedder`, commit `fbca54b`
   (local clone at `crates/nova`, pinned via root `[patch.crates-io]`).
 - **Upstream:** `github.com/trynova/nova`.
 
