@@ -28,7 +28,9 @@ layout_dom_api = { workspace = true }
 # through the shared tick interpreter (embedder_traits::webdriver_actions).
 webdriver = { workspace = true }
 # MANIFEST.json reader (harness-exactness H1): the upstream WPT manifest is JSON.
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 
 # Phase 2 (reftests): render to pixels via the paint + netrender path
 # (the same public API the html_to_pixels_e2e test drives) and compare.

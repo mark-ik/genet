@@ -109,16 +109,168 @@ impl Manifest {
     }
 
     fn from_value(root: Value) -> std::io::Result<Manifest> {
+        let version = root.get("version").and_then(Value::as_u64).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "manifest has no numeric version",
+            )
+        })?;
+        if !matches!(version, 8 | 9) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unsupported WPT manifest version {version}; expected 8 or 9"),
+            ));
+        }
         let url_base = root
             .get("url_base")
             .and_then(Value::as_str)
-            .unwrap_or("/")
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "manifest has no string url_base",
+                )
+            })?
             .to_string();
         let items = root
             .get("items")
             .cloned()
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "no items"))?;
-        Ok(Manifest { items, url_base })
+        if !items.is_object() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "manifest items is not an object",
+            ));
+        }
+        let manifest = Manifest { items, url_base };
+        manifest.validate()?;
+        Ok(manifest)
+    }
+
+    fn validate(&self) -> std::io::Result<()> {
+        for (kind, key) in [
+            (TestKind::Testharness, "testharness"),
+            (TestKind::Reftest, "reftest"),
+            (TestKind::PrintReftest, "print-reftest"),
+            (TestKind::Crashtest, "crashtest"),
+            (TestKind::Visual, "visual"),
+            (TestKind::Wdspec, "wdspec"),
+            (TestKind::Manual, "manual"),
+        ] {
+            if let Some(tree) = self.items.get(key) {
+                self.validate_node(tree, kind, &mut String::new())?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_node(
+        &self,
+        node: &Value,
+        kind: TestKind,
+        prefix: &mut String,
+    ) -> std::io::Result<()> {
+        match node {
+            Value::Object(map) => {
+                for (component, child) in map {
+                    let restore = prefix.len();
+                    if !prefix.is_empty() {
+                        prefix.push('/');
+                    }
+                    prefix.push_str(component);
+                    self.validate_node(child, kind, prefix)?;
+                    prefix.truncate(restore);
+                }
+                Ok(())
+            },
+            Value::Array(leaf) => {
+                if leaf.is_empty() || !matches!(leaf.first(), Some(Value::String(_) | Value::Null))
+                {
+                    return Err(invalid_manifest(
+                        kind,
+                        prefix,
+                        "leaf lacks a string or null source hash",
+                    ));
+                }
+                if leaf.len() == 1 {
+                    return Err(invalid_manifest(kind, prefix, "leaf has no test variants"));
+                }
+                for (index, variant) in leaf.iter().enumerate().skip(1) {
+                    let Some(fields) = variant.as_array() else {
+                        return Err(invalid_manifest(
+                            kind,
+                            prefix,
+                            &format!("variant {index} is not an array"),
+                        ));
+                    };
+                    let expected_fields = if kind.is_reftest() { 3 } else { 2 };
+                    if fields.len() != expected_fields {
+                        return Err(invalid_manifest(
+                            kind,
+                            prefix,
+                            &format!(
+                                "variant {index} has {} fields, expected {expected_fields}",
+                                fields.len()
+                            ),
+                        ));
+                    }
+                    if !matches!(fields.first(), Some(Value::String(_) | Value::Null)) {
+                        return Err(invalid_manifest(
+                            kind,
+                            prefix,
+                            &format!("variant {index} lacks a string or null URL"),
+                        ));
+                    }
+                    if kind.is_reftest() {
+                        let Some(refs) = fields.get(1).and_then(Value::as_array) else {
+                            return Err(invalid_manifest(
+                                kind,
+                                prefix,
+                                &format!("variant {index} lacks a reference list"),
+                            ));
+                        };
+                        for reference in refs {
+                            let Some(pair) = reference.as_array() else {
+                                return Err(invalid_manifest(
+                                    kind,
+                                    prefix,
+                                    &format!("variant {index} has a malformed reference"),
+                                ));
+                            };
+                            if pair.len() != 2
+                                || pair.first().and_then(Value::as_str).is_none()
+                                || !matches!(pair.get(1).and_then(Value::as_str), Some("==" | "!="))
+                            {
+                                return Err(invalid_manifest(
+                                    kind,
+                                    prefix,
+                                    &format!("variant {index} has a malformed reference"),
+                                ));
+                            }
+                        }
+                    }
+                    if fields.last().and_then(Value::as_object).is_none() {
+                        return Err(invalid_manifest(
+                            kind,
+                            prefix,
+                            &format!("variant {index} lacks an extras object"),
+                        ));
+                    }
+                    if self.parse_variant(variant, kind, prefix).is_none() {
+                        return Err(invalid_manifest(
+                            kind,
+                            prefix,
+                            &format!("variant {index} has an unsupported shape"),
+                        ));
+                    }
+                }
+                Ok(())
+            },
+            _ => Err(invalid_manifest(
+                kind,
+                prefix,
+                "tree node is neither a directory object nor a test leaf",
+            )),
+        }
     }
 
     /// Enumerate the runnable tests of the kinds this runner can host, with
@@ -225,6 +377,17 @@ impl Manifest {
             long_timeout,
         })
     }
+}
+
+fn invalid_manifest(kind: TestKind, path: &str, detail: &str) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        format!(
+            "malformed {} manifest entry `{}`: {detail}",
+            kind.label(),
+            if path.is_empty() { "<root>" } else { path }
+        ),
+    )
 }
 
 /// Parse a reftest references value: `[[ref_url, "=="|"!="], ...]`.
@@ -361,6 +524,40 @@ mod tests {
             vec![("/css/ref-ref.html".to_string(), RefMatch::Equal)]
         );
         assert_eq!(r.fuzzy, Some(((0, 2), (0, 40))));
+    }
+
+    #[test]
+    fn rejects_unknown_manifest_versions() {
+        let error = Manifest::from_value(serde_json::json!({
+            "version": 10,
+            "url_base": "/",
+            "items": {}
+        }))
+        .err()
+        .expect("an unknown shape cannot define the denominator");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported WPT manifest version")
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_variants_in_supported_buckets() {
+        let error = Manifest::from_value(serde_json::json!({
+            "version": 9,
+            "url_base": "/",
+            "items": {
+                "testharness": {
+                    "css": {
+                        "broken.html": ["hash", 42]
+                    }
+                }
+            }
+        }))
+        .err()
+        .expect("a silently dropped variant would shrink the denominator");
+        assert!(error.to_string().contains("variant 1"));
     }
 
     /// Opt-in integration test against the real ~39MB manifest (heavy; run with

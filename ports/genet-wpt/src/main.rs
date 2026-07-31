@@ -25,6 +25,7 @@ use genet_static_dom::StaticDocument;
 use layout_dom_api::{LayoutDom, LocalName};
 use script_engine_api::ScriptEngine;
 
+mod conformance;
 mod harness;
 mod manifest;
 mod render;
@@ -60,6 +61,7 @@ enum Kind {
     Reference,
     Manual,
     Reftest,
+    PrintReftest,
     Crashtest,
     Testharness,
     Load,
@@ -69,7 +71,8 @@ impl Kind {
     fn from_manifest(kind: manifest::TestKind) -> Kind {
         match kind {
             manifest::TestKind::Testharness => Kind::Testharness,
-            manifest::TestKind::Reftest | manifest::TestKind::PrintReftest => Kind::Reftest,
+            manifest::TestKind::Reftest => Kind::Reftest,
+            manifest::TestKind::PrintReftest => Kind::PrintReftest,
             manifest::TestKind::Crashtest => Kind::Crashtest,
             manifest::TestKind::Manual
             | manifest::TestKind::Visual
@@ -82,6 +85,7 @@ impl Kind {
             Kind::Reference => "reference",
             Kind::Manual => "manual",
             Kind::Reftest => "reftest",
+            Kind::PrintReftest => "print-reftest",
             Kind::Crashtest => "crashtest",
             Kind::Testharness => "testharness",
             Kind::Load => "load",
@@ -422,6 +426,18 @@ struct Args {
     expectations: Option<String>,
     /// Write current per-test statuses to a JSON expectations file.
     write_expectations: Option<String>,
+    /// Exact reftest result files joined by the absolute conformance command.
+    reftest_results: Vec<PathBuf>,
+    /// Exact testharness result files joined by the absolute conformance command.
+    testharness_results: Vec<PathBuf>,
+    /// Write deterministic absolute conformance JSON.
+    write_conformance: Option<PathBuf>,
+    /// Compare against a prior absolute conformance report.
+    conformance_baseline: Option<PathBuf>,
+    /// Permit a diagnostic report with hostable tests absent from its inputs.
+    allow_incomplete_conformance: bool,
+    /// Permit legacy result maps without pinned manifest and runner identities.
+    allow_unpinned_conformance_inputs: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -438,6 +454,12 @@ fn parse_args() -> Result<Args, String> {
     let mut walk_discovery = false;
     let mut expectations = None;
     let mut write_expectations = None;
+    let mut reftest_results = Vec::new();
+    let mut testharness_results = Vec::new();
+    let mut write_conformance = None;
+    let mut conformance_baseline = None;
+    let mut allow_incomplete_conformance = false;
+    let mut allow_unpinned_conformance_inputs = false;
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -475,6 +497,30 @@ fn parse_args() -> Result<Args, String> {
             "--write-expectations" => {
                 write_expectations = Some(it.next().ok_or("--write-expectations needs a path")?);
             },
+            "--reftest-results" => {
+                reftest_results.push(PathBuf::from(
+                    it.next().ok_or("--reftest-results needs a path")?,
+                ));
+            },
+            "--testharness-results" => {
+                testharness_results.push(PathBuf::from(
+                    it.next().ok_or("--testharness-results needs a path")?,
+                ));
+            },
+            "--write-conformance" => {
+                write_conformance = Some(PathBuf::from(
+                    it.next().ok_or("--write-conformance needs a path")?,
+                ));
+            },
+            "--conformance-baseline" => {
+                conformance_baseline = Some(PathBuf::from(
+                    it.next().ok_or("--conformance-baseline needs a path")?,
+                ));
+            },
+            "--allow-incomplete-conformance" => allow_incomplete_conformance = true,
+            "--allow-unpinned-conformance-inputs" => {
+                allow_unpinned_conformance_inputs = true;
+            },
             "-v" | "--verbose" => verbose = true,
             "-h" | "--help" => return Err(usage()),
             _ if arg.starts_with('-') => return Err(format!("unknown flag: {arg}\n{}", usage())),
@@ -497,6 +543,12 @@ fn parse_args() -> Result<Args, String> {
         walk_discovery,
         expectations,
         write_expectations,
+        reftest_results,
+        testharness_results,
+        write_conformance,
+        conformance_baseline,
+        allow_incomplete_conformance,
+        allow_unpinned_conformance_inputs,
     })
 }
 
@@ -510,6 +562,7 @@ Usage:
     genet-wpt reftest     <subset>   render + pixel-compare reftests (needs a GPU)
     genet-wpt testharness <subset>   run testharness.js tests + collect results (Boa)
     genet-wpt manifest    <subset>   enumerate from MANIFEST.json (authoritative; H1)
+    genet-wpt conformance <subset>   join exact results to the manifest; report absolute totals
     genet-wpt compare     <subset>   run each testharness test on Boa + Nova, diff (H2b)
     genet-wpt test262     <subset>   run test262 on Boa + Nova, diff = Nova's worklist
 
@@ -521,6 +574,18 @@ Options:
     --expectations <f>   fail if testharness results differ from JSON expectations
     --write-expectations <f>
                          write current testharness results as JSON expectations
+    --reftest-results <f>
+                         add an exact reftest result file to `conformance`
+    --testharness-results <f>
+                         add an exact testharness result file to `conformance`
+    --write-conformance <f>
+                         write deterministic absolute conformance JSON
+    --conformance-baseline <f>
+                         print aggregate deltas from a prior conformance report
+    --allow-incomplete-conformance
+                         permit missing hostable tests in a diagnostic report
+    --allow-unpinned-conformance-inputs
+                         permit legacy result maps only in a diagnostic report
     --engine <name>      testharness JS engine: boa (default) | nova
     --renderer <name>    style/render route: stylo (default) | livery
     --server-base <url>  run testharness against a live `wpt serve` at <url>
@@ -577,6 +642,11 @@ fn real_main() {
         return;
     }
 
+    if args.command == "conformance" {
+        conformance_cmd(&args);
+        return;
+    }
+
     // `test262` runs its own vendored corpus (third_party/test262), not the WPT walk.
     if args.command == "test262" {
         test262_cmd(&args);
@@ -586,6 +656,17 @@ fn real_main() {
     if args.command == "test262-one" {
         test262_one(&args);
         return;
+    }
+
+    if !args.reftest_results.is_empty()
+        || !args.testharness_results.is_empty()
+        || args.write_conformance.is_some()
+        || args.conformance_baseline.is_some()
+        || args.allow_incomplete_conformance
+        || args.allow_unpinned_conformance_inputs
+    {
+        eprintln!("conformance result flags are supported only for `conformance`");
+        std::process::exit(2);
     }
 
     if (args.expectations.is_some() || args.write_expectations.is_some())
@@ -622,6 +703,93 @@ fn real_main() {
             eprintln!("unknown command: {other}\n{}", usage());
             std::process::exit(2);
         },
+    }
+}
+
+fn conformance_cmd(args: &Args) {
+    if args.walk_discovery {
+        eprintln!("`conformance` requires manifest discovery");
+        std::process::exit(2);
+    }
+    if args.expectations.is_some() || args.write_expectations.is_some() {
+        eprintln!(
+            "`conformance` reads exact result files; use --reftest-results and \
+             --testharness-results"
+        );
+        std::process::exit(2);
+    }
+    let path = manifest_path(&args.tests_root);
+    let manifest_sha256 = match conformance::sha256_file(&path) {
+        Ok(digest) => digest,
+        Err(error) => {
+            eprintln!(
+                "cannot fingerprint WPT manifest {}: {error}",
+                path.display()
+            );
+            std::process::exit(1);
+        },
+    };
+    let manifest = match manifest::Manifest::load(&path) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            eprintln!("cannot load WPT manifest {}: {error}", path.display());
+            std::process::exit(1);
+        },
+    };
+    let tests = manifest.tests_under(&args.subset);
+    if tests.is_empty() {
+        eprintln!(
+            "no manifest tests found for '{}'",
+            if args.subset.is_empty() {
+                "<all>"
+            } else {
+                &args.subset
+            }
+        );
+        std::process::exit(1);
+    }
+    let report = match conformance::build_report(
+        &tests,
+        conformance::ReportInputs {
+            subset: &args.subset,
+            renderer: args.renderer.label(),
+            testharness_engine: args.engine.label(),
+            manifest_sha256: &manifest_sha256,
+            reftest_results: &args.reftest_results,
+            testharness_results: &args.testharness_results,
+            allow_incomplete: args.allow_incomplete_conformance,
+            allow_unpinned: args.allow_unpinned_conformance_inputs,
+        },
+    ) {
+        Ok(report) => report,
+        Err(error) => {
+            eprintln!("conformance report failed: {error}");
+            std::process::exit(1);
+        },
+    };
+    println!("{}", report.human_summary());
+    if let Some(path) = &args.write_conformance {
+        if let Err(error) = report.write(path) {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        println!("conformance report written to {}", path.display());
+    }
+    if let Some(path) = &args.conformance_baseline {
+        let baseline = match conformance::ConformanceReport::read(path) {
+            Ok(report) => report,
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            },
+        };
+        match report.delta_from(&baseline) {
+            Ok(delta) => println!("{delta}"),
+            Err(error) => {
+                eprintln!("cannot compare conformance reports: {error}");
+                std::process::exit(1);
+            },
+        }
     }
 }
 
@@ -714,7 +882,7 @@ fn rel(path: &Path, tests_root: &str) -> String {
 }
 
 fn list(tests: &[TestCase], _args: &Args) {
-    let mut counts = [0usize; 6];
+    let mut counts = [0usize; 7];
     let mut manifest_backed = 0usize;
     for test in tests {
         let kind = test.kind;
@@ -726,9 +894,10 @@ fn list(tests: &[TestCase], _args: &Args) {
         println!("{:<12} {}{}", kind.label(), test.name(), timeout);
     }
     println!(
-        "\n{} test variant(s): {} reftest, {} testharness, {} crashtest, {} load, {} manual, {} reference{}",
+        "\n{} test variant(s): {} reftest, {} print-reftest, {} testharness, {} crashtest, {} load, {} manual, {} reference{}",
         tests.len(),
         counts[Kind::Reftest as usize],
+        counts[Kind::PrintReftest as usize],
         counts[Kind::Testharness as usize],
         counts[Kind::Crashtest as usize],
         counts[Kind::Load as usize],
@@ -977,13 +1146,64 @@ impl std::fmt::Display for ActualRecordDisplay<'_> {
     }
 }
 
+struct ResultFileMetadata<'a> {
+    command: &'a str,
+    engine: &'a str,
+    renderer: &'a str,
+    subset: &'a str,
+    manifest_sha256: Option<&'a str>,
+    runner_sha256: Option<&'a str>,
+}
+
 fn finish_expectations(args: &Args, command: &str, actuals: &[ActualRecord]) {
     if let Some(out) = &args.write_expectations {
+        let provenance = if args.walk_discovery {
+            None
+        } else {
+            let manifest = manifest_path(&args.tests_root);
+            let manifest_sha256 = match conformance::sha256_file(&manifest) {
+                Ok(digest) => digest,
+                Err(error) => {
+                    eprintln!(
+                        "failed to fingerprint WPT manifest {}: {error}",
+                        manifest.display()
+                    );
+                    std::process::exit(1);
+                },
+            };
+            let executable = match std::env::current_exe() {
+                Ok(path) => path,
+                Err(error) => {
+                    eprintln!("failed to locate genet-wpt executable: {error}");
+                    std::process::exit(1);
+                },
+            };
+            let runner_sha256 = match conformance::sha256_file(&executable) {
+                Ok(digest) => digest,
+                Err(error) => {
+                    eprintln!(
+                        "failed to fingerprint genet-wpt executable {}: {error}",
+                        executable.display()
+                    );
+                    std::process::exit(1);
+                },
+            };
+            Some((manifest_sha256, runner_sha256))
+        };
         if let Err(e) = write_expectations(
             out,
-            command,
-            args.engine.label(),
-            args.renderer.label(),
+            ResultFileMetadata {
+                command,
+                engine: if command == "reftest" {
+                    "none"
+                } else {
+                    args.engine.label()
+                },
+                renderer: args.renderer.label(),
+                subset: &args.subset,
+                manifest_sha256: provenance.as_ref().map(|(manifest, _)| manifest.as_str()),
+                runner_sha256: provenance.as_ref().map(|(_, runner)| runner.as_str()),
+            },
             actuals,
         ) {
             eprintln!("failed to write expectations to {out}: {e}");
@@ -1004,9 +1224,7 @@ fn finish_expectations(args: &Args, command: &str, actuals: &[ActualRecord]) {
 
 fn write_expectations(
     path: &str,
-    command: &str,
-    engine: &str,
-    renderer: &str,
+    metadata: ResultFileMetadata<'_>,
     actuals: &[ActualRecord],
 ) -> Result<(), String> {
     let mut tests = BTreeMap::new();
@@ -1033,9 +1251,12 @@ fn write_expectations(
     }
     let value = serde_json::json!({
         "version": 1,
-        "command": command,
-        "engine": engine,
-        "renderer": renderer,
+        "command": metadata.command,
+        "engine": metadata.engine,
+        "renderer": metadata.renderer,
+        "subset": metadata.subset.trim_matches('/').replace('\\', "/"),
+        "manifest_sha256": metadata.manifest_sha256,
+        "runner_sha256": metadata.runner_sha256,
         "tests": tests,
     });
     let out = Path::new(path);
@@ -1096,12 +1317,9 @@ fn load_expectations(path: &str) -> Result<Expectations, String> {
                 let count = |field: &str| -> Result<Option<usize>, String> {
                     match fields.get(field) {
                         None | Some(serde_json::Value::Null) => Ok(None),
-                        Some(value) => value
-                            .as_u64()
-                            .map(|n| Some(n as usize))
-                            .ok_or_else(|| {
-                                format!("expectation for {name} must carry an integer `{field}`")
-                            }),
+                        Some(value) => value.as_u64().map(|n| Some(n as usize)).ok_or_else(|| {
+                            format!("expectation for {name} must carry an integer `{field}`")
+                        }),
                     }
                 };
                 let subtests = match (count("subtests_passed")?, count("subtests_total")?) {
@@ -2539,6 +2757,17 @@ mod tests {
             .into_owned()
     }
 
+    fn test_result_metadata<'a>(renderer: &'a str, subset: &'a str) -> ResultFileMetadata<'a> {
+        ResultFileMetadata {
+            command: "testharness",
+            engine: "boa",
+            renderer,
+            subset,
+            manifest_sha256: Some("manifest"),
+            runner_sha256: Some("runner"),
+        }
+    }
+
     #[test]
     fn expectations_accept_exact_statuses() {
         let path = temp_expectations_path("exact");
@@ -2556,7 +2785,7 @@ mod tests {
                 subtests: None,
             },
         ];
-        write_expectations(&path, "testharness", "boa", "stylo", &actuals)
+        write_expectations(&path, test_result_metadata("stylo", "dom"), &actuals)
             .expect("write expectations");
         check_expectations(&path, "stylo", &actuals).expect("expectations match exactly");
         let _ = fs::remove_file(path);
@@ -2571,7 +2800,7 @@ mod tests {
             reason: None,
             subtests: None,
         }];
-        write_expectations(&path, "testharness", "boa", "stylo", &expected)
+        write_expectations(&path, test_result_metadata("stylo", "dom"), &expected)
             .expect("write expectations");
         let actual = vec![ActualRecord {
             test: "dom/example.html".into(),
@@ -2602,7 +2831,7 @@ mod tests {
                 subtests: None,
             },
         ];
-        write_expectations(&path, "testharness", "boa", "stylo", &expected)
+        write_expectations(&path, test_result_metadata("stylo", "dom"), &expected)
             .expect("write expectations");
         check_expectations(&path, "stylo", &expected).expect("expectations match exact reason");
         let _ = fs::remove_file(path);
@@ -2617,7 +2846,7 @@ mod tests {
             reason: Some("worker-only".into()),
             subtests: None,
         }];
-        write_expectations(&path, "testharness", "boa", "stylo", &expected)
+        write_expectations(&path, test_result_metadata("stylo", "dom"), &expected)
             .expect("write expectations");
         let actual = vec![ActualRecord {
             test: "dom/example.html".into(),
@@ -2643,7 +2872,7 @@ mod tests {
             reason: None,
             subtests: Some((40, 47)),
         }];
-        write_expectations(&path, "testharness", "boa", "livery", &expected)
+        write_expectations(&path, test_result_metadata("livery", "css"), &expected)
             .expect("write expectations");
 
         // The same counts pass.
@@ -2705,14 +2934,11 @@ mod tests {
             reason: None,
             subtests: Some((5, 5)),
         }];
-        write_expectations(&path, "testharness", "boa", "livery", &expected)
+        write_expectations(&path, test_result_metadata("livery", "css"), &expected)
             .expect("write expectations");
         let err = check_expectations(&path, "stylo", &expected)
             .expect_err("a Livery baseline must not vouch for a Stylo run");
-        assert!(
-            err.contains("written under renderer `livery`"),
-            "{err}"
-        );
+        assert!(err.contains("written under renderer `livery`"), "{err}");
         let _ = fs::remove_file(path);
     }
 
