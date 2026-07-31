@@ -872,6 +872,20 @@ Neither is silent, and neither may be counted as support.
    column vector for an automatic table, since `fixed_column_widths` returns
    `None`. Wiring the provider is the remaining half of this gate.
 
+#### Focused no-movement receipt, 2026-07-31
+
+All nine K4c4 expectation maps rerun exactly, each with its original command
+and renderer (six reftest/livery, three testharness/stylo), each gated by the
+runner's own `--expectations` comparison rather than a by-hand diff: zero
+movement. The corpus is the in-repo `tests/wpt/tests` checkout that every
+prior receipt used; the separate current-upstream checkout in
+`Code/crates/wpt` is for standards reading only, never for ratchet
+comparison. Proof directory:
+`testing/genet/wpt-ledger/2026-07-31_buckram_k4c5a`.
+
+The complete `css/CSS2/tables` and `css/css-tables` maps required by this
+gate's Evidence section remain to be produced with the two named gaps above.
+
 #### Live root font size
 
 `length_percentage_px` and `border_width_px` resolve `rem` against a hardcoded
