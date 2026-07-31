@@ -2,7 +2,10 @@
 
 **Date:** 2026-07-28
 
-**Status:** K4c2 is complete on the accepted K4b base `26eda4cd9fe`; K4c3 is next.
+**Status:** K4c4a is complete on the accepted K4b base `26eda4cd9fe`; K4c5a is
+next. K4c1 through K4c4a landed pure model code. Livery still owns every live
+table sizing decision, so no WPT movement is creditable to K4c yet. K4c5 is
+split into K4c5a shadow comparison and K4c5b authority and deletion.
 
 **Parent plan:** [Buckram K4 CSS tables execution plan](2026-07-28_buckram_k4_css_tables_execution_plan.md)
 
@@ -338,7 +341,7 @@ an algorithm or change table behavior.
 edge logic only after live Buckram sizing consumes the result. K4d must remove
 the Grid/Flex table bridge after the same live route is complete.
 
-**Commit:** this commit.
+**Commit:** `8ef729852a1` (`Define Buckram table sizing contracts`).
 
 ## K4c2. Fixed inline sizing in separated mode
 
@@ -453,7 +456,7 @@ collapsed-border cases.
 remains the compatibility-path decision maker until K4c5 consumes Buckram's
 result. K4d still owns removal of the Grid/Flex bridge.
 
-**Commit:** this commit.
+**Commit:** `03d8dce3041` (`Add Buckram fixed table sizing`).
 
 ## K4c3. Automatic column measures
 
@@ -594,7 +597,7 @@ gate receives no live WPT acceptance credit.
 Buckram vector is the only K4c3 automatic-measure source; the compatibility
 path's fixed-width decision remains until K4c5 consumes a Buckram result.
 
-**Commit:** this commit.
+**Commit:** `b5e47279b92` (`Add Buckram automatic column measures`).
 
 ## K4c4. Automatic used width and column distribution
 
@@ -742,9 +745,107 @@ compatibility-path evidence, not live K4c4 acceptance credit.
 owns deletion of the compatibility bridge's table-width choices after it
 consumes this result.
 
-**Commit:** this commit.
+**Commit:** `acba7c84268` (`Add Buckram automatic table used sizing`).
 
-## K4c5. Parent integration, live bridge, and cleanup
+## K4c4a. Padding percentage retention
+
+### Outcome
+
+`CellInlineOffsets` carries a padding percentage to Buckram instead of
+rejecting it during style lowering.
+
+### Why this precedes K4c5
+
+K4c1 lowered padding to `f32` and returned `UnresolvedPercentageBasis` for any
+percentage. Livery's live `horizontal_edges` resolves one, and
+`fixed_column_widths` gives it the table's content width. K4c5 deletes both.
+Deleting a live helper that handles a case the model rejects would regress
+every fixed table with percentage cell padding, and no K4c5 stop rule catches
+it, because `TableInlineSizingError` has no live consumer.
+
+This also brought the contract into line with global invariant 6. Fixed layout
+establishes its table width before distributing columns, so a basis genuinely
+exists there; only automatic layout is circular.
+
+### Work
+
+- `CellInlineOffsets::padding_start` and `padding_end` became
+  `AffineLengthPercentage`. Borders stay absolute, because CSS has no
+  percentage border width.
+- `total` takes a percentage basis. `absolute_total` returns `None` rather than
+  sampling a percentage at zero.
+- `TableInlineSizingInput::table_padding_basis` is the single source of the
+  table box's own basis, so the two `separated_metrics` copies cannot diverge.
+- Fixed cell sizing resolves against the requested table size, which is the
+  basis its width constraint already used.
+- Automatic measures return the new `TableDeferral::PercentagePaddingPendingBasis`.
+- Livery's `logical_padding` returns the affine value and picks no basis.
+
+### Boundary retained
+
+Livery lowers and does not resolve. Every basis is chosen inside Buckram.
+
+### Deferral counts
+
+Automatic tables with percentage cell padding defer under
+`PercentagePaddingPendingBasis` and stay on the compatibility bridge until a
+gate supplies a post-measure basis. This is a named deferral, not a silent
+fallback.
+
+### Verification
+
+- `cargo test -p buckram --lib`: 120 passed, 0 failed (118 before this gate).
+- `cargo test -p genet-livery`: all targets passed, 0 failed.
+- `cargo clippy -p buckram --offline --no-deps -- -D warnings`: passed.
+  The combined command is blocked by a pre-existing unrelated warning in
+  `components/genet-livery/src/text.rs:1399`, which this gate does not touch.
+- Rustfmt on touched files and `git diff --check`: passed.
+
+### Known divergence for K4c5a to compare
+
+Buckram resolves a cell percentage against `requested_table_size`; Livery
+resolves against the table's *content* width. These agree for a content-box
+table, and differ for a border-box table with table padding. K4c2 already had
+this divergence for cell width percentages, so it is not introduced here. The
+shadow comparison must classify it before K4c5b deletes the live helper.
+
+**Commit:** `e9fedff78a5` (`Carry table padding percentages into Buckram`).
+
+## K4c5a. Shadow integration
+
+### Outcome
+
+Buckram's result is computed for every live table and compared against the
+existing Livery path. Nothing is deleted and no live geometry changes.
+
+### Work
+
+- Lower live table inputs once and call Buckram for fixed and automatic tables.
+- Keep `fixed_column_widths` authoritative for painted output.
+- Assert agreement per table between the Buckram result and the live path, and
+  log divergence with the table's box identity and the disagreeing quantity.
+- Count, and do not silently absorb, every `TableDeferral` reached live.
+
+### Evidence
+
+- A divergence ledger over the `css/CSS2/tables` and `css/css-tables` corpora
+  naming every disagreeing table and quantity.
+- The border-box table padding divergence above is either resolved or
+  explicitly accepted with a recorded rule.
+- No expectation-map movement, because no live behavior changed. Any movement
+  is a bug in this gate.
+
+### Stop rules
+
+- Stop if a divergence is silenced rather than classified.
+- Stop if the shadow path changes a painted result.
+
+## K4c5b. Authority, live bridge, and cleanup
+
+### Entry gate
+
+K4c5a's shadow comparison is silent, or every remaining divergence has a
+recorded and accepted rule.
 
 ### Outcome
 
@@ -909,14 +1010,21 @@ Proof directory:
 Commit:
 ```
 
-## First executable task
+## Next executable task
 
-The initial handoff is:
+K4c1 through K4c4a are accepted. The current handoff is:
 
-> Read this plan, the accepted K4b receipt, CSS 2.1 sections 17.5.2.1 and
-> 17.5.2.2, and the live seams named under K4c1. Execute K4c1 only. Preserve
-> unrelated worktree changes. Record the accepted K4b commit and produce
-> fresh `css/CSS2/tables` and `css/css-tables` maps before changing layout
-> behavior. Stop after K4c1 passes its verification ladder, append its
-> receipt here, stage only K4c1 paths, and commit. Do not begin K4c2 in the
-> same task.
+> Read this plan, the accepted K4c4a receipt, CSS 2.1 sections 17.5.2.1 and
+> 17.5.2.2, and the live seams named under K4c5a. Execute K4c5a only. Preserve
+> unrelated worktree changes. Compute Buckram's result for every live table
+> and compare it against the existing Livery path without changing painted
+> output or deleting anything. Produce a divergence ledger naming each
+> disagreeing table and quantity, and classify the border-box table padding
+> divergence recorded under K4c4a. Expectation maps must not move. Stop after
+> K4c5a passes its verification ladder, append its receipt here, stage only
+> K4c5a paths, and commit. Do not begin K4c5b in the same task.
+
+K4c5 is the first gate that changes live behavior, which is why it is split.
+K4c5a proves Buckram agrees with the live path while both exist; K4c5b makes
+Buckram authoritative and deletes the old path. Landing both at once would mix
+any regression with the removal of the code that would have revealed it.

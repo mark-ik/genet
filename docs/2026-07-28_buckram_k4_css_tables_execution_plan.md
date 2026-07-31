@@ -2,7 +2,11 @@
 
 **Date:** 2026-07-28
 
-**Status:** in execution. K4a and K4b are accepted; K4c1 is next.
+**Status:** in execution. K4a, K4b, and K4c1 through K4c4a are accepted; K4c5a
+is next. Everything through K4c4a is model-only: no live table sizing has
+changed yet. K4c5 is split into K4c5a shadow comparison and K4c5b authority
+and deletion, so the first live cutover cannot land mixed with the removal of
+the path it replaces.
 
 **Architectural authority:** [Buckram CSS layout engine plan](2026-07-26_buckram_css_layout_engine_plan.md)
 
