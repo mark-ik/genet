@@ -13,10 +13,10 @@ mod invalidation;
 mod layout;
 mod paint;
 mod style;
-// K4c1 validates the lowering without wiring it into the temporary table
-// Grid/Flex bridge. K4c5 consumes it and removes this scoped allowance.
-#[allow(dead_code)]
 mod table_sizing;
+// K4c5a compares Buckram against the live path without changing painted
+// output. K4c5b makes Buckram authoritative and deletes the live helper.
+pub mod table_shadow;
 mod text;
 
 pub use buckram::{

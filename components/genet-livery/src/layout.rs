@@ -45,6 +45,7 @@ use crate::{
     InteractionStates, StylePlane, StyleSet, TextSystem,
     box_tree::GeneratedBoxTree,
     style::resolve_styles_with_containers,
+    table_shadow::{TableShadowLedger, shadow_fixed_table},
     text::{InlineLayout, InlineRequest, TextFrame},
 };
 
@@ -89,6 +90,7 @@ pub struct LiveryLayout<Id> {
     text_frame: Option<TextFrame<Id>>,
     block_algorithms: BlockAlgorithmCounts,
     table_bridges: TableBridgeCounts,
+    table_shadow: TableShadowLedger,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -114,12 +116,14 @@ where
         text_frame: Option<TextFrame<Id>>,
         block_algorithms: BlockAlgorithmCounts,
         table_bridges: TableBridgeCounts,
+        table_shadow: TableShadowLedger,
     ) -> Self {
         Self {
             buckram,
             text_frame,
             block_algorithms,
             table_bridges,
+            table_shadow,
         }
     }
 
@@ -159,6 +163,12 @@ where
         self.table_bridges
     }
 
+    /// K4c5a's shadow comparison of Buckram's fixed sizing against the live
+    /// path. K4c5b may only make Buckram authoritative once this is silent.
+    pub fn table_shadow_ledger(&self) -> &TableShadowLedger {
+        &self.table_shadow
+    }
+
     pub(crate) fn text_frame(&self) -> Option<&TextFrame<Id>> {
         self.text_frame.as_ref()
     }
@@ -189,6 +199,7 @@ struct BuildState<'a, D: LayoutDom> {
     tree: AlgorithmTree<Style, TextMeasure, Option<BoxId>>,
     image_sources: &'a ImageSources,
     table_bridge_count: usize,
+    table_shadow: TableShadowLedger,
 }
 
 struct InlineMeasure {
@@ -748,6 +759,7 @@ where
         tree: AlgorithmTree::new(),
         image_sources,
         table_bridge_count: 0,
+        table_shadow: TableShadowLedger::default(),
     };
     let children = boxes
         .roots()
@@ -815,6 +827,7 @@ where
     let table_bridges = TableBridgeCounts {
         grids: state.table_bridge_count,
     };
+    let table_shadow = std::mem::take(&mut state.table_shadow);
 
     let mut fragments = FragmentTree::default();
     let mut output = FragmentOutput {
@@ -843,6 +856,7 @@ where
             taffy: taffy_blocks,
         },
         table_bridges,
+        table_shadow,
     ))
 }
 
@@ -882,6 +896,7 @@ where
             boxes,
             tree: AlgorithmTree::new(),
             image_sources,
+            table_shadow: TableShadowLedger::default(),
             table_bridge_count: 0,
         };
         let Some(atomic_root) = state.build_box(
@@ -1216,6 +1231,13 @@ where
             taffy: taffy_blocks,
         },
         table_bridges,
+        // The text path lays tables out inside atomic subtrees, whose
+        // per-root `BuildState` ledgers are discarded in `layout_atomic_subtrees`
+        // exactly as its `table_bridge_count` already is. Accumulating them
+        // through `AtomicLayoutPlane` is required before K4c5a is accepted;
+        // until then this path reports an empty ledger rather than a false
+        // silent one.
+        TableShadowLedger::default(),
     ))
 }
 
@@ -1537,17 +1559,35 @@ where
                 // CSS 2.1 section 17.5.2.1: a fixed table's columns are sized
                 // from the first row, so they can be pinned as explicit grid
                 // tracks before anything is measured.
-                if let Some(columns) = table.as_ref().and_then(|table| {
-                    fixed_column_widths(
+                if let Some(grid) = table.as_ref() {
+                    let live_columns = fixed_column_widths(
                         self.boxes,
                         self.styles,
-                        table,
+                        grid,
                         &computed,
                         font_size,
                         containing_size.0,
-                    )
-                }) {
-                    taffy_style.grid_template_columns = columns.into_iter().map(length).collect();
+                    );
+                    // K4c5a: Buckram runs beside the live result and disagrees
+                    // into a ledger. The live value below is still the one that
+                    // paints, until K4c5b.
+                    shadow_fixed_table(
+                        self.dom,
+                        self.boxes,
+                        self.styles,
+                        grid,
+                        box_id,
+                        node,
+                        &computed,
+                        font_size,
+                        containing_size.0,
+                        live_columns.as_deref(),
+                        &mut self.table_shadow,
+                    );
+                    if let Some(columns) = live_columns {
+                        taffy_style.grid_template_columns =
+                            columns.into_iter().map(length).collect();
+                    }
                 }
                 taffy_style.size.width =
                     dimension_with_basis(computed.width, font_size, containing_size.0);
@@ -3486,6 +3526,81 @@ mod tests {
             layout.table_bridge_counts(),
             TableBridgeCounts { grids: 1 },
             "the table's Grid/Flex compatibility route is counted once at its grid"
+        );
+    }
+
+    fn fixed_shadow_ledger(spacing: &str) -> crate::table_shadow::TableShadowLedger {
+        let dom = StaticDocument::parse(
+            "<table><tbody><tr><td id=first>one</td><td>two</td><td>three</td></tr></tbody></table>",
+        );
+        let css = format!(
+            "table {{ display: table; table-layout: fixed; width: 300px; border-spacing: {spacing}; }} tbody {{ display: table-row-group; }} tr {{ display: table-row; }} td {{ display: table-cell; }} #first {{ width: 120px; }}"
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[&css]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        layout(&dom, &styles, 320.0, 240.0)
+            .expect("layout")
+            .table_shadow_ledger()
+            .clone()
+    }
+
+    /// The control. Where Livery's fixed algorithm is correct, two independent
+    /// implementations reach the same columns. This is what K4c5b needs before
+    /// it may delete the live path.
+    #[test]
+    fn k4c5a_shadow_agrees_with_the_live_fixed_table_path() {
+        let ledger = fixed_shadow_ledger("0");
+        assert_eq!(
+            ledger.compared, 1,
+            "the fixed table was not shadowed at all: {ledger:?}"
+        );
+        assert!(
+            ledger.is_silent(),
+            "Buckram disagreed with the live path: {ledger:?}"
+        );
+        assert_eq!(ledger.agreed, 1, "{ledger:?}");
+    }
+
+    /// The first classified K4c5a divergence, and Buckram is the correct side.
+    ///
+    /// CSS 2.1 17.5.2.1 shares the remaining table space over the columns
+    /// *after* borders and spacing. Livery omits `border-spacing` entirely,
+    /// which its own `table-layout` partial marker already admits. With the UA
+    /// sheet's `border-spacing: 2px` and `td { padding: 1px }`, the first cell
+    /// occupies 122px and four gaps take 8px, so Buckram distributes
+    /// `(300 - 8 - 122) / 2 = 85` where Livery distributes `(300 - 122) / 2 = 89`.
+    ///
+    /// The live tables in `tests/anonymous_boxes.rs` all set
+    /// `border-spacing: 0`, which is why this never surfaced.
+    #[test]
+    fn k4c5a_shadow_classifies_the_live_border_spacing_omission() {
+        let ledger = fixed_shadow_ledger("2px");
+        assert_eq!(ledger.compared, 1, "{ledger:?}");
+        assert_eq!(ledger.agreed, 0, "{ledger:?}");
+        let observed = ledger
+            .divergences
+            .iter()
+            .map(|one| (one.quantity, one.buckram, one.livery))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            observed,
+            vec![
+                (
+                    crate::table_shadow::TableSizingQuantity::ColumnSize(1),
+                    85.0,
+                    89.0
+                ),
+                (
+                    crate::table_shadow::TableSizingQuantity::ColumnSize(2),
+                    85.0,
+                    89.0
+                ),
+            ],
+            "{ledger:?}"
         );
     }
 

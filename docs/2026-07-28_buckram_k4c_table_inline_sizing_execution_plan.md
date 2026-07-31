@@ -826,6 +826,59 @@ existing Livery path. Nothing is deleted and no live geometry changes.
   log divergence with the table's box identity and the disagreeing quantity.
 - Count, and do not silently absorb, every `TableDeferral` reached live.
 
+### Progress
+
+The fixed path is wired and live. `components/genet-livery/src/table_shadow.rs`
+lowers each live table once, runs Buckram beside `fixed_column_widths`, and
+records disagreements against the table's `BoxId`. The ledger is reachable as
+`LiveryLayout::table_shadow_ledger`. Painted output is unchanged.
+
+#### First classified divergence: Livery omits `border-spacing`
+
+Buckram is the correct side. CSS 2.1 17.5.2.1 shares remaining table space over
+the columns after borders and spacing; Livery's fixed algorithm never subtracts
+`border-spacing`, which its own `table-layout` partial marker already admits.
+
+With the UA sheet's `border-spacing: 2px` and `td { padding: 1px }`, a 300px
+fixed table whose first of three cells is 120px gives:
+
+| | Column 0 | Columns 1 and 2 |
+|---|---:|---:|
+| Buckram | 122 | 85 |
+| Livery | 122 | 89 |
+
+Livery distributes `(300 - 122) / 2`; Buckram distributes
+`(300 - 8 - 122) / 2`, where 8px is four gaps of 2px. Every live table fixture
+in `components/genet-livery/tests/anonymous_boxes.rs` sets `border-spacing: 0`,
+which is why this never surfaced. **Accepted rule:** K4c5b takes Buckram's
+value, so this divergence is expected to persist until the live helper is
+deleted. It is a live bug that K4c5b fixes, not a Buckram defect.
+
+The control test pins the other half: with `border-spacing: 0` the two
+implementations agree exactly.
+
+#### Named gaps before K4c5a can be accepted
+
+Neither is silent, and neither may be counted as support.
+
+1. **Atomic-subtree ledgers are discarded.** `layout_atomic_subtrees` builds one
+   `BuildState` per atomic root inside a loop and drops each one, exactly as it
+   already drops `table_bridge_count`. Tables laid out through the text path
+   therefore report an empty ledger. They must be accumulated through
+   `AtomicLayoutPlane` before this gate closes.
+2. **Automatic tables are not compared.** Buckram's automatic algorithm needs a
+   `TableIntrinsicMeasureProvider`, and intrinsic content sizes do not exist at
+   box-build time, so the comparison has no partner. The live path also has no
+   column vector for an automatic table, since `fixed_column_widths` returns
+   `None`. Wiring the provider is the remaining half of this gate.
+
+#### Live root font size
+
+`length_percentage_px` and `border_width_px` resolve `rem` against a hardcoded
+16px rather than the root element's computed font size. The shadow matches that
+constant deliberately, or every `rem` table would report an artifact. Fixing the
+live assumption is its own change, and K4c5b must not inherit it silently.
+
 ### Evidence
 
 - A divergence ledger over the `css/CSS2/tables` and `css/css-tables` corpora
