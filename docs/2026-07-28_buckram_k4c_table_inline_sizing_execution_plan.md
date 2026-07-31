@@ -931,6 +931,49 @@ comparison. Proof directory:
 The complete `css/CSS2/tables` and `css/css-tables` maps required by this
 gate's Evidence section remain to be produced with the two named gaps above.
 
+#### All-nine ratchet after the atomic-inline split fix, 2026-07-31
+
+The split fix changes box generation beyond tables, so all nine K3 ratchet
+directories were rerun against their last accepted maps (K3t `_livery` maps;
+the newer K4b map for `css/css-tables`). 146 statuses moved. Every moved test
+was then rerun at three prior commits (`52cc3ac` pre-split-fix, `89aca05`
+pre-merges, `2f1ae56` K3t itself, plus `26eda4c` accepted K4b) in a throwaway
+worktree, which attributes every single movement with no three-way residue:
+
+1. **34 moved by the split fix.** 25 improvements, dominated by the
+   `*-applies-to-012` inline-table families, `box-generation-001`,
+   `static-inside-inline-block`, and `grid-baseline-003`. And 9 pass-to-fail
+   disclosures, structurally the same event as K3t's 21: the old passes rode
+   on the wrong box tree (inline-block content hoisted out), and the correct
+   structure now reaches weaker downstream paths. The nine:
+   `flexbox_stf-inline-block`, `percentage-heights-015`,
+   `block-non-replaced-width-001`, `left-offset-{001,002}`,
+   `right-offset-{001,002}`, `position-sticky-top-003`,
+   `position-sticky-bottom-002`. Each needs a named owner (shrink-to-fit of
+   inline-blocks with block children; static/sticky position after atomic
+   inlines) before K4c5b treats their families as covered.
+2. **43 runner reclassifications, not layout.** Every `*-print` test now
+   reports `skip (non-reftest)`; skip reasons also renamed. This came with
+   the merged absolute-conformance-ledger runner. It removes 41 nominal
+   passes from the raw counts; the conformance instrument reports them
+   truthfully as not-run.
+3. **69 pre-existing movements from the K4a/K4b window** (`2f1ae56` to
+   `26eda4c`), invisible until now because K4b's acceptance reran only the
+   two table corpora while its box-generation work moved seven other
+   directories. All exactly reproduced at accepted K4b and unchanged since.
+   Includes most `*-applies-to-015` inline-block improvements, all fourteen
+   `table-progression-*` improvements, and, on the regression side:
+   `positioning/{bottom,position}-applies-to-{002,003,015}`,
+   `overflow-applies-to-{002,003}`, `inline-table-zorder-003`,
+   `flexbox-table-fixup-001`, and one **new crash**,
+   `css/CSS2/css21-errata/s-11-1-1b-005.html` (pass to crash). The crash is
+   not from anything in the current session and needs its own triage.
+
+Proof artifacts: `attr-caused-by-splitfix.txt`, `attr-predrift-and-odd.txt`,
+`attr-{prefix,premerge,k3t}-results.tsv`, and the fresh `*_splitfix.json`
+maps in the K4c5a proof directory. The fresh maps are the new accepted
+baselines for the nine directories.
+
 #### Live root font size
 
 `length_percentage_px` and `border_width_px` resolve `rem` against a hardcoded
