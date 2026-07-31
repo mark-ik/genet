@@ -13,7 +13,7 @@ use super::TableGrid;
 
 /// A finite affine CSS length-percentage retained until its percentage basis is
 /// known. `percentage: 1.0` means `100%`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct AffineLengthPercentage {
     pub absolute: f32,
     pub percentage: f32,
@@ -24,6 +24,14 @@ impl AffineLengthPercentage {
         absolute: 0.0,
         percentage: 0.0,
     };
+
+    /// An absolute length with no percentage component.
+    pub const fn px(absolute: f32) -> Self {
+        Self {
+            absolute,
+            percentage: 0.0,
+        }
+    }
 
     pub fn new(absolute: f32, percentage: f32) -> Option<Self> {
         (absolute.is_finite() && percentage.is_finite()).then_some(Self {
@@ -128,26 +136,38 @@ impl Default for TableInlineConstraints {
 /// The logical inline padding and border between one cell's content and border
 /// edges. They remain separate from content contributions so K4g can replace
 /// the border portion with collapsed-border winners.
+///
+/// Padding retains its percentage. CSS resolves a padding percentage against
+/// the containing block's inline size, which is the used grid width for a cell
+/// and the table's own containing block for the table box. Neither basis exists
+/// when Livery lowers computed style, so the adapter must not choose one.
+/// A border cannot be a percentage, so it stays absolute.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CellInlineOffsets {
-    pub padding_start: f32,
-    pub padding_end: f32,
+    pub padding_start: AffineLengthPercentage,
+    pub padding_end: AffineLengthPercentage,
     pub border_start: f32,
     pub border_end: f32,
 }
 
 impl CellInlineOffsets {
     pub const ZERO: Self = Self {
-        padding_start: 0.0,
-        padding_end: 0.0,
+        padding_start: AffineLengthPercentage::ZERO,
+        padding_end: AffineLengthPercentage::ZERO,
         border_start: 0.0,
         border_end: 0.0,
     };
 
+    pub const fn needs_percentage_basis(self) -> bool {
+        self.padding_start.needs_percentage_basis() || self.padding_end.needs_percentage_basis()
+    }
+
     pub fn is_valid(self) -> bool {
         [
-            self.padding_start,
-            self.padding_end,
+            self.padding_start.absolute,
+            self.padding_start.percentage,
+            self.padding_end.absolute,
+            self.padding_end.percentage,
             self.border_start,
             self.border_end,
         ]
@@ -155,10 +175,25 @@ impl CellInlineOffsets {
         .all(|value| value.is_finite() && value >= 0.0)
     }
 
-    pub fn total(self) -> Option<f32> {
-        self.is_valid()
-            .then_some(self.padding_start + self.padding_end + self.border_start + self.border_end)
-            .filter(|total| total.is_finite())
+    /// The total inline offset against a known padding percentage basis.
+    pub fn total(self, percentage_basis: f32) -> Option<f32> {
+        if !self.is_valid() {
+            return None;
+        }
+        let total = self.padding_start.resolve(percentage_basis)?
+            + self.padding_end.resolve(percentage_basis)?
+            + self.border_start
+            + self.border_end;
+        total.is_finite().then_some(total)
+    }
+
+    /// The total inline offset where no basis exists yet. `None` when a padding
+    /// percentage is present, so a caller must defer rather than silently
+    /// sample the percentage at zero.
+    pub fn absolute_total(self) -> Option<f32> {
+        (!self.needs_percentage_basis())
+            .then(|| self.total(0.0))
+            .flatten()
     }
 }
 
@@ -172,9 +207,14 @@ pub struct TableSeparatedBorderMetrics {
 
 impl TableSeparatedBorderMetrics {
     /// The two table edges plus one spacing interval before, after, and between
-    /// every K4b column.
-    pub fn undistributable_inline_size(self, column_count: usize) -> Option<f32> {
-        let offsets = self.table_offsets.total()?;
+    /// every K4b column. The basis resolves a table padding percentage and is
+    /// the table's own containing block, never its used width.
+    pub fn undistributable_inline_size(
+        self,
+        column_count: usize,
+        percentage_basis: f32,
+    ) -> Option<f32> {
+        let offsets = self.table_offsets.total(percentage_basis)?;
         if !self.inline_spacing.is_finite() || self.inline_spacing < 0.0 {
             return None;
         }
@@ -251,6 +291,10 @@ pub enum TableDeferral {
     CaptionMinPendingK4e,
     TrackVisibilityPendingK4f,
     CollapsedBorderMetricsPendingK4g,
+    /// A padding percentage whose containing-block basis is not yet available.
+    /// Automatic sizing measures cells before the table width exists, so the
+    /// dependency is genuinely circular there and stays explicit.
+    PercentagePaddingPendingBasis,
 }
 
 /// One complete table-sizing input, all in the table's logical inline axis.
@@ -265,13 +309,31 @@ pub struct TableInlineSizingInput<'a> {
 }
 
 impl<'a> TableInlineSizingInput<'a> {
+    /// The basis for the table box's own padding percentage. CSS resolves it
+    /// against the table's containing block, never against its used width.
+    pub fn table_padding_basis(&self) -> Result<f32, TableInlineSizingError> {
+        let TableInlineBorderMetrics::Separated(metrics) = self.border_metrics else {
+            return Err(TableInlineSizingError::Deferral(
+                TableDeferral::CollapsedBorderMetricsPendingK4g,
+            ));
+        };
+        match self.available_inline_size {
+            Some(basis) => Ok(basis),
+            None if !metrics.table_offsets.needs_percentage_basis() => Ok(0.0),
+            None => Err(TableInlineSizingError::Deferral(
+                TableDeferral::PercentagePaddingPendingBasis,
+            )),
+        }
+    }
+
     pub fn separated_undistributable_inline_size(&self) -> Result<f32, TableInlineSizingError> {
         if !self.track_visibility.matches_grid(self.grid) {
             return Err(TableInlineSizingError::TrackVisibilityShape);
         }
+        let basis = self.table_padding_basis()?;
         match self.border_metrics {
             TableInlineBorderMetrics::Separated(metrics) => metrics
-                .undistributable_inline_size(self.grid.columns.len())
+                .undistributable_inline_size(self.grid.columns.len(), basis)
                 .ok_or(TableInlineSizingError::InvalidBorderMetrics),
             TableInlineBorderMetrics::CollapsedPendingK4g => Err(TableInlineSizingError::Deferral(
                 TableDeferral::CollapsedBorderMetricsPendingK4g,
@@ -302,7 +364,13 @@ pub struct TableCellInlineMeasure {
 
 impl TableCellInlineMeasure {
     pub fn outer_content_sizes(self) -> Result<IntrinsicSizes, TableInlineSizingError> {
-        let Some(offsets) = self.offsets.total() else {
+        // An intrinsic contribution is measured before any table width exists.
+        if self.offsets.needs_percentage_basis() {
+            return Err(TableInlineSizingError::Deferral(
+                TableDeferral::PercentagePaddingPendingBasis,
+            ));
+        }
+        let Some(offsets) = self.offsets.absolute_total() else {
             return Err(TableInlineSizingError::InvalidOffsets {
                 box_id: self.box_id,
             });
@@ -710,8 +778,8 @@ mod tests {
     #[test]
     fn content_and_border_box_offsets_remain_distinct() {
         let offsets = CellInlineOffsets {
-            padding_start: 2.0,
-            padding_end: 3.0,
+            padding_start: AffineLengthPercentage::px(2.0),
+            padding_end: AffineLengthPercentage::px(3.0),
             border_start: 4.0,
             border_end: 5.0,
         };
@@ -757,8 +825,8 @@ mod tests {
     #[test]
     fn logical_offsets_are_identical_for_ltr_and_rtl() {
         let offsets = CellInlineOffsets {
-            padding_start: 1.0,
-            padding_end: 2.0,
+            padding_start: AffineLengthPercentage::px(1.0),
+            padding_end: AffineLengthPercentage::px(2.0),
             border_start: 3.0,
             border_end: 4.0,
         };
@@ -770,7 +838,31 @@ mod tests {
             FlowAxes::new(crate::WritingMode::HorizontalTb, crate::Direction::Rtl).inline_start(),
             crate::PhysicalSide::Right
         );
-        assert_eq!(offsets.total(), Some(10.0));
+        assert_eq!(offsets.total(0.0), Some(10.0));
+    }
+
+    #[test]
+    fn an_intrinsic_contribution_defers_a_padding_percentage_instead_of_sampling_zero() {
+        let measure = TableCellInlineMeasure {
+            box_id: sample_grid().1,
+            content: IntrinsicSizes::new(10.0, 20.0).expect("valid intrinsic pair"),
+            preferred: InlineSizeConstraint::Auto,
+            minimum: InlineSizeConstraint::Auto,
+            maximum: InlineSizeConstraint::None,
+            box_sizing: TableBoxSizing::ContentBox,
+            offsets: CellInlineOffsets {
+                padding_start: AffineLengthPercentage::new(0.0, 0.1).expect("finite percentage"),
+                ..CellInlineOffsets::ZERO
+            },
+        };
+        assert_eq!(
+            measure.outer_content_sizes(),
+            Err(TableInlineSizingError::Deferral(
+                TableDeferral::PercentagePaddingPendingBasis
+            ))
+        );
+        // The same offsets resolve once a basis exists.
+        assert_eq!(measure.offsets.total(200.0), Some(20.0));
     }
 
     #[test]
@@ -779,8 +871,8 @@ mod tests {
         let mut input = input(&grid);
         input.border_metrics = TableInlineBorderMetrics::Separated(TableSeparatedBorderMetrics {
             table_offsets: CellInlineOffsets {
-                padding_start: 1.0,
-                padding_end: 2.0,
+                padding_start: AffineLengthPercentage::px(1.0),
+                padding_end: AffineLengthPercentage::px(2.0),
                 border_start: 3.0,
                 border_end: 4.0,
             },
@@ -919,10 +1011,10 @@ mod tests {
         assert_eq!(AffineLengthPercentage::new(f32::NAN, 0.0), None);
         assert_eq!(
             CellInlineOffsets {
-                padding_start: -1.0,
+                padding_start: AffineLengthPercentage::px(-1.0),
                 ..CellInlineOffsets::ZERO
             }
-            .total(),
+            .total(0.0),
             None
         );
         let valid_input = input(&grid);

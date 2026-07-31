@@ -192,7 +192,7 @@ fn separated_metrics(
     };
     let table_offsets = metrics
         .table_offsets
-        .total()
+        .total(sizing.table_padding_basis()?)
         .ok_or(TableInlineSizingError::InvalidBorderMetrics)?;
     let undistributable = sizing.separated_undistributable_inline_size()?;
     Ok((table_offsets, undistributable))
@@ -718,8 +718,8 @@ mod tests {
         input.sizing.border_metrics =
             TableInlineBorderMetrics::Separated(TableSeparatedBorderMetrics {
                 table_offsets: super::super::CellInlineOffsets {
-                    padding_start: 2.0,
-                    padding_end: 3.0,
+                    padding_start: AffineLengthPercentage::px(2.0),
+                    padding_end: AffineLengthPercentage::px(3.0),
                     border_start: 4.0,
                     border_end: 5.0,
                 },

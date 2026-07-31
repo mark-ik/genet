@@ -166,7 +166,7 @@ fn logical_padding(
     font_size: f32,
     root_font_size: f32,
     property: TableInlineProperty,
-) -> Result<f32, TableInlineSizingError> {
+) -> Result<AffineLengthPercentage, TableInlineSizingError> {
     let value = match side {
         PhysicalSide::Top => computed.padding_top.0,
         PhysicalSide::Right => computed.padding_right.0,
@@ -179,18 +179,14 @@ fn logical_padding(
             property,
         });
     };
-    if value.needs_percentage_basis() {
-        return Err(TableInlineSizingError::UnresolvedPercentageBasis {
+    // The percentage travels to Buckram unresolved. Livery does not own the
+    // containing-block basis and must not invent one here.
+    (value.absolute >= 0.0 && value.percentage >= 0.0)
+        .then_some(value)
+        .ok_or(TableInlineSizingError::InvalidConstraint {
             box_id: None,
             property,
-        });
-    }
-    value.resolve(0.0).filter(|value| *value >= 0.0).ok_or(
-        TableInlineSizingError::InvalidConstraint {
-            box_id: None,
-            property,
-        },
-    )
+        })
 }
 
 fn logical_border(computed: &ComputedValues, side: PhysicalSide, font_size: f32) -> f32 {
@@ -313,23 +309,23 @@ mod tests {
             16.0,
         )
         .expect("RTL style");
-        assert_eq!(ltr.offsets.padding_start, 1.0);
+        assert_eq!(ltr.offsets.padding_start, AffineLengthPercentage::px(1.0));
         assert_eq!(ltr.offsets.border_start, 3.0);
-        assert_eq!(rtl.offsets.padding_start, 2.0);
+        assert_eq!(rtl.offsets.padding_start, AffineLengthPercentage::px(2.0));
         assert_eq!(rtl.offsets.border_start, 4.0);
     }
 
     #[test]
-    fn percentage_padding_and_nonlinear_math_are_not_sampled_at_zero() {
+    fn percentage_padding_is_carried_unresolved_and_math_stays_unreduced() {
         let mut computed = ComputedValues::default();
         computed.padding_left = "10%".parse().expect("percentage padding");
-        assert_eq!(
-            table_cell_inline_style(&computed, FlowAxes::HORIZONTAL_LTR, 16.0, 16.0),
-            Err(TableInlineSizingError::UnresolvedPercentageBasis {
-                box_id: None,
-                property: TableInlineProperty::PaddingInlineStart,
-            })
-        );
+        let style = table_cell_inline_style(&computed, FlowAxes::HORIZONTAL_LTR, 16.0, 16.0)
+            .expect("a padding percentage reaches Buckram unresolved");
+        // Livery does not own the containing-block basis, so it neither
+        // resolves the percentage nor samples it at zero.
+        assert!(style.offsets.needs_percentage_basis());
+        assert_eq!(style.offsets.padding_start.absolute, 0.0);
+        assert_eq!(style.offsets.padding_start.resolve(200.0), Some(20.0));
 
         computed.padding_left = "0".parse().expect("zero padding");
         computed.width = "min(10px, 50%)".parse().expect("math width");

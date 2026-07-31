@@ -409,13 +409,20 @@ fn cell_constraint(
     if let Some(absolute) = contribution.absolute {
         contribution.absolute = Some(match measure.box_sizing {
             TableBoxSizing::ContentBox => {
+                // Automatic measures run before a table width exists, so a
+                // padding percentage has no basis and must not be sampled at
+                // zero. K4c5 routes these tables to the compatibility bridge.
+                if measure.offsets.needs_percentage_basis() {
+                    return Err(TableInlineSizingError::Deferral(
+                        TableDeferral::PercentagePaddingPendingBasis,
+                    ));
+                }
                 absolute
-                    + measure
-                        .offsets
-                        .total()
-                        .ok_or(TableInlineSizingError::InvalidOffsets {
+                    + measure.offsets.absolute_total().ok_or(
+                        TableInlineSizingError::InvalidOffsets {
                             box_id: measure.box_id,
-                        })?
+                        },
+                    )?
             },
             TableBoxSizing::BorderBox => absolute,
         });

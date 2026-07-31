@@ -345,7 +345,7 @@ fn separated_metrics(
     };
     let table_offsets = metrics
         .table_offsets
-        .total()
+        .total(sizing.table_padding_basis()?)
         .ok_or(TableInlineSizingError::InvalidBorderMetrics)?;
     let undistributable = sizing.separated_undistributable_inline_size()?;
     let separated_spacing = undistributable - table_offsets;
@@ -402,13 +402,15 @@ fn fixed_cell_border_box_size(
     };
     let size = match measure.box_sizing {
         TableBoxSizing::ContentBox => {
+            // Fixed layout knows the table width before it distributes columns,
+            // so a cell padding percentage has a real basis here. It is the
+            // same basis the cell's own width constraint resolves against.
             width
-                + measure
-                    .offsets
-                    .total()
-                    .ok_or(TableInlineSizingError::InvalidOffsets {
+                + measure.offsets.total(table_width).ok_or(
+                    TableInlineSizingError::InvalidOffsets {
                         box_id: measure.box_id,
-                    })?
+                    },
+                )?
         },
         TableBoxSizing::BorderBox => width,
     };
@@ -648,8 +650,8 @@ mod tests {
         let mut input = input(&grid, 170.0);
         input.cells[0].preferred = absolute(90.0);
         input.cells[0].offsets = super::super::CellInlineOffsets {
-            padding_start: 2.0,
-            padding_end: 3.0,
+            padding_start: AffineLengthPercentage::px(2.0),
+            padding_end: AffineLengthPercentage::px(3.0),
             border_start: 1.0,
             border_end: 4.0,
         };
@@ -662,14 +664,49 @@ mod tests {
     }
 
     #[test]
+    fn a_cell_padding_percentage_resolves_against_the_table_width() {
+        let grid = grid(true);
+        // 1% and 1.5% of a 200px table are the same 2px and 3px.
+        let percentage = super::super::CellInlineOffsets {
+            padding_start: AffineLengthPercentage::new(0.0, 0.01).expect("finite percentage"),
+            padding_end: AffineLengthPercentage::new(0.0, 0.015).expect("finite percentage"),
+            border_start: 1.0,
+            border_end: 4.0,
+        };
+        let absolute_equivalent = super::super::CellInlineOffsets {
+            padding_start: AffineLengthPercentage::px(2.0),
+            padding_end: AffineLengthPercentage::px(3.0),
+            border_start: 1.0,
+            border_end: 4.0,
+        };
+        assert!(percentage.needs_percentage_basis());
+        assert!(!absolute_equivalent.needs_percentage_basis());
+
+        let mut percentage_input = input(&grid, 200.0);
+        percentage_input.cells[0].preferred = absolute(90.0);
+        percentage_input.cells[0].offsets = percentage;
+        let mut absolute_input = input(&grid, 200.0);
+        absolute_input.cells[0].preferred = absolute(90.0);
+        absolute_input.cells[0].offsets = absolute_equivalent;
+
+        let from_percentage = fixed(&percentage_input);
+        let from_absolute = fixed(&absolute_input);
+        assert_eq!(from_percentage.column_sizes, from_absolute.column_sizes);
+        assert_eq!(
+            from_percentage.used_table_inline_size,
+            from_absolute.used_table_inline_size
+        );
+    }
+
+    #[test]
     fn unresolved_columns_share_table_space_after_separated_metrics_once() {
         let grid = grid(false);
         let mut input = input(&grid, 104.0);
         input.sizing.border_metrics =
             TableInlineBorderMetrics::Separated(TableSeparatedBorderMetrics {
                 table_offsets: super::super::CellInlineOffsets {
-                    padding_start: 1.0,
-                    padding_end: 1.0,
+                    padding_start: AffineLengthPercentage::px(1.0),
+                    padding_end: AffineLengthPercentage::px(1.0),
                     border_start: 1.0,
                     border_end: 1.0,
                 },
