@@ -71,6 +71,16 @@ impl TableShadowLedger {
         self.divergences.is_empty()
     }
 
+    /// Fold another ledger in. Atomic subtrees each build under their own
+    /// `BuildState`, and dropping their ledgers would report tables reached
+    /// through the text path as silently unshadowed.
+    pub fn merge(&mut self, other: Self) {
+        self.compared += other.compared;
+        self.agreed += other.agreed;
+        self.divergences.extend(other.divergences);
+        self.skipped.extend(other.skipped);
+    }
+
     fn skip(&mut self, table: BoxId, reason: TableShadowSkip) {
         self.skipped.push((table, reason));
     }

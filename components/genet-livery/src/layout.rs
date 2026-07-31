@@ -62,6 +62,9 @@ struct AtomicSubtree {
 struct AtomicLayoutPlane {
     fragments: HashMap<BoxId, Fragment>,
     subtrees: Vec<AtomicSubtree>,
+    // Accumulated K4c5a shadow ledgers from each atomic root's BuildState,
+    // which are otherwise dropped exactly as table_bridge_count still is.
+    table_shadow: TableShadowLedger,
 }
 
 impl AtomicLayoutPlane {
@@ -335,6 +338,7 @@ struct InlineBuildState<'a, D: LayoutDom> {
     tree: AlgorithmTree<Style, InlineMeasure, Vec<BoxId>>,
     image_sources: &'a ImageSources,
     table_bridge_count: usize,
+    table_shadow: TableShadowLedger,
 }
 
 type ResolvedLayout<Id> = (StylePlane<Id>, LiveryLayout<Id>);
@@ -899,13 +903,18 @@ where
             table_shadow: TableShadowLedger::default(),
             table_bridge_count: 0,
         };
-        let Some(atomic_root) = state.build_box(
+        let built = state.build_box(
             box_id,
             None,
             16.0,
             (Some(viewport_width), Some(viewport_height)),
-        )?
-        else {
+        )?;
+        // Harvest before any continue below: the shadow already ran inside
+        // build_box, and both skip paths would otherwise drop its ledger.
+        plane
+            .table_shadow
+            .merge(std::mem::take(&mut state.table_shadow));
+        let Some(atomic_root) = built else {
             continue;
         };
         // An admitted atomic inline root needs a containing block so its
@@ -1080,6 +1089,7 @@ where
         tree: AlgorithmTree::new(),
         image_sources,
         table_bridge_count: 0,
+        table_shadow: TableShadowLedger::default(),
     };
     let children = boxes
         .roots()
@@ -1221,6 +1231,10 @@ where
         &mut text_frame,
         styles,
     )?;
+    // Tables on the inline route shadow into the state's own ledger; tables
+    // inside atomic subtrees accumulated into the plane's. Both survive.
+    let mut table_shadow = std::mem::take(&mut state.table_shadow);
+    table_shadow.merge(atomic.table_shadow.clone());
     drop(state);
     merge_atomic_subtrees(atomic, &boxes, &mut fragments);
     Ok(LiveryLayout::new(
@@ -1231,13 +1245,7 @@ where
             taffy: taffy_blocks,
         },
         table_bridges,
-        // The text path lays tables out inside atomic subtrees, whose
-        // per-root `BuildState` ledgers are discarded in `layout_atomic_subtrees`
-        // exactly as its `table_bridge_count` already is. Accumulating them
-        // through `AtomicLayoutPlane` is required before K4c5a is accepted;
-        // until then this path reports an empty ledger rather than a false
-        // silent one.
-        TableShadowLedger::default(),
+        table_shadow,
     ))
 }
 
@@ -1363,6 +1371,27 @@ where
                 .is_some_and(|node| table_is_flattenable(self.dom, self.styles, node))
         {
             let table = build_table_grid(self.boxes, self.dom, parent);
+            // K4c5a: this inline route is the production table path, and it
+            // has no fixed sizing at all. Cells are pinned below and Taffy
+            // infers every track. The shadow records each fixed table here as
+            // NoLiveResult: Buckram has an answer and nothing consumes it.
+            if let Some(node) = self.boxes.origin_node(parent) {
+                shadow_fixed_table(
+                    self.dom,
+                    self.boxes,
+                    self.styles,
+                    &table,
+                    parent,
+                    node,
+                    parent_style,
+                    parent_font_size,
+                    // The inline route threads no containing width.
+                    None,
+                    // No live fixed-column vector exists on this route.
+                    None,
+                    &mut self.table_shadow,
+                );
+            }
             let mut children = Vec::with_capacity(table.cells.len());
             for cell in &table.cells {
                 let Some(node) =
@@ -3601,6 +3630,56 @@ mod tests {
                 ),
             ],
             "{ledger:?}"
+        );
+    }
+
+    /// Gap 1 receipt, and the gate's largest finding pinned as a test: the
+    /// text path is the production path, and it applies no fixed table sizing
+    /// at all. `fixed_column_widths` runs only on the tests-only block entry.
+    /// A fixed table here routes through `InlineBuildState::build_children`,
+    /// which pins cell slots and lets Taffy infer every track, so the shadow
+    /// records it as `NoLiveResult`: Buckram has an answer and nothing
+    /// consumes it. K4c5b's real work is routing THIS path through Buckram,
+    /// not merely replacing the block entry's helper.
+    ///
+    /// The ledger reaching `LiveryLayout` at all is the gap-1 receipt; it was
+    /// previously dropped with the per-root build state.
+    #[test]
+    fn k4c5a_text_path_fixed_tables_have_no_live_sizing_to_shadow() {
+        let dom = StaticDocument::parse(
+            "<p>before the table</p><table><tbody><tr><td id=first>one</td><td>two</td><td>three</td></tr></tbody></table>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "table { display: table; table-layout: fixed; width: 300px; border-spacing: 0; } tbody { display: table-row-group; } tr { display: table-row; } td { display: table-cell; } #first { width: 120px; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let ledger = layout.table_shadow_ledger();
+        let reached = ledger.compared + ledger.skipped.len();
+        assert!(
+            reached >= 1,
+            "the text path dropped its shadow ledger: {ledger:?}"
+        );
+        assert!(
+            ledger.skipped.iter().any(|(_, skip)| matches!(
+                skip,
+                crate::table_shadow::TableShadowSkip::NoLiveResult
+            )),
+            "expected the fixed table to record NoLiveResult: {ledger:?}"
         );
     }
 

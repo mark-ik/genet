@@ -857,15 +857,48 @@ deleted. It is a live bug that K4c5b fixes, not a Buckram defect.
 The control test pins the other half: with `border-spacing: 0` the two
 implementations agree exactly.
 
+#### The production path has no fixed table sizing at all
+
+The gate's largest finding, discovered while closing gap 1 below and pinned by
+`k4c5a_text_path_fixed_tables_have_no_live_sizing_to_shadow`:
+`fixed_column_widths` runs only on the block-only `layout` entry, which is
+used exclusively by unit tests. Production (`document.rs`, and therefore every
+WPT reftest) goes through `layout_with_text_system`, where a table routes into
+`InlineBuildState::build_children`. That route pins cell slots into the Taffy
+grid and lets Taffy infer every track. No CSS 2.1 fixed algorithm runs there.
+
+Consequences:
+
+- Every existing live fixed-table receipt, including
+  `fixed_table_layout_sizes_columns_from_the_first_row`, exercises the
+  tests-only entry.
+- Fixed-table WPT passes are Taffy grid inference agreeing by coincidence,
+  not the fixed algorithm.
+- The shadow now runs at the inline route too, and records each fixed table
+  there as `NoLiveResult`: Buckram has an answer and nothing consumes it.
+  On the production path there is nothing to compare against, which is
+  itself the finding.
+- K4c5b's real work is routing the inline route through Buckram, not merely
+  replacing the block entry's helper. The `layout.rs` deletion list is
+  necessary but nowhere near sufficient.
+
+Two subordinate observations from the same investigation:
+
+- The inline route threads no containing width, so the shadow passes `None`
+  there; a percentage table width becomes an explicit deferral rather than a
+  comparison.
+- Box generation hoists a block-level table out of an enclosing inline-block
+  atomic (`span { display: inline-block }` with a `display: table` child ends
+  up with the table as a sibling anonymous block, the span left empty). That
+  looks wrong independently of K4c and deserves its own K2-side look.
+
 #### Named gaps before K4c5a can be accepted
 
-Neither is silent, and neither may be counted as support.
-
-1. **Atomic-subtree ledgers are discarded.** `layout_atomic_subtrees` builds one
-   `BuildState` per atomic root inside a loop and drops each one, exactly as it
-   already drops `table_bridge_count`. Tables laid out through the text path
-   therefore report an empty ledger. They must be accumulated through
-   `AtomicLayoutPlane` before this gate closes.
+1. **Atomic-subtree ledgers** — closed. Per-root `BuildState` ledgers
+   accumulate through `AtomicLayoutPlane`, harvested before every skip path,
+   and the inline route's own ledger merges with them into `LiveryLayout`.
+   (`table_bridge_count` is still dropped on that path; same fix applies when
+   K4d retires the bridge.)
 2. **Automatic tables are not compared.** Buckram's automatic algorithm needs a
    `TableIntrinsicMeasureProvider`, and intrinsic content sizes do not exist at
    box-build time, so the comparison has no partner. The live path also has no
@@ -877,7 +910,8 @@ Neither is silent, and neither may be counted as support.
 All nine K4c4 expectation maps rerun exactly, each with its original command
 and renderer (six reftest/livery, three testharness/stylo), each gated by the
 runner's own `--expectations` comparison rather than a by-hand diff: zero
-movement. The corpus is the in-repo `tests/wpt/tests` checkout that every
+movement. The six livery families were rerun again after the shadow was wired
+into the production inline route: still zero movement. The corpus is the in-repo `tests/wpt/tests` checkout that every
 prior receipt used; the separate current-upstream checkout in
 `Code/crates/wpt` is for standards reading only, never for ratchet
 comparison. Proof directory:
