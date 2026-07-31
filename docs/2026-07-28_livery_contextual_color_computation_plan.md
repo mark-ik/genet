@@ -1,8 +1,12 @@
 # Livery contextual color computation plan
 
 **Date:** 2026-07-28  
-**Status:** corrective F0 subplan  
+**Status:** corrective F0 subplan. C0 is complete; C1 is next.
+
 **Parent:** `2026-07-24_livery_fullweb_cutover_and_servo_retirement_plan.md`
+
+This seam must close before K4g, whose collapsed-border paint needs a resolved
+contextual winner for `currentcolor` border colors.
 
 ## Why this is a separate seam
 
@@ -74,6 +78,8 @@ or gradient re-resolves against the descendant's foreground.
 
 ## C0: correct the contract
 
+**Status:** complete on `main` at the merge of `codex/livery-color-functions`.
+
 - Replace tests and plan language that describe rejecting contextual
   functions as correct.
 - Add declaration-level red tests for all five contextual families. A
@@ -81,8 +87,43 @@ or gradient re-resolves against the descendant's foreground.
 - Pin the absolute-function result counts from the 2026-07-28 color slice as
   the non-regression baseline while contextual tests remain red.
 
-Done when valid contextual declarations enter the cascade without being
-discarded or replaced by black.
+### Measured state, 2026-07-31
+
+The two layers disagree, which is the whole seam in one observation.
+
+`tests/color.rs` shows the specified parser retaining contextual expressions
+correctly: `alpha(from currentcolor / 0.5)` round trips and `resolved()`
+returns `None`. But every one of the five families is rejected one layer
+lower, at the declaration parser:
+
+```text
+DeclarationError { name: "background-color",
+  value: "color-mix(in srgb, currentcolor 100%, white)", kind: InvalidValue }
+```
+
+So the retained syntax is real and unreachable. Any receipt drawn from
+`SpecifiedColor` serialization overstates what the cascade actually accepts.
+This is the specific trap C0 exists to close, and reading the round-trip tests
+alone is enough to fall into it.
+
+### Receipt
+
+- `components/livery/tests/contextual_color.rs`: six declaration-level and
+  cascade-level tests covering `color-mix()`, relative colors, `alpha()`,
+  `contrast-color()`, and `color-layers()`. All six are `#[ignore]`d with the
+  sub-gate that unblocks each, so the wall stays green and the seam stays
+  visible. Run them with `--include-ignored`.
+- Non-regression baseline: `cargo test -p livery --test color` is 55 passed,
+  0 failed. `cargo test -p livery` is 0 failed across all targets.
+
+### Correction to this gate's done-condition
+
+C0 was written with the done-condition "valid contextual declarations enter the
+cascade without being discarded or replaced by black." That is C1's outcome,
+not C0's: no amount of contract correction makes a declaration parse while the
+computed property is still an eager `Color`. C0's own work is the contract and
+the red tests, and that is what is complete. The original sentence now serves
+as C1's acceptance condition.
 
 ## C1: one authoritative computed color
 
