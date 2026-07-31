@@ -13,6 +13,9 @@
 //! stylo fork under the harvest plan's fork-and-own rules. Per-module headers
 //! name what came from where.
 
+mod alpha;
+mod contrast;
+mod layers;
 mod mix;
 mod parse;
 mod relative;
@@ -218,6 +221,36 @@ impl Color {
                 alpha,
                 ..
             } => Some((from.convert(space, components), alpha)),
+        }
+    }
+
+    /// Replace this color's alpha without changing its color space.
+    ///
+    /// `currentcolor` cannot be modified until its used value is known.
+    /// System colors resolve through Livery's current device-palette seam.
+    pub(super) fn with_alpha(self, alpha: f32) -> Option<Self> {
+        match self {
+            Self::CurrentColor => None,
+            Self::System(_) => {
+                let (components, _) = self.to_space(ColorSpace::Srgb)?;
+                Some(Self::Absolute {
+                    space: ColorSpace::Srgb,
+                    components,
+                    alpha,
+                    legacy: true,
+                })
+            },
+            Self::Absolute {
+                space,
+                components,
+                legacy,
+                ..
+            } => Some(Self::Absolute {
+                space,
+                components,
+                alpha,
+                legacy,
+            }),
         }
     }
 

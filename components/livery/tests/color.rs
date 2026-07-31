@@ -109,23 +109,28 @@ fn color_function_covers_the_predefined_spaces() {
     // srgb-linear 1 is srgb 1: the transfer function fixes both endpoints.
     assert_eq!(srgb8("color(srgb-linear 1 1 1)"), (255, 255, 255, 255));
     // Linear 0.5 is about 0.7354 gamma-encoded.
-    assert_close("color(srgb-linear 0.5 0.5 0.5)", (0.7354, 0.7354, 0.7354), 0.002);
+    assert_close(
+        "color(srgb-linear 0.5 0.5 0.5)",
+        (0.7354, 0.7354, 0.7354),
+        0.002,
+    );
     // White is white in every space, which exercises each matrix pair plus
     // the D50/D65 chromatic adaptation.
-    for space in [
-        "display-p3",
-        "a98-rgb",
-        "prophoto-rgb",
-        "rec2020",
-    ] {
+    for space in ["display-p3", "a98-rgb", "prophoto-rgb", "rec2020"] {
         assert_eq!(
             srgb8(&format!("color({space} 1 1 1)")),
             (255, 255, 255, 255),
             "{space} white",
         );
     }
-    assert_eq!(srgb8("color(xyz-d65 0.9505 1.0 1.089)"), (255, 255, 255, 255));
-    assert_eq!(srgb8("color(xyz-d50 0.9643 1.0 0.8251)"), (255, 255, 255, 255));
+    assert_eq!(
+        srgb8("color(xyz-d65 0.9505 1.0 1.089)"),
+        (255, 255, 255, 255)
+    );
+    assert_eq!(
+        srgb8("color(xyz-d50 0.9643 1.0 0.8251)"),
+        (255, 255, 255, 255)
+    );
     // `xyz` is an alias for `xyz-d65`.
     assert_eq!(srgb8("color(xyz 0 0 0)"), (0, 0, 0, 255));
 }
@@ -199,8 +204,6 @@ fn malformed_color_syntax_is_rejected() {
         "color(1 0 0)",
         "lab()",
         "oklch(0.5 0.1 0 0)",
-        "color-mix(red, blue)",
-        "color-mix(in srgb, red)",
         "color-mix(in not-a-space, red, blue)",
         "notacolor",
         "#12345",
@@ -214,9 +217,42 @@ fn malformed_color_syntax_is_rejected() {
 #[test]
 fn color_mix_defaults_to_an_even_split() {
     // Half red, half blue in sRGB is (128, 0, 128).
+    assert_eq!(srgb8("color-mix(in srgb, red, blue)"), (128, 0, 128, 255));
+}
+
+#[test]
+fn color_mix_accepts_one_or_more_items() {
+    assert_eq!(srgb8("color-mix(in srgb, red)"), (255, 0, 0, 255));
+    assert_eq!(srgb8("color-mix(in srgb, red 50%)"), (255, 0, 0, 128));
     assert_eq!(
-        srgb8("color-mix(in srgb, red, blue)"),
-        (128, 0, 128, 255)
+        srgb8("color-mix(in srgb, red, lime, blue)"),
+        (85, 85, 85, 255)
+    );
+}
+
+#[test]
+fn color_mix_folds_polar_items_in_list_order() {
+    assert_eq!(
+        srgb8(
+            "color-mix(in hsl shorter hue, \
+             hsl(0 100% 50%), hsl(240 100% 50%), hsl(120 100% 50%))"
+        ),
+        (0, 0, 255, 255)
+    );
+    assert_eq!(
+        srgb8(
+            "color-mix(in hsl shorter hue, \
+             hsl(120 100% 50%), hsl(240 100% 50%), hsl(0 100% 50%))"
+        ),
+        (0, 255, 0, 255)
+    );
+}
+
+#[test]
+fn color_mix_defaults_to_oklab_when_the_method_is_omitted() {
+    assert_eq!(
+        parse("color-mix(red, blue)").to_srgb8(),
+        parse("color-mix(in oklab, red, blue)").to_srgb8()
     );
 }
 
@@ -247,23 +283,43 @@ fn color_mix_percentages_below_one_hundred_scale_alpha() {
 }
 
 #[test]
+fn color_mix_all_zero_is_transparent_black_in_the_mixing_space() {
+    let mixed = parse("color-mix(in oklch, teal 0%, olive 0%)");
+    assert_eq!(mixed.to_css_string(), "oklch(0 0 none / 0)");
+    assert_eq!(mixed.to_srgb8(), Some((0, 0, 0, 0)));
+}
+
+#[test]
+fn color_mix_accepts_percentage_typed_math() {
+    for css in [
+        "color-mix(in srgb, red calc(25%), blue)",
+        "color-mix(in srgb, red min(25%, 50%), blue)",
+        "color-mix(in srgb, red max(10%, 25%), blue)",
+        "color-mix(in srgb, red clamp(10%, 25%, 50%), blue)",
+    ] {
+        assert_eq!(srgb8(css), (64, 0, 191, 255), "{css}");
+    }
+}
+
+#[test]
+fn color_mix_rejects_wrongly_typed_percentage_math() {
+    for css in [
+        "color-mix(in srgb, red calc(1px), blue)",
+        "color-mix(in srgb, red calc(10% + 0.1), blue)",
+    ] {
+        assert!(css.parse::<Color>().is_err(), "accepted {css}");
+    }
+}
+
+#[test]
 fn color_mix_in_a_polar_space_takes_the_short_way_round() {
     // 0deg and 240deg: shorter goes backwards through 300deg, longer forwards
     // through 120deg. The two must not agree.
     let shorter = srgb8("color-mix(in hsl, hsl(0 100% 50%), hsl(240 100% 50%))");
     let longer = srgb8("color-mix(in hsl shorter hue, hsl(0 100% 50%), hsl(240 100% 50%))");
-    let explicit_longer =
-        srgb8("color-mix(in hsl longer hue, hsl(0 100% 50%), hsl(240 100% 50%))");
+    let explicit_longer = srgb8("color-mix(in hsl longer hue, hsl(0 100% 50%), hsl(240 100% 50%))");
     assert_eq!(shorter, longer, "shorter is the default");
     assert_ne!(shorter, explicit_longer, "longer must take the other arc");
-}
-
-#[test]
-fn color_mix_with_currentcolor_stays_unresolved() {
-    // `currentcolor` has no components until the cascade runs, so the mix
-    // cannot be resolved here. It must fail to parse rather than silently
-    // resolving to black.
-    assert!("color-mix(in srgb, currentcolor, red)".parse::<Color>().is_err());
 }
 
 #[test]
@@ -277,7 +333,142 @@ fn programmatic_mix_matches_the_parsed_form() {
         None,
     )
     .expect("mix resolves");
-    assert_eq!(mixed.to_srgb8(), Some(srgb8("color-mix(in srgb, red, blue)")));
+    assert_eq!(
+        mixed.to_srgb8(),
+        Some(srgb8("color-mix(in srgb, red, blue)"))
+    );
+}
+
+// ── CSS Color 5/6 color modification functions ─────────────────────────
+
+#[test]
+fn alpha_replaces_only_the_origin_alpha() {
+    assert_eq!(srgb8("alpha(from red / 0.5)"), (255, 0, 0, 128));
+    assert_eq!(srgb8("alpha(from blue / 0%)"), (0, 0, 255, 0));
+    assert_eq!(srgb8("alpha(from green / 2)"), (0, 128, 0, 255));
+    assert_eq!(srgb8("alpha(from green / -1)"), (0, 128, 0, 0));
+    assert_eq!(srgb8("alpha(from rgba(255, 0, 0, 0.3))"), (255, 0, 0, 77));
+    assert_eq!(
+        srgb8("alpha(from rgba(255, 0, 0, 0.8) / calc(alpha * 0.5))"),
+        (255, 0, 0, 102)
+    );
+}
+
+#[test]
+fn alpha_accepts_percentage_typed_math() {
+    for css in [
+        "alpha(from red / calc(50%))",
+        "alpha(from red / min(50%, 75%))",
+        "alpha(from red / max(25%, 50%))",
+        "alpha(from red / clamp(25%, 50%, 75%))",
+    ] {
+        assert_eq!(srgb8(css), (255, 0, 0, 128), "{css}");
+    }
+}
+
+#[test]
+fn alpha_preserves_the_origin_color_space() {
+    assert_eq!(
+        parse("alpha(from color(display-p3 1 0 0) / 0.5)").to_css_string(),
+        "color(display-p3 1 0 0 / 0.5)"
+    );
+    assert_eq!(
+        parse("alpha(from lab(50 20 -30) / 0.5)").to_css_string(),
+        "lab(50 20 -30 / 0.5)"
+    );
+}
+
+#[test]
+fn alpha_rejects_invalid_grammar() {
+    for css in [
+        "alpha(red / 0.5)",
+        "alpha()",
+        "alpha(from / 0.5)",
+        "alpha(from red /)",
+        "alpha(from red / 0.5 0.5)",
+        "alpha(from red r g b / 0.5)",
+        "alpha(from red / calc(1px))",
+        "alpha(from red / calc(10% + 0.1))",
+    ] {
+        assert!(css.parse::<Color>().is_err(), "accepted {css}");
+    }
+}
+
+#[test]
+fn contrast_color_selects_black_or_white() {
+    assert_eq!(srgb8("contrast-color(white)"), (0, 0, 0, 255));
+    assert_eq!(srgb8("contrast-color(black)"), (255, 255, 255, 255));
+    assert_eq!(srgb8("contrast-color(darkblue)"), (255, 255, 255, 255));
+    assert_eq!(srgb8("contrast-color(lightyellow)"), (0, 0, 0, 255));
+    assert_eq!(
+        srgb8("contrast-color(contrast-color(white))"),
+        (255, 255, 255, 255)
+    );
+}
+
+#[test]
+fn contrast_color_rejects_invalid_grammar() {
+    for css in [
+        "contrast-color()",
+        "contrast-color(1)",
+        "contrast-color(white white)",
+    ] {
+        assert!(css.parse::<Color>().is_err(), "accepted {css}");
+    }
+}
+
+#[test]
+fn color_layers_composites_the_first_color_on_top() {
+    assert_eq!(
+        srgb8("color-layers(rgba(255, 0, 0, 0.5), blue)"),
+        (128, 0, 128, 255)
+    );
+    assert_eq!(
+        srgb8("color-layers(red, rgba(0, 0, 255, 0.5), green)"),
+        (255, 0, 0, 255)
+    );
+    assert_eq!(srgb8("color-layers(red)"), (255, 0, 0, 255));
+    assert_eq!(srgb8("color-layers(multiply, red, blue)"), (0, 0, 0, 255));
+}
+
+#[test]
+fn color_layers_accepts_every_standard_blend_mode() {
+    for mode in [
+        "normal",
+        "multiply",
+        "screen",
+        "overlay",
+        "darken",
+        "lighten",
+        "color-dodge",
+        "color-burn",
+        "hard-light",
+        "soft-light",
+        "difference",
+        "exclusion",
+        "hue",
+        "saturation",
+        "color",
+        "luminosity",
+    ] {
+        let css = format!("color-layers({mode}, red, blue)");
+        assert!(css.parse::<Color>().is_ok(), "rejected {css}");
+    }
+}
+
+#[test]
+fn color_layers_rejects_invalid_grammar() {
+    for css in [
+        "color-layers()",
+        "color-layers(normal)",
+        "color-layers(multiply)",
+        "color-layers(red blue)",
+        "color-layers(red, blue,)",
+        "color-layers(plus-lighter, red, blue)",
+        "color-layers(normal, normal, red)",
+    ] {
+        assert!(css.parse::<Color>().is_err(), "accepted {css}");
+    }
 }
 
 // ── Serialization ────────────────────────────────────────────────────────
@@ -414,7 +605,10 @@ fn relative_color_substitutes_keywords_into_calc() {
         (100, 200, 128, 255)
     );
     // A hue channel takes an angle-valued expression.
-    assert_eq!(srgb8("hsl(from hsl(0 100% 50%) calc(h + 120) s l)"), (0, 255, 0, 255));
+    assert_eq!(
+        srgb8("hsl(from hsl(0 100% 50%) calc(h + 120) s l)"),
+        (0, 255, 0, 255)
+    );
 }
 
 #[test]
@@ -422,7 +616,10 @@ fn relative_color_alpha_defaults_to_the_origins() {
     // Omitted alpha inherits from the origin rather than resetting to 1.
     assert_eq!(srgb8("rgb(from rgb(1 2 3 / 0.5) r g b)"), (1, 2, 3, 128));
     // An explicit alpha overrides it, and `alpha` is bound too.
-    assert_eq!(srgb8("rgb(from rgb(1 2 3 / 0.5) r g b / 1)"), (1, 2, 3, 255));
+    assert_eq!(
+        srgb8("rgb(from rgb(1 2 3 / 0.5) r g b / 1)"),
+        (1, 2, 3, 255)
+    );
     assert_eq!(
         srgb8("rgb(from rgb(1 2 3 / 0.5) r g b / calc(alpha / 2))"),
         (1, 2, 3, 64)
@@ -439,9 +636,36 @@ fn relative_color_supports_none_and_cross_space_origins() {
 }
 
 #[test]
-fn relative_color_rejects_what_it_cannot_resolve() {
-    // `currentcolor` has no components until the cascade runs.
-    assert!("rgb(from currentcolor r g b)".parse::<Color>().is_err());
+fn relative_srgb_family_uses_modern_computed_serialization() {
+    assert_eq!(
+        "rgb(from contrast-color(blue) r g b)"
+            .parse::<Color>()
+            .unwrap()
+            .to_string(),
+        "color(srgb 1 1 1)"
+    );
+    for input in ["hsl(from red h s l)", "hwb(from red h w b)"] {
+        assert!(
+            input
+                .parse::<Color>()
+                .unwrap()
+                .to_string()
+                .starts_with("color(srgb "),
+            "{input}"
+        );
+    }
+    assert!(
+        "hsl(from red none s l)"
+            .parse::<Color>()
+            .unwrap()
+            .to_string()
+            .starts_with("hsl(none "),
+        "missing hsl components must preserve the hsl identity"
+    );
+}
+
+#[test]
+fn relative_color_rejects_invalid_grammar() {
     // A keyword that does not belong to the output space is not bound:
     // `rgb()` binds r/g/b, so `h` is an unknown ident.
     assert!("rgb(from red h g b)".parse::<Color>().is_err());
@@ -461,7 +685,10 @@ fn keyword_substitution_does_not_corrupt_neighbouring_tokens() {
     assert!("calc(1rem + 2px)".parse::<LengthPercentage>().is_ok());
     // `b` appears inside no unit, but `g` does not either; the risk is the
     // single-letter match. Blackness/blue keywords next to numbers:
-    assert_eq!(srgb8("rgb(from #0a0b0c calc(r * 1) g b)"), (10, 11, 12, 255));
+    assert_eq!(
+        srgb8("rgb(from #0a0b0c calc(r * 1) g b)"),
+        (10, 11, 12, 255)
+    );
 }
 
 #[test]
@@ -516,8 +743,14 @@ fn specified_level_retains_relative_colors() {
     // Expected strings are WPT css-color/parsing/color-valid-relative-color
     // expectations verbatim.
     for (input, expected) in [
-        ("rgb(from rebeccapurple r g b)", "rgb(from rebeccapurple r g b)"),
-        ("rgba(from rebeccapurple r g b / alpha)", "rgb(from rebeccapurple r g b / alpha)"),
+        (
+            "rgb(from rebeccapurple r g b)",
+            "rgb(from rebeccapurple r g b)",
+        ),
+        (
+            "rgba(from rebeccapurple r g b / alpha)",
+            "rgb(from rebeccapurple r g b / alpha)",
+        ),
         (
             "rgb(from rgb(20%, 40%, 60%, 80%) r g b / alpha)",
             "rgb(from rgba(51, 102, 153, 0.8) r g b / alpha)",
@@ -530,8 +763,14 @@ fn specified_level_retains_relative_colors() {
             "rgb(from rgb(from rebeccapurple r g b) r g b)",
             "rgb(from rgb(from rebeccapurple r g b) r g b)",
         ),
-        ("rgb(from rebeccapurple 0 0 0)", "rgb(from rebeccapurple 0 0 0)"),
-        ("rgb(from rebeccapurple 20% g b / alpha)", "rgb(from rebeccapurple 20% g b / alpha)"),
+        (
+            "rgb(from rebeccapurple 0 0 0)",
+            "rgb(from rebeccapurple 0 0 0)",
+        ),
+        (
+            "rgb(from rebeccapurple 20% g b / alpha)",
+            "rgb(from rebeccapurple 20% g b / alpha)",
+        ),
         ("oklch(from red l c h)", "oklch(from red l c h)"),
         (
             "rgb(from rebeccapurple calc(r / 2) g b)",
@@ -553,13 +792,32 @@ fn specified_level_retains_color_mix() {
     // Expected strings are WPT css-color/parsing/color-valid-color-mix
     // expectations verbatim, including the percentage normalization rules.
     for (input, expected) in [
-        ("color-mix(in srgb, red, blue)", "color-mix(in srgb, red, blue)"),
+        ("color-mix(red)", "color-mix(red)"),
+        ("color-mix(red, green, blue)", "color-mix(red, green, blue)"),
+        (
+            "color-mix(red 50%, green, blue)",
+            "color-mix(red 50%, green 25%, blue 25%)",
+        ),
+        (
+            "color-mix(in srgb, red, blue)",
+            "color-mix(in srgb, red, blue)",
+        ),
+        (
+            "color-mix(in srgb, red calc(25%), green, blue 25%)",
+            "color-mix(in srgb, red calc(25%), green, blue 25%)",
+        ),
         (
             "color-mix(in srgb, 70% red, 50% blue)",
             "color-mix(in srgb, red 70%, blue 50%)",
         ),
-        ("color-mix(in hsl, red 50%, blue)", "color-mix(in hsl, red, blue)"),
-        ("color-mix(in hsl, red, blue 50%)", "color-mix(in hsl, red, blue)"),
+        (
+            "color-mix(in hsl, red 50%, blue)",
+            "color-mix(in hsl, red, blue)",
+        ),
+        (
+            "color-mix(in hsl, red, blue 50%)",
+            "color-mix(in hsl, red, blue)",
+        ),
         (
             "color-mix(in hsl, red 25%, blue)",
             "color-mix(in hsl, red 25%, blue 75%)",
@@ -572,6 +830,7 @@ fn specified_level_retains_color_mix() {
             "color-mix(in hsl, red 30%, blue 90%)",
             "color-mix(in hsl, red 30%, blue 90%)",
         ),
+        ("color-mix(in oklab, red, blue)", "color-mix(red, blue)"),
         (
             "color-mix(in hsl, red 0%, blue)",
             "color-mix(in hsl, red 0%, blue 100%)",
@@ -596,12 +855,190 @@ fn specified_level_retains_color_mix() {
 }
 
 #[test]
+fn specified_level_retains_alpha() {
+    use livery::values::SpecifiedColor;
+    for (input, expected) in [
+        ("alpha(from red / 0.5)", "alpha(from red / 0.5)"),
+        ("alpha(from red / 50%)", "alpha(from red / 50%)"),
+        ("alpha(from red / none)", "alpha(from red / none)"),
+        ("alpha(from red)", "alpha(from red)"),
+        (
+            "alpha(from currentcolor / calc(alpha * 0.5))",
+            "alpha(from currentcolor / calc(0.5 * alpha))",
+        ),
+        (
+            "alpha(from currentcolor / calc(alpha + 0.1))",
+            "alpha(from currentcolor / calc(0.1 + alpha))",
+        ),
+        (
+            "alpha(from color-mix(in srgb, red, blue) / 0.5)",
+            "alpha(from color-mix(in srgb, red, blue) / 0.5)",
+        ),
+        (
+            "rgb(from alpha(from currentcolor / 0.5) r g b)",
+            "rgb(from alpha(from currentcolor / 0.5) r g b)",
+        ),
+    ] {
+        let parsed = input.parse::<SpecifiedColor>().unwrap();
+        assert_eq!(parsed.to_string(), expected, "{input}");
+        assert!(parsed.to_string().parse::<SpecifiedColor>().is_ok());
+    }
+    assert!(
+        "alpha(from currentcolor / 0.5)"
+            .parse::<SpecifiedColor>()
+            .unwrap()
+            .resolved()
+            .is_none(),
+        "currentcolor must stay deferred"
+    );
+}
+
+#[test]
+fn specified_level_retains_contrast_color() {
+    use livery::values::SpecifiedColor;
+    for (input, expected) in [
+        ("contrast-color(white)", "contrast-color(white)"),
+        (
+            "contrast-color(color(srgb 1 0 1 / 0.5))",
+            "contrast-color(color(srgb 1 0 1 / 0.5))",
+        ),
+        (
+            "contrast-color(contrast-color(pink))",
+            "contrast-color(contrast-color(pink))",
+        ),
+        (
+            "contrast-color(color-mix(blue, green))",
+            "contrast-color(color-mix(blue, green))",
+        ),
+        (
+            "rgb(from contrast-color(blue) r g b)",
+            "rgb(from contrast-color(blue) r g b)",
+        ),
+        (
+            "contrast-color(currentcolor)",
+            "contrast-color(currentcolor)",
+        ),
+    ] {
+        let parsed = input.parse::<SpecifiedColor>().unwrap();
+        assert_eq!(parsed.to_string(), expected, "{input}");
+        assert!(parsed.to_string().parse::<SpecifiedColor>().is_ok());
+    }
+    assert!(
+        "contrast-color(currentcolor)"
+            .parse::<SpecifiedColor>()
+            .unwrap()
+            .resolved()
+            .is_none(),
+        "currentcolor must stay deferred"
+    );
+}
+
+#[test]
+fn specified_level_retains_color_layers() {
+    use livery::values::SpecifiedColor;
+    for (input, expected) in [
+        ("color-layers(red)", "color-layers(red)"),
+        ("color-layers(red, blue)", "color-layers(red, blue)"),
+        ("color-layers(normal, red, blue)", "color-layers(red, blue)"),
+        (
+            "color-layers(multiply, red, blue, green)",
+            "color-layers(multiply, red, blue, green)",
+        ),
+        (
+            "color-layers(currentcolor, blue)",
+            "color-layers(currentcolor, blue)",
+        ),
+        (
+            "color-layers(color-mix(in srgb, red, blue), blue)",
+            "color-layers(color-mix(in srgb, red, blue), blue)",
+        ),
+        (
+            "color-layers(color-layers(red, blue), green)",
+            "color-layers(color-layers(red, blue), green)",
+        ),
+    ] {
+        let parsed = input.parse::<SpecifiedColor>().unwrap();
+        assert_eq!(parsed.to_string(), expected, "{input}");
+        assert!(parsed.to_string().parse::<SpecifiedColor>().is_ok());
+    }
+    assert!(
+        "color-layers(currentcolor, blue)"
+            .parse::<SpecifiedColor>()
+            .unwrap()
+            .resolved()
+            .is_none(),
+        "currentcolor must stay deferred"
+    );
+
+    for mode in [
+        "multiply",
+        "screen",
+        "overlay",
+        "darken",
+        "lighten",
+        "color-dodge",
+        "color-burn",
+        "hard-light",
+        "soft-light",
+        "difference",
+        "exclusion",
+        "hue",
+        "saturation",
+        "color",
+        "luminosity",
+    ] {
+        let css = format!("color-layers({mode}, currentcolor, blue)");
+        assert_eq!(css.parse::<SpecifiedColor>().unwrap().to_string(), css);
+    }
+}
+
+#[test]
+fn specified_color_rejects_invalid_modification_functions() {
+    use livery::values::SpecifiedColor;
+    for css in [
+        "alpha(red / 0.5)",
+        "alpha()",
+        "alpha(from / 0.5)",
+        "alpha(from none / 0.5)",
+        "alpha(from red /)",
+        "alpha(from red / 0.5 0.5)",
+        "alpha(from red r g b / 0.5)",
+        "alpha(from red / calc(1px))",
+        "alpha(from red / calc(10% + 0.1))",
+        "color-mix(in srgb, red calc(1px), blue)",
+        "color-mix(in srgb, red calc(10% + 0.1), blue)",
+        "contrast-color()",
+        "contrast-color(1)",
+        "contrast-color(max)",
+        "contrast-color(white white)",
+        "color-layers()",
+        "color-layers(normal)",
+        "color-layers(multiply)",
+        "color-layers(red blue)",
+        "color-layers(red, blue,)",
+        "color-layers(plus-lighter, red, blue)",
+        "color-layers(multiply, multiply, red)",
+    ] {
+        assert!(css.parse::<SpecifiedColor>().is_err(), "accepted {css}");
+    }
+}
+
+#[test]
 fn specified_level_flows_through_the_cssom_seam() {
     // The seam the WPT -valid- family actually reads.
     for (input, expected) in [
         ("red", "red"),
-        ("rgb(from rebeccapurple r g b)", "rgb(from rebeccapurple r g b)"),
-        ("color-mix(in srgb, red, blue)", "color-mix(in srgb, red, blue)"),
+        (
+            "rgb(from rebeccapurple r g b)",
+            "rgb(from rebeccapurple r g b)",
+        ),
+        (
+            "color-mix(in srgb, red, blue)",
+            "color-mix(in srgb, red, blue)",
+        ),
+        ("alpha(from red / 0.5)", "alpha(from red / 0.5)"),
+        ("contrast-color(white)", "contrast-color(white)"),
+        ("color-layers(red, blue)", "color-layers(red, blue)"),
         ("#663399", "rgb(102, 51, 153)"),
     ] {
         assert_eq!(
@@ -610,7 +1047,10 @@ fn specified_level_flows_through_the_cssom_seam() {
             "{input}",
         );
     }
-    assert_eq!(livery::canonicalize_specified_longhand("color", "florp"), None);
+    assert_eq!(
+        livery::canonicalize_specified_longhand("color", "florp"),
+        None
+    );
     // Opacity keeps its authored range at the specified level.
     for (input, expected) in [("-2", "-2"), ("3", "3"), ("-100%", "-1"), ("300%", "3")] {
         assert_eq!(

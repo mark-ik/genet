@@ -1126,6 +1126,24 @@ impl MathLengthPercentage {
         })
     }
 
+    /// Resolve a percentage-typed math expression against an explicit basis.
+    ///
+    /// This rejects length, angle, time, and tree-dependent leaves instead
+    /// of accidentally treating a `<length-percentage>` as a percentage.
+    pub(super) fn resolved_percentage(self, percentage_basis: f32) -> Option<f32> {
+        self.evaluate(|operand| match operand {
+            MathOperand::Number(value) => Some(EvaluatedMath::Value(value)),
+            MathOperand::Percentage(value) => Some(EvaluatedMath::Value(value * percentage_basis)),
+            MathOperand::RoundingStrategy(strategy) => Some(EvaluatedMath::Strategy(strategy)),
+            MathOperand::None => Some(EvaluatedMath::None),
+            MathOperand::Length(_)
+            | MathOperand::Angle(_)
+            | MathOperand::Time(_)
+            | MathOperand::SiblingIndex
+            | MathOperand::SiblingCount => None,
+        })
+    }
+
     fn specified_absolute_px(self) -> Option<f32> {
         self.evaluate(|operand| match operand {
             MathOperand::Number(value) => Some(EvaluatedMath::Value(value)),

@@ -155,11 +155,9 @@ fn parse_hue<'i>(
 /// channel resolves as an `<angle>` (radians, converted back to degrees here),
 /// every other channel as a `<number>`.
 ///
-/// Known gap: a percentage-valued expression in channel position
-/// (`rgb(calc(50%) 0 0)`) is rejected rather than scaled by the channel's
-/// basis. The math program reduces percentages against a length base, which is
-/// the wrong reference for a color channel. Recorded rather than approximated,
-/// since a silent wrong scale is worse than a parse failure.
+/// Percentage-typed expressions resolve against the channel's own basis:
+/// alpha and modern RGB use 1, legacy RGB uses 255, and each perceptual
+/// channel supplies the range CSS Color assigns to 100%.
 fn parse_math_number<'i>(
     input: &mut Parser<'i, '_>,
     name: &str,
@@ -197,7 +195,9 @@ fn parse_math_number<'i>(
             .or_else(|_| crate::values::calc::parse_number(source))
             .map_err(|_| fail(input));
     }
-    crate::values::calc::parse_number(source).map_err(|_| fail(input))
+    crate::values::calc::parse_number(source)
+        .or_else(|_| crate::values::calc::parse_percentage(source, channel.percentage_basis()))
+        .map_err(|_| fail(input))
 }
 
 pub(super) fn is_math_function(name: &str) -> bool {
@@ -205,11 +205,12 @@ pub(super) fn is_math_function(name: &str) -> bool {
         "calc", "min", "max", "clamp", "round", "mod", "rem", "sin", "cos", "tan", "asin", "acos",
         "atan", "atan2", "pow", "sqrt", "hypot", "log", "exp", "abs", "sign",
     ];
-    MATH.iter().any(|candidate| name.eq_ignore_ascii_case(candidate))
+    MATH.iter()
+        .any(|candidate| name.eq_ignore_ascii_case(candidate))
 }
 
 /// The alpha channel: `<number>` or `<percentage>`, or `none`.
-fn parse_alpha<'i>(
+pub(super) fn parse_alpha<'i>(
     input: &mut Parser<'i, '_>,
     bindings: Option<&Bindings>,
 ) -> Result<Option<f32>, Failure<'i>> {
@@ -331,6 +332,15 @@ fn parse_color_function<'i>(
     if name.eq_ignore_ascii_case("color-mix") {
         return super::mix::parse_color_mix(input);
     }
+    if name.eq_ignore_ascii_case("alpha") {
+        return super::alpha::parse_alpha(input);
+    }
+    if name.eq_ignore_ascii_case("contrast-color") {
+        return super::contrast::parse_contrast_color(input);
+    }
+    if name.eq_ignore_ascii_case("color-layers") {
+        return super::layers::parse_color_layers(input);
+    }
     if name.eq_ignore_ascii_case("color") {
         return parse_predefined(input);
     }
@@ -367,8 +377,9 @@ fn parse_color_function<'i>(
     };
 
     let bindings = parse_origin(input, space, false)?;
+    let relative = bindings.is_some();
     let parsed = parse_components(input, channels, bindings.as_ref())?;
-    Ok(finish(space, parsed))
+    Ok(finish(space, parsed, relative))
 }
 
 /// The optional `from <color>` prefix of a relative color.
@@ -429,7 +440,7 @@ fn parse_predefined<'i>(input: &mut Parser<'i, '_>) -> Result<Color, Failure<'i>
 }
 
 /// Apply per-space clamping and record the legacy serialization form.
-fn finish(space: ColorSpace, parsed: Parsed) -> Color {
+fn finish(mut space: ColorSpace, parsed: Parsed, relative: bool) -> Color {
     let Parsed {
         mut components,
         alpha,
@@ -484,13 +495,20 @@ fn finish(space: ColorSpace, parsed: Parsed) -> Color {
         _ => {},
     }
 
-    // Every sRGB-family function serializes in the legacy rgb()/rgba() form,
-    // whichever syntax authored it; only color() and the Lab/Oklab family keep
-    // their own. `legacy` here is therefore about the space, not the commas.
-    let legacy = matches!(
-        space,
-        ColorSpace::Srgb | ColorSpace::Hsl | ColorSpace::Hwb
-    );
+    // Resolved relative rgb()/hsl()/hwb() values use modern color(srgb ...)
+    // serialization. Missing hsl()/hwb() components are the exception: keep
+    // that space so modern hsl()/hwb() can preserve their `none` identity.
+    if relative
+        && matches!(space, ColorSpace::Hsl | ColorSpace::Hwb)
+        && !components.0.is_nan()
+        && !components.1.is_nan()
+        && !components.2.is_nan()
+        && alpha.is_some()
+    {
+        components = space.convert(ColorSpace::Srgb, components);
+        space = ColorSpace::Srgb;
+    }
+    let legacy = !relative && matches!(space, ColorSpace::Srgb | ColorSpace::Hsl | ColorSpace::Hwb);
     let alpha = alpha.unwrap_or(f32::NAN);
     Color::Absolute {
         space,

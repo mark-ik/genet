@@ -871,6 +871,13 @@ pub(super) fn parse_number(source: &str) -> Result<f32, ParseError> {
         .ok_or_else(|| ParseError::expected("a finite bounded CSS number expression"))
 }
 
+pub(super) fn parse_percentage(source: &str, basis: f32) -> Result<f32, ParseError> {
+    parse_math_dimension(source, MathDimension::Length)?
+        .resolved_percentage(basis)
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| ParseError::expected("a finite bounded CSS percentage expression"))
+}
+
 pub(super) fn parse_angle(source: &str) -> Result<f32, ParseError> {
     resolve_constant_math(parse_math_dimension(source, MathDimension::Angle)?)
         .ok_or_else(|| ParseError::expected("a finite bounded CSS angle expression"))
