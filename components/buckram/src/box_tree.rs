@@ -456,7 +456,13 @@ where
                 proto.children.insert(0, marker_box(owner, proto.flow));
             }
 
+            // CSS 2.1 section 9.2.1.1 splits an inline box around in-flow
+            // block-level children. That applies only to a non-atomic inline
+            // (`inside: flow`): an atomic inline such as inline-block or
+            // inline-table establishes its own formatting context and keeps
+            // its block children.
             if proto.display.outside == Some(DisplayOutside::Inline)
+                && proto.display.inside == Some(DisplayInside::Flow)
                 && proto.children.iter().any(ProtoBox::is_in_flow_block)
             {
                 return split_inline_around_blocks(proto);
@@ -1371,6 +1377,79 @@ mod tests {
                 owner: 1,
                 pseudo: PseudoElement::After,
             }
+        );
+    }
+
+    #[test]
+    fn atomic_inlines_keep_in_flow_block_children() {
+        fn descendants(tree: &CssBoxTree<u8>, root: BoxId, out: &mut Vec<BoxId>) {
+            for child in tree[root].children() {
+                out.push(*child);
+                descendants(tree, *child, out);
+            }
+        }
+
+        let inline_block = DisplayRole {
+            generation: BoxGeneration::Normal,
+            outside: Some(DisplayOutside::Inline),
+            inside: Some(DisplayInside::FlowRoot),
+            list_item: false,
+            internal_table: None,
+        };
+        // <p>text <span=3 inline-block><div=4 block/></span></p>
+        let tree = generate_box_tree([input(
+            BoxOrigin::Element(1),
+            DisplayRole::BLOCK_FLOW,
+            vec![
+                text(2, false),
+                input(
+                    BoxOrigin::Element(3),
+                    inline_block,
+                    vec![input(
+                        BoxOrigin::Element(4),
+                        DisplayRole::BLOCK_FLOW,
+                        Vec::new(),
+                    )],
+                ),
+            ],
+        )]);
+
+        // CSS 2.1 section 9.2.1.1 does not split an atomic inline: it
+        // establishes its own formatting context and keeps block children.
+        assert_eq!(
+            tree.boxes_for_node(3).len(),
+            1,
+            "an atomic inline must not split around a block child"
+        );
+        let span = tree.principal_box(3).expect("inline-block principal box");
+        let block = tree.principal_box(4).expect("block child principal box");
+        let mut inside = Vec::new();
+        descendants(&tree, span, &mut inside);
+        assert!(
+            inside.contains(&block),
+            "the block child must stay inside the atomic inline, not become its sibling"
+        );
+
+        // Contrast: the same structure under a plain inline still splits.
+        let tree = generate_box_tree([input(
+            BoxOrigin::Element(1),
+            DisplayRole::BLOCK_FLOW,
+            vec![
+                text(2, false),
+                input(
+                    BoxOrigin::Element(3),
+                    DisplayRole::INLINE_FLOW,
+                    vec![input(
+                        BoxOrigin::Element(4),
+                        DisplayRole::BLOCK_FLOW,
+                        Vec::new(),
+                    )],
+                ),
+            ],
+        )]);
+        assert!(
+            tree.boxes_for_node(3).len() > 1,
+            "a non-atomic inline still splits around a block child"
         );
     }
 

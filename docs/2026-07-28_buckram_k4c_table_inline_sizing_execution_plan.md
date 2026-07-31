@@ -887,10 +887,21 @@ Two subordinate observations from the same investigation:
 - The inline route threads no containing width, so the shadow passes `None`
   there; a percentage table width becomes an explicit deferral rather than a
   comparison.
-- Box generation hoists a block-level table out of an enclosing inline-block
-  atomic (`span { display: inline-block }` with a `display: table` child ends
-  up with the table as a sibling anonymous block, the span left empty). That
-  looks wrong independently of K4c and deserves its own K2-side look.
+- The "table hoisted out of an inline-block" observation turned out to be two
+  superimposed causes, since separated. The real bug: Buckram's block-in-inline
+  split guard tested only `outside == Inline`, so atomic inlines (inline-block,
+  inline-table) were split around in-flow block children in violation of
+  CSS 2.1 section 9.2.1.1. Fixed in `buckram/src/box_tree.rs` by requiring
+  `inside == Flow`; pinned by `atomic_inlines_keep_in_flow_block_children`
+  (Buckram) and `an_inline_block_keeps_a_block_level_table_child`
+  (genet-livery). The other half was never a bug: a `<div>` or `<table>` start
+  tag inside an open `<p>` closes the paragraph at the HTML parser, before box
+  generation runs, so div-in-p repros restructure at parse time regardless.
+  With the fix, a fixed table inside an inline-block reaches `BuildState`
+  through an atomic subtree on the text path and its shadow comparison is live
+  (`k4c5a_shadow_compares_inside_an_atomic_inline_subtree`), which makes the
+  gap-1 accumulation exercised rather than latent. The six livery reftest
+  families were rerun after the fix: zero movement.
 
 #### Named gaps before K4c5a can be accepted
 

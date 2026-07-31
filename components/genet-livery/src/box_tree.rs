@@ -270,6 +270,58 @@ mod tests {
         assert_eq!(generated[inside_box].parent(), Some(body_box));
     }
 
+    /// Regression for the K4c5a discovery: block-in-inline splitting was
+    /// applied to atomic inlines, hoisting a block-level table out of an
+    /// enclosing inline-block and leaving the span empty. CSS 2.1 section
+    /// 9.2.1.1 splits only non-atomic inlines; an inline-block establishes
+    /// its own formatting context and keeps block children.
+    ///
+    /// The markup is span-based on purpose. A literal `<div>` (or `<table>`)
+    /// start tag inside an open `<p>` makes the HTML parser close the
+    /// paragraph, restructuring the DOM before box generation ever runs. That
+    /// parser behavior is spec-correct and was half of what the original
+    /// repro observed; the box-generation split bug was the other half.
+    #[test]
+    fn an_inline_block_keeps_a_block_level_table_child() {
+        let dom = StaticDocument::parse(
+            "<p>before <span id=atom><span id=t><span class=row><span class=cell>one</span></span></span></span> after</p>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "#atom { display: inline-block; } #t { display: table; } .row { display: table-row; } .cell { display: table-cell; }",
+            ]),
+            &Device::screen(800.0, 600.0),
+            &InteractionStates::default(),
+        );
+        let generated = GeneratedBoxTree::from_dom(&dom, &styles);
+        let atom = find(&dom, dom.document(), "atom").expect("atom");
+        let table = find(&dom, dom.document(), "t").expect("t");
+
+        assert_eq!(
+            generated.boxes_for_node(atom).len(),
+            1,
+            "an atomic inline must not split around its block child"
+        );
+        let atom_box = generated.principal_box(atom).expect("atom principal box");
+        let table_box = generated.principal_box(table).expect("table principal box");
+        // The table generates a wrapper, so walk ancestors rather than
+        // asserting a direct parent edge.
+        let mut ancestor = generated[table_box].parent();
+        let mut inside_atom = false;
+        while let Some(candidate) = ancestor {
+            if candidate == atom_box {
+                inside_atom = true;
+                break;
+            }
+            ancestor = generated[candidate].parent();
+        }
+        assert!(
+            inside_atom,
+            "the table must stay inside the inline-block, not become its sibling"
+        );
+    }
+
     #[test]
     fn generated_boxes_carry_inherited_writing_mode_and_direction() {
         fn find(

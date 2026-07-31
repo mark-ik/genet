@@ -3683,6 +3683,46 @@ mod tests {
         );
     }
 
+    /// Full-circle receipt for the atomic-inline split fix: a fixed table
+    /// inside an inline-block now stays inside it, reaches `BuildState`
+    /// through an atomic subtree on the text path, and its shadow comparison
+    /// survives into `LiveryLayout` via the accumulated plane ledger. Before
+    /// the fix the table was hoisted and the accumulation was unreachable.
+    ///
+    /// Span-based markup because a `<div>` start tag inside `<p>` closes the
+    /// paragraph at the HTML parser, before box generation runs.
+    #[test]
+    fn k4c5a_shadow_compares_inside_an_atomic_inline_subtree() {
+        let dom = StaticDocument::parse(
+            "<p>before <span id=atom><span class=t><span class=tb><span class=row><span class=cell id=first>one</span><span class=cell>two</span><span class=cell>three</span></span></span></span></span> after</p>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "#atom { display: inline-block; } .t { display: table; table-layout: fixed; width: 300px; border-spacing: 0; } .tb { display: table-row-group; } .row { display: table-row; } .cell { display: table-cell; } #first { width: 120px; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let ledger = layout.table_shadow_ledger();
+        assert!(
+            ledger.compared >= 1,
+            "the atomic subtree's fixed table was not compared: {ledger:?}"
+        );
+        assert!(ledger.is_silent(), "{ledger:?}");
+    }
+
     #[test]
     fn html_column_and_column_group_spans_are_bounded_at_the_adapter() {
         let dom = StaticDocument::parse(
