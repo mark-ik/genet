@@ -1,0 +1,28 @@
+[package]
+name = "genet-render-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+rust-version = "1.92.0"
+description = "Target-neutral Genet present core: boot wgpu + a netrender Renderer, configure a surface on any wgpu target, and rasterize scenes into composable textures."
+
+[lib]
+name = "genet_render_host"
+path = "src/lib.rs"
+
+[dependencies]
+# The present stack: a netrender Renderer rasterizes genet scenes and composites
+# them onto the surface (workspace path dep on the sibling netrender checkout).
+netrender = { workspace = true }
+wgpu = { version = "29", default-features = false, features = ["std", "wgsl"] }
+# Host-neutral diagnostics facade (P3 raster spans); the app owns the subscriber.
+tracing = "0.1"
+
+# Deliberately no winit, no accesskit, no raw-window-handle. A surface target is
+# whatever wgpu accepts, so a winit window and a browser canvas both reach this
+# crate without either dragging the other's dependencies into the build.
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)', 'cfg(llvm_pgo)'] }

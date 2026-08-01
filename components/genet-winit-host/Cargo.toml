@@ -16,6 +16,10 @@ path = "src/lib.rs"
 # The present stack: a netrender Renderer rasterizes genet scenes and composites
 # them onto the surface (workspace path dep on the sibling netrender checkout).
 netrender = { workspace = true }
+# The target-neutral present core (device boot, surface configuration, scene
+# rasterization). Re-exported from this crate's root so existing callers of
+# `genet_winit_host::RenderCore` are unaffected by the split.
+genet-render-host = { workspace = true }
 # Windowing + wgpu surface (workspace pins: winit 0.30 / wgpu 29).
 winit = { workspace = true }
 wgpu = { version = "29", default-features = false, features = ["std", "wgsl"] }

@@ -43,6 +43,7 @@ members = [
     # static/scripted/smolweb retained documents, promoted out of pelt.
     "components/genet-documents",
     "components/genet-host-api",
+    "components/genet-render-host",
     "components/genet-winit-host",
     "components/genet-render",
     "components/shared/layout-dom",
@@ -247,6 +248,7 @@ scrying-engine = { version = "=0.2.0", path = "components/inker/engines/scrying-
 graft-engine = { version = "=0.2.0", path = "components/inker/engines/graft-engine" }
 weld-engine = { version = "=0.2.0", path = "components/inker/engines/weld-engine" }
 genet-host-api = { version = "=0.1.0", path = "components/genet-host-api" }
+genet-render-host = { path = "components/genet-render-host" }
 pelt-desktop = { version = "=0.2.0", path = "ports/pelt/desktop" }
 netrender = { git = "https://github.com/merely-made/netrender.git", branch = "main", version = "0.1.0" }
 netrender_device = { git = "https://github.com/merely-made/netrender.git", branch = "main", version = "0.1.0" }
