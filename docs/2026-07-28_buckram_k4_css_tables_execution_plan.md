@@ -2,11 +2,10 @@
 
 **Date:** 2026-07-28
 
-**Status:** in execution. K4a, K4b, and K4c1 through K4c4a are accepted; K4c5a
-is next. Everything through K4c4a is model-only: no live table sizing has
-changed yet. K4c5 is split into K4c5a shadow comparison and K4c5b authority
-and deletion, so the first live cutover cannot land mixed with the removal of
-the path it replaces.
+**Status:** in execution. K4a through K4c are accepted: Buckram owns live
+table inline sizing on every route (K4c5b, `a96fe7d147e`), with the named
+K4e, K4f, and K4g inputs still pending by design. K4d is in execution; K4d1
+is accepted and K4d2 is next.
 
 **Architectural authority:** [Buckram CSS layout engine plan](2026-07-26_buckram_css_layout_engine_plan.md)
 

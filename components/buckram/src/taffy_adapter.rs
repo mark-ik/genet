@@ -31,6 +31,10 @@ pub enum AlgorithmKind {
     Block,
     Flex,
     Grid,
+    /// A Buckram table formatting context. K4d1 reserves the dispatch tag;
+    /// K4d6 routes live tables through `buckram::table` row layout instead of
+    /// the Grid/Flex bridge. Nothing constructs it until then.
+    Table,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -416,6 +420,8 @@ impl<S, Context, Source> AlgorithmTree<S, Context, Source> {
                 .iter()
                 .copied()
                 .all(|child| self.intrinsic_inline_subtree_is_admitted(child, false)),
+            // K4d owns table intrinsic admission when live dispatch lands.
+            AlgorithmKind::Table => false,
         }
     }
 
@@ -1113,7 +1119,9 @@ where
         let kind = self.tree.nodes[node.index()].kind;
         let style = self.tree.nodes[node.index()].block_style;
         let sizes = match kind {
-            AlgorithmKind::Hidden => {
+            // K4d6 supplies table intrinsics from the accepted K4c query
+            // contract; nothing constructs the tag before then.
+            AlgorithmKind::Hidden | AlgorithmKind::Table => {
                 IntrinsicSizes::new(0.0, 0.0).expect("zero intrinsic sizes are valid")
             },
             AlgorithmKind::Leaf => {
@@ -1821,6 +1829,9 @@ where
                 },
                 AlgorithmKind::Flex => compute_flexbox_layout(tree, node_id, inputs),
                 AlgorithmKind::Grid => compute_grid_layout(tree, node_id, inputs),
+                // Reserved by K4d1; live table dispatch is K4d6's cutover.
+                // Nothing constructs the tag before the dispatcher exists.
+                AlgorithmKind::Table => compute_hidden_layout(tree, node_id),
                 AlgorithmKind::Leaf => {
                     let node = &mut tree.tree.nodes[node_index];
                     let style = sealed::AlgorithmStyle::as_taffy_style(&node.style);

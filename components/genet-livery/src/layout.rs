@@ -3973,6 +3973,180 @@ mod tests {
         .expect("layout must not panic");
     }
 
+    /// K4d1 adapter fixture: a `TableCellFormatter` over the live algorithm
+    /// tree formats block and flex cell contents at the exact inline size the
+    /// table algorithm supplies. The scratch tree contains only cell
+    /// subtrees, so the table and its row structurally record no backend
+    /// call, while the flex cell dispatches through its own algorithm; the
+    /// old bridge's table-as-Grid node does not exist here at all.
+    #[test]
+    fn k4d1_cell_formatter_formats_contents_at_exact_inline_sizes() {
+        use buckram::{
+            FragmentDraft, FragmentDraftTree, TableCellFormatter, TableCellLayoutInput,
+            TableCellLayoutOutput, TableRowLayoutError,
+        };
+
+        struct TreeFormatter<'a> {
+            tree: &'a mut AlgorithmTree<Style, TextMeasure, Option<BoxId>>,
+            nodes: HashMap<BoxId, AlgorithmNodeId>,
+            formatted: Vec<(BoxId, f32)>,
+        }
+
+        impl TableCellFormatter for TreeFormatter<'_> {
+            fn format_cell(
+                &mut self,
+                input: TableCellLayoutInput,
+            ) -> Result<TableCellLayoutOutput, TableRowLayoutError> {
+                let node = *self.nodes.get(&input.box_id).ok_or(
+                    TableRowLayoutError::InvalidCellOutput {
+                        box_id: input.box_id,
+                    },
+                )?;
+                self.tree.compute_layout_with_measure(
+                    node,
+                    AlgorithmSize::new(
+                        AlgorithmAvailableSpace::Definite(input.content_inline_size),
+                        AlgorithmAvailableSpace::MaxContent,
+                    ),
+                    |known, _, _, context, _| {
+                        let Some(context) = context else {
+                            return AlgorithmSize::new(0.0, 0.0);
+                        };
+                        AlgorithmSize::new(
+                            known.width.unwrap_or(context.max_width),
+                            known.height.unwrap_or(context.height),
+                        )
+                    },
+                );
+                let layout = self.tree.layout(node);
+                self.formatted
+                    .push((input.box_id, input.content_inline_size));
+                let mut fragments = FragmentDraftTree::default();
+                fragments.push(FragmentDraft {
+                    box_id: input.box_id,
+                    logical_rect: buckram::LogicalRect::default(),
+                    overflow: buckram::LogicalRect::default(),
+                    parent: None,
+                });
+                Ok(TableCellLayoutOutput {
+                    content_block_size: layout.height,
+                    border_box_min_block_size: layout.height,
+                    // K4d5 owns real cell baselines; the contract placeholder
+                    // synthesizes from the block end.
+                    baselines: buckram::Baselines::synthesized_from_block_end(layout.height),
+                    overflow: buckram::LogicalRect::default(),
+                    fragments,
+                })
+            }
+        }
+
+        // A real grid from a two-cell table document; the algorithm tree gets
+        // one block cell and one flex cell, and nothing else.
+        let dom = StaticDocument::parse(
+            "<table><tbody><tr><td id=blocky>x</td><td id=flexy><i>a</i><i>b</i></td></tr></tbody></table>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "table { display: table; border-spacing: 0; } tbody { display: table-row-group; } tr { display: table-row; } td { display: table-cell; padding: 0; } #flexy { display: table-cell; } #flexy i { display: block; height: 7px; }",
+            ]),
+            &Device::screen(800.0, 600.0),
+            &InteractionStates::default(),
+        );
+        let boxes = GeneratedBoxTree::from_dom(&dom, &styles);
+        let table = boxes
+            .iter()
+            .find_map(|(box_id, css_box)| {
+                (css_box.display.internal_table == Some(buckram::InternalTableRole::Grid))
+                    .then_some(box_id)
+            })
+            .expect("table grid box");
+        let grid = build_table_grid(&boxes, &dom, table);
+        assert_eq!(grid.cells.len(), 2);
+
+        let mut tree: AlgorithmTree<Style, TextMeasure, Option<BoxId>> = AlgorithmTree::new();
+        let mut nodes = HashMap::new();
+        for cell in &grid.cells {
+            let kind = if nodes.is_empty() {
+                AlgorithmKind::Block
+            } else {
+                AlgorithmKind::Flex
+            };
+            let children = if kind == AlgorithmKind::Flex {
+                vec![tree.new_with_children(
+                    AlgorithmKind::Block,
+                    Style {
+                        size: Size {
+                            width: Dimension::auto(),
+                            height: Dimension::length(7.0),
+                        },
+                        ..Style::default()
+                    },
+                    &[],
+                    None,
+                )]
+            } else {
+                Vec::new()
+            };
+            let node = tree.new_with_children(kind, Style::default(), &children, None);
+            nodes.insert(cell.source, node);
+        }
+        let inline = {
+            let sizing = buckram::TableInlineSizingInput {
+                grid: &grid,
+                available_inline_size: Some(150.0),
+                table_constraints: buckram::TableInlineConstraints::default(),
+                border_metrics: buckram::TableInlineBorderMetrics::Separated(
+                    buckram::TableSeparatedBorderMetrics::default(),
+                ),
+                caption_min: buckram::CaptionMinContribution::NoCaption,
+                track_visibility: buckram::TableTrackVisibility::all_visible(&grid),
+            };
+            buckram::TableInlineSizingResult::new(
+                &sizing,
+                buckram::IntrinsicSizes::new(150.0, 150.0).expect("intrinsic pair"),
+                150.0,
+                150.0,
+                vec![90.0, 60.0],
+            )
+            .expect("reconciled inline result")
+        };
+        let input = buckram::TableBlockSizingInput {
+            grid: &grid,
+            inline: &inline,
+            table_constraint: buckram::TableBlockConstraint::Auto,
+            border_metrics: buckram::TableBlockBorderMetrics::Separated(
+                buckram::TableSeparatedBlockMetrics::default(),
+            ),
+            available_block_size: None,
+            track_visibility: buckram::TableTrackVisibility::all_visible(&grid),
+        };
+        let mut formatter = TreeFormatter {
+            tree: &mut tree,
+            nodes,
+            formatted: Vec::new(),
+        };
+        let outputs = buckram::format_table_cells(&input, 0.0, |_, _| 0.0, &mut formatter)
+            .expect("formatted cells");
+
+        assert_eq!(outputs.len(), 2);
+        // Exact K4c column sizes reached the formatter.
+        let widths = formatter
+            .formatted
+            .iter()
+            .map(|(_, width)| *width)
+            .collect::<Vec<_>>();
+        assert_eq!(widths, vec![90.0, 60.0]);
+        // The tree holds only cell subtrees: no node represents the table or
+        // the row, so neither can have recorded a backend call.
+        assert_eq!(tree.node_ids().count(), 3);
+        assert!(
+            tree.node_ids()
+                .all(|id| tree.kind(id) != AlgorithmKind::Grid),
+            "no table-as-Grid node may exist in the K4d dispatch shape"
+        );
+    }
+
     #[test]
     fn html_column_and_column_group_spans_are_bounded_at_the_adapter() {
         let dom = StaticDocument::parse(

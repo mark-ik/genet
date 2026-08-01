@@ -2,7 +2,8 @@
 
 **Date:** 2026-07-28
 
-**Status:** scoped; execution starts after the accepted K4c receipt
+**Status:** in execution from accepted K4c5b commit `a96fe7d147e`. K4d1 is
+complete; K4d2 is next.
 
 **Parent plan:** [Buckram K4 CSS tables execution plan](2026-07-28_buckram_k4_css_tables_execution_plan.md)
 
@@ -301,6 +302,47 @@ without exposing table layout to Taffy.
 
 No live bridge code is deleted in K4d1. Record the exact dispatch and callback
 types that will replace it.
+
+### K4d1 receipt - 2026-08-01
+
+**Base commit:** `a96fe7d147e` (accepted K4c5b).
+
+**Capability:** `components/buckram/src/table/rows.rs` defines the row-layout
+boundary: `TableBlockConstraint`, `TableSeparatedBlockMetrics` and
+`TableBlockBorderMetrics` (block padding pre-resolved, since CSS resolves
+padding percentages against the inline containing size that K4c made real),
+`TableBlockDeferral` with the four named deferrals, `TableCellLayoutPass`,
+`TableCellLayoutInput`/`Output`, the `TableCellFormatter` trait,
+`TableRowMeasure`, `TableBlockSizingInput`, `TableCellPlacement`,
+`TableRowLayoutResult`, and `FragmentDraftTree`. Drafts are deliberately not
+`Fragment`s: no commit path into `FragmentTree` exists until K4d6, so a
+discarded pass cannot leak into painted output by construction, and a parent
+draft must precede its children. `spanned_cell_content_inline_size` derives
+each cell's exact content inline size from K4c's spanned columns plus crossed
+spacing minus resolved offsets; `format_table_cells` is the K4d1 dispatch
+skeleton, first pass only, collapsed metrics deferring by name.
+`AlgorithmKind::Table` is reserved at the adapter; nothing constructs it
+until K4d6, and `buckram::table` imports no Taffy type.
+
+**Pure fixtures:** exact single-span and spanned inline sizes (including the
+crossed spacing interval), collapsed-metrics deferral, out-of-bounds span
+error, draft-tree parent ordering, and discarded-pass draft dropping. Four
+tests; buckram 127 total.
+
+**Adapter fixture:** `k4d1_cell_formatter_formats_contents_at_exact_inline_sizes`
+implements `TableCellFormatter` over the live `AlgorithmTree`, formats a
+block cell and a flex cell at the exact K4c column sizes, and proves the
+scratch tree contains only cell subtrees: no node represents the table or
+row, and no table-as-Grid node exists in the dispatch shape.
+
+**WPT:** the K4c5b maps are copied into the K4d proof directory as the
+baseline, and both table corpora rerun with zero movement, as a model-only
+gate requires. Proof directory:
+`testing/genet/wpt-ledger/2026-08-01_buckram_k4d1`.
+
+**Verification:** buckram 127, livery and genet-livery all targets 0 failed;
+clippy clean on touched files (one pre-existing `is_multiple_of` warning in
+unrelated adapter tests); exact-file Rustfmt and `git diff --check` clean.
 
 ## K4d2. First-pass cell layout and single-span row minima
 
