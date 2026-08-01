@@ -501,7 +501,7 @@ grammar = "auto | fixed"
 seed_values = ["auto", "fixed"]
 animation = "discrete"
 source = "css2_tables"
-partial = "fixed sizing from first-row cell widths only (CSS 2.1 17.5.2.1); no <col>/<colgroup> contribution, no row or column spans, no border-spacing in the width calculation, and the auto algorithm (17.5.2.2) is not built"
+partial = "Buckram owns fixed (CSS 2.1 17.5.2.1) and automatic (17.5.2.2) inline sizing live; collapsed-border geometry still defers to K4g, and a deferred table falls back to grid inference under a named counter"
 
 [[property]]
 name = "box-sizing"

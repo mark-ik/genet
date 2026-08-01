@@ -22,8 +22,8 @@ use livery::{
         Gap as CssGap, GridAutoFlow as CssGridAutoFlow, GridPlacement as CssGridPlacement,
         GridTemplate as CssGridTemplate, GridTrack as CssGridTrack, Inset, Length,
         LengthPercentage as CssLengthPercentage, LineHeight, Margin, Overflow as CssOverflow,
-        Position as CssPosition, RelativeLengthEnvironment, Size as CssSize,
-        TableLayout as CssTableLayout, VerticalAlign, WhiteSpaceCollapse,
+        Position as CssPosition, RelativeLengthEnvironment, Size as CssSize, VerticalAlign,
+        WhiteSpaceCollapse,
     },
 };
 use taffy::{
@@ -46,8 +46,7 @@ use crate::{
     box_tree::GeneratedBoxTree,
     style::resolve_styles_with_containers,
     table_shadow::{
-        PendingAutomaticShadow, TableShadowLedger, note_automatic_inline_route,
-        shadow_automatic_table, shadow_fixed_table,
+        PendingTable, TableShadowLedger, buckram_table_columns, verify_assigned_columns,
     },
     text::{InlineLayout, InlineRequest, TextFrame},
 };
@@ -206,7 +205,7 @@ struct BuildState<'a, D: LayoutDom> {
     image_sources: &'a ImageSources,
     table_bridge_count: usize,
     table_shadow: TableShadowLedger,
-    pending_automatic: Vec<PendingAutomaticShadow<D::NodeId>>,
+    pending_tables: Vec<PendingTable<D::NodeId>>,
 }
 
 struct InlineMeasure {
@@ -343,6 +342,10 @@ struct InlineBuildState<'a, D: LayoutDom> {
     image_sources: &'a ImageSources,
     table_bridge_count: usize,
     table_shadow: TableShadowLedger,
+    pending_tables: Vec<PendingTable<D::NodeId>>,
+    /// The grid and cell nodes for the table `build_children` just processed,
+    /// consumed by `build_box` when it creates the table's algorithm node.
+    pending_table_handoff: Option<(TableGrid, Vec<Option<AlgorithmNodeId>>)>,
 }
 
 type ResolvedLayout<Id> = (StylePlane<Id>, LiveryLayout<Id>);
@@ -768,7 +771,7 @@ where
         image_sources,
         table_bridge_count: 0,
         table_shadow: TableShadowLedger::default(),
-        pending_automatic: Vec::new(),
+        pending_tables: Vec::new(),
     };
     let children = boxes
         .roots()
@@ -809,6 +812,7 @@ where
         None,
     );
 
+    state.apply_buckram_table_columns();
     state.tree.compute_layout_with_measure(
         root,
         AlgorithmSize::new(
@@ -855,7 +859,7 @@ where
         None,
         &mut output,
     )?;
-    state.process_automatic_shadows(|box_id| {
+    state.verify_table_columns(|box_id| {
         fragments
             .fragments_for_box(box_id)
             .next()
@@ -913,7 +917,7 @@ where
             image_sources,
             table_shadow: TableShadowLedger::default(),
             table_bridge_count: 0,
-            pending_automatic: Vec::new(),
+            pending_tables: Vec::new(),
         };
         let built = state.build_box(
             box_id,
@@ -927,9 +931,9 @@ where
             .table_shadow
             .merge(std::mem::take(&mut state.table_shadow));
         let Some(atomic_root) = built else {
-            // No fragments exist for a root that built nothing, but noted
-            // automatic tables still run so their deferrals are recorded.
-            state.process_automatic_shadows(|_| None);
+            // No layout will run for a root that built nothing, but noted
+            // tables still record their deferrals.
+            state.apply_buckram_table_columns();
             plane
                 .table_shadow
                 .merge(std::mem::take(&mut state.table_shadow));
@@ -963,6 +967,7 @@ where
         } else {
             atomic_root
         };
+        state.apply_buckram_table_columns();
         state.tree.compute_layout_with_measure(
             root,
             AlgorithmSize::new(
@@ -989,10 +994,9 @@ where
 
         let mut fragments = Vec::new();
         collect_atomic_fragments(&state.tree, root, Point { x: 0.0, y: 0.0 }, &mut fragments);
-        // Widths are stable across the origin shift below, so the automatic
-        // shadow can read them either side of it. It must run after
-        // collection, because its intrinsic queries scribble on the tree.
-        state.process_automatic_shadows(|needle| {
+        // Widths are stable across the origin shift below, so verification
+        // can read them either side of it.
+        state.verify_table_columns(|needle| {
             fragments
                 .iter()
                 .find(|(candidate, _)| *candidate == needle)
@@ -1120,11 +1124,22 @@ where
         image_sources,
         table_bridge_count: 0,
         table_shadow: TableShadowLedger::default(),
+        pending_tables: Vec::new(),
+        pending_table_handoff: None,
     };
     let children = boxes
         .roots()
         .iter()
-        .filter_map(|box_id| state.build_box(*box_id, None, 16.0).transpose())
+        .filter_map(|box_id| {
+            state
+                .build_box(
+                    *box_id,
+                    None,
+                    16.0,
+                    (Some(viewport_width), Some(viewport_height)),
+                )
+                .transpose()
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let root = state.tree.new_with_children_and_block_style(
         AlgorithmKind::Block,
@@ -1147,6 +1162,7 @@ where
         Vec::new(),
     );
 
+    state.apply_buckram_table_columns(text);
     let mut intrinsic_sizes = IntrinsicSizeCache::default();
     state.tree.compute_layout_with_measure(
         root,
@@ -1261,7 +1277,13 @@ where
         &mut text_frame,
         styles,
     )?;
-    // Tables on the inline route shadow into the state's own ledger; tables
+    state.verify_table_columns(|box_id| {
+        fragments
+            .fragments_for_box(box_id)
+            .next()
+            .map(|fragment| fragment.width)
+    });
+    // Tables on the inline route record into the state's own ledger; tables
     // inside atomic subtrees accumulated into the plane's. Both survive.
     let mut table_shadow = std::mem::take(&mut state.table_shadow);
     table_shadow.merge(atomic.table_shadow.clone());
@@ -1289,6 +1311,7 @@ where
         box_id: BoxId,
         inherited: Option<&ComputedValues>,
         parent_font_size: f32,
+        containing_size: (Option<f32>, Option<f32>),
     ) -> Result<Option<AlgorithmNodeId>, LayoutError> {
         match self.boxes[box_id].origin {
             BoxOrigin::Element(node) => {
@@ -1296,7 +1319,13 @@ where
                 if computed.display == CssDisplay::Table {
                     self.table_bridge_count += 1;
                 }
+                debug_assert!(
+                    self.pending_table_handoff.is_none(),
+                    "a table handoff must be consumed by its own build_box call"
+                );
                 let font_size = font_size_px(&computed.font_size, parent_font_size);
+                let child_containing_size =
+                    resolved_child_containing_size(&computed, font_size, containing_size);
                 let mut inline_container_style = computed.clone();
                 if matches!(
                     computed.position,
@@ -1307,7 +1336,13 @@ where
                     // text inside that container.
                     inline_container_style.vertical_align = VerticalAlign::Baseline;
                 }
-                let children = self.build_children(box_id, &inline_container_style, font_size)?;
+                let children = self.build_children(
+                    box_id,
+                    &inline_container_style,
+                    font_size,
+                    child_containing_size,
+                )?;
+                let table_handoff = self.pending_table_handoff.take();
                 let mut taffy_style = to_taffy_style(&computed, font_size);
                 apply_replaced_image_size(
                     &mut taffy_style,
@@ -1319,6 +1354,7 @@ where
                 );
                 let block_style = to_block_style(self.boxes, box_id, &computed, font_size);
                 let kind = algorithm_kind(&self.boxes[box_id], children.is_empty());
+                let dom_node = node;
                 let node = self.tree.new_with_children_and_block_style(
                     kind,
                     block_style,
@@ -1326,6 +1362,18 @@ where
                     &children,
                     vec![box_id],
                 );
+                if let Some((grid, cell_nodes)) = table_handoff {
+                    self.pending_tables.push(PendingTable {
+                        table: box_id,
+                        node: dom_node,
+                        taffy_table: node,
+                        grid,
+                        cell_nodes,
+                        font_size,
+                        containing_width: containing_size.0,
+                        assigned: None,
+                    });
+                }
                 if supports_nested_float_state(&self.boxes[box_id], block_style, kind) {
                     self.tree.enable_nested_float_state(node);
                 }
@@ -1364,11 +1412,12 @@ where
                         // K4e owns its flow, captions, and float avoidance.
                         // Keep the existing table-as-grid bridge attached to
                         // the grid until that dispatcher replaces it.
-                        return self.build_box(*grid, inherited, parent_font_size);
+                        return self.build_box(*grid, inherited, parent_font_size, containing_size);
                     }
                 }
                 let computed = inherited.cloned().unwrap_or_default();
-                let children = self.build_children(box_id, &computed, parent_font_size)?;
+                let children =
+                    self.build_children(box_id, &computed, parent_font_size, containing_size)?;
                 let block_style = anonymous_block_style(self.boxes, box_id);
                 let kind = algorithm_kind(&self.boxes[box_id], children.is_empty());
                 let node = self.tree.new_with_children_and_block_style(
@@ -1386,11 +1435,133 @@ where
         }
     }
 
+    /// Measure one cell's border-box intrinsic pair through the inline
+    /// measure contract. Width sizing is neutralized for the query, because
+    /// Buckram applies those constraints itself, and restored afterwards.
+    fn measure_cell_intrinsics(
+        &mut self,
+        text: &mut TextSystem,
+        cell_node: AlgorithmNodeId,
+    ) -> Option<IntrinsicSizes> {
+        let (dom, styles, boxes, atomic) = (self.dom, self.styles, self.boxes, self.atomic);
+        let style = self.tree.style_mut(cell_node);
+        let saved = (style.size.width, style.min_size.width, style.max_size.width);
+        style.size.width = Dimension::auto();
+        style.min_size.width = Dimension::auto();
+        style.max_size.width = Dimension::auto();
+        let mut measure = |available| {
+            self.tree.compute_layout_with_measure(
+                cell_node,
+                AlgorithmSize::new(available, AlgorithmAvailableSpace::MaxContent),
+                |known, available, _, context, _| {
+                    let Some(context) = context else {
+                        return AlgorithmSize::new(0.0, 0.0);
+                    };
+                    let width = match available.width {
+                        AlgorithmAvailableSpace::Definite(width) => width,
+                        // A nearly-zero line breaks at every opportunity; an
+                        // infinite one suppresses wrapping, as in the main
+                        // measure closure.
+                        AlgorithmAvailableSpace::MinContent => 0.01,
+                        AlgorithmAvailableSpace::MaxContent => f32::INFINITY,
+                    };
+                    let (measured_width, measured_height) = measure_inline_context(
+                        text,
+                        dom,
+                        styles,
+                        boxes,
+                        atomic,
+                        context,
+                        InlineMeasureGeometry {
+                            width: known.width.unwrap_or(width),
+                            line_constraints: None,
+                        },
+                    );
+                    AlgorithmSize::new(
+                        known.width.unwrap_or(measured_width),
+                        known.height.unwrap_or(measured_height),
+                    )
+                },
+            );
+            self.tree.layout(cell_node).width
+        };
+        let min = measure(AlgorithmAvailableSpace::MinContent);
+        let max = measure(AlgorithmAvailableSpace::MaxContent);
+        let style = self.tree.style_mut(cell_node);
+        (style.size.width, style.min_size.width, style.max_size.width) = saved;
+        IntrinsicSizes::new(min, max.max(min))
+    }
+
+    /// K4c5b: compute Buckram's columns for every noted table and pin them as
+    /// explicit grid tracks, before the main layout pass.
+    fn apply_buckram_table_columns(&mut self, text: &mut TextSystem) {
+        let mut pendings = std::mem::take(&mut self.pending_tables);
+        for pending in &mut pendings {
+            let Some(computed) = self.styles.get(pending.node).cloned() else {
+                continue;
+            };
+            let intrinsics = pending
+                .cell_nodes
+                .clone()
+                .into_iter()
+                .map(|cell_node| {
+                    cell_node.and_then(|node| self.measure_cell_intrinsics(text, node))
+                })
+                .collect::<Vec<_>>();
+            let columns = buckram_table_columns(
+                self.dom,
+                self.boxes,
+                self.styles,
+                &pending.grid,
+                pending.table,
+                pending.node,
+                &computed,
+                pending.font_size,
+                pending.containing_width,
+                &intrinsics,
+                &mut self.table_shadow,
+            );
+            if let Some(columns) = &columns {
+                self.tree
+                    .style_mut(pending.taffy_table)
+                    .grid_template_columns = columns.iter().copied().map(length).collect();
+            }
+            pending.assigned = columns;
+        }
+        self.pending_tables = pendings;
+    }
+
+    /// Assert the painted fragments honored every assigned column vector.
+    fn verify_table_columns(&mut self, live_width_of: impl Fn(BoxId) -> Option<f32>) {
+        let pendings = std::mem::take(&mut self.pending_tables);
+        for pending in pendings {
+            let Some(assigned) = pending.assigned else {
+                continue;
+            };
+            let live = pending
+                .grid
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    pending
+                        .grid
+                        .cells
+                        .iter()
+                        .find(|cell| cell.column == index && cell.column_span == 1)
+                        .and_then(|cell| live_width_of(cell.source))
+                })
+                .collect::<Vec<_>>();
+            verify_assigned_columns(pending.table, &assigned, &live, &mut self.table_shadow);
+        }
+    }
+
     fn build_children(
         &mut self,
         parent: BoxId,
         parent_style: &ComputedValues,
         parent_font_size: f32,
+        containing_size: (Option<f32>, Option<f32>),
     ) -> Result<Vec<AlgorithmNodeId>, LayoutError> {
         // A `display: table` box takes its flattened cells directly, matching
         // the precomputed atomic subtree.
@@ -1401,42 +1572,26 @@ where
                 .is_some_and(|node| table_is_flattenable(self.dom, self.styles, node))
         {
             let table = build_table_grid(self.boxes, self.dom, parent);
-            // K4c5a: this inline route is the production table path, and it
-            // has no fixed sizing at all. Cells are pinned below and Taffy
-            // infers every track. The shadow records each fixed table here as
-            // NoLiveResult: Buckram has an answer and nothing consumes it.
-            // Automatic tables cannot even be shadowed on this route: the
-            // inline tree offers no seam yet for post-collection intrinsic
-            // queries, so each is counted instead of silently passing.
-            if parent_style.table_layout != CssTableLayout::Fixed {
-                note_automatic_inline_route(parent, &mut self.table_shadow);
-            } else if let Some(node) = self.boxes.origin_node(parent) {
-                shadow_fixed_table(
-                    self.dom,
-                    self.boxes,
-                    self.styles,
-                    &table,
-                    parent,
-                    node,
-                    parent_style,
-                    parent_font_size,
-                    // The inline route threads no containing width.
-                    None,
-                    // No live fixed-column vector exists on this route.
-                    None,
-                    &mut self.table_shadow,
-                );
-            }
+            let mut cell_nodes = Vec::with_capacity(table.cells.len());
             let mut children = Vec::with_capacity(table.cells.len());
             for cell in &table.cells {
-                let Some(node) =
-                    self.build_box(cell.source, Some(parent_style), parent_font_size)?
-                else {
+                let built = self.build_box(
+                    cell.source,
+                    Some(parent_style),
+                    parent_font_size,
+                    containing_size,
+                )?;
+                cell_nodes.push(built);
+                let Some(node) = built else {
                     continue;
                 };
                 place_table_cell(self.tree.style_mut(node), cell);
                 children.push(node);
             }
+            // K4c5b: hand the grid to build_box, which creates the table's
+            // algorithm node and notes the table for Buckram column
+            // assignment before the main layout pass.
+            self.pending_table_handoff = Some((table, cell_nodes));
             return Ok(children);
         }
         self.build_flow_children(
@@ -1444,6 +1599,7 @@ where
             self.boxes[parent].children().to_vec(),
             parent_style,
             parent_font_size,
+            containing_size,
         )
     }
 
@@ -1453,6 +1609,7 @@ where
         child_ids: Vec<BoxId>,
         parent_style: &ComputedValues,
         parent_font_size: f32,
+        containing_size: (Option<f32>, Option<f32>),
     ) -> Result<Vec<AlgorithmNodeId>, LayoutError> {
         let intrinsic_owner = intrinsic_owner_for_flow_children(self.boxes, parent, &child_ids);
         let mut children = Vec::new();
@@ -1471,7 +1628,9 @@ where
                 )?);
             }
             inline_group.clear();
-            if let Some(node) = self.build_box(child, Some(parent_style), parent_font_size)? {
+            if let Some(node) =
+                self.build_box(child, Some(parent_style), parent_font_size, containing_size)?
+            {
                 children.push(node);
             }
         }
@@ -1587,37 +1746,70 @@ where
         self.tree.layout(node).width
     }
 
-    /// K4c5a's automatic half: measure each noted table's cell intrinsics,
-    /// run Buckram's automatic algorithm, and compare its columns against the
-    /// Taffy-inferred widths `live_width_of` reads back from the fragments.
-    /// Must run after fragment collection: the queries scribble over the
-    /// scratch tree's layout state.
-    fn process_automatic_shadows(&mut self, live_width_of: impl Fn(BoxId) -> Option<f32>) {
-        let pendings = std::mem::take(&mut self.pending_automatic);
-        for pending in pendings {
+    /// Measure one cell's border-box intrinsic pair through the live measure
+    /// contract. The cell's own width sizing is neutralized for the query,
+    /// because Buckram applies those constraints itself, and restored
+    /// afterwards so the main layout pass sees the real style.
+    fn measure_cell_intrinsics(&mut self, cell_node: AlgorithmNodeId) -> Option<IntrinsicSizes> {
+        let style = self.tree.style_mut(cell_node);
+        let saved = (style.size.width, style.min_size.width, style.max_size.width);
+        style.size.width = Dimension::auto();
+        style.min_size.width = Dimension::auto();
+        style.max_size.width = Dimension::auto();
+        let min = self.measure_intrinsic_width(cell_node, AlgorithmAvailableSpace::MinContent);
+        let max = self.measure_intrinsic_width(cell_node, AlgorithmAvailableSpace::MaxContent);
+        let style = self.tree.style_mut(cell_node);
+        (style.size.width, style.min_size.width, style.max_size.width) = saved;
+        IntrinsicSizes::new(min, max.max(min))
+    }
+
+    /// K4c5b: compute Buckram's columns for every noted table and pin them as
+    /// explicit grid tracks. Runs after the tree is built and before the main
+    /// layout pass; the intrinsic queries only scribble on scratch layout
+    /// state that the main pass recomputes.
+    fn apply_buckram_table_columns(&mut self) {
+        let mut pendings = std::mem::take(&mut self.pending_tables);
+        for pending in &mut pendings {
             let Some(computed) = self.styles.get(pending.node).cloned() else {
                 continue;
             };
-            let mut intrinsics = Vec::with_capacity(pending.cell_nodes.len());
-            for cell_node in &pending.cell_nodes {
-                let Some(cell_node) = *cell_node else {
-                    intrinsics.push(None);
-                    continue;
-                };
-                // Neutralize the cell's own sizing so the query measures
-                // content. Buckram applies the width constraints itself, and
-                // the fragments are already collected, so this cannot leak
-                // into painted output.
-                let style = self.tree.style_mut(cell_node);
-                style.size.width = Dimension::auto();
-                style.min_size.width = Dimension::auto();
-                style.max_size.width = Dimension::auto();
-                let min =
-                    self.measure_intrinsic_width(cell_node, AlgorithmAvailableSpace::MinContent);
-                let max =
-                    self.measure_intrinsic_width(cell_node, AlgorithmAvailableSpace::MaxContent);
-                intrinsics.push(IntrinsicSizes::new(min, max.max(min)));
+            let intrinsics = pending
+                .cell_nodes
+                .clone()
+                .into_iter()
+                .map(|cell_node| cell_node.and_then(|node| self.measure_cell_intrinsics(node)))
+                .collect::<Vec<_>>();
+            let columns = buckram_table_columns(
+                self.dom,
+                self.boxes,
+                self.styles,
+                &pending.grid,
+                pending.table,
+                pending.node,
+                &computed,
+                pending.font_size,
+                pending.containing_width,
+                &intrinsics,
+                &mut self.table_shadow,
+            );
+            if let Some(columns) = &columns {
+                self.tree
+                    .style_mut(pending.taffy_table)
+                    .grid_template_columns = columns.iter().copied().map(length).collect();
             }
+            pending.assigned = columns;
+        }
+        self.pending_tables = pendings;
+    }
+
+    /// Assert the painted fragments honored every assigned column vector.
+    /// Runs after fragment collection.
+    fn verify_table_columns(&mut self, live_width_of: impl Fn(BoxId) -> Option<f32>) {
+        let pendings = std::mem::take(&mut self.pending_tables);
+        for pending in pendings {
+            let Some(assigned) = pending.assigned else {
+                continue;
+            };
             let live = pending
                 .grid
                 .columns
@@ -1632,16 +1824,7 @@ where
                         .and_then(|cell| live_width_of(cell.source))
                 })
                 .collect::<Vec<_>>();
-            shadow_automatic_table(
-                self.dom,
-                self.boxes,
-                self.styles,
-                &pending,
-                &computed,
-                &intrinsics,
-                &live,
-                &mut self.table_shadow,
-            );
+            verify_assigned_columns(pending.table, &assigned, &live, &mut self.table_shadow);
         }
     }
 
@@ -1711,54 +1894,6 @@ where
                         .collect::<Result<Vec<_>, _>>()?
                 };
                 let mut taffy_style = to_taffy_style(&computed, font_size);
-                // CSS 2.1 section 17.5.2.1: a fixed table's columns are sized
-                // from the first row, so they can be pinned as explicit grid
-                // tracks before anything is measured.
-                if let Some(grid) = table.as_ref() {
-                    let live_columns = fixed_column_widths(
-                        self.boxes,
-                        self.styles,
-                        grid,
-                        &computed,
-                        font_size,
-                        containing_size.0,
-                    );
-                    // K4c5a: Buckram runs beside the live result and disagrees
-                    // into a ledger. The live value below is still the one that
-                    // paints, until K4c5b.
-                    shadow_fixed_table(
-                        self.dom,
-                        self.boxes,
-                        self.styles,
-                        grid,
-                        box_id,
-                        node,
-                        &computed,
-                        font_size,
-                        containing_size.0,
-                        live_columns.as_deref(),
-                        &mut self.table_shadow,
-                    );
-                    if let Some(columns) = live_columns {
-                        taffy_style.grid_template_columns =
-                            columns.into_iter().map(length).collect();
-                    }
-                }
-                // An automatic table cannot be shadowed yet: cell intrinsics
-                // need the measure machinery, which only the outer layout call
-                // owns. Note it for post-collection processing.
-                if computed.table_layout != CssTableLayout::Fixed
-                    && let Some(grid) = table
-                {
-                    self.pending_automatic.push(PendingAutomaticShadow {
-                        table: box_id,
-                        node,
-                        grid,
-                        cell_nodes: std::mem::take(&mut table_cell_nodes),
-                        font_size,
-                        containing_width: containing_size.0,
-                    });
-                }
                 taffy_style.size.width =
                     dimension_with_basis(computed.width, font_size, containing_size.0);
                 taffy_style.size.height =
@@ -1781,6 +1916,7 @@ where
                 );
                 let block_style = to_block_style(self.boxes, box_id, &computed, font_size);
                 let kind = algorithm_kind(&self.boxes[box_id], children.is_empty());
+                let dom_node = node;
                 let node = self.tree.new_with_children_and_block_style(
                     kind,
                     block_style,
@@ -1788,6 +1924,21 @@ where
                     &children,
                     Some(box_id),
                 );
+                // K4c5b: Buckram owns this table's columns. They are computed
+                // before the main layout pass, once the whole tree exists and
+                // intrinsic queries can run, and pinned as explicit tracks.
+                if let Some(grid) = table {
+                    self.pending_tables.push(PendingTable {
+                        table: box_id,
+                        node: dom_node,
+                        taffy_table: node,
+                        grid,
+                        cell_nodes: std::mem::take(&mut table_cell_nodes),
+                        font_size,
+                        containing_width: containing_size.0,
+                        assigned: None,
+                    });
+                }
                 if supports_nested_float_state(&self.boxes[box_id], block_style, kind) {
                     self.tree.enable_nested_float_state(node);
                 }
@@ -2665,108 +2816,6 @@ where
     }
 
     walk(dom, styles, table)
-}
-
-/// Column widths for a `table-layout: fixed` table, per CSS 2.1 section
-/// 17.5.2.1.
-///
-/// The fixed algorithm reads widths only from the first row (and from
-/// `<col>`, not yet modelled here), never from content, which is what makes
-/// it computable before layout. A cell's `width` is a content-box width, so
-/// the column it establishes is that width plus the cell's horizontal
-/// padding and border. Columns left auto share what remains of the table's
-/// content width equally.
-///
-/// Returns `None` when the algorithm does not apply, which leaves the table
-/// on auto-sized implicit tracks: no `table-layout: fixed`, no definite
-/// table width, or no cells to read.
-fn fixed_column_widths<Id>(
-    boxes: &GeneratedBoxTree<Id>,
-    styles: &StylePlane<Id>,
-    table: &TableGrid,
-    computed: &ComputedValues,
-    font_size: f32,
-    containing_width: Option<f32>,
-) -> Option<Vec<f32>>
-where
-    Id: Copy + Eq + Hash,
-{
-    if computed.table_layout != CssTableLayout::Fixed {
-        return None;
-    }
-    let columns = table.columns.len();
-    if columns == 0 {
-        return None;
-    }
-
-    // The table's own content width: its used width less its border and
-    // padding, since the column widths fill the content box.
-    let table_width = resolved_explicit_size(computed.width, font_size, containing_width)?;
-    let inner = match computed.box_sizing {
-        CssBoxSizing::BorderBox => {
-            table_width - horizontal_edges(computed, font_size, containing_width)
-        },
-        CssBoxSizing::ContentBox => table_width,
-    };
-    if !inner.is_finite() || inner <= 0.0 {
-        return None;
-    }
-
-    // First-row cells set the columns; later rows are ignored by the
-    // algorithm, which is the point of it.
-    let mut widths: Vec<Option<f32>> = vec![None; columns];
-    for cell in &table.cells {
-        if cell.row != 0 || cell.column_span != 1 {
-            continue;
-        }
-        let Some(cell_node) = boxes.origin_node(cell.source) else {
-            continue;
-        };
-        let Some(cell_style) = styles.get(cell_node) else {
-            continue;
-        };
-        let Some(width) = resolved_explicit_size(cell_style.width, font_size, Some(inner)) else {
-            continue;
-        };
-        let border_box = match cell_style.box_sizing {
-            CssBoxSizing::BorderBox => width,
-            CssBoxSizing::ContentBox => {
-                width + horizontal_edges(cell_style, font_size, Some(inner))
-            },
-        };
-        widths[cell.column] = Some(border_box.max(0.0));
-    }
-
-    let fixed: f32 = widths.iter().flatten().sum();
-    let auto_columns = widths.iter().filter(|width| width.is_none()).count();
-    let share = if auto_columns > 0 {
-        ((inner - fixed) / auto_columns as f32).max(0.0)
-    } else {
-        0.0
-    };
-    Some(
-        widths
-            .into_iter()
-            .map(|width| width.unwrap_or(share))
-            .collect(),
-    )
-}
-
-/// A box's horizontal border plus padding.
-fn horizontal_edges(computed: &ComputedValues, font_size: f32, basis: Option<f32>) -> f32 {
-    let basis = basis.unwrap_or(0.0);
-    length_percentage_px(computed.padding_left.0, font_size, basis).max(0.0)
-        + length_percentage_px(computed.padding_right.0, font_size, basis).max(0.0)
-        + border_width_px(
-            computed.border_left_style,
-            computed.border_left_width,
-            font_size,
-        )
-        + border_width_px(
-            computed.border_right_style,
-            computed.border_right_width,
-            font_size,
-        )
 }
 
 /// Pin a cell's temporary bridge style to its TableGrid start slot. Buckram
@@ -3699,7 +3748,7 @@ mod tests {
         );
     }
 
-    fn fixed_shadow_ledger(spacing: &str) -> crate::table_shadow::TableShadowLedger {
+    fn fixed_table_ledger(spacing: &str) -> crate::table_shadow::TableShadowLedger {
         let dom = StaticDocument::parse(
             "<table><tbody><tr><td id=first>one</td><td>two</td><td>three</td></tr></tbody></table>",
         );
@@ -3718,75 +3767,43 @@ mod tests {
             .clone()
     }
 
-    /// The control. Where Livery's fixed algorithm is correct, two independent
-    /// implementations reach the same columns. This is what K4c5b needs before
-    /// it may delete the live path.
-    #[test]
-    fn k4c5a_shadow_agrees_with_the_live_fixed_table_path() {
-        let ledger = fixed_shadow_ledger("0");
+    fn assert_assigned_and_honored(ledger: &crate::table_shadow::TableShadowLedger) {
         assert_eq!(
-            ledger.compared, 1,
-            "the fixed table was not shadowed at all: {ledger:?}"
+            ledger.assigned, 1,
+            "Buckram did not size the table: {ledger:?}"
+        );
+        assert_eq!(
+            ledger.verified, 1,
+            "the assignment was not verified: {ledger:?}"
         );
         assert!(
             ledger.is_silent(),
-            "Buckram disagreed with the live path: {ledger:?}"
+            "the bridge did not honor Buckram's tracks: {ledger:?}"
         );
-        assert_eq!(ledger.agreed, 1, "{ledger:?}");
+        assert_eq!(ledger.honored, 1, "{ledger:?}");
     }
 
-    /// The first classified K4c5a divergence, and Buckram is the correct side.
-    ///
-    /// CSS 2.1 17.5.2.1 shares the remaining table space over the columns
-    /// *after* borders and spacing. Livery omits `border-spacing` entirely,
-    /// which its own `table-layout` partial marker already admits. With the UA
-    /// sheet's `border-spacing: 2px` and `td { padding: 1px }`, the first cell
-    /// occupies 122px and four gaps take 8px, so Buckram distributes
-    /// `(300 - 8 - 122) / 2 = 85` where Livery distributes `(300 - 122) / 2 = 89`.
-    ///
-    /// The live tables in `tests/anonymous_boxes.rs` all set
-    /// `border-spacing: 0`, which is why this never surfaced.
+    /// K4c5b: Buckram owns the fixed algorithm and the painted fragments
+    /// honor its columns exactly.
     #[test]
-    fn k4c5a_shadow_classifies_the_live_border_spacing_omission() {
-        let ledger = fixed_shadow_ledger("2px");
-        assert_eq!(ledger.compared, 1, "{ledger:?}");
-        assert_eq!(ledger.agreed, 0, "{ledger:?}");
-        let observed = ledger
-            .divergences
-            .iter()
-            .map(|one| (one.quantity, one.buckram, one.livery))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            observed,
-            vec![
-                (
-                    crate::table_shadow::TableSizingQuantity::ColumnSize(1),
-                    85.0,
-                    89.0
-                ),
-                (
-                    crate::table_shadow::TableSizingQuantity::ColumnSize(2),
-                    85.0,
-                    89.0
-                ),
-            ],
-            "{ledger:?}"
-        );
+    fn k4c5b_fixed_table_columns_are_buckram_owned() {
+        assert_assigned_and_honored(&fixed_table_ledger("0"));
     }
 
-    /// Gap 1 receipt, and the gate's largest finding pinned as a test: the
-    /// text path is the production path, and it applies no fixed table sizing
-    /// at all. `fixed_column_widths` runs only on the tests-only block entry.
-    /// A fixed table here routes through `InlineBuildState::build_children`,
-    /// which pins cell slots and lets Taffy infer every track, so the shadow
-    /// records it as `NoLiveResult`: Buckram has an answer and nothing
-    /// consumes it. K4c5b's real work is routing THIS path through Buckram,
-    /// not merely replacing the block entry's helper.
-    ///
-    /// The ledger reaching `LiveryLayout` at all is the gap-1 receipt; it was
-    /// previously dropped with the per-root build state.
+    /// The first K4c5a divergence, resolved by authority. The deleted live
+    /// helper omitted `border-spacing` from CSS 2.1 17.5.2.1's distribution
+    /// and painted 89px columns; Buckram's 85px columns now paint, and the
+    /// fragment verification proves it.
     #[test]
-    fn k4c5a_text_path_fixed_tables_have_no_live_sizing_to_shadow() {
+    fn k4c5b_fixed_border_spacing_distribution_is_painted() {
+        assert_assigned_and_honored(&fixed_table_ledger("2px"));
+    }
+
+    /// K4c5b on the production text path: a fixed table routed through
+    /// `InlineBuildState` receives Buckram columns before the main pass. This
+    /// route previously had no fixed sizing at all.
+    #[test]
+    fn k4c5b_text_path_fixed_tables_are_buckram_owned() {
         let dom = StaticDocument::parse(
             "<p>before the table</p><table><tbody><tr><td id=first>one</td><td>two</td><td>three</td></tr></tbody></table>",
         );
@@ -3809,31 +3826,17 @@ mod tests {
             &HashMap::new(),
         )
         .expect("layout");
-        let ledger = layout.table_shadow_ledger();
-        let reached = ledger.compared + ledger.skipped.len();
-        assert!(
-            reached >= 1,
-            "the text path dropped its shadow ledger: {ledger:?}"
-        );
-        assert!(
-            ledger.skipped.iter().any(|(_, skip)| matches!(
-                skip,
-                crate::table_shadow::TableShadowSkip::NoLiveResult
-            )),
-            "expected the fixed table to record NoLiveResult: {ledger:?}"
-        );
+        assert_assigned_and_honored(layout.table_shadow_ledger());
     }
 
-    /// Full-circle receipt for the atomic-inline split fix: a fixed table
-    /// inside an inline-block now stays inside it, reaches `BuildState`
-    /// through an atomic subtree on the text path, and its shadow comparison
-    /// survives into `LiveryLayout` via the accumulated plane ledger. Before
-    /// the fix the table was hoisted and the accumulation was unreachable.
+    /// A fixed table inside an inline-block builds under an atomic subtree's
+    /// own `BuildState`; its assignment and verification survive into
+    /// `LiveryLayout` through the accumulated plane ledger.
     ///
     /// Span-based markup because a `<div>` start tag inside `<p>` closes the
     /// paragraph at the HTML parser, before box generation runs.
     #[test]
-    fn k4c5a_shadow_compares_inside_an_atomic_inline_subtree() {
+    fn k4c5b_tables_inside_atomic_inline_subtrees_are_buckram_owned() {
         let dom = StaticDocument::parse(
             "<p>before <span id=atom><span class=t><span class=tb><span class=row><span class=cell id=first>one</span><span class=cell>two</span><span class=cell>three</span></span></span></span></span> after</p>",
         );
@@ -3858,13 +3861,13 @@ mod tests {
         .expect("layout");
         let ledger = layout.table_shadow_ledger();
         assert!(
-            ledger.compared >= 1,
-            "the atomic subtree's fixed table was not compared: {ledger:?}"
+            ledger.assigned >= 1,
+            "the atomic subtree's table was not sized by Buckram: {ledger:?}"
         );
         assert!(ledger.is_silent(), "{ledger:?}");
     }
 
-    fn automatic_shadow_ledger(table_css: &str) -> crate::table_shadow::TableShadowLedger {
+    fn automatic_table_ledger(table_css: &str) -> crate::table_shadow::TableShadowLedger {
         let dom = StaticDocument::parse(
             "<table><tbody><tr><td>one</td><td>one</td><td>one</td></tr></tbody></table>",
         );
@@ -3883,60 +3886,34 @@ mod tests {
             .clone()
     }
 
-    /// Gap 2 control: a shrink-to-fit automatic table is measured through the
-    /// live intrinsic machinery post-collection, Buckram's automatic
-    /// algorithm runs, and its columns agree with the Taffy-inferred tracks.
+    /// K4c5b: a shrink-to-fit automatic table is sized by Buckram from cell
+    /// intrinsics measured through the live machinery before the main pass.
     #[test]
-    fn k4c5a_automatic_shadow_agrees_for_shrink_to_fit() {
-        let ledger = automatic_shadow_ledger("");
-        assert_eq!(
-            ledger.compared, 1,
-            "the automatic table was not compared: {ledger:?}"
-        );
-        assert!(ledger.is_silent(), "{ledger:?}");
-        assert_eq!(ledger.agreed, 1, "{ledger:?}");
+    fn k4c5b_automatic_shrink_to_fit_is_buckram_owned() {
+        assert_assigned_and_honored(&automatic_table_ledger(""));
     }
 
-    /// The second classified K4c5a divergence, and Buckram is again the
-    /// correct side: an automatic table with an explicit width wider than its
-    /// max-content must distribute the extra space over the columns (CSS 2.1
-    /// 17.5.2.2), but the live bridge leaves Taffy's auto tracks at
-    /// max-content and the extra width fills nothing. This is why the
-    /// `width-distribution` WPT family barely moves on the live path.
+    /// The second K4c5a divergence, resolved by authority: an automatic table
+    /// explicitly wider than its max-content distributes the extra space over
+    /// its columns (CSS 2.1 17.5.2.2). Taffy inference left the tracks at
+    /// max-content; Buckram's 100px columns now paint, verified against the
+    /// fragments.
     #[test]
-    fn k4c5a_automatic_shadow_classifies_unfilled_explicit_width() {
-        let ledger = automatic_shadow_ledger("width: 300px;");
-        assert_eq!(ledger.compared, 1, "{ledger:?}");
-        assert_eq!(ledger.agreed, 0, "{ledger:?}");
-        assert_eq!(ledger.divergences.len(), 3, "{ledger:?}");
-        for divergence in &ledger.divergences {
-            assert!(
-                matches!(
-                    divergence.quantity,
-                    crate::table_shadow::TableSizingQuantity::InferredColumnSize(_)
-                ),
-                "{ledger:?}"
-            );
-            // Buckram fills the explicit 300px; the live tracks sit near the
-            // cells' max-content instead.
-            assert!(
-                (divergence.buckram - 100.0).abs() < 0.01 && divergence.livery < 40.0,
-                "{ledger:?}"
-            );
-        }
+    fn k4c5b_automatic_explicit_width_is_distributed_and_painted() {
+        assert_assigned_and_honored(&automatic_table_ledger("width: 300px;"));
     }
 
-    /// An automatic table on the production inline route is counted, never
-    /// silently passed: no live columns and no intrinsic seam exist there yet.
+    /// K4c5b on the production text path: automatic tables there previously
+    /// could not even be shadowed; they are now sized by Buckram.
     #[test]
-    fn k4c5a_automatic_tables_on_the_text_path_are_counted() {
+    fn k4c5b_text_path_automatic_tables_are_buckram_owned() {
         let dom = StaticDocument::parse(
             "<p>before</p><table><tbody><tr><td>one</td><td>two</td></tr></tbody></table>",
         );
         let styles = resolve_styles(
             &dom,
             &StyleSet::cambium(&[
-                "table { display: table; } tbody { display: table-row-group; } tr { display: table-row; } td { display: table-cell; }",
+                "table { display: table; border-spacing: 0; } tbody { display: table-row-group; } tr { display: table-row; } td { display: table-cell; padding: 0; }",
             ]),
             &Device::screen(320.0, 240.0),
             &InteractionStates::default(),
@@ -3954,12 +3931,10 @@ mod tests {
         .expect("layout");
         let ledger = layout.table_shadow_ledger();
         assert!(
-            ledger.skipped.iter().any(|(_, skip)| matches!(
-                skip,
-                crate::table_shadow::TableShadowSkip::AutomaticOnInlineRoute
-            )),
-            "expected the automatic table to be counted on the inline route: {ledger:?}"
+            ledger.assigned >= 1,
+            "the text path's automatic table was not sized by Buckram: {ledger:?}"
         );
+        assert!(ledger.is_silent(), "{ledger:?}");
     }
 
     /// Regression for the K4a/K4b-window crash in WPT

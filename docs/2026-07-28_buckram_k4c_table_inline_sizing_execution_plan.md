@@ -1139,6 +1139,64 @@ The accepted K4c5 tree contains:
 The `table-layout` partial marker remains narrowed until K4g supplies
 collapsed-border metrics and reruns the collapsed fixed-layout families.
 
+### K4c5b receipt - 2026-07-31
+
+**Capability:** Buckram owns live table inline sizing on every route. Every
+flattenable table is noted at box-build time; before the main layout pass its
+columns are computed by Buckram's fixed or automatic algorithm (automatic
+cell intrinsics measured through the live measure machinery, with the cell's
+own width sizing neutralized and restored) and pinned as explicit grid
+tracks. The inline production route now threads a containing size, mirroring
+the block route, so width-auto tables shrink-to-fit instead of deferring.
+After fragment collection, a verification pass asserts the painted
+single-span cell widths honored the assignment; a divergence there is a
+bridge invariant violation, not a sizing disagreement.
+
+**Removal:** `fixed_column_widths` and the table-only `horizontal_edges` are
+deleted. No live code path chooses a table or column width outside Buckram; a
+table Buckram defers (collapsed borders pending K4g, percentage padding
+pending a basis, incomplete cells, named indefinite bases) falls back to grid
+inference under a named ledger skip, counted, never silent. The
+`table-layout` partial marker is narrowed to the K4g collapsed-border
+geometry.
+
+**Both accepted K4c5a divergences resolved in Buckram's favor**, pinned by
+`k4c5b_fixed_border_spacing_distribution_is_painted` and
+`k4c5b_automatic_explicit_width_is_distributed_and_painted`; the
+corpus receipt is `border-spacing-percentage-001.xht` moving to pass.
+
+**WPT movement (vs the accepted `*_baselinefix` maps):** roughly ten
+improvements against five table-adjacent regressions, each classified:
+
+- Improvements: `absolute-tables-010.tentative`, `colspan-004`,
+  `visibility-collapse-colspan-003`, `border-spacing-percentage-001`,
+  `display-{012,013}`, `margin-collapse-{110,131}`,
+  `margin-right-applies-to-007`.
+- `rules-groups.html`: the `rules=groups` test table implies collapsed
+  borders and defers to inference while its separate-border reference gets
+  Buckram columns, so the two pages size asymmetrically. Owner: K4g, whose
+  collapsed metrics remove the deferral and the asymmetry.
+- `floats-wrap-bfc-003-{left,right}-table.xht`: a table establishing a BFC
+  beside a float must shrink-to-fit the float band, but the noted table
+  carries its containing block's full width, so Buckram sizes it too wide to
+  wrap. Owner: K4h table integration (fitted available space under floats).
+- `c5501-mrgn-t-000.xht`, `c5503-mrgn-b-000.xht`: css1 margin fixtures whose
+  measurement structure contains tables; the same geometry-shift class as
+  the float pair. Owner: K4h integration, to be rediagnosed with it.
+
+Seven of the nine ratchet directories moved nothing. The `*_k4c5b.json` maps
+are the new accepted baselines. Proof directory:
+`testing/genet/wpt-ledger/2026-07-31_buckram_k4c5b`.
+
+**Verification:** buckram 123, livery and genet-livery all targets 0 failed
+(genet-livery lib 46, including seven K4c5b receipts across both routes and
+the atomic subtree path); clippy `-D warnings` clean on touched crates;
+exact-file Rustfmt and `git diff --check` clean; release `genet-wpt` build
+clean.
+
+**Bridge count:** the Grid/Flex bridge remains as placement only, counted by
+`table_bridge_counts` exactly as before; K4d owns its retirement.
+
 ## Cross-gate dependency map
 
 | Consumer | K4c output or input |

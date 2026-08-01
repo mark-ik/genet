@@ -14,8 +14,8 @@ mod layout;
 mod paint;
 mod style;
 mod table_sizing;
-// K4c5a compares Buckram against the live path without changing painted
-// output. K4c5b makes Buckram authoritative and deletes the live helper.
+// K4c5b: Buckram owns live table inline sizing on every route; deferred
+// tables fall back to grid inference under named counters.
 pub mod table_shadow;
 mod text;
 
