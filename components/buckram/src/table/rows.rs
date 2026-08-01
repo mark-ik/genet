@@ -445,6 +445,219 @@ fn definite_block_size(constraint: TableBlockConstraint) -> Option<f32> {
     }
 }
 
+/// One cell's required border-box block size, and whether its own specified
+/// height supplied a definite contribution.
+fn cell_required_block_size(
+    style: TableCellBlockStyle,
+    output: &TableCellLayoutOutput,
+    box_id: BoxId,
+) -> Result<(f32, bool), TableRowLayoutError> {
+    if !output.is_valid() {
+        return Err(TableRowLayoutError::InvalidCellOutput { box_id });
+    }
+    let offsets = style
+        .offsets
+        .total()
+        .ok_or(TableRowLayoutError::InvalidCellOutput { box_id })?;
+    // Overflow is deliberately not consulted: it is retained on the output
+    // and never inflates a row.
+    let mut required = (output.content_block_size + offsets).max(output.border_box_min_block_size);
+    let mut constrained = false;
+    if let Some(specified) = definite_block_size(style.specified) {
+        let as_border_box = match style.box_sizing {
+            TableBoxSizing::ContentBox => specified + offsets,
+            TableBoxSizing::BorderBox => specified,
+        };
+        required = required.max(as_border_box);
+        constrained = true;
+    }
+    Ok((required, constrained))
+}
+
+/// The zero-weight fallback for a distribution site. Both branches are
+/// measured, not assumed; see the K4d3 interop record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ZeroWeightFallback {
+    /// Table and row-group height over rows with no measure at all: equal
+    /// shares. Chrome 150 and Firefox 153 both give `[150, 150]` for a 300px
+    /// table over two empty rows.
+    EqualShares,
+    /// Rowspan excess over rows with no measure at all: the last spanned row
+    /// takes everything. Both engines give `[0, 200]`, not `[100, 100]`.
+    LastEligibleRow,
+}
+
+/// Grow `sizes[scope]` to total `target`, following the measured rule.
+///
+/// Rows without a definite specified height absorb the growth. When every
+/// row in scope is constrained they all participate instead, in proportion
+/// to their sizes: Chrome 150 and Firefox 153 agree on that for a rowspan
+/// (`[80, 120]` over definite 20/30), and Chrome extends it to table height
+/// where Firefox instead splits the excess equally. Buckram follows Chrome
+/// there, because it keeps one rule for both sites rather than two.
+///
+/// Weights are the rows' current sizes, so rows never shrink: the function
+/// is only entered when `target` exceeds the scope's current total.
+fn distribute_over_rows(
+    sizes: &mut [f32],
+    constrained: &[bool],
+    start: usize,
+    span: usize,
+    target: f32,
+    fallback: ZeroWeightFallback,
+) {
+    let end = start + span;
+    let unconstrained = (start..end).filter(|index| !constrained[*index]).count();
+    let eligible = (start..end)
+        .filter(|index| unconstrained == 0 || !constrained[*index])
+        .collect::<Vec<_>>();
+    if eligible.is_empty() {
+        return;
+    }
+    let fixed = (start..end)
+        .filter(|index| !eligible.contains(index))
+        .map(|index| sizes[index])
+        .sum::<f32>();
+    let share = (target - fixed).max(0.0);
+    let weight = eligible.iter().map(|index| sizes[*index]).sum::<f32>();
+
+    let mut remainder = share;
+    for (position, index) in eligible.iter().enumerate() {
+        let last = position + 1 == eligible.len();
+        let size = if last {
+            remainder
+        } else if weight > 0.0 {
+            share * sizes[*index] / weight
+        } else {
+            match fallback {
+                ZeroWeightFallback::EqualShares => share / eligible.len() as f32,
+                ZeroWeightFallback::LastEligibleRow => 0.0,
+            }
+        };
+        sizes[*index] = size;
+        remainder -= size;
+    }
+}
+
+/// K4d3's block-axis result.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableRowSizing {
+    pub used_table_block_size: f32,
+    pub row_offsets: Vec<f32>,
+    pub row_sizes: Vec<f32>,
+}
+
+/// K4d3: fit every spanning cell within its row range, then choose the
+/// table's used block size.
+///
+/// Spanning cells are processed in increasing span order, so a wider span
+/// always sees the rows a narrower one already grew. A definite table block
+/// size is a minimum, never a maximum: a table shorter than its rows keeps
+/// the rows. See the K4d3 interop record for the measured distribution.
+pub fn size_table_rows(
+    input: &TableBlockSizingInput<'_>,
+    measures: &[TableRowMeasure],
+    cell_styles: &[TableCellBlockStyle],
+    cell_outputs: &[(BoxId, TableCellLayoutOutput)],
+) -> Result<TableRowSizing, TableRowLayoutError> {
+    let grid = input.grid;
+    if measures.len() != grid.rows.len() {
+        return Err(TableRowLayoutError::RowInputCountMismatch {
+            expected: grid.rows.len(),
+            actual: measures.len(),
+        });
+    }
+    if cell_styles.len() != grid.cells.len() || cell_outputs.len() != grid.cells.len() {
+        return Err(TableRowLayoutError::CellInputCountMismatch {
+            expected: grid.cells.len(),
+            actual: cell_styles.len().min(cell_outputs.len()),
+        });
+    }
+    let TableBlockBorderMetrics::Separated(metrics) = input.border_metrics else {
+        return Err(TableRowLayoutError::Deferral(
+            TableBlockDeferral::CollapsedBlockBorderMetricsPendingK4g,
+        ));
+    };
+    let undistributable = metrics
+        .undistributable_block_size(grid.rows.len())
+        .ok_or(TableRowLayoutError::InvalidCellOutput { box_id: grid.grid })?;
+
+    let mut sizes = measures
+        .iter()
+        .map(|measure| measure.min_block_size)
+        .collect::<Vec<_>>();
+    let constrained = measures
+        .iter()
+        .map(|measure| measure.constrained)
+        .collect::<Vec<_>>();
+
+    // Increasing span order: a wider span must see the rows a narrower one
+    // already grew, never the other way round.
+    let mut spanning = Vec::new();
+    for (index, cell) in grid.cells.iter().enumerate() {
+        if cell.row_span <= 1 {
+            continue;
+        }
+        if cell.row + cell.row_span > grid.rows.len() {
+            return Err(TableRowLayoutError::Deferral(
+                TableBlockDeferral::FragmentationDependentRowspan,
+            ));
+        }
+        let (required, _) =
+            cell_required_block_size(cell_styles[index], &cell_outputs[index].1, cell.source)?;
+        spanning.push((cell.row_span, cell.row, required));
+    }
+    spanning.sort_by_key(|(span, row, _)| (*span, *row));
+
+    for (span, row, required) in spanning {
+        // Spacing between the spanned rows counts toward the cell's range,
+        // so only the row sizes themselves have to make up the remainder.
+        let crossed_spacing = metrics.block_spacing * (span - 1) as f32;
+        let available = sizes[row..row + span].iter().sum::<f32>() + crossed_spacing;
+        if required <= available {
+            continue;
+        }
+        distribute_over_rows(
+            &mut sizes,
+            &constrained,
+            row,
+            span,
+            required - crossed_spacing,
+            ZeroWeightFallback::LastEligibleRow,
+        );
+    }
+
+    let rows_total = sizes.iter().sum::<f32>();
+    if let Some(definite) = definite_block_size(input.table_constraint)
+        && definite > rows_total + undistributable
+    {
+        distribute_over_rows(
+            &mut sizes,
+            &constrained,
+            0,
+            grid.rows.len(),
+            definite - undistributable,
+            ZeroWeightFallback::EqualShares,
+        );
+    }
+
+    let mut row_offsets = Vec::with_capacity(grid.rows.len());
+    let mut cursor = metrics.table_offset_start + metrics.block_spacing;
+    for size in &sizes {
+        row_offsets.push(cursor);
+        cursor += size + metrics.block_spacing;
+    }
+    let used_table_block_size = sizes.iter().sum::<f32>() + undistributable;
+    if !used_table_block_size.is_finite() || sizes.iter().any(|size| !size.is_finite()) {
+        return Err(TableRowLayoutError::InvalidCellOutput { box_id: grid.grid });
+    }
+    Ok(TableRowSizing {
+        used_table_block_size,
+        row_offsets,
+        row_sizes: sizes,
+    })
+}
+
 /// K4d2: content-based minimum block sizes for every K4b row.
 ///
 /// Per CSS 2.1 section 17.5.3, a row's minimum is the maximum of its own
@@ -506,35 +719,13 @@ pub fn measure_single_span_rows(
             if cell.row != index || cell.row_span != 1 {
                 continue;
             }
-            let style = cell_styles[cell_index];
-            let output = &cell_outputs[cell_index].1;
-            if !output.is_valid() {
-                return Err(TableRowLayoutError::InvalidCellOutput {
-                    box_id: cell.source,
-                });
-            }
-            let offsets = style
-                .offsets
-                .total()
-                .ok_or(TableRowLayoutError::InvalidCellOutput {
-                    box_id: cell.source,
-                })?;
-            // The content the cell actually needs, as a border box. Overflow
-            // is deliberately not consulted: it is retained on the output and
-            // never inflates a row.
-            let content_required = output.content_block_size + offsets;
-            min_block_size = min_block_size
-                .max(content_required)
-                .max(output.border_box_min_block_size);
-
-            if let Some(specified) = definite_block_size(style.specified) {
-                let as_border_box = match style.box_sizing {
-                    TableBoxSizing::ContentBox => specified + offsets,
-                    TableBoxSizing::BorderBox => specified,
-                };
-                min_block_size = min_block_size.max(as_border_box);
-                constrained = true;
-            }
+            let (required, cell_constrained) = cell_required_block_size(
+                cell_styles[cell_index],
+                &cell_outputs[cell_index].1,
+                cell.source,
+            )?;
+            min_block_size = min_block_size.max(required);
+            constrained |= cell_constrained;
         }
 
         if !min_block_size.is_finite() || min_block_size < 0.0 {
@@ -1108,6 +1299,255 @@ mod tests {
                 expected: 1,
                 actual: 2,
             })
+        );
+    }
+
+    /// Run one interop-matrix case: `rows` gives each row's (minimum,
+    /// definite-height) pair, `span` an optional (row, span, required)
+    /// spanning cell, and `table` the table's own constraint.
+    fn matrix_case(
+        row_minima: &[(f32, bool)],
+        span: Option<(usize, usize, f32)>,
+        table: TableBlockConstraint,
+        metrics: TableSeparatedBlockMetrics,
+    ) -> TableRowSizing {
+        // One cell per row, plus the spanning cell in its starting row.
+        // Element ids: row r's own cell is 3+r, the spanner is 200.
+        let rows_spec = (0..row_minima.len())
+            .map(|r| {
+                if span.is_some_and(|(start, _, _)| start == r) {
+                    vec![3u8 + r as u8, 200]
+                } else {
+                    vec![3u8 + r as u8]
+                }
+            })
+            .collect::<Vec<_>>();
+        let refs = rows_spec.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let span_inputs = span
+            .map(|(_, span, _)| vec![(200u8, span)])
+            .unwrap_or_default();
+        let grid = multi_row_grid(&refs, &span_inputs);
+
+        let mut styles = vec![TableCellBlockStyle::default(); grid.cells.len()];
+        let mut outputs = Vec::with_capacity(grid.cells.len());
+        for cell in &grid.cells {
+            if cell.row_span > 1 {
+                outputs.push(output(span.expect("spanning case").2, 0.0));
+            } else {
+                let (minimum, definite) = row_minima[cell.row];
+                if definite {
+                    styles[outputs.len()].specified = px(minimum);
+                    outputs.push(output(0.0, 0.0));
+                } else {
+                    outputs.push(output(minimum, 0.0));
+                }
+            }
+        }
+        let inline = inline_result(&grid, vec![10.0; grid.columns.len()]);
+        let input = TableBlockSizingInput {
+            grid: &grid,
+            inline: &inline,
+            table_constraint: table,
+            border_metrics: TableBlockBorderMetrics::Separated(metrics),
+            available_block_size: None,
+            track_visibility: TableTrackVisibility::all_visible(&grid),
+        };
+        let paired = grid
+            .cells
+            .iter()
+            .map(|cell| cell.source)
+            .zip(outputs)
+            .collect::<Vec<_>>();
+        let row_constraints = vec![TableBlockConstraint::Auto; grid.rows.len()];
+        let measures = measure_single_span_rows(&input, &styles, &paired, &row_constraints)
+            .expect("row measures");
+        size_table_rows(&input, &measures, &styles, &paired).expect("row sizing")
+    }
+
+    fn close(actual: &[f32], expected: &[f32]) {
+        assert_eq!(actual.len(), expected.len(), "{actual:?} vs {expected:?}");
+        for (one, other) in actual.iter().zip(expected) {
+            assert!(
+                (one - other).abs() < 0.05,
+                "{actual:?} vs expected {expected:?}"
+            );
+        }
+    }
+
+    /// The K4d3 interop matrix, measured in Chrome 150 and Firefox 153 on
+    /// 2026-08-01. Every case below reproduces a measurement; see the
+    /// gate receipt for the full table and the one divergence.
+    #[test]
+    fn rowspan_excess_follows_the_measured_interop_matrix() {
+        let zero = TableSeparatedBlockMetrics::default();
+        // S1: two automatic rows with minima 20/40, spanner needs 200.
+        // Both engines: proportional to the minima.
+        let s1 = matrix_case(
+            &[(20.0, false), (40.0, false)],
+            Some((0, 2, 200.0)),
+            TableBlockConstraint::Auto,
+            zero,
+        );
+        close(&s1.row_sizes, &[66.67, 133.33]);
+        assert!((s1.used_table_block_size - 200.0).abs() < 0.05);
+
+        // S2: a definite row does not grow while an automatic row can.
+        let s2 = matrix_case(
+            &[(20.0, true), (40.0, false)],
+            Some((0, 2, 200.0)),
+            TableBlockConstraint::Auto,
+            zero,
+        );
+        close(&s2.row_sizes, &[20.0, 180.0]);
+
+        // S3: three rows, minima 10/20/30.
+        let s3 = matrix_case(
+            &[(10.0, false), (20.0, false), (30.0, false)],
+            Some((0, 3, 200.0)),
+            TableBlockConstraint::Auto,
+            zero,
+        );
+        close(&s3.row_sizes, &[33.33, 66.67, 100.0]);
+
+        // S4: every spanned row is empty, so there is no proportion to
+        // follow. Both engines give the whole excess to the last row, not
+        // an equal split.
+        let s4 = matrix_case(
+            &[(0.0, false), (0.0, false)],
+            Some((0, 2, 200.0)),
+            TableBlockConstraint::Auto,
+            zero,
+        );
+        close(&s4.row_sizes, &[0.0, 200.0]);
+
+        // S5: every spanned row is definite, so they all grow together in
+        // proportion. Both engines agree here.
+        let s5 = matrix_case(
+            &[(20.0, true), (30.0, true)],
+            Some((0, 2, 200.0)),
+            TableBlockConstraint::Auto,
+            zero,
+        );
+        close(&s5.row_sizes, &[80.0, 120.0]);
+    }
+
+    #[test]
+    fn used_table_block_size_follows_the_measured_interop_matrix() {
+        let zero = TableSeparatedBlockMetrics::default();
+        // T1: 300px table over minima 20/40, proportional.
+        let t1 = matrix_case(&[(20.0, false), (40.0, false)], None, px(300.0), zero);
+        close(&t1.row_sizes, &[100.0, 200.0]);
+        assert!((t1.used_table_block_size - 300.0).abs() < 0.05);
+
+        // T2: an empty row has no measure, so proportion gives it nothing.
+        let t2 = matrix_case(&[(60.0, false), (0.0, false)], None, px(300.0), zero);
+        close(&t2.row_sizes, &[300.0, 0.0]);
+
+        // T3: a definite table height is a minimum, never a maximum.
+        let t3 = matrix_case(&[(20.0, false), (40.0, false)], None, px(10.0), zero);
+        close(&t3.row_sizes, &[20.0, 40.0]);
+        assert!((t3.used_table_block_size - 60.0).abs() < 0.05);
+
+        // T5: a definite row keeps its height; the automatic row absorbs.
+        let t5 = matrix_case(&[(20.0, true), (40.0, false)], None, px(300.0), zero);
+        close(&t5.row_sizes, &[20.0, 280.0]);
+
+        // T6: with no measure anywhere, table height splits equally. This
+        // is the branch that differs from the rowspan site.
+        let t6 = matrix_case(&[(0.0, false), (0.0, false)], None, px(300.0), zero);
+        close(&t6.row_sizes, &[150.0, 150.0]);
+
+        // T7: the one divergence. Chrome 150 distributes proportionally
+        // ([120, 180]); Firefox 153 splits the excess equally ([145, 155]).
+        // Buckram follows Chrome, keeping one rule for both distribution
+        // sites rather than two.
+        let t7 = matrix_case(&[(20.0, true), (30.0, true)], None, px(300.0), zero);
+        close(&t7.row_sizes, &[120.0, 180.0]);
+    }
+
+    #[test]
+    fn spacing_counts_once_at_the_table_and_inside_a_span() {
+        let metrics = TableSeparatedBlockMetrics {
+            table_offset_start: 1.0,
+            table_offset_end: 2.0,
+            block_spacing: 5.0,
+        };
+        // Two rows of 20 and 40: edges 3 plus three intervals of 5 = 18.
+        let sizing = matrix_case(
+            &[(20.0, false), (40.0, false)],
+            None,
+            TableBlockConstraint::Auto,
+            metrics,
+        );
+        close(&sizing.row_sizes, &[20.0, 40.0]);
+        assert!((sizing.used_table_block_size - 78.0).abs() < 0.05);
+        // Offsets start after the table edge and its first interval.
+        close(&sizing.row_offsets, &[6.0, 31.0]);
+
+        // The interval a span crosses counts toward the cell's range, so the
+        // rows only have to supply 200 - 5.
+        let spanned = matrix_case(
+            &[(20.0, false), (40.0, false)],
+            Some((0, 2, 200.0)),
+            TableBlockConstraint::Auto,
+            metrics,
+        );
+        assert!((spanned.row_sizes.iter().sum::<f32>() - 195.0).abs() < 0.05);
+    }
+
+    /// The K4d3 monotonicity property: raising one spanning cell's
+    /// requirement never shrinks a row inside its span.
+    #[test]
+    fn raising_a_spanning_requirement_never_shrinks_a_spanned_row() {
+        let zero = TableSeparatedBlockMetrics::default();
+        let mut previous = vec![0.0, 0.0];
+        for required in [0.0_f32, 50.0, 120.0, 200.0, 480.0] {
+            let sizing = matrix_case(
+                &[(20.0, false), (40.0, false)],
+                Some((0, 2, required)),
+                TableBlockConstraint::Auto,
+                zero,
+            );
+            for (now, before) in sizing.row_sizes.iter().zip(&previous) {
+                assert!(
+                    *now >= before - 0.05,
+                    "required {required}: {:?} shrank below {previous:?}",
+                    sizing.row_sizes
+                );
+            }
+            previous = sizing.row_sizes;
+        }
+    }
+
+    #[test]
+    fn collapsed_block_metrics_defer_before_any_row_sizing() {
+        let grid = multi_row_grid(&[&[3]], &[]);
+        let inline = inline_result(&grid, vec![10.0]);
+        let input = TableBlockSizingInput {
+            grid: &grid,
+            inline: &inline,
+            table_constraint: TableBlockConstraint::Auto,
+            border_metrics: TableBlockBorderMetrics::CollapsedPendingK4g,
+            available_block_size: None,
+            track_visibility: TableTrackVisibility::all_visible(&grid),
+        };
+        let measures = vec![TableRowMeasure {
+            row: grid.rows[0].source,
+            min_block_size: 10.0,
+            preferred: TableBlockConstraint::Auto,
+            constrained: false,
+        }];
+        let paired = vec![(grid.cells[0].source, output(10.0, 0.0))];
+        assert_eq!(
+            size_table_rows(
+                &input,
+                &measures,
+                &[TableCellBlockStyle::default()],
+                &paired
+            ),
+            Err(TableRowLayoutError::Deferral(
+                TableBlockDeferral::CollapsedBlockBorderMetricsPendingK4g
+            ))
         );
     }
 

@@ -2,9 +2,9 @@
 
 **Date:** 2026-07-28
 
-**Status:** in execution from accepted K4c5b commit `a96fe7d147e`. K4d1 and
-K4d2 are complete; K4d3 is next, and needs its browser interop matrix before
-its algorithm can be selected.
+**Status:** in execution from accepted K4c5b commit `a96fe7d147e`. K4d1
+through K4d3 are complete, with K4d3's distribution selected from a measured
+Chrome 150 / Firefox 153 matrix. K4d4 is next and needs its own matrix.
 
 **Parent plan:** [Buckram K4 CSS tables execution plan](2026-07-28_buckram_k4_css_tables_execution_plan.md)
 
@@ -501,6 +501,95 @@ size.
 
 Delete any adapter-side rowspan or table-height distribution. Buckram's row
 result is the only source for used row and table block sizes.
+
+### K4d3 interop matrix - 2026-08-01
+
+Measured with `interop-matrix.html` in the K4d3 proof directory, headless:
+**Chrome 150.0.0.0** (`--dump-dom`) and **Firefox 153.0.1** (`--screenshot`).
+Each case reports every row's border-box block size and the table's.
+
+| Case | Chrome 150 | Firefox 153 |
+|---|---|---|
+| S1 span 2, minima 20/40, cell 200 | 66.66 / 133.34 | 66.67 / 133.33 |
+| S2 span 2, definite 20 + auto 40, cell 200 | 20 / 180 | 20 / 180 |
+| S3 span 3, minima 10/20/30, cell 200 | 33.33 / 66.66 / 100.02 | 33.33 / 66.67 / 100 |
+| S4 span 2, both rows empty, cell 200 | 0 / 200 | 0 / 200 |
+| S5 span 2, both rows definite 20/30, cell 200 | 80 / 120 | 80 / 120 |
+| T1 table 300, minima 20/40 | 100 / 200 | 100 / 200 |
+| T2 table 300, minima 60/0 | 300 / 0 | 300 / 0 |
+| T3 table 10, minima 20/40 | 20 / 40 (table 60) | 20 / 40 (table 60) |
+| T4 row-group 200, minima 20/40 | 66.66 / 133.34 | 66.67 / 133.33 |
+| T5 table 300, definite 20 + auto 40 | 20 / 280 | 20 / 280 |
+| T6 table 300, two empty rows | 150 / 150 | 150 / 150 |
+| **T7 table 300, both rows definite 20/30** | **120 / 180** | **145 / 155** |
+
+**Eleven of twelve cases agree.** The accepted rule, reproduced by
+`distribute_over_rows`:
+
+1. Rows without a definite specified height absorb growth; rows with one keep
+   it (S2, T5).
+2. Growth is distributed in proportion to the rows' current sizes (S1, S3,
+   T1, T2, T4).
+3. When every row in scope is constrained, they all participate in proportion
+   instead (S5, T7).
+4. When every eligible weight is zero the two sites differ, and both branches
+   are measured, not assumed: a rowspan gives everything to the last spanned
+   row (S4), while table height splits equally (T6).
+5. A definite table block size is a minimum, never a maximum (T3).
+
+**The one divergence, T7,** is resolved toward Chrome. Firefox is internally
+inconsistent there: it distributes a rowspan's excess proportionally over
+all-definite rows (S5) but splits a table's excess equally over the same
+shape (T7). Chrome uses one rule at both sites, and so does Buckram, which
+keeps a single distribution function rather than two that differ only in a
+rarely-reached branch. This is a measured tiebreak, not a reading of draft
+prose.
+
+**Row-group height (T4) is explicit but unimplemented.** Both engines apply a
+row-group height exactly as a table height over that group's rows. Buckram
+does not yet act on it because `TableBlockSizingInput` carries no per-group
+constraint; adding one the adapter does not supply would be worse than the
+recorded gap. K4d6 wires it when the adapter lowers group styles.
+
+### K4d3 receipt - 2026-08-01
+
+**Base commit:** `568959cef94` (accepted K4d2).
+
+**Capability:** `size_table_rows` fits every spanning cell within its row
+range and selects the table's used block size. Spanning cells are processed
+in increasing span order, so a wider span always sees the rows a narrower one
+already grew. Spacing a span crosses counts toward that cell's range, so only
+the row sizes make up the remainder, and the table's undistributable total is
+added exactly once. Returns `TableRowSizing` with row offsets in the table's
+logical block axis.
+
+**Interop decision:** the matrix above. All twelve cases are reproduced by
+`rowspan_excess_follows_the_measured_interop_matrix` and
+`used_table_block_size_follows_the_measured_interop_matrix`, including T7 at
+Chrome's value.
+
+**Pure fixtures:** the twelve matrix cases; spacing counted once at the table
+and once per crossed interval inside a span; the monotonicity property that
+raising a spanning requirement never shrinks a spanned row, checked across
+five increasing requirements; and collapsed metrics deferring before any row
+sizing. Five tests; buckram 139.
+
+**Deferrals:** a rowspan reaching past the last row returns
+`FragmentationDependentRowspan`. K4b already clamps spans to their row group,
+so this is reachable only from a malformed grid; no fragmentainer exists in
+this gate, and K6 owns the real split case.
+
+**Removal:** no adapter-side rowspan or table-height distribution exists;
+`size_table_rows` is the only source of used row and table block sizes.
+
+**WPT:** both table corpora rerun against the K4d1 maps with zero movement,
+as a model-only gate requires. Proof directory:
+`testing/genet/wpt-ledger/2026-08-01_buckram_k4d3`, holding
+`interop-matrix.html`, `chrome-dom.txt`, and `firefox.png`.
+
+**Verification:** buckram 139, livery and genet-livery all targets 0 failed;
+clippy clean on touched files; exact-file Rustfmt and `git diff --check`
+clean.
 
 ## K4d4. Percentage-height relayout and cycle handling
 

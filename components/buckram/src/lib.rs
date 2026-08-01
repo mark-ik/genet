@@ -53,13 +53,13 @@ pub use table::{
     TableGrid, TableGridError, TableGridInputs, TableInlineBorderMetrics, TableInlineConstraints,
     TableInlineProperty, TableInlineSizingError, TableInlineSizingInput, TableInlineSizingResult,
     TableIntrinsicMeasureProvider, TableRowLayoutError, TableRowLayoutResult, TableRowMeasure,
-    TableRowSpan, TableSeparatedBlockMetrics, TableSeparatedBorderMetrics, TableSlot,
-    TableSpanMeasureDistribution, TableTrack, TableTrackGroup, TableTrackGroupKind,
+    TableRowSizing, TableRowSpan, TableSeparatedBlockMetrics, TableSeparatedBorderMetrics,
+    TableSlot, TableSpanMeasureDistribution, TableTrack, TableTrackGroup, TableTrackGroupKind,
     TableTrackInput, TableTrackVisibility, TableTrackVisibilityState,
     cache_automatic_table_grid_intrinsic_sizes, collect_table_cell_inline_measures,
     format_table_cells, measure_automatic_columns, measure_single_span_rows,
     query_table_cell_inline_sizes, size_automatic_table_inline, size_fixed_table_inline,
-    spanned_cell_content_inline_size,
+    size_table_rows, spanned_cell_content_inline_size,
 };
 pub use taffy_adapter::{
     AlgorithmAvailableSpace, AlgorithmKind, AlgorithmLayout, AlgorithmNodeId, AlgorithmSize,
