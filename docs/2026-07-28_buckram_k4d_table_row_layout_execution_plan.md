@@ -2,8 +2,9 @@
 
 **Date:** 2026-07-28
 
-**Status:** in execution from accepted K4c5b commit `a96fe7d147e`. K4d1 is
-complete; K4d2 is next.
+**Status:** in execution from accepted K4c5b commit `a96fe7d147e`. K4d1 and
+K4d2 are complete; K4d3 is next, and needs its browser interop matrix before
+its algorithm can be selected.
 
 **Parent plan:** [Buckram K4 CSS tables execution plan](2026-07-28_buckram_k4_css_tables_execution_plan.md)
 
@@ -393,6 +394,62 @@ Compute content-based minimum row heights for cells that occupy one row.
 
 Delete any shadow row-minimum arithmetic outside `buckram::table::rows`.
 Live Grid/Flex placement remains until K4d6.
+
+### K4d2 receipt - 2026-08-01
+
+**Base commit:** `3ea63852115` (accepted K4d1).
+
+**Capability:** `measure_single_span_rows` computes each K4b row's minimum as
+the maximum of its own definite height, the definite specified-height
+contributions of cells occupying only that row, and the border-box minimum
+those cells' contents require. Supporting contracts: `CellBlockOffsets`
+(resolved, since a padding percentage resolves against the inline containing
+size K4c made definite) and `TableCellBlockStyle`, which keeps a cell's
+specified height apart from its measured content so the specification
+constrains the row without overwriting the content box.
+
+**Boundary retained:** cells spanning more than one row contribute nothing;
+distributing a spanning minimum is K4d3's undefined-in-CSS-2.1 decision.
+Separated spacing is excluded from every row and belongs to the table level
+exactly once, via `undistributable_block_size`. Overflow is retained on the
+cell output and never inflates a row. `input.inline` is read-only, so
+later-row content cannot feed back into K4c's columns. A percentage height
+is never sampled at zero: it contributes nothing definite, leaves
+`constrained` false, and survives in `preferred` for K4d4.
+
+**Contract correction:** `TableRowMeasure::row` became `Option<BoxId>`. A row
+track created implicitly by placement has no CSS box, and inventing an
+identity for it would make a later fragment attributable to a box that does
+not exist.
+
+**Pure fixtures:** row maximum over differing cell heights with padding and
+borders; cell-order permutation invariance; specified cell height as a row
+constraint in both box-sizing modes; row-versus-cell competition; percentage
+survival; empty rows, displaced cells, and rows holding only a continuing
+rowspan inventing nothing; overflow and spacing exclusion; subpixel exactness;
+and misaligned input vectors as explicit errors. Seven tests; buckram 134.
+
+**Adapter fixture:**
+`k4d2_row_minima_follow_from_formatted_cell_contents` formats real cell
+contents over the live `AlgorithmTree` at the exact K4c inline size with an
+indefinite first-pass block size, then derives row minima of 27px and 9px
+from the measured contents alone.
+
+**Removal:** an audit of `components/genet-livery/src` finds no row-height
+arithmetic outside `buckram::table::rows`; only the new test's name matches.
+Live Grid/Flex placement remains until K4d6.
+
+**WPT:** both table corpora rerun against the K4d1 maps with zero movement,
+as a model-only gate requires. The focused height families are captured as
+orientation for K4d6's cutover, measured before any live change:
+`height-distribution` 2 passed / 10 failed / 5 skipped of 17,
+`empty-table-height` and `subpixel-table-cell-height-001` passing,
+`dynamic-table-cell-height` skipped as script-dependent. Proof directory:
+`testing/genet/wpt-ledger/2026-08-01_buckram_k4d2`.
+
+**Verification:** buckram 134, livery and genet-livery all targets 0 failed;
+clippy clean on touched files; exact-file Rustfmt and `git diff --check`
+clean.
 
 ## K4d3. Rowspan constraints and used table height
 

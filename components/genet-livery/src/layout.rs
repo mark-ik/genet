@@ -4147,6 +4147,186 @@ mod tests {
         );
     }
 
+    /// K4d2 adapter fixture: real cell contents are formatted at exact K4c
+    /// inline sizes with an indefinite first-pass block size, and the row
+    /// minima that follow come from those measured contents. The taller row
+    /// is taller because its content is, not because anything was assumed.
+    #[test]
+    fn k4d2_row_minima_follow_from_formatted_cell_contents() {
+        use buckram::{
+            FragmentDraftTree, TableCellBlockStyle, TableCellFormatter, TableCellLayoutInput,
+            TableCellLayoutOutput, TableCellLayoutPass, TableRowLayoutError,
+        };
+
+        struct TreeFormatter<'a> {
+            tree: &'a mut AlgorithmTree<Style, TextMeasure, Option<BoxId>>,
+            nodes: HashMap<BoxId, AlgorithmNodeId>,
+            requests: Vec<TableCellLayoutInput>,
+        }
+
+        impl TableCellFormatter for TreeFormatter<'_> {
+            fn format_cell(
+                &mut self,
+                input: TableCellLayoutInput,
+            ) -> Result<TableCellLayoutOutput, TableRowLayoutError> {
+                self.requests.push(input);
+                let node = *self.nodes.get(&input.box_id).ok_or(
+                    TableRowLayoutError::InvalidCellOutput {
+                        box_id: input.box_id,
+                    },
+                )?;
+                self.tree.compute_layout_with_measure(
+                    node,
+                    AlgorithmSize::new(
+                        AlgorithmAvailableSpace::Definite(input.content_inline_size),
+                        // The first pass is deliberately indefinite in the
+                        // block axis: a cell height must not stretch its
+                        // content formatting context.
+                        AlgorithmAvailableSpace::MaxContent,
+                    ),
+                    |known, _, _, context, _| {
+                        let Some(context) = context else {
+                            return AlgorithmSize::new(0.0, 0.0);
+                        };
+                        AlgorithmSize::new(
+                            known.width.unwrap_or(context.max_width),
+                            known.height.unwrap_or(context.height),
+                        )
+                    },
+                );
+                let layout = self.tree.layout(node);
+                Ok(TableCellLayoutOutput {
+                    content_block_size: layout.height,
+                    border_box_min_block_size: 0.0,
+                    baselines: buckram::Baselines::synthesized_from_block_end(layout.height),
+                    overflow: buckram::LogicalRect::default(),
+                    fragments: FragmentDraftTree::default(),
+                })
+            }
+        }
+
+        // Row 0's cell is three stacked 9px blocks; row 1's is one.
+        let dom = StaticDocument::parse(
+            "<table><tbody><tr><td id=tall><i></i><i></i><i></i></td></tr><tr><td id=short><i></i></td></tr></tbody></table>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "table { display: table; border-spacing: 0; } tbody { display: table-row-group; } tr { display: table-row; } td { display: table-cell; padding: 0; } i { display: block; height: 9px; }",
+            ]),
+            &Device::screen(800.0, 600.0),
+            &InteractionStates::default(),
+        );
+        let boxes = GeneratedBoxTree::from_dom(&dom, &styles);
+        let table = boxes
+            .iter()
+            .find_map(|(box_id, css_box)| {
+                (css_box.display.internal_table == Some(buckram::InternalTableRole::Grid))
+                    .then_some(box_id)
+            })
+            .expect("table grid box");
+        let grid = build_table_grid(&boxes, &dom, table);
+        assert_eq!(grid.rows.len(), 2);
+        assert_eq!(grid.cells.len(), 2);
+
+        let mut tree: AlgorithmTree<Style, TextMeasure, Option<BoxId>> = AlgorithmTree::new();
+        let mut nodes = HashMap::new();
+        for (index, cell) in grid.cells.iter().enumerate() {
+            let blocks = (0..if index == 0 { 3 } else { 1 })
+                .map(|_| {
+                    tree.new_with_children_and_block_style(
+                        AlgorithmKind::Block,
+                        BlockStyle {
+                            size: BlockDimensions::new(
+                                BlockSizeValue::Auto,
+                                BlockSizeValue::Length(FlowLength::px(9.0)),
+                            ),
+                            ..BlockStyle::default()
+                        },
+                        Style {
+                            size: Size {
+                                width: Dimension::auto(),
+                                height: Dimension::length(9.0),
+                            },
+                            ..Style::default()
+                        },
+                        &[],
+                        None,
+                    )
+                })
+                .collect::<Vec<_>>();
+            nodes.insert(
+                cell.source,
+                tree.new_with_children_and_block_style(
+                    AlgorithmKind::Block,
+                    BlockStyle::default(),
+                    Style::default(),
+                    &blocks,
+                    None,
+                ),
+            );
+        }
+
+        let inline = {
+            let sizing = buckram::TableInlineSizingInput {
+                grid: &grid,
+                available_inline_size: Some(80.0),
+                table_constraints: buckram::TableInlineConstraints::default(),
+                border_metrics: buckram::TableInlineBorderMetrics::Separated(
+                    buckram::TableSeparatedBorderMetrics::default(),
+                ),
+                caption_min: buckram::CaptionMinContribution::NoCaption,
+                track_visibility: buckram::TableTrackVisibility::all_visible(&grid),
+            };
+            buckram::TableInlineSizingResult::new(
+                &sizing,
+                buckram::IntrinsicSizes::new(80.0, 80.0).expect("intrinsic pair"),
+                80.0,
+                80.0,
+                vec![80.0],
+            )
+            .expect("reconciled inline result")
+        };
+        let input = buckram::TableBlockSizingInput {
+            grid: &grid,
+            inline: &inline,
+            table_constraint: buckram::TableBlockConstraint::Auto,
+            border_metrics: buckram::TableBlockBorderMetrics::Separated(
+                buckram::TableSeparatedBlockMetrics::default(),
+            ),
+            available_block_size: None,
+            track_visibility: buckram::TableTrackVisibility::all_visible(&grid),
+        };
+        let mut formatter = TreeFormatter {
+            tree: &mut tree,
+            nodes,
+            requests: Vec::new(),
+        };
+        let outputs = buckram::format_table_cells(&input, 0.0, |_, _| 0.0, &mut formatter)
+            .expect("formatted cells");
+
+        // Every first-pass request carried the exact column size and an
+        // indefinite block size.
+        assert!(formatter.requests.iter().all(|request| {
+            request.content_inline_size == 80.0
+                && request.available_block_size.is_none()
+                && request.percentage_basis.is_none()
+                && request.pass == TableCellLayoutPass::Measure
+        }));
+
+        let rows = buckram::measure_single_span_rows(
+            &input,
+            &[TableCellBlockStyle::default(); 2],
+            &outputs,
+            &[buckram::TableBlockConstraint::Auto; 2],
+        )
+        .expect("row measures");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].min_block_size, 27.0);
+        assert_eq!(rows[1].min_block_size, 9.0);
+        assert!(rows.iter().all(|row| !row.constrained && row.row.is_some()));
+    }
+
     #[test]
     fn html_column_and_column_group_spans_are_bounded_at_the_adapter() {
         let dom = StaticDocument::parse(
