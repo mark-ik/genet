@@ -45,7 +45,10 @@ use crate::{
     InteractionStates, StylePlane, StyleSet, TextSystem,
     box_tree::GeneratedBoxTree,
     style::resolve_styles_with_containers,
-    table_shadow::{TableShadowLedger, shadow_fixed_table},
+    table_shadow::{
+        PendingAutomaticShadow, TableShadowLedger, note_automatic_inline_route,
+        shadow_automatic_table, shadow_fixed_table,
+    },
     text::{InlineLayout, InlineRequest, TextFrame},
 };
 
@@ -203,6 +206,7 @@ struct BuildState<'a, D: LayoutDom> {
     image_sources: &'a ImageSources,
     table_bridge_count: usize,
     table_shadow: TableShadowLedger,
+    pending_automatic: Vec<PendingAutomaticShadow<D::NodeId>>,
 }
 
 struct InlineMeasure {
@@ -764,6 +768,7 @@ where
         image_sources,
         table_bridge_count: 0,
         table_shadow: TableShadowLedger::default(),
+        pending_automatic: Vec::new(),
     };
     let children = boxes
         .roots()
@@ -831,7 +836,6 @@ where
     let table_bridges = TableBridgeCounts {
         grids: state.table_bridge_count,
     };
-    let table_shadow = std::mem::take(&mut state.table_shadow);
 
     let mut fragments = FragmentTree::default();
     let mut output = FragmentOutput {
@@ -851,6 +855,13 @@ where
         None,
         &mut output,
     )?;
+    state.process_automatic_shadows(|box_id| {
+        fragments
+            .fragments_for_box(box_id)
+            .next()
+            .map(|fragment| fragment.width)
+    });
+    let table_shadow = std::mem::take(&mut state.table_shadow);
     drop(state);
     Ok(LiveryLayout::new(
         LayoutResult::new(boxes.into_tree(), fragments),
@@ -902,6 +913,7 @@ where
             image_sources,
             table_shadow: TableShadowLedger::default(),
             table_bridge_count: 0,
+            pending_automatic: Vec::new(),
         };
         let built = state.build_box(
             box_id,
@@ -915,6 +927,12 @@ where
             .table_shadow
             .merge(std::mem::take(&mut state.table_shadow));
         let Some(atomic_root) = built else {
+            // No fragments exist for a root that built nothing, but noted
+            // automatic tables still run so their deferrals are recorded.
+            state.process_automatic_shadows(|_| None);
+            plane
+                .table_shadow
+                .merge(std::mem::take(&mut state.table_shadow));
             continue;
         };
         // An admitted atomic inline root needs a containing block so its
@@ -971,6 +989,18 @@ where
 
         let mut fragments = Vec::new();
         collect_atomic_fragments(&state.tree, root, Point { x: 0.0, y: 0.0 }, &mut fragments);
+        // Widths are stable across the origin shift below, so the automatic
+        // shadow can read them either side of it. It must run after
+        // collection, because its intrinsic queries scribble on the tree.
+        state.process_automatic_shadows(|needle| {
+            fragments
+                .iter()
+                .find(|(candidate, _)| *candidate == needle)
+                .map(|(_, rect)| rect.width)
+        });
+        plane
+            .table_shadow
+            .merge(std::mem::take(&mut state.table_shadow));
         let Some(root_rect) = fragments
             .iter()
             .find_map(|(candidate, rect)| (*candidate == box_id).then_some(*rect))
@@ -1375,7 +1405,12 @@ where
             // has no fixed sizing at all. Cells are pinned below and Taffy
             // infers every track. The shadow records each fixed table here as
             // NoLiveResult: Buckram has an answer and nothing consumes it.
-            if let Some(node) = self.boxes.origin_node(parent) {
+            // Automatic tables cannot even be shadowed on this route: the
+            // inline tree offers no seam yet for post-collection intrinsic
+            // queries, so each is counted instead of silently passing.
+            if parent_style.table_layout != CssTableLayout::Fixed {
+                note_automatic_inline_route(parent, &mut self.table_shadow);
+            } else if let Some(node) = self.boxes.origin_node(parent) {
                 shadow_fixed_table(
                     self.dom,
                     self.boxes,
@@ -1521,6 +1556,95 @@ where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    /// One intrinsic inline query through the same measure contract the main
+    /// layout uses. Only sound once painted fragments have been collected,
+    /// because it recomputes the subtree's scratch layout.
+    fn measure_intrinsic_width(
+        &mut self,
+        node: AlgorithmNodeId,
+        available: AlgorithmAvailableSpace,
+    ) -> f32 {
+        self.tree.compute_layout_with_measure(
+            node,
+            AlgorithmSize::new(available, AlgorithmAvailableSpace::MaxContent),
+            |known, available, _, context, _| {
+                let Some(context) = context else {
+                    return AlgorithmSize::new(0.0, 0.0);
+                };
+                let available_width = match available.width {
+                    AlgorithmAvailableSpace::Definite(width) => width,
+                    AlgorithmAvailableSpace::MinContent => context.min_width,
+                    AlgorithmAvailableSpace::MaxContent => context.max_width,
+                };
+                AlgorithmSize::new(
+                    known
+                        .width
+                        .unwrap_or(context.max_width.min(available_width.max(0.0))),
+                    known.height.unwrap_or(context.height),
+                )
+            },
+        );
+        self.tree.layout(node).width
+    }
+
+    /// K4c5a's automatic half: measure each noted table's cell intrinsics,
+    /// run Buckram's automatic algorithm, and compare its columns against the
+    /// Taffy-inferred widths `live_width_of` reads back from the fragments.
+    /// Must run after fragment collection: the queries scribble over the
+    /// scratch tree's layout state.
+    fn process_automatic_shadows(&mut self, live_width_of: impl Fn(BoxId) -> Option<f32>) {
+        let pendings = std::mem::take(&mut self.pending_automatic);
+        for pending in pendings {
+            let Some(computed) = self.styles.get(pending.node).cloned() else {
+                continue;
+            };
+            let mut intrinsics = Vec::with_capacity(pending.cell_nodes.len());
+            for cell_node in &pending.cell_nodes {
+                let Some(cell_node) = *cell_node else {
+                    intrinsics.push(None);
+                    continue;
+                };
+                // Neutralize the cell's own sizing so the query measures
+                // content. Buckram applies the width constraints itself, and
+                // the fragments are already collected, so this cannot leak
+                // into painted output.
+                let style = self.tree.style_mut(cell_node);
+                style.size.width = Dimension::auto();
+                style.min_size.width = Dimension::auto();
+                style.max_size.width = Dimension::auto();
+                let min =
+                    self.measure_intrinsic_width(cell_node, AlgorithmAvailableSpace::MinContent);
+                let max =
+                    self.measure_intrinsic_width(cell_node, AlgorithmAvailableSpace::MaxContent);
+                intrinsics.push(IntrinsicSizes::new(min, max.max(min)));
+            }
+            let live = pending
+                .grid
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    pending
+                        .grid
+                        .cells
+                        .iter()
+                        .find(|cell| cell.column == index && cell.column_span == 1)
+                        .and_then(|cell| live_width_of(cell.source))
+                })
+                .collect::<Vec<_>>();
+            shadow_automatic_table(
+                self.dom,
+                self.boxes,
+                self.styles,
+                &pending,
+                &computed,
+                &intrinsics,
+                &live,
+                &mut self.table_shadow,
+            );
+        }
+    }
+
     fn build_box(
         &mut self,
         box_id: BoxId,
@@ -1553,16 +1677,18 @@ where
                 let table = (computed.display == CssDisplay::Table
                     && table_is_flattenable(self.dom, self.styles, node))
                 .then(|| build_table_grid(self.boxes, self.dom, box_id));
+                let mut table_cell_nodes = Vec::new();
                 let children = if let Some(table) = table.as_ref() {
                     let mut children = Vec::with_capacity(table.cells.len());
                     for cell in &table.cells {
-                        let Some(taffy_node) = self.build_box(
+                        let built = self.build_box(
                             cell.source,
                             Some(&computed),
                             font_size,
                             child_containing_size,
-                        )?
-                        else {
+                        )?;
+                        table_cell_nodes.push(built);
+                        let Some(taffy_node) = built else {
                             continue;
                         };
                         place_table_cell(self.tree.style_mut(taffy_node), cell);
@@ -1617,6 +1743,21 @@ where
                         taffy_style.grid_template_columns =
                             columns.into_iter().map(length).collect();
                     }
+                }
+                // An automatic table cannot be shadowed yet: cell intrinsics
+                // need the measure machinery, which only the outer layout call
+                // owns. Note it for post-collection processing.
+                if computed.table_layout != CssTableLayout::Fixed
+                    && let Some(grid) = table
+                {
+                    self.pending_automatic.push(PendingAutomaticShadow {
+                        table: box_id,
+                        node,
+                        grid,
+                        cell_nodes: std::mem::take(&mut table_cell_nodes),
+                        font_size,
+                        containing_width: containing_size.0,
+                    });
                 }
                 taffy_style.size.width =
                     dimension_with_basis(computed.width, font_size, containing_size.0);
@@ -3721,6 +3862,104 @@ mod tests {
             "the atomic subtree's fixed table was not compared: {ledger:?}"
         );
         assert!(ledger.is_silent(), "{ledger:?}");
+    }
+
+    fn automatic_shadow_ledger(table_css: &str) -> crate::table_shadow::TableShadowLedger {
+        let dom = StaticDocument::parse(
+            "<table><tbody><tr><td>one</td><td>one</td><td>one</td></tr></tbody></table>",
+        );
+        let css = format!(
+            "table {{ display: table; border-spacing: 0; {table_css} }} tbody {{ display: table-row-group; }} tr {{ display: table-row; }} td {{ display: table-cell; padding: 0; }}"
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[&css]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        layout(&dom, &styles, 320.0, 240.0)
+            .expect("layout")
+            .table_shadow_ledger()
+            .clone()
+    }
+
+    /// Gap 2 control: a shrink-to-fit automatic table is measured through the
+    /// live intrinsic machinery post-collection, Buckram's automatic
+    /// algorithm runs, and its columns agree with the Taffy-inferred tracks.
+    #[test]
+    fn k4c5a_automatic_shadow_agrees_for_shrink_to_fit() {
+        let ledger = automatic_shadow_ledger("");
+        assert_eq!(
+            ledger.compared, 1,
+            "the automatic table was not compared: {ledger:?}"
+        );
+        assert!(ledger.is_silent(), "{ledger:?}");
+        assert_eq!(ledger.agreed, 1, "{ledger:?}");
+    }
+
+    /// The second classified K4c5a divergence, and Buckram is again the
+    /// correct side: an automatic table with an explicit width wider than its
+    /// max-content must distribute the extra space over the columns (CSS 2.1
+    /// 17.5.2.2), but the live bridge leaves Taffy's auto tracks at
+    /// max-content and the extra width fills nothing. This is why the
+    /// `width-distribution` WPT family barely moves on the live path.
+    #[test]
+    fn k4c5a_automatic_shadow_classifies_unfilled_explicit_width() {
+        let ledger = automatic_shadow_ledger("width: 300px;");
+        assert_eq!(ledger.compared, 1, "{ledger:?}");
+        assert_eq!(ledger.agreed, 0, "{ledger:?}");
+        assert_eq!(ledger.divergences.len(), 3, "{ledger:?}");
+        for divergence in &ledger.divergences {
+            assert!(
+                matches!(
+                    divergence.quantity,
+                    crate::table_shadow::TableSizingQuantity::InferredColumnSize(_)
+                ),
+                "{ledger:?}"
+            );
+            // Buckram fills the explicit 300px; the live tracks sit near the
+            // cells' max-content instead.
+            assert!(
+                (divergence.buckram - 100.0).abs() < 0.01 && divergence.livery < 40.0,
+                "{ledger:?}"
+            );
+        }
+    }
+
+    /// An automatic table on the production inline route is counted, never
+    /// silently passed: no live columns and no intrinsic seam exist there yet.
+    #[test]
+    fn k4c5a_automatic_tables_on_the_text_path_are_counted() {
+        let dom = StaticDocument::parse(
+            "<p>before</p><table><tbody><tr><td>one</td><td>two</td></tr></tbody></table>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "table { display: table; } tbody { display: table-row-group; } tr { display: table-row; } td { display: table-cell; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let ledger = layout.table_shadow_ledger();
+        assert!(
+            ledger.skipped.iter().any(|(_, skip)| matches!(
+                skip,
+                crate::table_shadow::TableShadowSkip::AutomaticOnInlineRoute
+            )),
+            "expected the automatic table to be counted on the inline route: {ledger:?}"
+        );
     }
 
     #[test]

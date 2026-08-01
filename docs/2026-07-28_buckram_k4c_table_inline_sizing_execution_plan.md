@@ -910,11 +910,42 @@ Two subordinate observations from the same investigation:
    and the inline route's own ledger merges with them into `LiveryLayout`.
    (`table_bridge_count` is still dropped on that path; same fix applies when
    K4d retires the bridge.)
-2. **Automatic tables are not compared.** Buckram's automatic algorithm needs a
-   `TableIntrinsicMeasureProvider`, and intrinsic content sizes do not exist at
-   box-build time, so the comparison has no partner. The live path also has no
-   column vector for an automatic table, since `fixed_column_widths` returns
-   `None`. Wiring the provider is the remaining half of this gate.
+2. **Automatic tables** — closed on the `BuildState` routes. Automatic tables
+   are noted at box-build time and processed after fragment collection, when
+   the algorithm tree is scratch: each cell's min and max content are measured
+   through the same measure contract the main layout uses (with the cell's own
+   width constraints neutralized, since Buckram applies those itself), the
+   K4c3 and K4c4 algorithms run, and the columns are compared against
+   Taffy-inferred track widths read back from single-span cell fragments at a
+   1px tolerance, the rounding unit of painted output. On the production
+   inline route automatic tables are counted under a named
+   `AutomaticOnInlineRoute` skip, never silently passed.
+
+#### K4c4 corrective: growth beyond the max-content guess was capped
+
+The first live automatic shadow run failed reconciliation with
+`GridSizeMismatch`: `distribute_columns`' final growth phase reused
+`distribute_weighted`, which treats weights as caps. That is right for the
+slack phase, where `max - min` is a capacity, but wrong for growth beyond the
+upper guess: an automatic table with an explicit width wider than twice its
+max-content stalled and left width undistributed. K4c4's fixtures all had
+slack, so only real measured data (zero-slack single-word cells) could expose
+it. Fixed with an uncapped proportional distribution, pinned by
+`an_explicit_width_beyond_max_content_grows_zero_slack_columns`.
+
+#### Second classified divergence: the live bridge never fills an explicit width
+
+With the corrective in place, the automatic shadow's first real comparison
+classified the next live bug, and Buckram is again the correct side. An
+automatic table with `width: 300px` and three max-content 29px cells must
+distribute the extra space over its columns (CSS 2.1 17.5.2.2): Buckram
+assigns 100px per column, while the live bridge leaves Taffy's auto tracks at
+max-content and the extra width fills nothing. This is why the
+`width-distribution` WPT family barely moves on the live path. The
+shrink-to-fit control agrees exactly. **Accepted rule:** K4c5b takes Buckram's
+value; the divergence persists until then. Pinned by
+`k4c5a_automatic_shadow_classifies_unfilled_explicit_width` and its control
+`k4c5a_automatic_shadow_agrees_for_shrink_to_fit`.
 
 #### Focused no-movement receipt, 2026-07-31
 

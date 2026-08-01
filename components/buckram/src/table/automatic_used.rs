@@ -346,7 +346,7 @@ fn distribute_columns(
             .iter()
             .map(|index| (*index, measures.columns[*index].max_content.max(0.0)))
             .collect::<Vec<_>>();
-        remaining = distribute_weighted(&mut sizes, &max_content_weights, remaining);
+        remaining = distribute_proportional(&mut sizes, &max_content_weights, remaining);
     }
     if remaining > TableInlineSizingResult::SUBPIXEL_TOLERANCE {
         return Err(TableInlineSizingError::GridSizeMismatch {
@@ -360,6 +360,36 @@ fn distribute_columns(
 /// Assign up to `available` in proportion to the positive requested amounts.
 /// The last logical track receives the float remainder, keeping the aggregate
 /// sum stable without a physical-direction tie break.
+/// Spend all of `available` over the entries in proportion to their weights.
+///
+/// Unlike [`distribute_weighted`], the weights are proportions, not caps.
+/// This is the final growth phase: CSS 2 automatic tables grow without bound
+/// to fill an explicitly wider table, so no width may remain undistributed
+/// while an eligible column exists. Zero total weight falls back to equal
+/// shares, which covers a table of empty cells.
+fn distribute_proportional(sizes: &mut [f32], entries: &[(usize, f32)], available: f32) -> f32 {
+    if available <= 0.0 || entries.is_empty() {
+        return available;
+    }
+    let total = entries
+        .iter()
+        .map(|(_, weight)| weight.max(0.0))
+        .sum::<f32>();
+    let mut remainder = available;
+    for (position, (index, weight)) in entries.iter().enumerate() {
+        let share = if position + 1 == entries.len() {
+            remainder
+        } else if total > 0.0 {
+            available * weight.max(0.0) / total
+        } else {
+            available / entries.len() as f32
+        };
+        sizes[*index] += share;
+        remainder -= share;
+    }
+    0.0
+}
+
 fn distribute_weighted(sizes: &mut [f32], demands: &[(usize, f32)], available: f32) -> f32 {
     let demands = demands
         .iter()
@@ -570,6 +600,37 @@ mod tests {
         assert_close(result.column_sizes[0], 96.66667);
         assert_close(result.column_sizes[1], 100.0);
         assert_close(result.column_sizes[2], 103.33333);
+    }
+
+    /// Surfaced by K4c5a's first live automatic shadow: with zero-slack
+    /// columns (`min == max`) and an explicit table width beyond the
+    /// max-content guess, the final growth phase treated max-content weights
+    /// as caps and left width undistributed, failing reconciliation. Growth
+    /// beyond the upper guess is unbounded.
+    #[test]
+    fn an_explicit_width_beyond_max_content_grows_zero_slack_columns() {
+        let grid = grid(FlowAxes::HORIZONTAL_LTR);
+        let measures = TableAutomaticColumnMeasures {
+            columns: vec![
+                super::super::TableColumnMeasure {
+                    min_content: 29.0,
+                    max_content: 29.0,
+                    percentage: 0.0,
+                    constrained: false,
+                };
+                3
+            ],
+            span_distributions: Vec::new(),
+        };
+        let mut input = input(&grid, &measures);
+        input.sizing.table_constraints.preferred =
+            super::super::InlineSizeConstraint::Value(AffineLengthPercentage::px(300.0));
+        let result = sized(size_automatic_table_inline(&input).expect("explicitly wide table"));
+        assert_close(result.used_table_inline_size, 300.0);
+        assert_eq!(result.column_sizes.len(), 3);
+        for column in &result.column_sizes {
+            assert_close(*column, 100.0);
+        }
     }
 
     #[test]
