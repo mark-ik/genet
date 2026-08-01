@@ -1002,8 +1002,51 @@ worktree, which attributes every single movement with no three-way residue:
 
 Proof artifacts: `attr-caused-by-splitfix.txt`, `attr-predrift-and-odd.txt`,
 `attr-{prefix,premerge,k3t}-results.tsv`, and the fresh `*_splitfix.json`
-maps in the K4c5a proof directory. The fresh maps are the new accepted
-baselines for the nine directories.
+maps in the K4c5a proof directory.
+
+#### K4a/K4b drift triage - 2026-07-31
+
+**The crash was a non-negativity assert in baseline propagation, and it was
+crashing 22 tests, not one.** `Baselines::new` required offsets to be finite
+and non-negative. A negative margin legitimately places a child's baseline
+above its parent's block-start edge (`s-11-1-1b-005.html` does it with a
+`margin-top: -15px` table cell), and `propagate_declared_baselines` panicked
+on the propagated negative offset. The invariant is now finiteness only,
+pinned by `baselines_accept_negative_offsets_and_reject_non_finite_ones`
+(Buckram) and a byte-exact live repro of the WPT file through the production
+text path (genet-livery). Rerunning all nine directories against the
+`*_splitfix.json` baselines moved exactly the crash population and nothing
+else: 22 `fail (crash)` statuses across six directories became 5 passes
+(`flexbox_inline-abspos`, `flex-inline`, `flexbox_block`, `top-031`,
+`top-032`) and 17 ordinary fails. Zero regressions. The
+`*_baselinefix.json` maps are the new accepted nine-directory baselines.
+
+`s-11-1-1b-005.html` itself now fails as a pixel mismatch: its pre-K4a pass
+rode on the root `display: table` not being honored at all, so it is a
+false-pass disclosure like the rest below; the remaining work is root-table
+overflow propagation to the viewport, owned by K4h integration.
+
+**The pass-to-fail set are false-pass disclosures, not regressions**, in the
+K3t receipt's sense: each pass predated K4a's display vocabulary, when the
+element under test rendered as a generic block and the tested property
+trivially applied. K4a made the box structure real, and the honest gap is now
+visible:
+
+- `positioning/{bottom,position}-applies-to-002` (`table-header-group`) and
+  `-003` (`table-footer-group`) need positioned internal table boxes. Owner:
+  K5 positioning, matching K3t's routing of `grid-abspos-staticpos-*`.
+- `positioning/{bottom,position}-applies-to-015` (`table-caption`) needs
+  caption boxes first, then their positioning. Owner: K4e, then K5.
+- `ui/overflow-applies-to-{002,003}` assert `overflow` does **not** apply to
+  header and footer groups; internal-table overflow semantics belong to
+  table-specific rendering. Owner: K4f.
+- `normal-flow/inline-table-zorder-003` is inline-table stacking and paint
+  order. Owner: K4f.
+- `flexbox-table-fixup-001` is different in kind: K4a's
+  `repair_missing_table_parents` wraps a lone `table-cell` flex item in
+  anonymous table structure, where flex-item blockification must win
+  (css-display 3, section 2.4). That is a box-generation corrective on K4a's
+  own repair, owned by K4b's fixup surface; K4h audits it at closure.
 
 #### Live root font size
 

@@ -3962,6 +3962,42 @@ mod tests {
         );
     }
 
+    /// Regression for the K4a/K4b-window crash in WPT
+    /// `css/CSS2/css21-errata/s-11-1-1b-005.html`, run byte-exact from the
+    /// in-repo corpus: the root element styled `display: table` with a bare
+    /// `table-cell` `<body>` whose `margin-top: -15px` places its baseline
+    /// above the parent's block-start edge. Baseline propagation asserted
+    /// offsets were non-negative and panicked on the legitimate negative one.
+    #[test]
+    fn a_root_element_table_with_a_negative_margin_cell_does_not_panic() {
+        let source = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/wpt/tests/css/CSS2/css21-errata/s-11-1-1b-005.html"
+        ))
+        .expect("in-repo WPT corpus file");
+        let style_start = source.find("<style>").expect("style open") + "<style>".len();
+        let style_end = source.find("</style>").expect("style close");
+        let css = source[style_start..style_end].to_owned();
+        let dom = StaticDocument::parse(&source);
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[&css]),
+            &Device::screen(800.0, 600.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        layout_with_text_system(
+            &dom,
+            &styles,
+            800.0,
+            600.0,
+            ViewportSizes::uniform(800.0, 600.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout must not panic");
+    }
+
     #[test]
     fn html_column_and_column_group_spans_are_bounded_at_the_adapter() {
         let dom = StaticDocument::parse(

@@ -39,11 +39,17 @@ pub struct Baselines {
 
 impl Baselines {
     /// Construct finite baseline offsets in the fragment's own logical flow.
+    ///
+    /// A baseline offset may be negative: a negative margin or offset can
+    /// place a child's baseline above this fragment's block-start edge
+    /// (WPT `css/CSS2/css21-errata/s-11-1-1b-005.html` does exactly this with
+    /// a `margin-top: -15px` table cell). Only a non-finite offset is
+    /// invalid.
     pub fn new(first: Option<f32>, last: Option<f32>) -> Option<Self> {
         [first, last]
             .into_iter()
             .flatten()
-            .all(|baseline| baseline.is_finite() && baseline >= 0.0)
+            .all(f32::is_finite)
             .then_some(Self { first, last })
     }
 
@@ -452,6 +458,18 @@ mod tests {
                 height: 40.0,
             }
         );
+    }
+
+    /// A negative margin can place a child's baseline above its parent's
+    /// block-start edge, so a negative offset is a valid baseline. Rejecting
+    /// it crashed baseline propagation on
+    /// WPT `css/CSS2/css21-errata/s-11-1-1b-005.html`.
+    #[test]
+    fn baselines_accept_negative_offsets_and_reject_non_finite_ones() {
+        assert!(Baselines::new(Some(-15.0), Some(-15.0)).is_some());
+        assert!(Baselines::new(Some(-15.0), Some(20.0)).is_some());
+        assert!(Baselines::new(Some(f32::NAN), None).is_none());
+        assert!(Baselines::new(None, Some(f32::INFINITY)).is_none());
     }
 
     #[test]
