@@ -949,6 +949,29 @@ comparison if anything outside the two table corpora moves, which is the same
 shape of work as the 2026-07-31 split-fix attribution. Budget it as its own
 effort rather than as a tail on another gate.
 
+#### The owned-context seam has landed
+
+`AlgorithmTree::set_layout` writes a rectangle a Buckram algorithm already
+decided, and the `AlgorithmKind::Table` arm reports that size without laying
+out children, so the backend cannot overwrite what the table algorithm owns.
+`an_owned_table_context_keeps_the_geometry_it_was_given` proves both halves
+against a real backend walk.
+
+**The rectangle must be written unrounded.** The adapter keeps two stores:
+algorithms write `unrounded_layout`, and the backend's rounding pass then
+walks the entire tree from the root and derives every `final_layout` from it.
+Writing only `final_layout` is silently discarded by that pass, which is
+exactly what the first version of this seam did. Writing a pre-rounded value
+instead would round the table's subtree on a different grid from its
+siblings, so `set_layout` writes unrounded and lets the shared pass round it.
+
+What remains for the cutover: build cells as children of a `Table` node,
+run the full block pipeline before `compute_layout`, write every cell
+rectangle through this seam, splice K4d6a's structural fragments into
+`collect_fragments`, and delete `place_table_cell`, `table_is_flattenable`,
+and the table-to-Grid and row-to-Flex mappings in `algorithm_kind` and
+`anonymous_taffy_style`.
+
 ### Outcome
 
 Commit the final table fragment subtree, switch live tables to Buckram table

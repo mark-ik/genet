@@ -443,6 +443,34 @@ impl<S, Context, Source> AlgorithmTree<S, Context, Source> {
         }
     }
 
+    /// Write a rectangle a Buckram algorithm already decided.
+    ///
+    /// A formatting context Buckram owns outright computes its own geometry
+    /// and its children's before the backend walk begins; its node then
+    /// reports that size and does not recurse, so nothing overwrites what was
+    /// written here. Positions are relative to the node's parent, matching
+    /// [`AlgorithmTree::layout`].
+    ///
+    /// The rectangle is written unrounded. The backend's rounding pass walks
+    /// the whole tree from the root and derives every final layout from the
+    /// unrounded one, so writing only the final layout would be discarded,
+    /// and writing only a pre-rounded value would round this subtree on a
+    /// different grid from its siblings.
+    pub fn set_layout(&mut self, id: AlgorithmNodeId, layout: AlgorithmLayout) {
+        assert!(
+            [layout.x, layout.y, layout.width, layout.height]
+                .into_iter()
+                .all(f32::is_finite),
+            "an owned formatting context must write a finite rectangle"
+        );
+        let node = &mut self.nodes[id.index()];
+        node.unrounded_layout.location.x = layout.x;
+        node.unrounded_layout.location.y = layout.y;
+        node.unrounded_layout.size.width = layout.width;
+        node.unrounded_layout.size.height = layout.height;
+        node.final_layout = node.unrounded_layout;
+    }
+
     /// First and last baseline outputs produced by this formatting context.
     /// They are logical offsets from the node's block-start edge.
     pub fn baselines(&self, id: AlgorithmNodeId) -> Baselines {
@@ -1829,16 +1857,15 @@ where
                 },
                 AlgorithmKind::Flex => compute_flexbox_layout(tree, node_id, inputs),
                 AlgorithmKind::Grid => compute_grid_layout(tree, node_id, inputs),
-                // Reserved by K4d1; live table dispatch is K4d6b's cutover.
-                // Nothing constructs the tag yet, and a hidden layout is a
-                // zero rectangle, so assert loudly rather than let a future
-                // caller silently collapse a table to nothing.
+                // Buckram owns table layout outright. The caller computed the
+                // grid and every cell rectangle before this walk began and
+                // wrote them through `set_layout`, so this arm reports the
+                // size it was given and deliberately does not lay out
+                // children: recursing would overwrite the table algorithm's
+                // own result with a backend guess.
                 AlgorithmKind::Table => {
-                    debug_assert!(
-                        false,
-                        "AlgorithmKind::Table is reserved until K4d6b supplies the dispatcher"
-                    );
-                    compute_hidden_layout(tree, node_id)
+                    let size = tree.tree.nodes[node_index].final_layout.size;
+                    LayoutOutput::from_outer_size(size)
                 },
                 AlgorithmKind::Leaf => {
                     let node = &mut tree.tree.nodes[node_index];
@@ -4082,6 +4109,96 @@ mod tests {
             )
             .unwrap()
         );
+    }
+
+    /// K4d6b's seam: a formatting context Buckram owns writes its own and its
+    /// children's rectangles before the backend walk, and the walk must not
+    /// overwrite them. A `Table` node reports the size it was given and never
+    /// lays out a child.
+    #[test]
+    fn an_owned_table_context_keeps_the_geometry_it_was_given() {
+        let mut tree: AlgorithmTree<Style, (), u8> = AlgorithmTree::new();
+        let cells = (0..2)
+            .map(|index| {
+                tree.new_with_children_and_block_style(
+                    AlgorithmKind::Block,
+                    BlockStyle::default(),
+                    Style::default(),
+                    &[],
+                    index,
+                )
+            })
+            .collect::<Vec<_>>();
+        let table = tree.new_with_children_and_block_style(
+            AlgorithmKind::Table,
+            BlockStyle {
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style::default(),
+            &cells,
+            9,
+        );
+        let root = tree.new_with_children_and_block_style(
+            AlgorithmKind::Block,
+            BlockStyle {
+                establishes_bfc: true,
+                ..BlockStyle::default()
+            },
+            Style {
+                display: Display::Block,
+                size: taffy::Size {
+                    width: Dimension::length(200.0),
+                    height: Dimension::length(200.0),
+                },
+                ..Style::default()
+            },
+            &[table],
+            10,
+        );
+
+        // The table algorithm's decisions, written before the walk.
+        let decided = [
+            AlgorithmLayout {
+                x: 0.0,
+                y: 0.0,
+                width: 60.0,
+                height: 25.0,
+            },
+            AlgorithmLayout {
+                x: 60.0,
+                y: 0.0,
+                width: 40.0,
+                height: 25.0,
+            },
+        ];
+        for (cell, layout) in cells.iter().zip(decided) {
+            tree.set_layout(*cell, layout);
+        }
+        tree.set_layout(
+            table,
+            AlgorithmLayout {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 25.0,
+            },
+        );
+
+        tree.compute_layout_with_measure(root, available(200.0, 200.0), zero_measure);
+
+        // The table reported Buckram's size, and every cell rectangle
+        // survived the walk untouched.
+        let table_layout = tree.layout(table);
+        assert_eq!((table_layout.width, table_layout.height), (100.0, 25.0));
+        for (cell, expected) in cells.iter().zip(decided) {
+            let layout = tree.layout(*cell);
+            assert_eq!(
+                (layout.x, layout.y, layout.width, layout.height),
+                (expected.x, expected.y, expected.width, expected.height),
+                "the backend overwrote a rectangle the table algorithm owns"
+            );
+        }
     }
 
     #[test]
