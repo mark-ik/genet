@@ -919,6 +919,36 @@ Proof directory: `testing/genet/wpt-ledger/2026-08-01_buckram_k4d6a`.
 `cargo clippy -p buckram -- -D warnings` clean; exact-file Rustfmt and
 `git diff --check` clean.
 
+### K4d6b entry notes - 2026-08-01
+
+Scoped while closing K4d6a, so the cutover starts from a sized problem
+rather than a discovery phase.
+
+**The adapter has no way to write Buckram geometry back.** `AlgorithmTree`
+exposes `style_mut`, `baselines`, and `set_baselines`, but no `set_layout`.
+K4d6b needs one: the pipeline computes every table-internal rectangle before
+`compute_layout` runs, and the table's arm must then return that size without
+recursing, or Taffy will overwrite the children it should not own.
+
+**Rows, row groups, columns, and column groups have no algorithm nodes
+today.** The bridge flattens them away, so cells are direct children of the
+table node. K4d6a's fragments cover all six roles, so the cutover must either
+create structural nodes for them or splice the emitted subtree into
+`collect_fragments` directly. The second is closer to the plan's wording
+("record each content-containing fragment separately from its structural
+parent") and avoids inventing backend nodes for boxes that never enter a
+backend algorithm.
+
+**`AlgorithmKind::Table` currently falls to `compute_hidden_layout`,** which
+is a zero rectangle. It is now behind a `debug_assert!` so a premature
+constructor fails loudly in tests instead of silently collapsing a table.
+
+**This is the first K4d gate without a zero-movement safety net.** Its
+receipt has to classify every moved test and run the complete all-nine
+comparison if anything outside the two table corpora moves, which is the same
+shape of work as the 2026-07-31 split-fix attribution. Budget it as its own
+effort rather than as a tail on another gate.
+
 ### Outcome
 
 Commit the final table fragment subtree, switch live tables to Buckram table

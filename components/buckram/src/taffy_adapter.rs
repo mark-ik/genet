@@ -1829,9 +1829,17 @@ where
                 },
                 AlgorithmKind::Flex => compute_flexbox_layout(tree, node_id, inputs),
                 AlgorithmKind::Grid => compute_grid_layout(tree, node_id, inputs),
-                // Reserved by K4d1; live table dispatch is K4d6's cutover.
-                // Nothing constructs the tag before the dispatcher exists.
-                AlgorithmKind::Table => compute_hidden_layout(tree, node_id),
+                // Reserved by K4d1; live table dispatch is K4d6b's cutover.
+                // Nothing constructs the tag yet, and a hidden layout is a
+                // zero rectangle, so assert loudly rather than let a future
+                // caller silently collapse a table to nothing.
+                AlgorithmKind::Table => {
+                    debug_assert!(
+                        false,
+                        "AlgorithmKind::Table is reserved until K4d6b supplies the dispatcher"
+                    );
+                    compute_hidden_layout(tree, node_id)
+                },
                 AlgorithmKind::Leaf => {
                     let node = &mut tree.tree.nodes[node_index];
                     let style = sealed::AlgorithmStyle::as_taffy_style(&node.style);
