@@ -14,11 +14,11 @@
 use std::hash::Hash;
 
 use buckram::{
-    BoxId, CellBlockOffsets, FlowAxes, TableBlockBorderMetrics, TableBlockConstraint,
-    TableBlockDeferral, TableBlockLayout, TableBlockSizingInput, TableCellBlockStyle,
-    TableCellFormatter, TableCellLayoutInput, TableCellLayoutOutput, TableGrid,
-    TableInlineSizingError, TableInlineSizingResult, TableRowLayoutError,
-    TableSeparatedBlockMetrics, TableTrackVisibility, layout_table_block,
+    AlgorithmKind, AlgorithmLayout, AlgorithmNodeId, AlgorithmTree, BoxId, CellBlockOffsets,
+    FlowAxes, TableBlockBorderMetrics, TableBlockConstraint, TableBlockDeferral, TableBlockLayout,
+    TableBlockSizingInput, TableCellBlockStyle, TableCellFormatter, TableCellLayoutInput,
+    TableCellLayoutOutput, TableGrid, TableInlineSizingError, TableInlineSizingResult,
+    TableRowLayoutError, TableSeparatedBlockMetrics, TableTrackVisibility, layout_table_block,
 };
 use livery::{
     ComputedValues,
@@ -382,6 +382,65 @@ where
 /// backend produced and the offsets Buckram will add back itself.
 pub(crate) fn cell_content_block_size(border_box: f32, offsets: CellBlockOffsets) -> f32 {
     (border_box - offsets.total().unwrap_or(0.0)).max(0.0)
+}
+
+/// Commit one table's Buckram block layout to the algorithm tree.
+///
+/// Every cell rectangle is written through the owned-context seam, each cell's
+/// contents are shifted by the alignment offset the table chose, and the table
+/// node is resized and re-dispatched so the backend reports that size without
+/// laying the cells out again.
+///
+/// Rectangles are logical and the live path is horizontal LTR throughout, so
+/// inline maps to x and block to y. A vertical writing mode reaches this only
+/// once K4f gives the table one, and the flow axes it would need are not
+/// invented here.
+pub(crate) fn commit_table_block<S, Context, Source>(
+    tree: &mut AlgorithmTree<S, Context, Source>,
+    table_node: AlgorithmNodeId,
+    layout: &TableBlockLayout,
+    inline: &TableInlineSizingResult,
+    node_of: impl Fn(BoxId) -> Option<AlgorithmNodeId>,
+) where
+    S: buckram::AlgorithmStyle,
+{
+    for placement in &layout.alignment.cells {
+        let Some(node) = node_of(placement.box_id) else {
+            continue;
+        };
+        tree.set_layout(
+            node,
+            AlgorithmLayout {
+                x: placement.rect.inline_start,
+                y: placement.rect.block_start,
+                width: placement.rect.inline_size,
+                height: placement.rect.block_size,
+            },
+        );
+        // The cell's border box now fills its whole row range, so its
+        // contents no longer sit where the formatting pass left them. CSS 2.1
+        // section 17.5.3 places them by the cell's alignment, which is a
+        // placement offset and never a change to the computed padding.
+        if placement.content_block_offset.abs() > f32::EPSILON {
+            for child in tree.children(node).to_vec() {
+                let mut child_layout = tree.unrounded_layout(child);
+                child_layout.y += placement.content_block_offset;
+                tree.set_layout(child, child_layout);
+            }
+        }
+    }
+    tree.set_layout(
+        table_node,
+        AlgorithmLayout {
+            // The table's own position stays the parent's decision; the
+            // backend overwrites it when it places this node.
+            x: tree.unrounded_layout(table_node).x,
+            y: tree.unrounded_layout(table_node).y,
+            width: inline.used_grid_inline_size,
+            height: layout.sizing.used_table_block_size,
+        },
+    );
+    tree.set_kind(table_node, AlgorithmKind::Table);
 }
 
 /// Fragments are pixel-rounded cumulatively while Buckram's output is

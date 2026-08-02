@@ -49,7 +49,7 @@ use crate::{
     style::resolve_styles_with_containers,
     table_block::{
         CellBlockInput, CellFormatter, buckram_table_block, cell_content_block_size,
-        table_block_inputs, verify_table_block,
+        commit_table_block, table_block_inputs, verify_table_block,
     },
     table_shadow::{
         PendingTable, TableShadowLedger, buckram_table_columns, verify_assigned_columns,
@@ -1740,6 +1740,16 @@ where
                 &mut formatter,
                 &mut ledger,
             );
+            if let Some(block) = &pending.block {
+                commit_table_block(tree, pending.taffy_table, block, inline, |box_id| {
+                    pending
+                        .grid
+                        .cells
+                        .iter()
+                        .position(|cell| cell.source == box_id)
+                        .and_then(|index| pending.cell_nodes[index])
+                });
+            }
         }
         self.table_shadow.block = ledger;
     }
@@ -2063,6 +2073,16 @@ where
                 &mut formatter,
                 &mut ledger,
             );
+            if let Some(block) = &pending.block {
+                commit_table_block(tree, pending.taffy_table, block, inline, |box_id| {
+                    pending
+                        .grid
+                        .cells
+                        .iter()
+                        .position(|cell| cell.source == box_id)
+                        .and_then(|index| pending.cell_nodes[index])
+                });
+            }
         }
         self.table_shadow.block = ledger;
     }
@@ -4118,29 +4138,24 @@ mod tests {
         assert!(ledger.is_silent(), "{ledger:?}");
     }
 
-    /// K4d6b: Buckram's block pipeline runs on every live table, and it
-    /// already computes geometry the Grid bridge cannot.
+    /// K4d6b: a `height` on a `<tr>` reaches the painted rows.
     ///
-    /// A `height` on a `<tr>` is a row minimum under CSS 2.1 section 17.5.3.
-    /// The bridge flattens rows away before the backend sees them, so that
-    /// declaration reaches no grid track and it paints content-height rows
-    /// instead. Buckram produces 40 and 60. Every divergence recorded here is
-    /// the bridge's, which is why the cutover is a capability gain rather
-    /// than a rewrite, and why its WPT movement should be improvements.
+    /// It is a row minimum under CSS 2.1 section 17.5.3. The Grid bridge
+    /// flattened rows away before the backend saw them, so that declaration
+    /// reached no track and the table painted content-height rows: 18 and 19
+    /// for these two. Buckram computes 40 and 60, and now writes them.
     ///
-    /// This assertion inverts when K4d6b writes Buckram's rectangles: the
-    /// ledger then reports agreement and there are no divergences to check.
+    /// The painted rectangles are asserted directly rather than through the
+    /// ledger. A ledger that agreed with itself would prove nothing.
     #[test]
-    fn k4d6b_buckram_rows_honor_row_heights_the_bridge_drops() {
+    fn k4d6b_row_heights_reach_the_painted_rows() {
         let dom = StaticDocument::parse(
             "<table><tbody><tr id=a><td>one</td><td>two</td></tr><tr id=b><td>three</td><td>four</td></tr></tbody></table>",
         );
         let styles = resolve_styles(
             &dom,
             &StyleSet::cambium(&[
-                "table { display: table; table-layout: fixed; width: 200px; border-spacing: 0; } \
-                 tbody { display: table-row-group; } tr { display: table-row; } \
-                 td { display: table-cell; padding: 0; } #a { height: 40px; } #b { height: 60px; }",
+                "table { display: table; table-layout: fixed; width: 200px; border-spacing: 0; }                  tbody { display: table-row-group; } tr { display: table-row; }                  td { display: table-cell; padding: 0; } #a { height: 40px; } #b { height: 60px; }",
             ]),
             &Device::screen(320.0, 240.0),
             &InteractionStates::default(),
@@ -4163,51 +4178,55 @@ mod tests {
             ledger.block
         );
         assert_eq!(
-            ledger.block.verified, 1,
-            "the block layout was never compared against fragments: {:?}",
-            ledger.block
-        );
-        let sizes = ledger
-            .block
-            .divergences
-            .iter()
-            .filter(|divergence| {
-                divergence.quantity == crate::table_block::TableBlockQuantity::CellBlockSize
-            })
-            .map(|divergence| divergence.buckram)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            sizes,
-            vec![40.0, 40.0, 60.0, 60.0],
-            "Buckram must give both cells of each row that row's specified \
-             height: {:?}",
+            ledger.block.agreed, 1,
+            "the painted cells must now be the ones Buckram wrote: {:?}",
             ledger.block.divergences
         );
-        let starts = ledger
-            .block
-            .divergences
-            .iter()
-            .filter(|divergence| {
-                divergence.quantity == crate::table_block::TableBlockQuantity::CellBlockStart
-            })
-            .map(|divergence| divergence.buckram)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            starts,
-            vec![40.0, 40.0],
-            "only the second row's cells move, to just below a 40px first \
-             row: {:?}",
-            ledger.block.divergences
+
+        fn cell_rect(
+            dom: &StaticDocument,
+            layout: &LiveryLayout<<StaticDocument as LayoutDom>::NodeId>,
+            index: usize,
+        ) -> PhysicalRect {
+            fn cells(
+                dom: &StaticDocument,
+                node: <StaticDocument as LayoutDom>::NodeId,
+                found: &mut Vec<<StaticDocument as LayoutDom>::NodeId>,
+            ) {
+                if dom
+                    .element_name(node)
+                    .is_some_and(|name| name.local.as_ref() == "td")
+                {
+                    found.push(node);
+                }
+                for child in dom.dom_children(node) {
+                    cells(dom, child, found);
+                }
+            }
+            let mut found = Vec::new();
+            cells(dom, dom.document(), &mut found);
+            let box_id = layout.boxes().boxes_for_node(found[index])[0];
+            layout
+                .fragments()
+                .fragments_for_box(box_id)
+                .next()
+                .expect("cell fragment")
+                .physical_rect()
+        }
+        // The first cell of each row, in document order.
+        let first = cell_rect(&dom, &layout, 0);
+        let second = cell_rect(&dom, &layout, 2);
+        assert!(
+            (first.height - 40.0).abs() < 0.5,
+            "the first row's cell must be its row's 40px, not its content              height: {first:?}"
         );
         assert!(
-            ledger
-                .block
-                .divergences
-                .iter()
-                .all(|divergence| divergence.livery < divergence.buckram),
-            "every divergence must be the bridge falling short, not Buckram \
-             overshooting: {:?}",
-            ledger.block.divergences
+            (second.height - 60.0).abs() < 0.5,
+            "the second row's cell must be its row's 60px: {second:?}"
+        );
+        assert!(
+            (second.y - first.y - 40.0).abs() < 0.5,
+            "the second row must start just below a 40px first row:              {first:?} {second:?}"
         );
     }
 
