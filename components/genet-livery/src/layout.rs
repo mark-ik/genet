@@ -1521,10 +1521,11 @@ where
                 &intrinsics,
                 &mut self.table_shadow,
             );
-            if let Some(columns) = &columns {
+            if let Some(inline) = &columns {
                 self.tree
                     .style_mut(pending.taffy_table)
-                    .grid_template_columns = columns.iter().copied().map(length).collect();
+                    .grid_template_columns =
+                    inline.column_sizes.iter().copied().map(length).collect();
             }
             pending.assigned = columns;
         }
@@ -1535,7 +1536,8 @@ where
     fn verify_table_columns(&mut self, live_width_of: impl Fn(BoxId) -> Option<f32>) {
         let pendings = std::mem::take(&mut self.pending_tables);
         for pending in pendings {
-            let Some(assigned) = pending.assigned else {
+            let Some(assigned) = pending.assigned.as_ref().map(|inline| &inline.column_sizes)
+            else {
                 continue;
             };
             let live = pending
@@ -1792,10 +1794,11 @@ where
                 &intrinsics,
                 &mut self.table_shadow,
             );
-            if let Some(columns) = &columns {
+            if let Some(inline) = &columns {
                 self.tree
                     .style_mut(pending.taffy_table)
-                    .grid_template_columns = columns.iter().copied().map(length).collect();
+                    .grid_template_columns =
+                    inline.column_sizes.iter().copied().map(length).collect();
             }
             pending.assigned = columns;
         }
@@ -1807,7 +1810,8 @@ where
     fn verify_table_columns(&mut self, live_width_of: impl Fn(BoxId) -> Option<f32>) {
         let pendings = std::mem::take(&mut self.pending_tables);
         for pending in pendings {
-            let Some(assigned) = pending.assigned else {
+            let Some(assigned) = pending.assigned.as_ref().map(|inline| &inline.column_sizes)
+            else {
                 continue;
             };
             let live = pending

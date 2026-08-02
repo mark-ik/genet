@@ -12,6 +12,7 @@ mod automatic;
 mod automatic_used;
 mod fixed;
 mod fragments;
+mod pipeline;
 mod rows;
 mod sizing;
 
@@ -30,15 +31,15 @@ pub use fixed::{
     TableFixedInlineSizingOutcome, TableFixedLayoutFallback, size_fixed_table_inline,
 };
 pub use fragments::{TableFragment, TableFragmentRole, TableFragments, emit_table_fragments};
+pub use pipeline::{TableBlockLayout, layout_table_block};
 pub use rows::{
     CellBlockOffsets, FragmentDraft, FragmentDraftTree, TableAlignment, TableBlockBorderMetrics,
     TableBlockConstraint, TableBlockDeferral, TableBlockSizingInput, TableCellAlignment,
     TableCellBlockStyle, TableCellFormatter, TableCellLayoutInput, TableCellLayoutOutput,
     TableCellLayoutPass, TableCellPlacement, TablePercentagePass, TableRowBaseline,
-    TableRowLayoutError, TableRowLayoutResult, TableRowMeasure, TableRowSizing,
-    TableSeparatedBlockMetrics, align_table_cells, apply_baseline_row_minima, format_table_cells,
-    measure_single_span_rows, resolve_percentage_block_sizes, size_table_rows,
-    spanned_cell_content_inline_size,
+    TableRowLayoutError, TableRowMeasure, TableRowSizing, TableSeparatedBlockMetrics,
+    align_table_cells, apply_baseline_row_minima, format_table_cells, measure_single_span_rows,
+    resolve_percentage_block_sizes, size_table_rows, spanned_cell_content_inline_size,
 };
 pub use sizing::{
     AffineLengthPercentage, CaptionMinContribution, CellInlineOffsets, InlineSizeConstraint,

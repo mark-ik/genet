@@ -965,8 +965,37 @@ exactly what the first version of this seam did. Writing a pre-rounded value
 instead would round the table's subtree on a different grid from its
 siblings, so `set_layout` writes unrounded and lets the shared pass round it.
 
+#### Buckram owns the order of the phases
+
+K4d1 through K4d6a each accepted one phase as its own public function so it
+could be gated on its own evidence. That left the *order* unowned, and the
+order is load-bearing at two points: baseline minima are a row minimum
+content measurement cannot see, so they must reach row sizing, and the
+percentage pass may grow rows again, so alignment and fragment emission must
+both read its sizing rather than the first pass's. An adapter that sequenced
+those wrong would produce a different table with no error anywhere.
+
+`components/buckram/src/table/pipeline.rs` owns that order once.
+`layout_table_block` runs format, measure, baseline minima, size, percentage
+pass, align, and emit, and returns `TableBlockLayout`: the final sizing,
+alignment, per-cell outputs, the cells the percentage pass relaid out, and
+the emitted fragment subtree. Both order dependencies are pinned by fixtures
+that fail under the wrong sequence rather than by review.
+
+`TableRowLayoutResult` is **removed**. It was declared in K4d1 as the
+eventual result shape and nothing ever produced it; `TableBlockLayout` is
+what the pipeline actually returns, and its fields are accepted types from
+the phases that produce them. An exported result type no code path can
+produce reads as a capability receipt for a driver that did not exist.
+
+`buckram_table_columns` now returns the whole `TableInlineSizingResult`
+rather than just its column vector, because `TableBlockSizingInput` takes
+that result as its inline input. Re-deriving the used grid width or the
+undistributable remainder from the columns alone would put K4c's arithmetic
+back in Livery.
+
 What remains for the cutover: build cells as children of a `Table` node,
-run the full block pipeline before `compute_layout`, write every cell
+run `layout_table_block` before `compute_layout`, write every cell
 rectangle through this seam, splice K4d6a's structural fragments into
 `collect_fragments`, and delete `place_table_cell`, `table_is_flattenable`,
 and the table-to-Grid and row-to-Flex mappings in `algorithm_kind` and

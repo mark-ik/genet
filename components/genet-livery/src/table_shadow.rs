@@ -20,9 +20,9 @@ use buckram::{
     TableAutomaticColumnMeasureInput, TableAutomaticInlineSizingIndefinite,
     TableAutomaticInlineSizingInput, TableAutomaticInlineSizingOutcome, TableCellInlineMeasure,
     TableDeferral, TableFixedInlineSizingInput, TableFixedInlineSizingOutcome, TableGrid,
-    TableInlineBorderMetrics, TableInlineSizingError, TableSeparatedBorderMetrics,
-    TableTrackVisibility, measure_automatic_columns, size_automatic_table_inline,
-    size_fixed_table_inline,
+    TableInlineBorderMetrics, TableInlineSizingError, TableInlineSizingResult,
+    TableSeparatedBorderMetrics, TableTrackVisibility, measure_automatic_columns,
+    size_automatic_table_inline, size_fixed_table_inline,
 };
 use layout_dom_api::LayoutDom;
 use livery::{
@@ -141,11 +141,15 @@ pub struct PendingTable<Id> {
     pub cell_nodes: Vec<Option<AlgorithmNodeId>>,
     pub font_size: f32,
     pub containing_width: Option<f32>,
-    /// Columns Buckram assigned, once `buckram_table_columns` has run.
-    pub assigned: Option<Vec<f32>>,
+    /// The inline result Buckram assigned, once `buckram_table_columns` has
+    /// run. The whole result is retained, not just its columns: K4d's block
+    /// pipeline takes it as its inline input, and re-deriving the grid width
+    /// or the undistributable remainder from the column vector alone would
+    /// reintroduce exactly the arithmetic K4c owns.
+    pub assigned: Option<TableInlineSizingResult>,
 }
 
-/// Compute Buckram's authoritative columns for one live table.
+/// Compute Buckram's authoritative inline result for one live table.
 ///
 /// `cell_border_box_intrinsics` are min/max-content border-box widths
 /// measured through the live intrinsic machinery, per K4b cell; the cell's
@@ -166,7 +170,7 @@ pub(crate) fn buckram_table_columns<D>(
     containing_width: Option<f32>,
     cell_border_box_intrinsics: &[Option<IntrinsicSizes>],
     ledger: &mut TableShadowLedger,
-) -> Option<Vec<f32>>
+) -> Option<TableInlineSizingResult>
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -191,7 +195,7 @@ where
         match size_fixed_table_inline(&input) {
             Ok(TableFixedInlineSizingOutcome::Fixed(result)) => {
                 ledger.assigned += 1;
-                return Some(result.column_sizes);
+                return Some(result);
             },
             // CSS 2.1 17.5.2.1: fixed layout with an indefinite width uses
             // the automatic algorithm. Fall through.
@@ -230,7 +234,7 @@ fn automatic_columns<D>(
     containing_width: Option<f32>,
     cell_border_box_intrinsics: &[Option<IntrinsicSizes>],
     ledger: &mut TableShadowLedger,
-) -> Option<Vec<f32>>
+) -> Option<TableInlineSizingResult>
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
@@ -312,7 +316,7 @@ where
     }) {
         Ok(TableAutomaticInlineSizingOutcome::Sized(result)) => {
             ledger.assigned += 1;
-            Some(result.column_sizes)
+            Some(result)
         },
         Ok(TableAutomaticInlineSizingOutcome::Indefinite(reason)) => {
             ledger.skip(table, TableShadowSkip::AutomaticIndefinite(reason));

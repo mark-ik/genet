@@ -3953,7 +3953,7 @@ mod tests {
             calls.set(call + 1);
             AlgorithmSize::new(
                 known.width.unwrap_or(200.0),
-                if call % 2 == 0 { 0.0 } else { 10.0 },
+                if call.is_multiple_of(2) { 0.0 } else { 10.0 },
             )
         });
 

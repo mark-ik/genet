@@ -311,20 +311,6 @@ pub struct TableCellPlacement {
     pub content_block_offset: f32,
 }
 
-/// The complete row-layout result. Offsets and sizes use the table's logical
-/// block axis; physical coordinates are derived only when final fragments are
-/// committed.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TableRowLayoutResult {
-    pub used_table_block_size: f32,
-    pub row_offsets: Vec<f32>,
-    pub row_sizes: Vec<f32>,
-    pub cells: Vec<TableCellPlacement>,
-    pub baselines: Baselines,
-    pub overflow: LogicalRect,
-    pub fragments: FragmentDraftTree,
-}
-
 /// One draft fragment. Drafts are deliberately not `Fragment`s: nothing can
 /// insert them into a `FragmentTree` without the explicit commit that K4d6
 /// owns, so a discarded measurement pass cannot leak into painted output by
