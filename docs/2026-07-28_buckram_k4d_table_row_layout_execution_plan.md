@@ -3,10 +3,11 @@
 **Date:** 2026-07-28
 
 **Status:** in execution from accepted K4c5b commit `a96fe7d147e`. K4d1
-through K4d5 are complete; both 10/10 gates selected their algorithms from
-measured Chrome 150 / Firefox 153 matrices. K4d6 is next: it is the live
-cutover and the bridge-deletion gate, so it is the first K4d gate whose WPT
-maps are expected to move.
+through K4d5 are complete, and K4d6 is split: K4d6a's fragment model has
+landed. Both 10/10 gates selected their algorithms from measured Chrome 150 /
+Firefox 153 matrices. K4d6b is next: it is the live cutover and the
+bridge-deletion gate, so it is the first K4d gate whose WPT maps are expected
+to move.
 
 **Parent plan:** [Buckram K4 CSS tables execution plan](2026-07-28_buckram_k4_css_tables_execution_plan.md)
 
@@ -863,6 +864,60 @@ warning, which this gate does not touch. Exact-file Rustfmt and
 `git diff --check` clean.
 
 ## K4d6. Fragment emission, live dispatch, and bridge deletion
+
+**Split into K4d6a and K4d6b.** K4d6a emits the table's fragment subtree as a
+model, with no live behavior change and a zero-movement receipt. K4d6b routes
+live tables through the dispatcher, commits those fragments, and deletes the
+bridge. This is the same fault line K4c5 was split along, for the same
+reason: landing the cutover together with the removal of the code that would
+reveal a regression makes any movement unattributable. K4d6a's outcome,
+evidence, and stop rules are the fragment-model subset of the list below;
+K4d6b owns the live dispatch, the deletions, and the removal receipt.
+
+### K4d6a receipt - 2026-08-01
+
+**Base commit:** `d0fd1f3840b` (accepted K4d5).
+
+**Capability:** `components/buckram/src/table/fragments.rs` emits one
+fragment per table-internal box from the accepted K4c inline result, K4d3 row
+sizing, and K4d5 alignment: grid, row groups, rows, column groups, columns,
+and cells. Each carries its logical border-box rectangle, its structural
+parent, and its overflow. Parents always precede their children in the
+vector, so K4d6b can commit in order without a second traversal.
+
+**Structural parents** follow the plan: groups under the grid, rows under
+their row group or directly under the grid when ungrouped, columns under
+their column group or the grid, and cells under the row they originate in.
+
+**Rectangles come from the track model, never from painted cells.** A row
+group's rectangle is the exact union of its track range, and a column exists
+with its own rectangle even where no cell occupies it, which the
+`a_column_without_cells_still_has_its_own_rectangle` fixture pins. That is
+the gate's stop rule about reconstructing a column or group during paint,
+enforced by construction rather than by review.
+
+**A spanning cell gets exactly one fragment** covering its whole row range.
+Nothing is split here; K6 owns the fragmented case.
+
+**Overflow** unions upward from each cell through its row, that row's group,
+and the grid, in a single reverse sweep, and never disturbs any fragment's
+own rectangle.
+
+**Emitted, not committed.** `TableFragments` is a Buckram value with no path
+into a `FragmentTree`, so K4d6a cannot change painted output by construction,
+exactly as K4d1's draft discipline requires.
+
+**Fixtures:** every role present with correct parents and counts; group and
+column-group rectangles as exact track unions; a column with no cells; the
+overflow union; a spanning cell's single rectangle; and collapsed metrics
+deferring before any fragment is emitted. Five tests; buckram 154.
+
+**WPT:** both table corpora rerun against the K4d5 maps with zero movement.
+Proof directory: `testing/genet/wpt-ledger/2026-08-01_buckram_k4d6a`.
+
+**Verification:** buckram 154, livery and genet-livery all targets 0 failed;
+`cargo clippy -p buckram -- -D warnings` clean; exact-file Rustfmt and
+`git diff --check` clean.
 
 ### Outcome
 

@@ -11,6 +11,7 @@ use crate::{BoxId, CssBoxTree, InternalTableRole};
 mod automatic;
 mod automatic_used;
 mod fixed;
+mod fragments;
 mod rows;
 mod sizing;
 
@@ -28,6 +29,7 @@ pub use fixed::{
     TableFixedColumnGroupInput, TableFixedColumnInput, TableFixedInlineSizingInput,
     TableFixedInlineSizingOutcome, TableFixedLayoutFallback, size_fixed_table_inline,
 };
+pub use fragments::{TableFragment, TableFragmentRole, TableFragments, emit_table_fragments};
 pub use rows::{
     CellBlockOffsets, FragmentDraft, FragmentDraftTree, TableAlignment, TableBlockBorderMetrics,
     TableBlockConstraint, TableBlockDeferral, TableBlockSizingInput, TableCellAlignment,
