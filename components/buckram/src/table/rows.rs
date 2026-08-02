@@ -224,6 +224,11 @@ pub struct TableCellBlockStyle {
     /// content box, so it is kept apart from the measured content size.
     pub specified: TableBlockConstraint,
     pub box_sizing: TableBoxSizing,
+    /// Whether the cell's contents contain a block size that gains a basis
+    /// once the cell's own used block size is known. The adapter computes
+    /// this from computed styles. A cell whose dependency set is empty is
+    /// never relaid out, which is what keeps the percentage pass cheap.
+    pub percentage_dependent_contents: bool,
 }
 
 impl Default for TableCellBlockStyle {
@@ -232,6 +237,7 @@ impl Default for TableCellBlockStyle {
             offsets: CellBlockOffsets::ZERO,
             specified: TableBlockConstraint::Auto,
             box_sizing: TableBoxSizing::ContentBox,
+            percentage_dependent_contents: false,
         }
     }
 }
@@ -656,6 +662,140 @@ pub fn size_table_rows(
         row_offsets,
         row_sizes: sizes,
     })
+}
+
+/// The result of K4d4's bounded percentage pass.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TablePercentagePass {
+    pub sizing: TableRowSizing,
+    /// Cells relaid out because their contents gained a definite basis, in
+    /// K4b cell order. Every other cell stayed single-pass.
+    pub relaid_out: Vec<BoxId>,
+}
+
+/// A percentage constraint resolved against `basis`, or `None` when the
+/// constraint carries no percentage to resolve.
+fn resolved_against(constraint: TableBlockConstraint, basis: f32) -> Option<TableBlockConstraint> {
+    match constraint {
+        TableBlockConstraint::Value(value) if value.needs_percentage_basis() => value
+            .resolve(basis)
+            .filter(|size| size.is_finite() && *size >= 0.0)
+            .map(|size| TableBlockConstraint::Value(AffineLengthPercentage::px(size))),
+        _ => None,
+    }
+}
+
+/// K4d4: resolve percentage row, cell, and cell-descendant block sizes once
+/// a valid basis exists, in a bounded pair of named passes.
+///
+/// The basis for a percentage row or cell height is the table's own
+/// *specified* definite block size, never the used size K4d3 computed. That
+/// distinction is measured: with an indefinite table height both engines
+/// treat a 50% row or cell as automatic and the table stays at its content
+/// height, rather than resolving 50% against the height the content just
+/// produced. So no cycle can form, and `PercentageBlockCycle` is unreachable
+/// from this path rather than being a loop guard.
+///
+/// A cell whose contents depend on its block size is relaid out once, with
+/// the cell's final used block size, replacing its first-pass drafts and
+/// overflow. That second format pass never re-drives row sizing: growth
+/// discovered there would start an unbounded stabilization loop, and neither
+/// engine grows a row for it.
+pub fn resolve_percentage_block_sizes(
+    input: &TableBlockSizingInput<'_>,
+    first_pass: &TableRowSizing,
+    cell_styles: &[TableCellBlockStyle],
+    cell_outputs: &mut [(BoxId, TableCellLayoutOutput)],
+    row_constraints: &[TableBlockConstraint],
+    formatter: &mut impl TableCellFormatter,
+) -> Result<TablePercentagePass, TableRowLayoutError> {
+    let grid = input.grid;
+    let TableBlockBorderMetrics::Separated(metrics) = input.border_metrics else {
+        return Err(TableRowLayoutError::Deferral(
+            TableBlockDeferral::CollapsedBlockBorderMetricsPendingK4g,
+        ));
+    };
+    let undistributable = metrics
+        .undistributable_block_size(grid.rows.len())
+        .ok_or(TableRowLayoutError::InvalidCellOutput { box_id: grid.grid })?;
+
+    // Only a specified definite table height is a basis for a percentage row
+    // or cell height.
+    let mut sizing = first_pass.clone();
+    if let Some(table) = definite_block_size(input.table_constraint) {
+        let basis = (table - undistributable).max(0.0);
+        let rows = row_constraints
+            .iter()
+            .map(|constraint| resolved_against(*constraint, basis).unwrap_or(*constraint))
+            .collect::<Vec<_>>();
+        let styles = cell_styles
+            .iter()
+            .map(|style| TableCellBlockStyle {
+                specified: resolved_against(style.specified, basis).unwrap_or(style.specified),
+                ..*style
+            })
+            .collect::<Vec<_>>();
+        let resolved_anything = rows != row_constraints
+            || styles
+                .iter()
+                .zip(cell_styles)
+                .any(|(one, other)| one.specified != other.specified);
+        if resolved_anything {
+            let measures = measure_single_span_rows(input, &styles, cell_outputs, &rows)?;
+            sizing = size_table_rows(input, &measures, &styles, cell_outputs)?;
+        }
+    }
+
+    // Relayout only the cells whose contents actually gained a basis.
+    let mut relaid_out = Vec::new();
+    for (index, cell) in grid.cells.iter().enumerate() {
+        if !cell_styles[index].percentage_dependent_contents {
+            continue;
+        }
+        let end = cell.row + cell.row_span;
+        if end > sizing.row_sizes.len() {
+            return Err(TableRowLayoutError::Deferral(
+                TableBlockDeferral::FragmentationDependentRowspan,
+            ));
+        }
+        let crossed = metrics.block_spacing * (cell.row_span - 1) as f32;
+        let cell_block_size = sizing.row_sizes[cell.row..end].iter().sum::<f32>() + crossed;
+        let offsets =
+            cell_styles[index]
+                .offsets
+                .total()
+                .ok_or(TableRowLayoutError::InvalidCellOutput {
+                    box_id: cell.source,
+                })?;
+        let content_block_size = (cell_block_size - offsets).max(0.0);
+        let output = formatter.format_cell(TableCellLayoutInput {
+            box_id: cell.source,
+            content_inline_size: spanned_cell_content_inline_size(
+                input.inline,
+                0.0,
+                cell.source,
+                cell.column,
+                cell.column_span,
+                0.0,
+            )?,
+            available_block_size: Some(content_block_size),
+            percentage_basis: Some(content_block_size),
+            pass: TableCellLayoutPass::ResolvePercentages {
+                cell_block_size: content_block_size,
+            },
+        })?;
+        if !output.is_valid() {
+            return Err(TableRowLayoutError::InvalidCellOutput {
+                box_id: cell.source,
+            });
+        }
+        // The final pass replaces the draft subtree and overflow outright;
+        // nothing merges a measurement pass into the result.
+        cell_outputs[index].1 = output;
+        relaid_out.push(cell.source);
+    }
+
+    Ok(TablePercentagePass { sizing, relaid_out })
 }
 
 /// K4d2: content-based minimum block sizes for every K4b row.
@@ -1549,6 +1689,228 @@ mod tests {
                 TableBlockDeferral::CollapsedBlockBorderMetricsPendingK4g
             ))
         );
+    }
+
+    /// A formatter that resolves a percentage child against whatever basis
+    /// the pass supplies, and counts how many times each cell was formatted.
+    struct PercentageFormatter {
+        /// Fraction of the cell's content block size each cell's child wants.
+        child: Vec<Option<f32>>,
+        seen: Vec<TableCellLayoutPass>,
+    }
+
+    impl TableCellFormatter for PercentageFormatter {
+        fn format_cell(
+            &mut self,
+            input: TableCellLayoutInput,
+        ) -> Result<TableCellLayoutOutput, TableRowLayoutError> {
+            self.seen.push(input.pass);
+            let cell = (self.seen.len() - 1) % self.child.len();
+            let fraction = self.child[cell];
+            let content = match (fraction, input.percentage_basis) {
+                // A percentage child with no basis is zero, not automatic.
+                (Some(_), None) => 0.0,
+                (Some(fraction), Some(basis)) => basis * fraction,
+                (None, _) => 0.0,
+            };
+            Ok(TableCellLayoutOutput {
+                content_block_size: content,
+                border_box_min_block_size: 0.0,
+                baselines: Baselines::synthesized_from_block_end(content),
+                overflow: LogicalRect::default(),
+                fragments: FragmentDraftTree::default(),
+            })
+        }
+    }
+
+    fn percentage_case(
+        row_constraints: Vec<TableBlockConstraint>,
+        cell_specified: Vec<TableBlockConstraint>,
+        dependent: Vec<bool>,
+        table: TableBlockConstraint,
+        first_pass_content: Vec<f32>,
+    ) -> (TablePercentagePass, Vec<TableCellLayoutOutput>) {
+        let rows_spec = (0..row_constraints.len())
+            .map(|r| vec![3u8 + r as u8])
+            .collect::<Vec<_>>();
+        let refs = rows_spec.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let grid = multi_row_grid(&refs, &[]);
+        let styles = cell_specified
+            .iter()
+            .zip(&dependent)
+            .map(|(specified, dependent)| TableCellBlockStyle {
+                specified: *specified,
+                percentage_dependent_contents: *dependent,
+                ..TableCellBlockStyle::default()
+            })
+            .collect::<Vec<_>>();
+        let inline = inline_result(&grid, vec![10.0]);
+        let input = TableBlockSizingInput {
+            grid: &grid,
+            inline: &inline,
+            table_constraint: table,
+            border_metrics: TableBlockBorderMetrics::Separated(
+                TableSeparatedBlockMetrics::default(),
+            ),
+            available_block_size: None,
+            track_visibility: TableTrackVisibility::all_visible(&grid),
+        };
+        let mut outputs = grid
+            .cells
+            .iter()
+            .zip(&first_pass_content)
+            .map(|(cell, content)| (cell.source, output(*content, 0.0)))
+            .collect::<Vec<_>>();
+        let measures = measure_single_span_rows(&input, &styles, &outputs, &row_constraints)
+            .expect("first-pass measures");
+        let first = size_table_rows(&input, &measures, &styles, &outputs).expect("first sizing");
+        let mut formatter = PercentageFormatter {
+            child: dependent
+                .iter()
+                .map(|d| if *d { Some(0.5) } else { None })
+                .collect(),
+            seen: Vec::new(),
+        };
+        let pass = resolve_percentage_block_sizes(
+            &input,
+            &first,
+            &styles,
+            &mut outputs,
+            &row_constraints,
+            &mut formatter,
+        )
+        .expect("percentage pass");
+        let finals = outputs.into_iter().map(|(_, output)| output).collect();
+        (pass, finals)
+    }
+
+    fn pct(fraction: f32) -> TableBlockConstraint {
+        TableBlockConstraint::Value(
+            AffineLengthPercentage::new(0.0, fraction).expect("finite percentage"),
+        )
+    }
+
+    /// The K4d4 interop matrix, measured in Chrome 150 and Firefox 153 on
+    /// 2026-08-01. A percentage row or cell height resolves only against a
+    /// specified definite table height, never against the used height the
+    /// content just produced.
+    #[test]
+    fn percentage_rows_and_cells_follow_the_measured_interop_matrix() {
+        // P1: percentage row, indefinite table. Both engines treat it as
+        // automatic and the table stays at its content height.
+        let (p1, _) = percentage_case(
+            vec![pct(0.5), TableBlockConstraint::Auto],
+            vec![TableBlockConstraint::Auto; 2],
+            vec![false; 2],
+            TableBlockConstraint::Auto,
+            vec![20.0, 40.0],
+        );
+        close(&p1.sizing.row_sizes, &[20.0, 40.0]);
+        assert!((p1.sizing.used_table_block_size - 60.0).abs() < 0.05);
+
+        // P2: percentage row against a definite 300px table.
+        let (p2, _) = percentage_case(
+            vec![pct(0.5), TableBlockConstraint::Auto],
+            vec![TableBlockConstraint::Auto; 2],
+            vec![false; 2],
+            px(300.0),
+            vec![20.0, 40.0],
+        );
+        close(&p2.sizing.row_sizes, &[150.0, 150.0]);
+
+        // P3 and P4: a percentage cell height behaves exactly as a
+        // percentage row height at both table heights.
+        let (p3, _) = percentage_case(
+            vec![TableBlockConstraint::Auto; 2],
+            vec![pct(0.5), TableBlockConstraint::Auto],
+            vec![false; 2],
+            TableBlockConstraint::Auto,
+            vec![20.0, 40.0],
+        );
+        close(&p3.sizing.row_sizes, &[20.0, 40.0]);
+        let (p4, _) = percentage_case(
+            vec![TableBlockConstraint::Auto; 2],
+            vec![pct(0.5), TableBlockConstraint::Auto],
+            vec![false; 2],
+            px(300.0),
+            vec![20.0, 40.0],
+        );
+        close(&p4.sizing.row_sizes, &[150.0, 150.0]);
+    }
+
+    #[test]
+    fn percentage_cell_contents_gain_a_basis_only_from_the_final_cell_size() {
+        // P6: a definite 100px cell gives its percentage child 50. The first
+        // pass had no basis and produced zero; the second pass replaces it.
+        let (p6, outputs) = percentage_case(
+            vec![TableBlockConstraint::Auto],
+            vec![px(100.0)],
+            vec![true],
+            TableBlockConstraint::Auto,
+            vec![0.0],
+        );
+        close(&p6.sizing.row_sizes, &[100.0]);
+        assert_eq!(p6.relaid_out.len(), 1);
+        assert!((outputs[0].content_block_size - 50.0).abs() < 0.05);
+
+        // P7, the one divergence. The cell's own height is automatic, but the
+        // 300px table makes its used height definite. Chrome resolves the
+        // child against it (150); Firefox leaves it at zero. Buckram follows
+        // Chrome, because the second pass exists precisely to supply a basis
+        // that appears only after row distribution.
+        let (p7, outputs) = percentage_case(
+            vec![TableBlockConstraint::Auto],
+            vec![TableBlockConstraint::Auto],
+            vec![true],
+            px(300.0),
+            vec![0.0],
+        );
+        close(&p7.sizing.row_sizes, &[300.0]);
+        assert!((outputs[0].content_block_size - 150.0).abs() < 0.05);
+    }
+
+    /// P9's shape: a percentage cell holding a percentage child under an
+    /// indefinite table. Both engines collapse it to zero. No basis ever
+    /// appears, so nothing iterates and no cycle has to be detected.
+    #[test]
+    fn an_unbased_percentage_chain_collapses_without_iterating() {
+        let (p9, outputs) = percentage_case(
+            vec![TableBlockConstraint::Auto],
+            vec![pct(0.5)],
+            vec![true],
+            TableBlockConstraint::Auto,
+            vec![0.0],
+        );
+        close(&p9.sizing.row_sizes, &[0.0]);
+        assert!((p9.sizing.used_table_block_size).abs() < 0.05);
+        assert!((outputs[0].content_block_size).abs() < 0.05);
+    }
+
+    /// The plan's pass counter: a cell with no percentage dependency is
+    /// never reformatted, and a dependent cell is reformatted exactly once.
+    #[test]
+    fn independent_cells_stay_single_pass() {
+        let (pass, _) = percentage_case(
+            vec![TableBlockConstraint::Auto; 3],
+            vec![TableBlockConstraint::Auto; 3],
+            vec![false, true, false],
+            px(300.0),
+            vec![10.0, 20.0, 30.0],
+        );
+        assert_eq!(
+            pass.relaid_out.len(),
+            1,
+            "only the dependent cell may be relaid out: {pass:?}"
+        );
+
+        let (none, _) = percentage_case(
+            vec![TableBlockConstraint::Auto; 2],
+            vec![TableBlockConstraint::Auto; 2],
+            vec![false; 2],
+            px(300.0),
+            vec![10.0, 20.0],
+        );
+        assert!(none.relaid_out.is_empty());
     }
 
     #[test]

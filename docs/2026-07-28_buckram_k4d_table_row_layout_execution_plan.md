@@ -3,8 +3,8 @@
 **Date:** 2026-07-28
 
 **Status:** in execution from accepted K4c5b commit `a96fe7d147e`. K4d1
-through K4d3 are complete, with K4d3's distribution selected from a measured
-Chrome 150 / Firefox 153 matrix. K4d4 is next and needs its own matrix.
+through K4d4 are complete; both 10/10 gates selected their algorithms from
+measured Chrome 150 / Firefox 153 matrices. K4d5 is next.
 
 **Parent plan:** [Buckram K4 CSS tables execution plan](2026-07-28_buckram_k4_css_tables_execution_plan.md)
 
@@ -643,6 +643,95 @@ a valid table or cell basis exists.
 Delete any generic backend percentage-height retry used only to compensate
 for table-as-Grid layout. Retain shared formatting-context relayout support
 only when another non-table consumer is proved.
+
+### K4d4 interop matrix - 2026-08-01
+
+Measured with `interop-matrix.html` in the K4d4 proof directory, headless
+**Chrome 150.0.0.0** and **Firefox 153.0.1**. `inner` is the measured
+subject (row heights, or the percentage descendant's height); `outer` is its
+table or cell.
+
+| Case | Chrome 150 | Firefox 153 |
+|---|---|---|
+| P1 pct row 50%, table auto | rows 20 / 40, table 60 | same |
+| P2 pct row 50%, table 300 | rows 150 / 150 | same |
+| P3 pct cell 50%, table auto | rows 20 / 40, table 60 | same |
+| P4 pct cell 50%, table 300 | rows 150 / 150 | same |
+| P5 pct child, cell auto, table auto | child 0, cell 40 | same |
+| P6 pct child, cell 100px | child 50, cell 100 | same |
+| **P7 pct child, cell auto, table 300** | **child 150**, cell 300 | **child 0**, cell 300 |
+| P8 pct grandchild through auto wrapper, cell 100px | child 0, cell 100 | same |
+| P9 pct cell holding a pct child, table auto | child 0, cell 0 | same |
+| P10 pct child in `overflow:auto` cell 100px | child 50, cell 100 | same |
+
+**Nine of ten cases agree.** The accepted rules:
+
+1. A percentage row or cell height resolves only against the table's
+   *specified* definite block size, never against the used size K4d3 just
+   computed from content (P1, P3 versus P2, P4). That distinction is what
+   makes the pass acyclic: a percentage never feeds the height it measures
+   against.
+2. A percentage row height and a percentage cell height behave identically
+   (P2 equals P4).
+3. A percentage descendant with no basis is zero, not automatic (P5).
+4. A descendant's basis is the cell's final used block size, and only its
+   direct children see it: an intervening auto-height wrapper breaks the
+   chain in both engines (P8). Buckram supplies the cell block size and the
+   content formatting context applies the ordinary chain rule, so P8 needs no
+   table-specific code.
+5. `overflow: auto` on the cell does not change the basis (P10).
+
+**The one divergence, P7,** is resolved toward Chrome: a cell whose own
+height is automatic but whose used height is made definite by the table does
+give its percentage children a basis. Firefox requires the cell's own
+specified height to be definite. Chrome's behavior is what this gate is
+architecturally for, since the plan's second pass exists precisely to apply a
+basis that appears only after row distribution; under Firefox's rule that
+pass would be unreachable for automatic cells. CSS 2.1 section 17.5.3 also
+makes a cell's height a product of its row, so the used height is a genuine
+basis once rows are final.
+
+**`PercentageBlockCycle` is unreachable from this path, and that is a
+result rather than an omission.** Because a percentage never resolves against
+a used height it helped produce (rule 1), the two passes cannot feed each
+other. P9's apparent cycle collapses to zero in both engines for the same
+reason: no basis ever appears. The variant stays reserved for a future gate
+that introduces a genuine dependency loop.
+
+### K4d4 receipt - 2026-08-01
+
+**Base commit:** `dddd01c537b` (accepted K4d3).
+
+**Capability:** `resolve_percentage_block_sizes` performs the bounded second
+pass. Percentage row and cell constraints resolve against the specified table
+basis and row sizing re-runs once; then each cell whose contents depend on
+its block size is reformatted exactly once with
+`TableCellLayoutPass::ResolvePercentages`, replacing its first-pass drafts
+and overflow outright. `TableCellBlockStyle` gained
+`percentage_dependent_contents` so a cell with an empty dependency set is
+never touched.
+
+**Boundedness:** the second format pass never re-drives row sizing. Growth
+discovered there would start an unbounded stabilization loop, and neither
+engine grows a row for it. Two named passes, no iteration, no convergence
+test.
+
+**Interop decision:** the matrix above, including P7 at Chrome's value.
+
+**Pure fixtures:** P1 through P4 as measured; the P6 and P7 descendant-basis
+pair; P9's unbased chain collapsing without iteration; and the plan's pass
+counter, proving a cell with no percentage dependency is never reformatted
+while a dependent cell is reformatted exactly once. Four tests; buckram 143.
+
+**WPT:** both table corpora rerun against the K4d3 maps with zero movement,
+as a model-only gate requires. `percent-height-table-cell-child.html` is
+captured as pre-cutover orientation and currently fails; K4d6 is where it can
+move. Proof directory:
+`testing/genet/wpt-ledger/2026-08-01_buckram_k4d4`.
+
+**Verification:** buckram 143, livery and genet-livery all targets 0 failed;
+clippy clean on touched files; exact-file Rustfmt and `git diff --check`
+clean.
 
 ## K4d5. Cell alignment and table baseline sets
 

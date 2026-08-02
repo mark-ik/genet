@@ -32,8 +32,9 @@ pub use rows::{
     CellBlockOffsets, FragmentDraft, FragmentDraftTree, TableBlockBorderMetrics,
     TableBlockConstraint, TableBlockDeferral, TableBlockSizingInput, TableCellBlockStyle,
     TableCellFormatter, TableCellLayoutInput, TableCellLayoutOutput, TableCellLayoutPass,
-    TableCellPlacement, TableRowLayoutError, TableRowLayoutResult, TableRowMeasure, TableRowSizing,
-    TableSeparatedBlockMetrics, format_table_cells, measure_single_span_rows, size_table_rows,
+    TableCellPlacement, TablePercentagePass, TableRowLayoutError, TableRowLayoutResult,
+    TableRowMeasure, TableRowSizing, TableSeparatedBlockMetrics, format_table_cells,
+    measure_single_span_rows, resolve_percentage_block_sizes, size_table_rows,
     spanned_cell_content_inline_size,
 };
 pub use sizing::{
