@@ -1032,6 +1032,12 @@ Both build routes now run it: the inline route that production uses, and the
 block-only route. K4c5b's finding that `fixed_column_widths` had never run in
 production came from exactly that asymmetry.
 
+**WPT:** both table corpora rerun against the K4d6a maps with zero movement.
+`css/css-tables` 56 passed, 74 failed, 198 skipped; `css/CSS2/tables` 68
+passed, 182 failed, 889 skipped; `unexpected=0` on both. Proof directory:
+`testing/genet/wpt-ledger/2026-08-02_buckram_k4d6b_shadow`. Those maps are
+also the baseline the cutover will be classified against.
+
 What remains for the cutover: write every cell rectangle through the owned-
 context seam, size the table node from `used_table_block_size`, splice
 K4d6a's structural fragments into `collect_fragments`, and delete
