@@ -5,10 +5,11 @@
 //! receives logical edges and box identity rather than backend layout state.
 
 use buckram::{
-    AffineLengthPercentage, CellInlineOffsets, FlowAxes, InlineSizeConstraint, PhysicalSide,
-    TableAutomaticColumnGroupInput, TableAutomaticColumnInput, TableBoxSizing, TableCellAlignment,
-    TableCellInlineStyle, TableFixedColumnGroupInput, TableFixedColumnInput, TableGrid,
-    TableInlineConstraints, TableInlineProperty, TableInlineSizingError,
+    AffineLengthPercentage, CellBlockOffsets, CellInlineOffsets, FlowAxes, InlineSizeConstraint,
+    PhysicalSide, TableAutomaticColumnGroupInput, TableAutomaticColumnInput, TableBlockConstraint,
+    TableBoxSizing, TableCellAlignment, TableCellBlockStyle, TableCellInlineStyle, TableDeferral,
+    TableFixedColumnGroupInput, TableFixedColumnInput, TableGrid, TableInlineConstraints,
+    TableInlineProperty, TableInlineSizingError,
 };
 use livery::{
     ComputedValues,
@@ -50,15 +51,104 @@ pub(crate) fn table_cell_inline_style(
     })
 }
 
+/// Lower a computed cell style into Buckram's block-axis contract.
+///
+/// Buckram's block-axis offsets are plain lengths, so a percentage padding has
+/// to resolve here or not at all. A table cell's containing block for that
+/// percentage is the table box, whose content width Livery cannot name from
+/// K4c's result alone: the undistributable remainder folds the table's own
+/// padding and border together with separated spacing. So a percentage defers
+/// under the same named gap the inline axis uses, and the ledger counts it.
+/// Picking one of the two plausible bases here would be exactly the invented
+/// geometry this boundary exists to prevent.
+pub(crate) fn table_cell_block_style(
+    computed: &ComputedValues,
+    axes: FlowAxes,
+    font_size: f32,
+    root_font_size: f32,
+) -> Result<TableCellBlockStyle, TableInlineSizingError> {
+    Ok(TableCellBlockStyle {
+        alignment: table_cell_alignment(computed),
+        offsets: CellBlockOffsets {
+            padding_start: absolute_padding(
+                computed,
+                axes.block_start(),
+                font_size,
+                root_font_size,
+                TableInlineProperty::PaddingInlineStart,
+            )?,
+            padding_end: absolute_padding(
+                computed,
+                axes.block_end(),
+                font_size,
+                root_font_size,
+                TableInlineProperty::PaddingInlineEnd,
+            )?,
+            border_start: logical_border(computed, axes.block_start(), font_size),
+            border_end: logical_border(computed, axes.block_end(), font_size),
+        },
+        specified: block_size_constraint(computed.height, font_size, root_font_size),
+        box_sizing: match computed.box_sizing {
+            BoxSizing::ContentBox => TableBoxSizing::ContentBox,
+            BoxSizing::BorderBox => TableBoxSizing::BorderBox,
+        },
+        // Filled in by the caller, which can see the cell's descendants.
+        percentage_dependent_contents: false,
+    })
+}
+
+/// Lower a computed block-axis size into Buckram's constraint. A percentage
+/// travels unresolved: only the table's own specified block size is a valid
+/// basis for it, and K4d4 owns that decision.
+pub(crate) fn block_size_constraint(
+    value: Size,
+    font_size: f32,
+    root_font_size: f32,
+) -> TableBlockConstraint {
+    match value {
+        // `none` is `max-height`'s initial value and is not a constraint.
+        Size::Auto | Size::None => TableBlockConstraint::Auto,
+        // No intrinsic keyword gives a table row or cell a definite block
+        // size, and CSS 2.1 defines no behavior for them here. Treating one
+        // as automatic would silently drop an author's declaration.
+        Size::MinContent | Size::MaxContent | Size::FitContent(_) => {
+            TableBlockConstraint::Unreduced
+        },
+        Size::Value(value) => affine_length_percentage(value, font_size, root_font_size)
+            .map_or(TableBlockConstraint::Unreduced, TableBlockConstraint::Value),
+    }
+}
+
+/// One padding edge as a plain length. A percentage has no basis Livery can
+/// name, so it defers rather than sampling at zero.
+fn absolute_padding(
+    computed: &ComputedValues,
+    side: PhysicalSide,
+    font_size: f32,
+    root_font_size: f32,
+    property: TableInlineProperty,
+) -> Result<f32, TableInlineSizingError> {
+    let value = logical_padding(computed, side, font_size, root_font_size, property)?;
+    if value.needs_percentage_basis() {
+        return Err(TableInlineSizingError::Deferral(
+            TableDeferral::PercentagePaddingPendingBasis,
+        ));
+    }
+    value
+        .resolve(0.0)
+        .filter(|resolved| resolved.is_finite() && *resolved >= 0.0)
+        .ok_or(TableInlineSizingError::InvalidConstraint {
+            box_id: None,
+            property,
+        })
+}
+
 /// Lower `vertical-align` to a table cell's block-axis alignment.
 ///
 /// CSS 2.1 section 17.5.3 gives table cells only `baseline`, `top`,
 /// `middle`, and `bottom`. The remaining values do not apply to a table cell
 /// and behave as `baseline`, so they collapse here rather than reaching
 /// Buckram as distinctions the table algorithm would have to ignore.
-// K4d6 consumes this when live tables dispatch through row layout. It is
-// tested now so the lowering is reviewable with the gate that defines it.
-#[allow(dead_code, reason = "consumed by K4d6 live dispatch")]
 pub(crate) fn table_cell_alignment(computed: &ComputedValues) -> TableCellAlignment {
     match computed.vertical_align {
         VerticalAlign::Top => TableCellAlignment::Top,

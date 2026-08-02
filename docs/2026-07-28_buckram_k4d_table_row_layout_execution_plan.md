@@ -994,12 +994,49 @@ that result as its inline input. Re-deriving the used grid width or the
 undistributable remainder from the columns alone would put K4c's arithmetic
 back in Livery.
 
-What remains for the cutover: build cells as children of a `Table` node,
-run `layout_table_block` before `compute_layout`, write every cell
-rectangle through this seam, splice K4d6a's structural fragments into
-`collect_fragments`, and delete `place_table_cell`, `table_is_flattenable`,
-and the table-to-Grid and row-to-Flex mappings in `algorithm_kind` and
-`anonymous_taffy_style`.
+#### The live block pipeline runs in shadow
+
+Following K4c5's split, the pipeline runs on every live table before it is
+given authority. `components/genet-livery/src/table_block.rs` lowers the
+block axis and calls `layout_table_block`; `verify_table_block` then compares
+Buckram's cell rectangles against the painted fragments after collection.
+Nothing is written to the tree yet, so this step cannot move a WPT test, and
+it converts the cutover's open-ended risk into a measured distance.
+
+**The measurement immediately found a live capability gap, in Buckram's
+favor.** A `height` on a `<tr>` is a row minimum under CSS 2.1 section
+17.5.3. The bridge flattens rows away before the backend sees them, so that
+declaration reaches no grid track: for a two-row table with rows of 40px and
+60px, the bridge paints 18px and 19px content-height rows while Buckram
+produces 40 and 60. Every divergence recorded in
+`k4d6b_buckram_rows_honor_row_heights_the_bridge_drops` is the bridge falling
+short, which is asserted directly rather than described. The cutover is
+therefore a capability gain, and its WPT movement should be improvements.
+
+**Deferrals are named, never silent.** Collapsed borders defer to K4g as
+before. Two new named skips cover what the block axis has no contract for: a
+cell or row `max-height` (`UnmodeledConstraint`), which is dropped by no one
+because dropping it would silently change the table, and a percentage
+block-axis padding. That padding's basis is the table box's content width,
+which Livery cannot name from K4c's result alone, because the
+undistributable remainder folds the table's own padding and border together
+with separated spacing. Picking one of the two plausible bases would be
+exactly the invented geometry this boundary exists to prevent, so it defers
+under the gap the inline axis already uses and the ledger counts it.
+
+**The block ledger nests inside `TableShadowLedger`** rather than running
+parallel to it. A table's two axes are one dispatch decision, and two ledgers
+threaded through three build routes would drift apart.
+
+Both build routes now run it: the inline route that production uses, and the
+block-only route. K4c5b's finding that `fixed_column_widths` had never run in
+production came from exactly that asymmetry.
+
+What remains for the cutover: write every cell rectangle through the owned-
+context seam, size the table node from `used_table_block_size`, splice
+K4d6a's structural fragments into `collect_fragments`, and delete
+`place_table_cell`, `table_is_flattenable`, and the table-to-Grid and
+row-to-Flex mappings in `algorithm_kind` and `anonymous_taffy_style`.
 
 ### Outcome
 

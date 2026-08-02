@@ -101,9 +101,8 @@ fn removing_a_sibling_recounts_the_group_incrementally() {
     );
     let mut discarded = Vec::new();
     dom.drain_mutations(&mut discarded);
-    let styles = StyleSet::cambium(&[
-        "span { z-index: calc(sibling-index() * 100 + sibling-count()); }",
-    ]);
+    let styles =
+        StyleSet::cambium(&["span { z-index: calc(sibling-index() * 100 + sibling-count()); }"]);
     let states = InteractionStates::default();
     let device = Device::screen(800.0, 600.0);
     let mut session = IncrementalStyle::new();

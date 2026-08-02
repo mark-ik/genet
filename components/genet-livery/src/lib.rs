@@ -13,6 +13,9 @@ mod invalidation;
 mod layout;
 mod paint;
 mod style;
+// K4d6b: Buckram lays out live tables' block axis through the phase order it
+// owns; a table it cannot lay out defers under a named gap.
+pub mod table_block;
 mod table_sizing;
 // K4c5b: Buckram owns live table inline sizing on every route; deferred
 // tables fall back to grid inference under named counters.

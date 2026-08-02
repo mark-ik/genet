@@ -18,11 +18,11 @@ use std::hash::Hash;
 use buckram::{
     AlgorithmNodeId, BoxId, CaptionMinContribution, IntrinsicSizes,
     TableAutomaticColumnMeasureInput, TableAutomaticInlineSizingIndefinite,
-    TableAutomaticInlineSizingInput, TableAutomaticInlineSizingOutcome, TableCellInlineMeasure,
-    TableDeferral, TableFixedInlineSizingInput, TableFixedInlineSizingOutcome, TableGrid,
-    TableInlineBorderMetrics, TableInlineSizingError, TableInlineSizingResult,
-    TableSeparatedBorderMetrics, TableTrackVisibility, measure_automatic_columns,
-    size_automatic_table_inline, size_fixed_table_inline,
+    TableAutomaticInlineSizingInput, TableAutomaticInlineSizingOutcome, TableBlockLayout,
+    TableCellInlineMeasure, TableDeferral, TableFixedInlineSizingInput,
+    TableFixedInlineSizingOutcome, TableGrid, TableInlineBorderMetrics, TableInlineSizingError,
+    TableInlineSizingResult, TableSeparatedBorderMetrics, TableTrackVisibility,
+    measure_automatic_columns, size_automatic_table_inline, size_fixed_table_inline,
 };
 use layout_dom_api::LayoutDom;
 use livery::{
@@ -33,6 +33,7 @@ use livery::{
 use crate::{
     StylePlane,
     box_tree::GeneratedBoxTree,
+    table_block::TableBlockLedger,
     table_sizing::{
         automatic_table_track_inputs, fixed_table_track_inputs, table_cell_inline_style,
         table_inline_constraints,
@@ -82,6 +83,10 @@ pub struct TableShadowLedger {
     pub honored: usize,
     pub divergences: Vec<TableSizingDivergence>,
     pub skipped: Vec<(BoxId, TableShadowSkip)>,
+    /// K4d6b's block-axis counters. Nested rather than parallel: a table's
+    /// two axes are one dispatch decision, and two ledgers threaded through
+    /// three routes would drift apart.
+    pub block: TableBlockLedger,
 }
 
 impl TableShadowLedger {
@@ -98,6 +103,7 @@ impl TableShadowLedger {
         self.honored += other.honored;
         self.divergences.extend(other.divergences);
         self.skipped.extend(other.skipped);
+        self.block.merge(other.block);
     }
 
     fn skip(&mut self, table: BoxId, reason: TableShadowSkip) {
@@ -128,7 +134,7 @@ const FRAGMENT_TOLERANCE: f32 = 1.0;
 /// `border_width_px`. The lowering matches that constant so Buckram's columns
 /// and the rest of live layout resolve font-relative units identically.
 /// Fixing the live assumption is its own change.
-const LIVE_ROOT_FONT_SIZE: f32 = 16.0;
+pub(crate) const LIVE_ROOT_FONT_SIZE: f32 = 16.0;
 
 /// A flattenable table noted at box-build time. Its columns are computed
 /// before the main compute and verified against fragments after collection.
@@ -141,12 +147,15 @@ pub struct PendingTable<Id> {
     pub cell_nodes: Vec<Option<AlgorithmNodeId>>,
     pub font_size: f32,
     pub containing_width: Option<f32>,
+    pub containing_height: Option<f32>,
     /// The inline result Buckram assigned, once `buckram_table_columns` has
     /// run. The whole result is retained, not just its columns: K4d's block
     /// pipeline takes it as its inline input, and re-deriving the grid width
     /// or the undistributable remainder from the column vector alone would
     /// reintroduce exactly the arithmetic K4c owns.
     pub assigned: Option<TableInlineSizingResult>,
+    /// The block-axis result, once the K4d pipeline has run.
+    pub block: Option<TableBlockLayout>,
 }
 
 /// Compute Buckram's authoritative inline result for one live table.

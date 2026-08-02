@@ -5,10 +5,12 @@ use buckram::{
     Baselines, BlockBoxSizing, BlockDimensions, BlockPosition as BuckramBlockPosition,
     BlockSizeValue, BlockStyle, BoxId, BoxOrigin, ClearSide, CssBox, DisplayInside, DisplayOutside,
     FloatContextProvenance, FloatLineConstraints, FloatSide, FlowAxes, FlowLength, FlowLengthAuto,
-    FormattingContextKind, Fragment as TreeFragment, FragmentId, FragmentTree, InternalTableRole,
-    IntrinsicSizeCache, IntrinsicSizeKind, IntrinsicSizeQuery, IntrinsicSizes, LayoutResult,
-    LogicalAxis, PhysicalRect, PhysicalSides, PhysicalSize, PositioningScheme, TableCell,
-    TableCellInput, TableGrid, TableGridInputs, TableRowSpan, TableTrackInput,
+    FormattingContextKind, Fragment as TreeFragment, FragmentDraftTree, FragmentId, FragmentTree,
+    InternalTableRole, IntrinsicSizeCache, IntrinsicSizeKind, IntrinsicSizeQuery, IntrinsicSizes,
+    LayoutResult, LogicalAxis, LogicalRect, PhysicalRect, PhysicalSides, PhysicalSize,
+    PositioningScheme, TableCell, TableCellInput, TableCellLayoutInput, TableCellLayoutOutput,
+    TableCellLayoutPass, TableGrid, TableGridInputs, TableRowLayoutError, TableRowSpan,
+    TableTrackInput,
 };
 use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
 use livery::{
@@ -45,6 +47,10 @@ use crate::{
     InteractionStates, StylePlane, StyleSet, TextSystem,
     box_tree::GeneratedBoxTree,
     style::resolve_styles_with_containers,
+    table_block::{
+        CellBlockInput, CellFormatter, buckram_table_block, cell_content_block_size,
+        table_block_inputs, verify_table_block,
+    },
     table_shadow::{
         PendingTable, TableShadowLedger, buckram_table_columns, verify_assigned_columns,
     },
@@ -309,6 +315,124 @@ where
             context.remember(width, constraints, layout)
         })
     })
+}
+
+/// Compare one table's Buckram result against its painted fragments, in both
+/// axes.
+///
+/// Buckram's rectangles are relative to the table grid's own origin, so the
+/// block-axis comparison subtracts the grid's painted position. Without that
+/// the table's place in the page would be reported as a table-layout
+/// disagreement on every cell.
+fn verify_one_table<Id>(
+    pending: &PendingTable<Id>,
+    live_rect_of: &impl Fn(BoxId) -> Option<Fragment>,
+    ledger: &mut TableShadowLedger,
+) {
+    if let Some(assigned) = pending.assigned.as_ref().map(|inline| &inline.column_sizes) {
+        let live = pending
+            .grid
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                pending
+                    .grid
+                    .cells
+                    .iter()
+                    .find(|cell| cell.column == index && cell.column_span == 1)
+                    .and_then(|cell| live_rect_of(cell.source))
+                    .map(|rect| rect.width)
+            })
+            .collect::<Vec<_>>();
+        verify_assigned_columns(pending.table, assigned, &live, ledger);
+    }
+    let (Some(block), Some(grid)) = (pending.block.as_ref(), live_rect_of(pending.table)) else {
+        return;
+    };
+    verify_table_block(
+        pending.table,
+        block,
+        |box_id| live_rect_of(box_id).map(|rect| (rect.y - grid.y, rect.height)),
+        &mut ledger.block,
+    );
+}
+
+/// Format one table cell for Buckram's block pipeline.
+///
+/// The cell is laid out at exactly the content inline size K4c assigned, with
+/// its own inline and block constraints neutralized: Buckram applies those
+/// itself, and a floor applied here would come back as measured content. The
+/// cell's specified block size reaches Buckram as a row constraint, never as
+/// a taller content box, which is why the measurement pass leaves the height
+/// automatic.
+fn format_table_cell<Context, Source>(
+    tree: &mut AlgorithmTree<Style, Context, Source>,
+    node: AlgorithmNodeId,
+    request: TableCellLayoutInput,
+    cell: &CellBlockInput,
+    mut measure: impl FnMut(&mut Context, InlineMeasureGeometry<'_>) -> (f32, f32),
+) -> TableCellLayoutOutput {
+    let offsets = cell.style.offsets;
+    let style = tree.style_mut(node);
+    let saved = (style.size, style.min_size, style.max_size, style.box_sizing);
+    style.box_sizing = BoxSizing::ContentBox;
+    style.size.width = Dimension::length(request.content_inline_size);
+    style.min_size.width = Dimension::auto();
+    style.max_size.width = Dimension::auto();
+    style.min_size.height = Dimension::auto();
+    style.max_size.height = Dimension::auto();
+    style.size.height = match request.pass {
+        TableCellLayoutPass::Measure => Dimension::auto(),
+        // The percentage pass supplies a used border-box block size; the
+        // cell's content box is that minus the offsets Buckram already knows.
+        TableCellLayoutPass::ResolvePercentages { cell_block_size } => {
+            Dimension::length(cell_content_block_size(cell_block_size, offsets))
+        },
+    };
+    tree.compute_layout_with_measure(
+        node,
+        AlgorithmSize::new(
+            AlgorithmAvailableSpace::Definite(request.content_inline_size),
+            AlgorithmAvailableSpace::MaxContent,
+        ),
+        |known, available, _, context, _| {
+            let Some(context) = context else {
+                return AlgorithmSize::new(0.0, 0.0);
+            };
+            let width = match available.width {
+                AlgorithmAvailableSpace::Definite(width) => width,
+                AlgorithmAvailableSpace::MinContent => 0.01,
+                AlgorithmAvailableSpace::MaxContent => f32::INFINITY,
+            };
+            let (measured_width, measured_height) = measure(
+                context,
+                InlineMeasureGeometry {
+                    width: known.width.unwrap_or(width),
+                    line_constraints: None,
+                },
+            );
+            AlgorithmSize::new(
+                known.width.unwrap_or(measured_width),
+                known.height.unwrap_or(measured_height),
+            )
+        },
+    );
+    let border_box = tree.layout(node).height;
+    let baselines = tree.baselines(node);
+    let style = tree.style_mut(node);
+    (style.size, style.min_size, style.max_size, style.box_sizing) = saved;
+    TableCellLayoutOutput {
+        content_block_size: cell_content_block_size(border_box, offsets),
+        border_box_min_block_size: cell.min_block_size,
+        // Live descendants stay in the backend tree, which fragment
+        // collection already walks. K4d6a's drafts exist for adapters with no
+        // such tree, and a zero rectangle unions into the cell's own without
+        // changing it.
+        baselines,
+        overflow: LogicalRect::default(),
+        fragments: FragmentDraftTree::default(),
+    }
 }
 
 /// Feed retained IFC line baselines into Buckram before fragment collection.
@@ -812,7 +936,7 @@ where
         None,
     );
 
-    state.apply_buckram_table_columns();
+    state.apply_buckram_table_layout();
     state.tree.compute_layout_with_measure(
         root,
         AlgorithmSize::new(
@@ -859,11 +983,16 @@ where
         None,
         &mut output,
     )?;
-    state.verify_table_columns(|box_id| {
+    state.verify_table_layout(|box_id| {
         fragments
             .fragments_for_box(box_id)
             .next()
-            .map(|fragment| fragment.width)
+            .map(|fragment| Fragment {
+                x: fragment.x,
+                y: fragment.y,
+                width: fragment.width,
+                height: fragment.height,
+            })
     });
     let table_shadow = std::mem::take(&mut state.table_shadow);
     drop(state);
@@ -933,7 +1062,7 @@ where
         let Some(atomic_root) = built else {
             // No layout will run for a root that built nothing, but noted
             // tables still record their deferrals.
-            state.apply_buckram_table_columns();
+            state.apply_buckram_table_layout();
             plane
                 .table_shadow
                 .merge(std::mem::take(&mut state.table_shadow));
@@ -967,7 +1096,7 @@ where
         } else {
             atomic_root
         };
-        state.apply_buckram_table_columns();
+        state.apply_buckram_table_layout();
         state.tree.compute_layout_with_measure(
             root,
             AlgorithmSize::new(
@@ -996,11 +1125,11 @@ where
         collect_atomic_fragments(&state.tree, root, Point { x: 0.0, y: 0.0 }, &mut fragments);
         // Widths are stable across the origin shift below, so verification
         // can read them either side of it.
-        state.verify_table_columns(|needle| {
+        state.verify_table_layout(|needle| {
             fragments
                 .iter()
                 .find(|(candidate, _)| *candidate == needle)
-                .map(|(_, rect)| rect.width)
+                .map(|(_, rect)| *rect)
         });
         plane
             .table_shadow
@@ -1162,7 +1291,7 @@ where
         Vec::new(),
     );
 
-    state.apply_buckram_table_columns(text);
+    state.apply_buckram_table_layout(text);
     let mut intrinsic_sizes = IntrinsicSizeCache::default();
     state.tree.compute_layout_with_measure(
         root,
@@ -1277,11 +1406,16 @@ where
         &mut text_frame,
         styles,
     )?;
-    state.verify_table_columns(|box_id| {
+    state.verify_table_layout(|box_id| {
         fragments
             .fragments_for_box(box_id)
             .next()
-            .map(|fragment| fragment.width)
+            .map(|fragment| Fragment {
+                x: fragment.x,
+                y: fragment.y,
+                width: fragment.width,
+                height: fragment.height,
+            })
     });
     // Tables on the inline route record into the state's own ledger; tables
     // inside atomic subtrees accumulated into the plane's. Both survive.
@@ -1371,7 +1505,9 @@ where
                         cell_nodes,
                         font_size,
                         containing_width: containing_size.0,
+                        containing_height: containing_size.1,
                         assigned: None,
+                        block: None,
                     });
                 }
                 if supports_nested_float_state(&self.boxes[box_id], block_style, kind) {
@@ -1492,9 +1628,12 @@ where
         IntrinsicSizes::new(min, max.max(min))
     }
 
-    /// K4c5b: compute Buckram's columns for every noted table and pin them as
-    /// explicit grid tracks, before the main layout pass.
-    fn apply_buckram_table_columns(&mut self, text: &mut TextSystem) {
+    /// K4c5b and K4d6b: compute Buckram's columns for every noted table and
+    /// pin them as explicit grid tracks, then lay out the block axis through
+    /// the pipeline Buckram owns. Runs before the main layout pass; the
+    /// formatting queries only scribble on scratch layout state the main pass
+    /// recomputes.
+    fn apply_buckram_table_layout(&mut self, text: &mut TextSystem) {
         let mut pendings = std::mem::take(&mut self.pending_tables);
         for pending in &mut pendings {
             let Some(computed) = self.styles.get(pending.node).cloned() else {
@@ -1529,32 +1668,88 @@ where
             }
             pending.assigned = columns;
         }
+        self.apply_buckram_table_rows(text, &mut pendings);
         self.pending_tables = pendings;
     }
 
-    /// Assert the painted fragments honored every assigned column vector.
-    fn verify_table_columns(&mut self, live_width_of: impl Fn(BoxId) -> Option<f32>) {
-        let pendings = std::mem::take(&mut self.pending_tables);
+    /// Run Buckram's block pipeline for every table whose columns it assigned.
+    ///
+    /// Split from the inline pass so the shared borrows the formatter needs
+    /// begin only after column assignment has released them.
+    fn apply_buckram_table_rows(
+        &mut self,
+        text: &mut TextSystem,
+        pendings: &mut [PendingTable<D::NodeId>],
+    ) {
+        let mut ledger = std::mem::take(&mut self.table_shadow.block);
+        let Self {
+            tree,
+            dom,
+            styles,
+            boxes,
+            atomic,
+            ..
+        } = self;
         for pending in pendings {
-            let Some(assigned) = pending.assigned.as_ref().map(|inline| &inline.column_sizes)
-            else {
+            let Some(inline) = pending.assigned.as_ref() else {
                 continue;
             };
-            let live = pending
-                .grid
-                .columns
-                .iter()
-                .enumerate()
-                .map(|(index, _)| {
-                    pending
-                        .grid
-                        .cells
-                        .iter()
-                        .find(|cell| cell.column == index && cell.column_span == 1)
-                        .and_then(|cell| live_width_of(cell.source))
-                })
-                .collect::<Vec<_>>();
-            verify_assigned_columns(pending.table, &assigned, &live, &mut self.table_shadow);
+            let Some(computed) = styles.get(pending.node) else {
+                continue;
+            };
+            let Some(inputs) = table_block_inputs(
+                boxes,
+                styles,
+                &pending.grid,
+                pending.table,
+                computed,
+                pending.font_size,
+                &mut ledger,
+            ) else {
+                continue;
+            };
+            let mut formatter = CellFormatter(|request: TableCellLayoutInput| {
+                let index = pending
+                    .grid
+                    .cells
+                    .iter()
+                    .position(|cell| cell.source == request.box_id)
+                    .ok_or(TableRowLayoutError::InvalidCellOutput {
+                        box_id: request.box_id,
+                    })?;
+                let node =
+                    pending.cell_nodes[index].ok_or(TableRowLayoutError::InvalidCellOutput {
+                        box_id: request.box_id,
+                    })?;
+                Ok(format_table_cell(
+                    tree,
+                    node,
+                    request,
+                    &inputs.cells[index],
+                    |context, geometry| {
+                        measure_inline_context(text, *dom, styles, boxes, atomic, context, geometry)
+                    },
+                ))
+            });
+            pending.block = buckram_table_block(
+                &pending.grid,
+                pending.table,
+                inline,
+                &inputs,
+                pending.containing_height,
+                &mut formatter,
+                &mut ledger,
+            );
+        }
+        self.table_shadow.block = ledger;
+    }
+
+    /// Assert the painted fragments honored every assigned column vector, and
+    /// record how far the painted cells sit from Buckram's block rectangles.
+    fn verify_table_layout(&mut self, live_rect_of: impl Fn(BoxId) -> Option<Fragment>) {
+        let pendings = std::mem::take(&mut self.pending_tables);
+        for pending in pendings {
+            verify_one_table(&pending, &live_rect_of, &mut self.table_shadow);
         }
     }
 
@@ -1765,11 +1960,11 @@ where
         IntrinsicSizes::new(min, max.max(min))
     }
 
-    /// K4c5b: compute Buckram's columns for every noted table and pin them as
-    /// explicit grid tracks. Runs after the tree is built and before the main
-    /// layout pass; the intrinsic queries only scribble on scratch layout
-    /// state that the main pass recomputes.
-    fn apply_buckram_table_columns(&mut self) {
+    /// K4c5b and K4d6b: compute Buckram's columns for every noted table and
+    /// pin them as explicit grid tracks, then lay out the block axis. Runs
+    /// after the tree is built and before the main layout pass; the queries
+    /// only scribble on scratch layout state that the main pass recomputes.
+    fn apply_buckram_table_layout(&mut self) {
         let mut pendings = std::mem::take(&mut self.pending_tables);
         for pending in &mut pendings {
             let Some(computed) = self.styles.get(pending.node).cloned() else {
@@ -1802,33 +1997,83 @@ where
             }
             pending.assigned = columns;
         }
+        self.apply_buckram_table_rows(&mut pendings);
         self.pending_tables = pendings;
     }
 
-    /// Assert the painted fragments honored every assigned column vector.
-    /// Runs after fragment collection.
-    fn verify_table_columns(&mut self, live_width_of: impl Fn(BoxId) -> Option<f32>) {
-        let pendings = std::mem::take(&mut self.pending_tables);
+    /// Run Buckram's block pipeline for every table whose columns it assigned.
+    fn apply_buckram_table_rows(&mut self, pendings: &mut [PendingTable<D::NodeId>]) {
+        let mut ledger = std::mem::take(&mut self.table_shadow.block);
+        let Self {
+            tree,
+            styles,
+            boxes,
+            ..
+        } = self;
         for pending in pendings {
-            let Some(assigned) = pending.assigned.as_ref().map(|inline| &inline.column_sizes)
-            else {
+            let Some(inline) = pending.assigned.as_ref() else {
                 continue;
             };
-            let live = pending
-                .grid
-                .columns
-                .iter()
-                .enumerate()
-                .map(|(index, _)| {
-                    pending
-                        .grid
-                        .cells
-                        .iter()
-                        .find(|cell| cell.column == index && cell.column_span == 1)
-                        .and_then(|cell| live_width_of(cell.source))
-                })
-                .collect::<Vec<_>>();
-            verify_assigned_columns(pending.table, &assigned, &live, &mut self.table_shadow);
+            let Some(computed) = styles.get(pending.node) else {
+                continue;
+            };
+            let Some(inputs) = table_block_inputs(
+                boxes,
+                styles,
+                &pending.grid,
+                pending.table,
+                computed,
+                pending.font_size,
+                &mut ledger,
+            ) else {
+                continue;
+            };
+            let mut formatter = CellFormatter(|request: TableCellLayoutInput| {
+                let index = pending
+                    .grid
+                    .cells
+                    .iter()
+                    .position(|cell| cell.source == request.box_id)
+                    .ok_or(TableRowLayoutError::InvalidCellOutput {
+                        box_id: request.box_id,
+                    })?;
+                let node =
+                    pending.cell_nodes[index].ok_or(TableRowLayoutError::InvalidCellOutput {
+                        box_id: request.box_id,
+                    })?;
+                Ok(format_table_cell(
+                    tree,
+                    node,
+                    request,
+                    &inputs.cells[index],
+                    |context: &mut TextMeasure, geometry| {
+                        (
+                            context.max_width.min(geometry.width.max(0.0)),
+                            context.height,
+                        )
+                    },
+                ))
+            });
+            pending.block = buckram_table_block(
+                &pending.grid,
+                pending.table,
+                inline,
+                &inputs,
+                pending.containing_height,
+                &mut formatter,
+                &mut ledger,
+            );
+        }
+        self.table_shadow.block = ledger;
+    }
+
+    /// Assert the painted fragments honored every assigned column vector, and
+    /// record how far the painted cells sit from Buckram's block rectangles.
+    /// Runs after fragment collection.
+    fn verify_table_layout(&mut self, live_rect_of: impl Fn(BoxId) -> Option<Fragment>) {
+        let pendings = std::mem::take(&mut self.pending_tables);
+        for pending in pendings {
+            verify_one_table(&pending, &live_rect_of, &mut self.table_shadow);
         }
     }
 
@@ -1940,7 +2185,9 @@ where
                         cell_nodes: std::mem::take(&mut table_cell_nodes),
                         font_size,
                         containing_width: containing_size.0,
+                        containing_height: containing_size.1,
                         assigned: None,
+                        block: None,
                     });
                 }
                 if supports_nested_float_state(&self.boxes[box_id], block_style, kind) {
@@ -3869,6 +4116,144 @@ mod tests {
             "the atomic subtree's table was not sized by Buckram: {ledger:?}"
         );
         assert!(ledger.is_silent(), "{ledger:?}");
+    }
+
+    /// K4d6b: Buckram's block pipeline runs on every live table, and it
+    /// already computes geometry the Grid bridge cannot.
+    ///
+    /// A `height` on a `<tr>` is a row minimum under CSS 2.1 section 17.5.3.
+    /// The bridge flattens rows away before the backend sees them, so that
+    /// declaration reaches no grid track and it paints content-height rows
+    /// instead. Buckram produces 40 and 60. Every divergence recorded here is
+    /// the bridge's, which is why the cutover is a capability gain rather
+    /// than a rewrite, and why its WPT movement should be improvements.
+    ///
+    /// This assertion inverts when K4d6b writes Buckram's rectangles: the
+    /// ledger then reports agreement and there are no divergences to check.
+    #[test]
+    fn k4d6b_buckram_rows_honor_row_heights_the_bridge_drops() {
+        let dom = StaticDocument::parse(
+            "<table><tbody><tr id=a><td>one</td><td>two</td></tr><tr id=b><td>three</td><td>four</td></tr></tbody></table>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "table { display: table; table-layout: fixed; width: 200px; border-spacing: 0; } \
+                 tbody { display: table-row-group; } tr { display: table-row; } \
+                 td { display: table-cell; padding: 0; } #a { height: 40px; } #b { height: 60px; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let ledger = layout.table_shadow_ledger();
+        assert_eq!(
+            ledger.block.laid_out, 1,
+            "Buckram did not lay out the table's block axis: {:?}",
+            ledger.block
+        );
+        assert_eq!(
+            ledger.block.verified, 1,
+            "the block layout was never compared against fragments: {:?}",
+            ledger.block
+        );
+        let sizes = ledger
+            .block
+            .divergences
+            .iter()
+            .filter(|divergence| {
+                divergence.quantity == crate::table_block::TableBlockQuantity::CellBlockSize
+            })
+            .map(|divergence| divergence.buckram)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sizes,
+            vec![40.0, 40.0, 60.0, 60.0],
+            "Buckram must give both cells of each row that row's specified \
+             height: {:?}",
+            ledger.block.divergences
+        );
+        let starts = ledger
+            .block
+            .divergences
+            .iter()
+            .filter(|divergence| {
+                divergence.quantity == crate::table_block::TableBlockQuantity::CellBlockStart
+            })
+            .map(|divergence| divergence.buckram)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            starts,
+            vec![40.0, 40.0],
+            "only the second row's cells move, to just below a 40px first \
+             row: {:?}",
+            ledger.block.divergences
+        );
+        assert!(
+            ledger
+                .block
+                .divergences
+                .iter()
+                .all(|divergence| divergence.livery < divergence.buckram),
+            "every divergence must be the bridge falling short, not Buckram \
+             overshooting: {:?}",
+            ledger.block.divergences
+        );
+    }
+
+    /// A cell `max-height` has no Buckram contract yet. The table defers
+    /// under a named skip rather than dropping the declaration, which would
+    /// silently change the table.
+    #[test]
+    fn k4d6b_an_unmodeled_cell_constraint_defers_the_block_axis() {
+        let dom = StaticDocument::parse("<table><tbody><tr><td>one</td></tr></tbody></table>");
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "table { display: table; table-layout: fixed; width: 100px; border-spacing: 0; } \
+                 tbody { display: table-row-group; } tr { display: table-row; } \
+                 td { display: table-cell; padding: 0; max-height: 10px; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let ledger = layout.table_shadow_ledger();
+        assert_eq!(
+            ledger.assigned, 1,
+            "the inline axis must still be Buckram's: {ledger:?}"
+        );
+        assert_eq!(ledger.block.laid_out, 0, "{:?}", ledger.block);
+        assert!(
+            ledger.block.skipped.iter().any(|(_, skip)| matches!(
+                skip,
+                crate::table_block::TableBlockSkip::UnmodeledConstraint(
+                    crate::table_block::TableBlockProperty::CellMaxBlockSize
+                )
+            )),
+            "the skip must name the property: {:?}",
+            ledger.block.skipped
+        );
     }
 
     fn automatic_table_ledger(table_css: &str) -> crate::table_shadow::TableShadowLedger {
