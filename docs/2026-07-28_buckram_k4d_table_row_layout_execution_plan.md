@@ -3,8 +3,10 @@
 **Date:** 2026-07-28
 
 **Status:** in execution from accepted K4c5b commit `a96fe7d147e`. K4d1
-through K4d4 are complete; both 10/10 gates selected their algorithms from
-measured Chrome 150 / Firefox 153 matrices. K4d5 is next.
+through K4d5 are complete; both 10/10 gates selected their algorithms from
+measured Chrome 150 / Firefox 153 matrices. K4d6 is next: it is the live
+cutover and the bridge-deletion gate, so it is the first K4d gate whose WPT
+maps are expected to move.
 
 **Parent plan:** [Buckram K4 CSS tables execution plan](2026-07-28_buckram_k4_css_tables_execution_plan.md)
 
@@ -794,6 +796,71 @@ table baselines.
 
 Delete generic synthesized table and row baselines. `TableRowLayoutResult`
 becomes the only baseline source for table-internal and table-grid fragments.
+
+### K4d5 receipt - 2026-08-01
+
+**Base commit:** `8c87ec62dc1` (accepted K4d4).
+
+**Capability:** `align_table_cells` applies CSS 2.1 section 17.5.3's ordered
+procedure and exports the table's baseline set.
+`apply_baseline_row_minima` is its necessary companion.
+
+**The gate's real finding: baseline alignment is a row-growth step, and
+K4d2's minima cannot see it.** A row must hold the deepest cell above the
+shared baseline plus the deepest below it, and that sum can exceed the
+tallest single cell. Two cells of 50px (baseline 10) and 40px (baseline 30)
+produce a 70px row. So `apply_baseline_row_minima` runs between K4d2's
+content minima and K4d3's sizing, and the ordering the plan asks for
+(baseline cells, then top, then growth, then bottom and middle) is expressed
+as that pipeline position rather than as a re-entrant pass.
+
+**Baseline model selected:** CSS Box Alignment 3's baseline sets. The table's
+first baseline comes from its first row and its last from its last row. CSS
+2.1 section 10.8 defines only the first, as an inline table's baseline, and
+that remains the first entry of the same set. Offsets stay logical
+throughout; nothing stores a physical coordinate as a baseline.
+
+**Other accepted rules:**
+
+- A spanning cell's baseline belongs to the row it starts in and never
+  participates in a later row's, per the gate's stop rule.
+- A row with no baseline-aligned cell, or whose baseline-aligned cells report
+  no line baseline, synthesizes from the lowest cell content edge, and
+  `TableRowBaseline::from_aligned_cell` records which happened.
+- Alignment is a placement offset. It never mutates the computed padding that
+  produced the cell's offsets, and the extra block-start fill is a separate
+  `content_block_offset`.
+
+**Adapter lowering:** `table_cell_alignment` collapses `vertical-align` to
+the four behaviors CSS 2.1 gives a table cell. `sub`, `super`, `text-top`,
+`text-bottom`, lengths, and percentages become `baseline` at the adapter, so
+Buckram never receives a distinction its algorithm would have to ignore.
+
+**Pure fixtures:** baseline growth beyond the tallest cell; all four
+alignments placed in one row; synthesis both when no cell is baseline-aligned
+and when a baseline-aligned cell has no line box; first and last table
+baselines under non-zero spacing; a spanning cell confined to its starting
+row; and column sizes proved unchanged. Six tests; buckram 149.
+
+**Adapter fixture:** `k4d5_cell_contents_return_baselines_directly` formats
+block cell contents over the live `AlgorithmTree` and aligns from the
+baselines the formatting context returns, with no descendant walk. It also
+pins the correction below.
+
+**Correction found while writing that fixture:** a block container's *first*
+baseline is its first child's, so two cells differing only in child count
+share a baseline. The fixture now varies the first child's height, which is
+what actually moves a first baseline.
+
+**WPT:** both table corpora rerun against the K4d4 maps with zero movement,
+as a model-only gate requires. Proof directory:
+`testing/genet/wpt-ledger/2026-08-01_buckram_k4d5`.
+
+**Verification:** buckram 149, livery and genet-livery all targets 0 failed;
+`cargo clippy -p buckram -- -D warnings` clean. The combined command remains
+blocked by the pre-existing unrelated `components/genet-livery/src/text.rs`
+warning, which this gate does not touch. Exact-file Rustfmt and
+`git diff --check` clean.
 
 ## K4d6. Fragment emission, live dispatch, and bridge deletion
 

@@ -29,11 +29,12 @@ pub use fixed::{
     TableFixedInlineSizingOutcome, TableFixedLayoutFallback, size_fixed_table_inline,
 };
 pub use rows::{
-    CellBlockOffsets, FragmentDraft, FragmentDraftTree, TableBlockBorderMetrics,
-    TableBlockConstraint, TableBlockDeferral, TableBlockSizingInput, TableCellBlockStyle,
-    TableCellFormatter, TableCellLayoutInput, TableCellLayoutOutput, TableCellLayoutPass,
-    TableCellPlacement, TablePercentagePass, TableRowLayoutError, TableRowLayoutResult,
-    TableRowMeasure, TableRowSizing, TableSeparatedBlockMetrics, format_table_cells,
+    CellBlockOffsets, FragmentDraft, FragmentDraftTree, TableAlignment, TableBlockBorderMetrics,
+    TableBlockConstraint, TableBlockDeferral, TableBlockSizingInput, TableCellAlignment,
+    TableCellBlockStyle, TableCellFormatter, TableCellLayoutInput, TableCellLayoutOutput,
+    TableCellLayoutPass, TableCellPlacement, TablePercentagePass, TableRowBaseline,
+    TableRowLayoutError, TableRowLayoutResult, TableRowMeasure, TableRowSizing,
+    TableSeparatedBlockMetrics, align_table_cells, apply_baseline_row_minima, format_table_cells,
     measure_single_span_rows, resolve_percentage_block_sizes, size_table_rows,
     spanned_cell_content_inline_size,
 };

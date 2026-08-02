@@ -197,6 +197,12 @@ impl CellBlockOffsets {
         border_end: 0.0,
     };
 
+    /// The distance from the cell's border-box block-start edge to its
+    /// content-box block-start edge.
+    pub fn block_start(self) -> f32 {
+        self.border_start + self.padding_start
+    }
+
     pub fn total(self) -> Option<f32> {
         let values = [
             self.padding_start,
@@ -215,9 +221,25 @@ impl CellBlockOffsets {
     }
 }
 
+/// How a cell aligns its contents in the table's block axis.
+///
+/// CSS 2.1 section 17.5.3 gives table cells only these four behaviors.
+/// `sub`, `super`, `text-top`, `text-bottom`, lengths, and percentages do not
+/// apply to a table cell and behave as `Baseline`; the adapter collapses them
+/// when it lowers `vertical-align`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TableCellAlignment {
+    #[default]
+    Baseline,
+    Top,
+    Middle,
+    Bottom,
+}
+
 /// One cell's lowered block-axis style.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TableCellBlockStyle {
+    pub alignment: TableCellAlignment,
     pub offsets: CellBlockOffsets,
     /// The cell's specified block size. CSS 2.1 section 17.5.3 makes this a
     /// constraint on the cell's row; it does not enlarge the cell's own
@@ -234,6 +256,7 @@ pub struct TableCellBlockStyle {
 impl Default for TableCellBlockStyle {
     fn default() -> Self {
         Self {
+            alignment: TableCellAlignment::Baseline,
             offsets: CellBlockOffsets::ZERO,
             specified: TableBlockConstraint::Auto,
             box_sizing: TableBoxSizing::ContentBox,
@@ -661,6 +684,241 @@ pub fn size_table_rows(
         used_table_block_size,
         row_offsets,
         row_sizes: sizes,
+    })
+}
+
+/// One row's baseline, as a distance from the row's block-start edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TableRowBaseline {
+    pub baseline: f32,
+    /// False when no baseline-aligned cell originated in the row, so CSS
+    /// 2.1's synthesis from the lowest cell content edge supplied it.
+    pub from_aligned_cell: bool,
+}
+
+/// K4d5's alignment result.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableAlignment {
+    pub cells: Vec<TableCellPlacement>,
+    pub rows: Vec<TableRowBaseline>,
+    /// The table's exported baseline set: first from the first row, last from
+    /// the last row, per CSS Box Alignment 3's baseline-set model. CSS 2.1
+    /// section 10.8 only defines the first, as an inline table's baseline.
+    pub baselines: Baselines,
+}
+
+/// A cell's own first baseline, measured from its border-box block-start.
+///
+/// The formatting context returned this directly; nothing walks a backend
+/// tree to rediscover it.
+fn cell_baseline(style: TableCellBlockStyle, output: &TableCellLayoutOutput) -> Option<f32> {
+    output
+        .baselines
+        .first
+        .map(|baseline| style.offsets.block_start() + baseline)
+}
+
+/// Raise each row's minimum so baseline-aligned cells fit once their
+/// baselines share a row baseline.
+///
+/// CSS 2.1 section 17.5.3 makes this a genuine growth step: a row must hold
+/// the deepest cell above the shared baseline plus the deepest below it, and
+/// that sum can exceed the tallest single cell. K4d2's content minima cannot
+/// see it, so it is applied before K4d3 chooses row sizes.
+pub fn apply_baseline_row_minima(
+    input: &TableBlockSizingInput<'_>,
+    cell_styles: &[TableCellBlockStyle],
+    cell_outputs: &[(BoxId, TableCellLayoutOutput)],
+    measures: &mut [TableRowMeasure],
+) -> Result<(), TableRowLayoutError> {
+    let grid = input.grid;
+    if measures.len() != grid.rows.len() {
+        return Err(TableRowLayoutError::RowInputCountMismatch {
+            expected: grid.rows.len(),
+            actual: measures.len(),
+        });
+    }
+    if cell_styles.len() != grid.cells.len() || cell_outputs.len() != grid.cells.len() {
+        return Err(TableRowLayoutError::CellInputCountMismatch {
+            expected: grid.cells.len(),
+            actual: cell_styles.len().min(cell_outputs.len()),
+        });
+    }
+    for (row, measure) in measures.iter_mut().enumerate() {
+        let mut above: f32 = 0.0;
+        let mut below: f32 = 0.0;
+        let mut any = false;
+        for (index, cell) in grid.cells.iter().enumerate() {
+            // A spanning cell's baseline belongs to the row it starts in, so
+            // it never participates in a later row's baseline.
+            if cell.row != row
+                || cell.row_span != 1
+                || cell_styles[index].alignment != TableCellAlignment::Baseline
+            {
+                continue;
+            }
+            let output = &cell_outputs[index].1;
+            let Some(baseline) = cell_baseline(cell_styles[index], output) else {
+                continue;
+            };
+            let (required, _) = cell_required_block_size(cell_styles[index], output, cell.source)?;
+            any = true;
+            above = above.max(baseline);
+            below = below.max(required - baseline);
+        }
+        if any {
+            measure.min_block_size = measure.min_block_size.max(above + below.max(0.0));
+        }
+    }
+    Ok(())
+}
+
+/// K4d5: place every cell's content within the final row geometry and export
+/// the table's baseline set.
+///
+/// CSS 2.1 section 17.5.3's ordered procedure: baseline-aligned cells
+/// establish the row baseline, top cells sit at the row's block-start, and
+/// bottom and middle cells are placed last within the row height K4d3 and
+/// `apply_baseline_row_minima` already fixed. Alignment reads the accepted
+/// inline result without writing to it, so no column size can change here.
+pub fn align_table_cells(
+    input: &TableBlockSizingInput<'_>,
+    sizing: &TableRowSizing,
+    cell_styles: &[TableCellBlockStyle],
+    cell_outputs: &[(BoxId, TableCellLayoutOutput)],
+    inline_spacing: f32,
+) -> Result<TableAlignment, TableRowLayoutError> {
+    let grid = input.grid;
+    if sizing.row_sizes.len() != grid.rows.len() || sizing.row_offsets.len() != grid.rows.len() {
+        return Err(TableRowLayoutError::RowInputCountMismatch {
+            expected: grid.rows.len(),
+            actual: sizing.row_sizes.len(),
+        });
+    }
+    if cell_styles.len() != grid.cells.len() || cell_outputs.len() != grid.cells.len() {
+        return Err(TableRowLayoutError::CellInputCountMismatch {
+            expected: grid.cells.len(),
+            actual: cell_styles.len().min(cell_outputs.len()),
+        });
+    }
+    let TableBlockBorderMetrics::Separated(metrics) = input.border_metrics else {
+        return Err(TableRowLayoutError::Deferral(
+            TableBlockDeferral::CollapsedBlockBorderMetricsPendingK4g,
+        ));
+    };
+
+    // Step 1: every row's baseline, from the cells that originate in it.
+    let mut rows = Vec::with_capacity(grid.rows.len());
+    for row in 0..grid.rows.len() {
+        let mut aligned: Option<f32> = None;
+        let mut lowest_content: f32 = 0.0;
+        for (index, cell) in grid.cells.iter().enumerate() {
+            if cell.row != row || cell.row_span != 1 {
+                continue;
+            }
+            let output = &cell_outputs[index].1;
+            let style = cell_styles[index];
+            lowest_content =
+                lowest_content.max(style.offsets.block_start() + output.content_block_size);
+            if style.alignment == TableCellAlignment::Baseline
+                && let Some(baseline) = cell_baseline(style, output)
+            {
+                aligned = Some(aligned.map_or(baseline, |current: f32| current.max(baseline)));
+            }
+        }
+        rows.push(match aligned {
+            Some(baseline) => TableRowBaseline {
+                baseline,
+                from_aligned_cell: true,
+            },
+            // CSS 2.1: with no baseline-aligned cell the row's baseline is
+            // synthesized from the lowest cell content edge.
+            None => TableRowBaseline {
+                baseline: lowest_content,
+                from_aligned_cell: false,
+            },
+        });
+    }
+
+    // Inline offsets come straight from K4c's accepted columns.
+    let mut inline_offsets = Vec::with_capacity(grid.columns.len());
+    let mut cursor = inline_spacing;
+    for size in &input.inline.column_sizes {
+        inline_offsets.push(cursor);
+        cursor += size + inline_spacing;
+    }
+
+    // Steps 2 to 4: place each cell's content inside its final rectangle.
+    let mut cells = Vec::with_capacity(grid.cells.len());
+    for (index, cell) in grid.cells.iter().enumerate() {
+        let row_end = cell.row + cell.row_span;
+        let column_end = cell.column + cell.column_span;
+        if row_end > grid.rows.len() || column_end > input.inline.column_sizes.len() {
+            return Err(TableRowLayoutError::ColumnSpanOutOfBounds {
+                box_id: cell.source,
+                column_start: cell.column,
+                column_span: cell.column_span,
+                columns: input.inline.column_sizes.len(),
+            });
+        }
+        let style = cell_styles[index];
+        let output = &cell_outputs[index].1;
+        let offsets = style
+            .offsets
+            .total()
+            .ok_or(TableRowLayoutError::InvalidCellOutput {
+                box_id: cell.source,
+            })?;
+        let block_size = sizing.row_sizes[cell.row..row_end].iter().sum::<f32>()
+            + metrics.block_spacing * (cell.row_span - 1) as f32;
+        let inline_size = input.inline.column_sizes[cell.column..column_end]
+            .iter()
+            .sum::<f32>()
+            + inline_spacing * (cell.column_span - 1) as f32;
+        let free = (block_size - offsets - output.content_block_size).max(0.0);
+        let content_block_offset = match style.alignment {
+            TableCellAlignment::Top => 0.0,
+            TableCellAlignment::Bottom => free,
+            TableCellAlignment::Middle => free / 2.0,
+            TableCellAlignment::Baseline => cell_baseline(style, output).map_or(0.0, |baseline| {
+                // Shift the content so the cell's own baseline lands on the
+                // row's. Extra fill is a placement offset, never a change to
+                // the computed padding that produced `offsets`.
+                (rows[cell.row].baseline - baseline).clamp(0.0, free)
+            }),
+        };
+        cells.push(TableCellPlacement {
+            box_id: cell.source,
+            row_start: cell.row,
+            row_span: cell.row_span,
+            column_start: cell.column,
+            column_span: cell.column_span,
+            rect: LogicalRect {
+                inline_start: inline_offsets
+                    .get(cell.column)
+                    .copied()
+                    .unwrap_or(inline_spacing),
+                block_start: sizing.row_offsets[cell.row],
+                inline_size,
+                block_size,
+            },
+            content_block_offset,
+        });
+    }
+
+    // CSS Box Alignment 3: the table's first baseline comes from its first
+    // row and its last from its last row. Offsets stay logical.
+    let first = rows.first().map(|row| sizing.row_offsets[0] + row.baseline);
+    let last = rows
+        .last()
+        .map(|row| sizing.row_offsets[grid.rows.len() - 1] + row.baseline);
+    let baselines = Baselines::new(first, last)
+        .ok_or(TableRowLayoutError::InvalidCellOutput { box_id: grid.grid })?;
+
+    Ok(TableAlignment {
+        cells,
+        rows,
+        baselines,
     })
 }
 
@@ -1911,6 +2169,235 @@ mod tests {
             vec![10.0, 20.0],
         );
         assert!(none.relaid_out.is_empty());
+    }
+
+    fn aligned_output(content: f32, baseline: Option<f32>) -> TableCellLayoutOutput {
+        TableCellLayoutOutput {
+            content_block_size: content,
+            border_box_min_block_size: 0.0,
+            baselines: Baselines::new(baseline, baseline)
+                .unwrap_or(Baselines::synthesized_from_block_end(content)),
+            overflow: LogicalRect::default(),
+            fragments: FragmentDraftTree::default(),
+        }
+    }
+
+    /// Run one alignment case over a single row of cells.
+    fn align_case(
+        cells: Vec<(TableCellAlignment, f32, Option<f32>)>,
+        row_size: Option<f32>,
+    ) -> (TableAlignment, TableRowSizing, Vec<f32>) {
+        let ids = (0..cells.len()).map(|i| 3u8 + i as u8).collect::<Vec<_>>();
+        let grid = multi_row_grid(&[&ids], &[]);
+        let styles = cells
+            .iter()
+            .map(|(alignment, _, _)| TableCellBlockStyle {
+                alignment: *alignment,
+                ..TableCellBlockStyle::default()
+            })
+            .collect::<Vec<_>>();
+        let outputs = grid
+            .cells
+            .iter()
+            .zip(&cells)
+            .map(|(cell, (_, content, baseline))| {
+                (cell.source, aligned_output(*content, *baseline))
+            })
+            .collect::<Vec<_>>();
+        let inline = inline_result(&grid, vec![10.0; grid.columns.len()]);
+        let input = TableBlockSizingInput {
+            grid: &grid,
+            inline: &inline,
+            table_constraint: row_size.map_or(TableBlockConstraint::Auto, px),
+            border_metrics: TableBlockBorderMetrics::Separated(
+                TableSeparatedBlockMetrics::default(),
+            ),
+            available_block_size: None,
+            track_visibility: TableTrackVisibility::all_visible(&grid),
+        };
+        let mut measures =
+            measure_single_span_rows(&input, &styles, &outputs, &[TableBlockConstraint::Auto])
+                .expect("measures");
+        apply_baseline_row_minima(&input, &styles, &outputs, &mut measures)
+            .expect("baseline minima");
+        let sizing = size_table_rows(&input, &measures, &styles, &outputs).expect("sizing");
+        let alignment =
+            align_table_cells(&input, &sizing, &styles, &outputs, 0.0).expect("alignment");
+        let columns = inline.column_sizes.clone();
+        (alignment, sizing, columns)
+    }
+
+    /// CSS 2.1 section 17.5.3: aligning baselines can make a row taller than
+    /// its tallest cell, because the row must hold the deepest cell above the
+    /// shared baseline plus the deepest below it.
+    #[test]
+    fn baseline_alignment_grows_a_row_beyond_its_tallest_cell() {
+        // Cell A: 50 tall, baseline at 10, so 40 below it.
+        // Cell B: 40 tall, baseline at 30, so 10 below it.
+        // The row baseline is 30, so it needs 30 above and 40 below: 70,
+        // though the tallest cell is only 50.
+        let (alignment, sizing, _) = align_case(
+            vec![
+                (TableCellAlignment::Baseline, 50.0, Some(10.0)),
+                (TableCellAlignment::Baseline, 40.0, Some(30.0)),
+            ],
+            None,
+        );
+        assert!((sizing.row_sizes[0] - 70.0).abs() < 0.05, "{sizing:?}");
+        assert!((alignment.rows[0].baseline - 30.0).abs() < 0.05);
+        assert!(alignment.rows[0].from_aligned_cell);
+        // A is pushed down 20 so its baseline reaches the row's; B is already
+        // there.
+        assert!((alignment.cells[0].content_block_offset - 20.0).abs() < 0.05);
+        assert!((alignment.cells[1].content_block_offset).abs() < 0.05);
+    }
+
+    #[test]
+    fn every_table_cell_alignment_places_content_in_the_final_row() {
+        // One baseline cell fixes a 60px row; the others are placed in it.
+        let (alignment, sizing, _) = align_case(
+            vec![
+                (TableCellAlignment::Baseline, 60.0, Some(20.0)),
+                (TableCellAlignment::Top, 20.0, Some(5.0)),
+                (TableCellAlignment::Middle, 20.0, Some(5.0)),
+                (TableCellAlignment::Bottom, 20.0, Some(5.0)),
+            ],
+            None,
+        );
+        assert!((sizing.row_sizes[0] - 60.0).abs() < 0.05);
+        assert!(
+            (alignment.cells[1].content_block_offset).abs() < 0.05,
+            "top"
+        );
+        assert!(
+            (alignment.cells[2].content_block_offset - 20.0).abs() < 0.05,
+            "middle"
+        );
+        assert!(
+            (alignment.cells[3].content_block_offset - 40.0).abs() < 0.05,
+            "bottom"
+        );
+    }
+
+    /// A row whose cells are all non-baseline, or whose cells report no line
+    /// baseline at all, synthesizes from the lowest cell content edge.
+    #[test]
+    fn a_row_without_baseline_cells_synthesizes_from_the_lowest_content_edge() {
+        let (alignment, _, _) = align_case(
+            vec![
+                (TableCellAlignment::Top, 30.0, Some(8.0)),
+                (TableCellAlignment::Bottom, 45.0, Some(9.0)),
+            ],
+            None,
+        );
+        assert!(!alignment.rows[0].from_aligned_cell);
+        assert!((alignment.rows[0].baseline - 45.0).abs() < 0.05);
+
+        // A baseline-aligned cell with no line box does not establish one
+        // either, so the row still synthesizes.
+        let (empty, _, _) = align_case(vec![(TableCellAlignment::Baseline, 0.0, None)], None);
+        assert!(!empty.rows[0].from_aligned_cell);
+        assert!((empty.rows[0].baseline).abs() < 0.05);
+    }
+
+    /// The table exports its first baseline from its first row and its last
+    /// from its last row, as logical offsets from the table's block-start.
+    #[test]
+    fn the_table_exports_first_and_last_row_baselines() {
+        let grid = multi_row_grid(&[&[3], &[4]], &[]);
+        let styles = vec![TableCellBlockStyle::default(); 2];
+        let outputs = vec![
+            (grid.cells[0].source, aligned_output(30.0, Some(12.0))),
+            (grid.cells[1].source, aligned_output(50.0, Some(20.0))),
+        ];
+        let inline = inline_result(&grid, vec![10.0]);
+        let metrics = TableSeparatedBlockMetrics {
+            table_offset_start: 1.0,
+            table_offset_end: 1.0,
+            block_spacing: 4.0,
+        };
+        let input = TableBlockSizingInput {
+            grid: &grid,
+            inline: &inline,
+            table_constraint: TableBlockConstraint::Auto,
+            border_metrics: TableBlockBorderMetrics::Separated(metrics),
+            available_block_size: None,
+            track_visibility: TableTrackVisibility::all_visible(&grid),
+        };
+        let mut measures =
+            measure_single_span_rows(&input, &styles, &outputs, &[TableBlockConstraint::Auto; 2])
+                .expect("measures");
+        apply_baseline_row_minima(&input, &styles, &outputs, &mut measures).expect("minima");
+        let sizing = size_table_rows(&input, &measures, &styles, &outputs).expect("sizing");
+        let alignment =
+            align_table_cells(&input, &sizing, &styles, &outputs, 0.0).expect("alignment");
+
+        // Row 0 starts after the table edge and its first interval.
+        assert!((sizing.row_offsets[0] - 5.0).abs() < 0.05, "{sizing:?}");
+        assert_eq!(alignment.baselines.first, Some(5.0 + 12.0));
+        assert_eq!(alignment.baselines.last, Some(sizing.row_offsets[1] + 20.0));
+    }
+
+    /// A spanning cell's baseline belongs to the row it starts in, and never
+    /// participates in a later row's baseline.
+    #[test]
+    fn a_spanning_cell_only_joins_its_starting_row_baseline() {
+        let grid = multi_row_grid(&[&[3, 200], &[4]], &[(200u8, 2)]);
+        let styles = vec![TableCellBlockStyle::default(); grid.cells.len()];
+        let outputs = grid
+            .cells
+            .iter()
+            .map(|cell| {
+                let output = if cell.row_span > 1 {
+                    aligned_output(80.0, Some(70.0))
+                } else {
+                    aligned_output(20.0, Some(8.0))
+                };
+                (cell.source, output)
+            })
+            .collect::<Vec<_>>();
+        let inline = inline_result(&grid, vec![10.0; grid.columns.len()]);
+        let input = TableBlockSizingInput {
+            grid: &grid,
+            inline: &inline,
+            table_constraint: TableBlockConstraint::Auto,
+            border_metrics: TableBlockBorderMetrics::Separated(
+                TableSeparatedBlockMetrics::default(),
+            ),
+            available_block_size: None,
+            track_visibility: TableTrackVisibility::all_visible(&grid),
+        };
+        let mut measures =
+            measure_single_span_rows(&input, &styles, &outputs, &[TableBlockConstraint::Auto; 2])
+                .expect("measures");
+        apply_baseline_row_minima(&input, &styles, &outputs, &mut measures).expect("minima");
+        let sizing = size_table_rows(&input, &measures, &styles, &outputs).expect("sizing");
+        let alignment =
+            align_table_cells(&input, &sizing, &styles, &outputs, 0.0).expect("alignment");
+        // The 70px spanner baseline never reaches either row's baseline: row
+        // 0 keeps its own 8px cell and row 1 keeps its own.
+        assert!(
+            (alignment.rows[0].baseline - 8.0).abs() < 0.05,
+            "{alignment:?}"
+        );
+        assert!((alignment.rows[1].baseline - 8.0).abs() < 0.05);
+    }
+
+    /// Alignment reads K4c's accepted columns and never writes to them.
+    #[test]
+    fn alignment_does_not_alter_column_sizes() {
+        let (alignment, _, columns) = align_case(
+            vec![
+                (TableCellAlignment::Baseline, 50.0, Some(10.0)),
+                (TableCellAlignment::Bottom, 40.0, Some(30.0)),
+            ],
+            None,
+        );
+        assert_eq!(columns, vec![10.0, 10.0]);
+        // Every cell rectangle covers exactly its own column.
+        for cell in &alignment.cells {
+            assert!((cell.rect.inline_size - 10.0).abs() < 0.05);
+        }
     }
 
     #[test]

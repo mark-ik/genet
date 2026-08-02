@@ -6,13 +6,13 @@
 
 use buckram::{
     AffineLengthPercentage, CellInlineOffsets, FlowAxes, InlineSizeConstraint, PhysicalSide,
-    TableAutomaticColumnGroupInput, TableAutomaticColumnInput, TableBoxSizing,
+    TableAutomaticColumnGroupInput, TableAutomaticColumnInput, TableBoxSizing, TableCellAlignment,
     TableCellInlineStyle, TableFixedColumnGroupInput, TableFixedColumnInput, TableGrid,
     TableInlineConstraints, TableInlineProperty, TableInlineSizingError,
 };
 use livery::{
     ComputedValues,
-    values::{BorderStyle, BorderWidth, BoxSizing, LengthPercentage, Size},
+    values::{BorderStyle, BorderWidth, BoxSizing, LengthPercentage, Size, VerticalAlign},
 };
 
 use crate::layout::border_width_px;
@@ -48,6 +48,29 @@ pub(crate) fn table_cell_inline_style(
             border_end: logical_border(computed, axes.inline_end(), font_size),
         },
     })
+}
+
+/// Lower `vertical-align` to a table cell's block-axis alignment.
+///
+/// CSS 2.1 section 17.5.3 gives table cells only `baseline`, `top`,
+/// `middle`, and `bottom`. The remaining values do not apply to a table cell
+/// and behave as `baseline`, so they collapse here rather than reaching
+/// Buckram as distinctions the table algorithm would have to ignore.
+// K4d6 consumes this when live tables dispatch through row layout. It is
+// tested now so the lowering is reviewable with the gate that defines it.
+#[allow(dead_code, reason = "consumed by K4d6 live dispatch")]
+pub(crate) fn table_cell_alignment(computed: &ComputedValues) -> TableCellAlignment {
+    match computed.vertical_align {
+        VerticalAlign::Top => TableCellAlignment::Top,
+        VerticalAlign::Middle => TableCellAlignment::Middle,
+        VerticalAlign::Bottom => TableCellAlignment::Bottom,
+        VerticalAlign::Baseline
+        | VerticalAlign::Sub
+        | VerticalAlign::Super
+        | VerticalAlign::TextTop
+        | VerticalAlign::TextBottom
+        | VerticalAlign::Length(_) => TableCellAlignment::Baseline,
+    }
 }
 
 /// Lower the width, min-width, max-width, and box-sizing values shared by a
@@ -332,6 +355,28 @@ mod tests {
         let style = table_cell_inline_style(&computed, FlowAxes::HORIZONTAL_LTR, 16.0, 16.0)
             .expect("unreduced math is retained on the constraint");
         assert_eq!(style.constraints.preferred, InlineSizeConstraint::Unreduced);
+    }
+
+    /// K4d5 lowering: only four `vertical-align` values reach a table cell.
+    #[test]
+    fn vertical_align_collapses_to_the_four_table_cell_behaviors() {
+        let mut computed = ComputedValues::default();
+        for (value, expected) in [
+            ("top", TableCellAlignment::Top),
+            ("middle", TableCellAlignment::Middle),
+            ("bottom", TableCellAlignment::Bottom),
+            ("baseline", TableCellAlignment::Baseline),
+            // CSS 2.1 section 17.5.3: these do not apply to a table cell.
+            ("sub", TableCellAlignment::Baseline),
+            ("super", TableCellAlignment::Baseline),
+            ("text-top", TableCellAlignment::Baseline),
+            ("text-bottom", TableCellAlignment::Baseline),
+            ("12px", TableCellAlignment::Baseline),
+            ("40%", TableCellAlignment::Baseline),
+        ] {
+            computed.vertical_align = value.parse().expect(value);
+            assert_eq!(table_cell_alignment(&computed), expected, "{value}");
+        }
     }
 
     #[test]

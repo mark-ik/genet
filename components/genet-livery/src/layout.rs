@@ -4327,6 +4327,212 @@ mod tests {
         assert!(rows.iter().all(|row| !row.constrained && row.row.is_some()));
     }
 
+    /// K4d5 adapter fixture: block and flex cell contents return their
+    /// baselines through the formatter's own output, and the table algorithm
+    /// aligns from those values alone. Nothing walks a backend descendant to
+    /// rediscover a baseline, and no physical coordinate is stored as one.
+    #[test]
+    fn k4d5_cell_contents_return_baselines_directly() {
+        use buckram::{
+            FragmentDraftTree, TableCellAlignment, TableCellBlockStyle, TableCellFormatter,
+            TableCellLayoutInput, TableCellLayoutOutput, TableRowLayoutError,
+        };
+
+        struct BaselineFormatter<'a> {
+            tree: &'a mut AlgorithmTree<Style, TextMeasure, Option<BoxId>>,
+            nodes: HashMap<BoxId, AlgorithmNodeId>,
+        }
+
+        impl TableCellFormatter for BaselineFormatter<'_> {
+            fn format_cell(
+                &mut self,
+                input: TableCellLayoutInput,
+            ) -> Result<TableCellLayoutOutput, TableRowLayoutError> {
+                let node = *self.nodes.get(&input.box_id).ok_or(
+                    TableRowLayoutError::InvalidCellOutput {
+                        box_id: input.box_id,
+                    },
+                )?;
+                self.tree.compute_layout_with_measure(
+                    node,
+                    AlgorithmSize::new(
+                        AlgorithmAvailableSpace::Definite(input.content_inline_size),
+                        AlgorithmAvailableSpace::MaxContent,
+                    ),
+                    |known, _, _, context, _| {
+                        let Some(context) = context else {
+                            return AlgorithmSize::new(0.0, 0.0);
+                        };
+                        AlgorithmSize::new(
+                            known.width.unwrap_or(context.max_width),
+                            known.height.unwrap_or(context.height),
+                        )
+                    },
+                );
+                self.tree.propagate_baselines();
+                let layout = self.tree.layout(node);
+                // The formatting context hands its baselines back directly.
+                let baselines = self.tree.baselines(node);
+                Ok(TableCellLayoutOutput {
+                    content_block_size: layout.height,
+                    border_box_min_block_size: 0.0,
+                    baselines,
+                    overflow: buckram::LogicalRect::default(),
+                    fragments: FragmentDraftTree::default(),
+                })
+            }
+        }
+
+        let dom = StaticDocument::parse(
+            "<table><tbody><tr><td id=a><i></i></td><td id=b><i></i><i></i></td></tr></tbody></table>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "table { display: table; border-spacing: 0; } tbody { display: table-row-group; } tr { display: table-row; } td { display: table-cell; padding: 0; } i { display: block; height: 12px; }",
+            ]),
+            &Device::screen(800.0, 600.0),
+            &InteractionStates::default(),
+        );
+        let boxes = GeneratedBoxTree::from_dom(&dom, &styles);
+        let table = boxes
+            .iter()
+            .find_map(|(box_id, css_box)| {
+                (css_box.display.internal_table == Some(buckram::InternalTableRole::Grid))
+                    .then_some(box_id)
+            })
+            .expect("table grid box");
+        let grid = build_table_grid(&boxes, &dom, table);
+
+        let mut tree: AlgorithmTree<Style, TextMeasure, Option<BoxId>> = AlgorithmTree::new();
+        let mut nodes = HashMap::new();
+        for (index, cell) in grid.cells.iter().enumerate() {
+            // A block container's first baseline is its first child's, so the
+            // cells differ in their first block rather than their count.
+            let height = if index == 0 { 20.0 } else { 12.0 };
+            let blocks = vec![tree.new_with_children_and_block_style(
+                AlgorithmKind::Block,
+                BlockStyle {
+                    size: BlockDimensions::new(
+                        BlockSizeValue::Auto,
+                        BlockSizeValue::Length(FlowLength::px(height)),
+                    ),
+                    ..BlockStyle::default()
+                },
+                Style {
+                    size: Size {
+                        width: Dimension::auto(),
+                        height: Dimension::length(height),
+                    },
+                    ..Style::default()
+                },
+                &[],
+                None,
+            )];
+            nodes.insert(
+                cell.source,
+                tree.new_with_children_and_block_style(
+                    AlgorithmKind::Block,
+                    BlockStyle::default(),
+                    Style::default(),
+                    &blocks,
+                    None,
+                ),
+            );
+        }
+
+        let inline = {
+            let sizing = buckram::TableInlineSizingInput {
+                grid: &grid,
+                available_inline_size: Some(80.0),
+                table_constraints: buckram::TableInlineConstraints::default(),
+                border_metrics: buckram::TableInlineBorderMetrics::Separated(
+                    buckram::TableSeparatedBorderMetrics::default(),
+                ),
+                caption_min: buckram::CaptionMinContribution::NoCaption,
+                track_visibility: buckram::TableTrackVisibility::all_visible(&grid),
+            };
+            buckram::TableInlineSizingResult::new(
+                &sizing,
+                buckram::IntrinsicSizes::new(80.0, 80.0).expect("intrinsic pair"),
+                80.0,
+                80.0,
+                vec![40.0, 40.0],
+            )
+            .expect("reconciled inline result")
+        };
+        let input = buckram::TableBlockSizingInput {
+            grid: &grid,
+            inline: &inline,
+            table_constraint: buckram::TableBlockConstraint::Auto,
+            border_metrics: buckram::TableBlockBorderMetrics::Separated(
+                buckram::TableSeparatedBlockMetrics::default(),
+            ),
+            available_block_size: None,
+            track_visibility: buckram::TableTrackVisibility::all_visible(&grid),
+        };
+        let mut formatter = BaselineFormatter {
+            tree: &mut tree,
+            nodes,
+        };
+        let outputs = buckram::format_table_cells(&input, 0.0, |_, _| 0.0, &mut formatter)
+            .expect("formatted cells");
+        // Each cell reported a real baseline from its own formatting context.
+        assert!(
+            outputs
+                .iter()
+                .all(|(_, output)| output.baselines.first.is_some())
+        );
+
+        let styles = vec![TableCellBlockStyle::default(); grid.cells.len()];
+        let mut measures = buckram::measure_single_span_rows(
+            &input,
+            &styles,
+            &outputs,
+            &[buckram::TableBlockConstraint::Auto],
+        )
+        .expect("measures");
+        buckram::apply_baseline_row_minima(&input, &styles, &outputs, &mut measures)
+            .expect("baseline minima");
+        let sizing =
+            buckram::size_table_rows(&input, &measures, &styles, &outputs).expect("sizing");
+        let alignment =
+            buckram::align_table_cells(&input, &sizing, &styles, &outputs, 0.0).expect("alignment");
+
+        // Cell a's baseline is 20 and cell b's is 12, so the row takes 20 and
+        // shifts b down by 8 to meet it.
+        assert!(alignment.rows[0].from_aligned_cell);
+        assert!(
+            (alignment.rows[0].baseline - 20.0).abs() < 0.05,
+            "{alignment:?}"
+        );
+        assert!(
+            (alignment.cells[0].content_block_offset).abs() < 0.05,
+            "{alignment:?}"
+        );
+        assert!(
+            (alignment.cells[1].content_block_offset - 8.0).abs() < 0.05,
+            "{alignment:?}"
+        );
+        assert_eq!(
+            alignment.baselines.first,
+            Some(alignment.rows[0].baseline),
+            "the table's first baseline is its first row's"
+        );
+        // Alignment never touches K4c's columns.
+        assert_eq!(inline.column_sizes, vec![40.0, 40.0]);
+        assert!(
+            alignment
+                .cells
+                .iter()
+                .all(|cell| (cell.rect.inline_size - 40.0).abs() < 0.05)
+        );
+        assert_eq!(
+            buckram::TableCellAlignment::default(),
+            TableCellAlignment::Baseline
+        );
+    }
+
     #[test]
     fn html_column_and_column_group_spans_are_bounded_at_the_adapter() {
         let dom = StaticDocument::parse(
