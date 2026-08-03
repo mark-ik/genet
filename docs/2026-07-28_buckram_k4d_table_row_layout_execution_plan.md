@@ -863,6 +863,48 @@ blocked by the pre-existing unrelated `components/genet-livery/src/text.rs`
 warning, which this gate does not touch. Exact-file Rustfmt and
 `git diff --check` clean.
 
+### K4d4b interop matrix - 2026-08-03
+
+K4d6b's live cutover exposed a case K4d4's matrix never covered: a
+**percentage cell height whose row has a definite specified height**. Every
+K4d4 case gave the percentage cell an automatic row, so nothing distinguished
+"resolve against the table" from "resolve against the table, then fit the
+table". Measured with `interop-matrix.html` in the K4d4b proof directory,
+headless **Chrome 150.0.0.0** (`--dump-dom`) and **Firefox 153.0** (`--screenshot`).
+
+| Case | Chrome 150 | Firefox 153 |
+|---|---|---|
+| Q1 table 100, rows 50/50, cells 100% | rows 50 / 50, table 100 | same |
+| Q2 table 300, row 50, cell 100% | row 300 | same |
+| Q3 table auto, row 80, cell 50% | row 80 | same |
+| Q4 control: table 300, auto row, cell 50% | rows 150 / 150 | same |
+| Q5 table 400, row 20, cell 50% | rows 200 / 200 | same |
+| Q6 table 200, row 25%, cell 100% | rows 190 / 10 | same |
+| Q7 table 200, spacing 10, row 60, cell 100% | row 180 | same |
+
+**All seven agree**, so there is no divergence to resolve, and one rule
+accounts for every case:
+
+> A percentage row or cell height still resolves only against the table's
+> specified definite block size, exactly as K4d4 accepted. What K4d4 missed
+> is that the resulting growth is then **fitted back into that height**.
+
+K4d3's rule that a definite table block size is a *minimum* stands, and this
+does not contradict it. That rule is about rows sized by content or by their
+own length, which cannot give the space back. Percentage-derived growth was
+computed *from* the table's height, so letting it overflow doubles the table:
+Q1 is exactly `table-as-item-cell-percentage-002`, where two 50px rows with
+`height: 100%` cells produced a 200px table instead of a 100px square.
+
+`shrink_percentage_growth` implements it. Each row shrinks only across the
+distance between its K4d2 minimum and what the resolved percentages asked
+for, in proportion to that distance, and never below the minimum. A row that
+grew for content or a length has zero growth here and is untouched. Q6 is
+the case that pins the proportion to the *pre-distribution* minima rather
+than the first pass's sizes: floors of 50 and 10 against a demand of 200 and
+10 give 190 and 10, while measuring growth from an already-distributed first
+pass would give 95 and 105.
+
 ## K4d6. Fragment emission, live dispatch, and bridge deletion
 
 **Split into K4d6a and K4d6b.** K4d6a emits the table's fragment subtree as a
@@ -1038,8 +1080,60 @@ passed, 182 failed, 889 skipped; `unexpected=0` on both. Proof directory:
 `testing/genet/wpt-ledger/2026-08-02_buckram_k4d6b_shadow`. Those maps are
 also the baseline the cutover will be classified against.
 
-What remains for the cutover: write every cell rectangle through the owned-
-context seam, size the table node from `used_table_block_size`, splice
+#### The cutover is written and measured, on branch `k4d6b-cutover`
+
+Commit `fe6a7114a9c` writes every cell rectangle through the owned-context
+seam, sizes the table node from `used_table_block_size`, and switches its
+dispatch to `AlgorithmKind::Table`. A table Buckram defers keeps the Grid
+bridge it was built with, which is what `AlgorithmTree::set_kind` is for:
+whether Buckram can lay a table out is only known once the algorithm has
+run, so deciding at build time would mean guessing or giving up the
+fallback.
+
+It is held off `main` because it moves nine reftests and one of them is a
+**model defect it exposed rather than caused**. That defect is the blocker,
+and it belongs to K4d4:
+
+> `table-as-item-cell-percentage-002` expects a 100px square and renders
+> 100x200. With `table { height: 100px }`, `tr { height: 50px }`, and
+> `td { height: 100% }`, the cell percentage resolves against the table's
+> specified height rather than its row's, so each 50px row grows to 100 and
+> the table doubles. The test's own assertion is that cells "do not
+> re-resolve their percentage heights based on the table's height".
+
+K4d4 chose the table's specified block size as the basis for both rows and
+cells, on measured evidence. That is right for a **row** percentage and
+wrong for a **cell** percentage, whose basis is its row's height when the
+row has a definite one. Correcting it needs the same browser measurement
+K4d4 was built on, not a guess, so it is the next gate's work rather than a
+patch here. `001`, `003`, and `004` in the same family all **improve**,
+which is what makes the single regression readable as a basis error rather
+than a broken pass.
+
+The rest of the movement is classified:
+
+- **Improvements (3):** `table-as-item-cell-percentage-001`, `-003`, `-004`.
+- **False-pass disclosures (3):** `separated-border-model-007`, `-008`,
+  `-009`. Before the cutover these rendered **zero red pixels** because the
+  table painted nothing at all; the reference is "no red", so an invisible
+  table passed. Now the table paints correct geometry (rows at 48 and 128,
+  table 208 tall, all verified) and the reftest exposes a **separate
+  pre-existing bug**: an absolutely positioned box at `top`/`left: 16px`
+  under `body { margin: 16px }` lands at 32,32 instead of 16,16, so its
+  containing block is the body's content box rather than the initial
+  containing block. Proved with a table-free probe, so it owes nothing to
+  K4. It needs its own gate outside K4.
+- **1px rounding (1):** `colspan-004` shifts one row by 1px. Its column
+  distribution, which is what the test targets, is byte-identical before and
+  after at 7/96/7 rather than the correct 5/100/5, so that colspan defect is
+  pre-existing K4c work this does not touch.
+- **Unexamined (1):** `table-cell-overflow-explicit-height-002`.
+
+**Baselines:** `testing/genet/wpt-ledger/2026-08-02_buckram_k4d6b` holds the
+post-cutover maps, against the `_shadow` maps beside them.
+
+What remains: fix K4d4's cell-percentage basis with browser measurement,
+re-measure the two corpora, examine the last unclassified test, splice
 K4d6a's structural fragments into `collect_fragments`, and delete
 `place_table_cell`, `table_is_flattenable`, and the table-to-Grid and
 row-to-Flex mappings in `algorithm_kind` and `anonymous_taffy_style`.
