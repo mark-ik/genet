@@ -41,17 +41,7 @@ pub enum TableBlockSkip {
     DeferredInLowering(TableInlineSizingError),
     /// A grid cell built no algorithm node, so it cannot be formatted.
     IncompleteCells,
-    /// A cell or row carries a block-axis constraint Buckram has no contract
-    /// for yet. Dropping it silently would change the table.
-    UnmodeledConstraint(TableBlockProperty),
     Error(TableRowLayoutError),
-}
-
-/// A block-axis CSS property with no Buckram contract yet.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TableBlockProperty {
-    CellMaxBlockSize,
-    RowMaxBlockSize,
 }
 
 /// The block-axis quantity a verification disagreed on.
@@ -118,9 +108,6 @@ pub(crate) struct CellBlockInput {
     /// The cell's resolved inline offsets, which K4c's accepted result makes
     /// definite. `format_table_cells` subtracts them from the spanned columns.
     pub inline_offsets: f32,
-    /// A `min-height` floor on the cell's border box, kept apart from the
-    /// measured content exactly as Buckram's contract separates them.
-    pub min_block_size: f32,
 }
 
 /// Everything the block pipeline needs that only the caller's tree can
@@ -179,19 +166,17 @@ where
         },
     };
 
+    // `min-height` and `max-height` reach neither cells nor rows. CSS 2.1
+    // section 10.7 leaves their effect on table cells, rows, and row groups
+    // undefined, and the K4d4c matrix measured Chrome 150 and Firefox 153
+    // ignoring them outright in all eight cases. Ignoring them is therefore
+    // the modeled behavior, not a gap, so nothing defers for them.
     let mut cells = Vec::with_capacity(grid.cells.len());
     for cell in &grid.cells {
         let Some(style) = style_of(cell.source) else {
             ledger.skip(table, TableBlockSkip::IncompleteCells);
             return None;
         };
-        if style.max_height != Size::None {
-            ledger.skip(
-                table,
-                TableBlockSkip::UnmodeledConstraint(TableBlockProperty::CellMaxBlockSize),
-            );
-            return None;
-        }
         let lowered = match lower_cell(boxes, styles, &style, cell.source, axes, font_size) {
             Ok(lowered) => lowered,
             Err(error) => {
@@ -209,13 +194,6 @@ where
             rows.push(TableBlockConstraint::Auto);
             continue;
         };
-        if style.max_height != Size::None {
-            ledger.skip(
-                table,
-                TableBlockSkip::UnmodeledConstraint(TableBlockProperty::RowMaxBlockSize),
-            );
-            return None;
-        }
         rows.push(block_size_constraint(style.height, font_size, root));
     }
 
@@ -250,19 +228,9 @@ where
         .ok_or(TableInlineSizingError::Deferral(
             buckram::TableDeferral::PercentagePaddingPendingBasis,
         ))?;
-    let min_block_size = match block_size_constraint(computed.min_height, font_size, root) {
-        TableBlockConstraint::Value(value) if !value.needs_percentage_basis() => {
-            value.resolve(0.0).unwrap_or(0.0)
-        },
-        // A percentage or unreduced minimum has no basis here. Zero is the
-        // CSS initial value, so this is the same floor an absent min-height
-        // gives, not an invented one.
-        _ => 0.0,
-    };
     Ok(CellBlockInput {
         style,
         inline_offsets,
-        min_block_size,
     })
 }
 

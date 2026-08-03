@@ -905,6 +905,32 @@ than the first pass's sizes: floors of 50 and 10 against a demand of 200 and
 10 give 190 and 10, while measuring growth from an already-distributed first
 pass would give 95 and 105.
 
+### K4d4c interop matrix - 2026-08-03
+
+`min-height` and `max-height` on table cells and rows. CSS 2.1 section 10.7
+says their effect on tables, inline tables, table cells, table rows, and row
+groups is **undefined**, so K4d6b's first pass deferred them under a named
+`UnmodeledConstraint` skip rather than dropping a declaration silently.
+Measured with `interop-matrix.html` in the K4d4c proof directory, headless
+**Chrome 150.0.0.0** and **Firefox 153.0**.
+
+| Case | Chrome 150 | Firefox 153 |
+|---|---|---|
+| R1 cell `max-height: 20`, content 100 | cell 100 | same |
+| R2 cell `max-height: 300`, content 100 | cell 100 | same |
+| R3 cell `min-height: 150`, content 40 | cell 40 | same |
+| R4 cell `height: 20` + `max-height: 20`, content 100 | cell 100 | same |
+| R5 row `max-height: 20`, content 100 | cell 100 | same |
+| R6 row `min-height: 150`, content 40 | cell 40 | same |
+| R7 table 300, cell `max-height: 20`, content 40 | cell 300 | same |
+| R8 cell `max-height: 20` + `overflow: hidden` | cell 100 | same |
+
+**All eight agree: both properties are ignored outright**, on cells and on
+rows, whether they would grow or shrink the box, and `overflow` does not
+change it. So this is modeled behavior, not a gap, and the fix is a
+deletion: the two `UnmodeledConstraint` skips and the cell's `min-height`
+border-box floor are gone, and no table defers for either property.
+
 ## K4d6. Fragment emission, live dispatch, and bridge deletion
 
 **Split into K4d6a and K4d6b.** K4d6a emits the table's fragment subtree as a

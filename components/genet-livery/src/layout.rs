@@ -424,7 +424,10 @@ fn format_table_cell<Context, Source>(
     (style.size, style.min_size, style.max_size, style.box_sizing) = saved;
     TableCellLayoutOutput {
         content_block_size: cell_content_block_size(border_box, offsets),
-        border_box_min_block_size: cell.min_block_size,
+        // CSS 2.1 section 10.7 leaves min-height and max-height undefined on
+        // a table cell, and the K4d4c matrix measured both engines ignoring
+        // them outright, so a cell carries no border-box floor of its own.
+        border_box_min_block_size: 0.0,
         // Live descendants stay in the backend tree, which fragment
         // collection already walks. K4d6a's drafts exist for adapters with no
         // such tree, and a zero rectangle unions into the cell's own without
@@ -4230,18 +4233,22 @@ mod tests {
         );
     }
 
-    /// A cell `max-height` has no Buckram contract yet. The table defers
-    /// under a named skip rather than dropping the declaration, which would
-    /// silently change the table.
+    /// K4d4c: `min-height` and `max-height` do not reach a table cell.
+    ///
+    /// CSS 2.1 section 10.7 leaves their effect on table cells, rows, and row
+    /// groups undefined, and Chrome 150 and Firefox 153 both ignore them
+    /// outright in all eight measured cases. So a cell carrying them is
+    /// ordinary work rather than a deferral, and a 100px child keeps its
+    /// 100px row against a `max-height: 20px` cell.
     #[test]
-    fn k4d6b_an_unmodeled_cell_constraint_defers_the_block_axis() {
-        let dom = StaticDocument::parse("<table><tbody><tr><td>one</td></tr></tbody></table>");
+    fn k4d4c_cell_min_and_max_height_are_ignored() {
+        let dom = StaticDocument::parse(
+            "<table><tbody><tr><td><div class=tall></div></td></tr></tbody></table>",
+        );
         let styles = resolve_styles(
             &dom,
             &StyleSet::cambium(&[
-                "table { display: table; table-layout: fixed; width: 100px; border-spacing: 0; } \
-                 tbody { display: table-row-group; } tr { display: table-row; } \
-                 td { display: table-cell; padding: 0; max-height: 10px; }",
+                "table { display: table; table-layout: fixed; width: 100px; border-spacing: 0; }                  tbody { display: table-row-group; } tr { display: table-row; }                  td { display: table-cell; padding: 0; height: 20px; max-height: 20px;                  min-height: 5px; } .tall { height: 100px; }",
             ]),
             &Device::screen(320.0, 240.0),
             &InteractionStates::default(),
@@ -4259,19 +4266,19 @@ mod tests {
         .expect("layout");
         let ledger = layout.table_shadow_ledger();
         assert_eq!(
-            ledger.assigned, 1,
-            "the inline axis must still be Buckram's: {ledger:?}"
+            ledger.block.laid_out, 1,
+            "a cell max-height must not defer the table: {:?}",
+            ledger.block
         );
-        assert_eq!(ledger.block.laid_out, 0, "{:?}", ledger.block);
         assert!(
-            ledger.block.skipped.iter().any(|(_, skip)| matches!(
-                skip,
-                crate::table_block::TableBlockSkip::UnmodeledConstraint(
-                    crate::table_block::TableBlockProperty::CellMaxBlockSize
-                )
-            )),
-            "the skip must name the property: {:?}",
+            ledger.block.skipped.is_empty(),
+            "{:?}",
             ledger.block.skipped
+        );
+        assert_eq!(
+            ledger.block.agreed, 1,
+            "the painted cell must be the one Buckram wrote: {:?}",
+            ledger.block.divergences
         );
     }
 
