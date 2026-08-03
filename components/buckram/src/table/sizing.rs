@@ -462,7 +462,14 @@ impl TableInlineSizingResult {
         let assignable_column_inline_size = column_sizes.iter().sum::<f32>();
         let undistributable_inline_size = input.separated_undistributable_inline_size()?;
         let expected_grid = assignable_column_inline_size + undistributable_inline_size;
-        if (expected_grid - used_grid_inline_size).abs() > Self::SUBPIXEL_TOLERANCE {
+        // The columns and the undistributable remainder account for the whole
+        // used grid width only when the grid has tracks. A table with no
+        // columns still has whatever width its own `width` asked for, and
+        // there is no track that could have absorbed the difference, so
+        // requiring the two to agree would reject an empty table outright.
+        if !input.grid.columns.is_empty()
+            && (expected_grid - used_grid_inline_size).abs() > Self::SUBPIXEL_TOLERANCE
+        {
             return Err(TableInlineSizingError::GridSizeMismatch {
                 expected: expected_grid,
                 actual: used_grid_inline_size,

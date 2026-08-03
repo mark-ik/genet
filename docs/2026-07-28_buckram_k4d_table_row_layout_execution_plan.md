@@ -1200,6 +1200,87 @@ The capability is proved by the paint-list fixture instead.
 **Verification:** buckram 160, genet-livery all targets 0 failed, 495 across
 the three crates; exact-file Rustfmt and `git diff --check` clean.
 
+### Deferral census - 2026-08-03
+
+What blocks the bridge deletion, counted rather than guessed. Both corpora
+run with the skip and dispatch paths instrumented; each figure is a table
+*instance* across every rendered document, so a reftest contributes both its
+test and its reference.
+
+| outcome | `css/css-tables` | `css/CSS2/tables` | total |
+|---|---:|---:|---:|
+| **laid out by Buckram** | 163 | 319 | **482** |
+| collapsed borders, K4g | 121 | 80 | **201** |
+| caption minimum, K4e | 3 | 14 | 17 |
+| `GridSizeMismatch` (error) | 6 | 8 | 14 |
+| percentage inline padding | 3 | 0 | 3 |
+| `InvalidConstraint` padding | 1 | 0 | 1 |
+| `FixedLayoutWithoutColumns` | 1 | 0 | 1 |
+
+**Buckram already owns about two thirds of live tables** (482 of 719), and
+**collapsed borders are 85% of what is left** (201 of 237). K4g is therefore
+not one blocker among several; it is essentially the whole remaining
+blocker, and K4e's 17 is the only other named gap with more than single
+digits. That ordering was not obvious before it was counted.
+
+**`GridSizeMismatch` is an error, not a named gap, and it fires 14 times.**
+It comes from the result reconciliation in `TableInlineSizingResult::new`
+rather than from the guard in `distribute_columns`, which never fires: the
+column sizes plus the undistributable remainder do not equal the used grid
+width the automatic algorithm chose. The algebra in
+`size_automatic_table_inline` says that should be unreachable, since
+`used_table_inline_size` is floored at `grid_intrinsic_sizes.min_content`
+and both sides derive from the same measures, so one of that reasoning's
+premises is false. It is a K4c defect, it is counted rather than silent, and
+those tables fall back to the bridge.
+
+### K4c empty-table receipt - 2026-08-03
+
+The census's `GridSizeMismatch` count led straight to a reproduction:
+**a table with a definite width and no column tracks at all**. The
+assignable width has no track to go to, `distribute_columns` reports the
+leftover as a mismatch, and the whole table falls back to the bridge. The
+probe reproduced it exactly, `-0.0` included.
+
+The invariant those guards encode - that the columns plus the undistributable
+remainder account for the whole used grid width - **holds only when the grid
+has tracks**. With none, the table still has whatever width its own `width`
+asked for and there is no track that could have absorbed the difference, so
+requiring the two to agree rejects an empty table outright. Both guards now
+except that case.
+
+Fixing the inline axis exposed two more defects in the same shape, each
+caught by a WPT reftest that had been passing only because the error made
+the table fall back:
+
+1. **A definite table block size was lost with no rows to grow.** K4d3's
+   rule that it is a minimum was only ever a consequence of the row
+   distribution, so a table with no row to distribute into collapsed to its
+   own borders and spacing. It is now stated directly.
+   (`subpixel-table-width-001`)
+2. **The table's own box-sizing was not modeled at all.** The UA stylesheet
+   gives a `<table>` element `border-box` and leaves a `display: table` box
+   at `content-box`, so the same specified height means two different used
+   sizes. `TableBlockSizingInput` now carries `table_box_sizing`, and
+   `distributable_block_size` makes that decision once for both the row
+   distribution's target and the basis a percentage row or cell resolves
+   against. (`table-has-box-sizing-border-box-001` and `-002`)
+
+Livery also now resolves the table's **own** percentage block size against
+its containing block before handing it over. That is ordinary CSS and
+unrelated to K4d4's rule for percentage rows and cells: the table resolves
+against its containing block like any other box, while its rows and cells
+resolve against the table's own specified size.
+
+**WPT:** both corpora rerun against the K4d6 fragment maps with **zero
+movement**, `unexpected=0` on both, at 58 and 65. That is the right outcome:
+the tables involved were already rendering correctly through the bridge, and
+what changed is that Buckram now owns them instead of erroring on them.
+Proof directory `testing/genet/wpt-ledger/2026-08-03_buckram_k4c_empty_table`.
+
+**Verification:** buckram 163, genet-livery all targets 0 failed, 498 across
+the three crates; Rustfmt and `git diff --check` clean.
+
 **Not yet done in K4d6:** `place_table_cell`, `table_is_flattenable`, and the
 table-to-Grid and row-to-Flex mappings are still present, because a table
 Buckram defers still needs them. The remaining deferrals are collapsed

@@ -1711,6 +1711,7 @@ where
                 pending.table,
                 computed,
                 pending.font_size,
+                pending.containing_height,
                 &mut ledger,
             ) else {
                 continue;
@@ -2056,6 +2057,7 @@ where
                 pending.table,
                 computed,
                 pending.font_size,
+                pending.containing_height,
                 &mut ledger,
             ) else {
                 continue;
@@ -4730,6 +4732,7 @@ mod tests {
             grid: &grid,
             inline: &inline,
             table_constraint: buckram::TableBlockConstraint::Auto,
+            table_box_sizing: buckram::TableBoxSizing::BorderBox,
             border_metrics: buckram::TableBlockBorderMetrics::Separated(
                 buckram::TableSeparatedBlockMetrics::default(),
             ),
@@ -4906,6 +4909,7 @@ mod tests {
             grid: &grid,
             inline: &inline,
             table_constraint: buckram::TableBlockConstraint::Auto,
+            table_box_sizing: buckram::TableBoxSizing::BorderBox,
             border_metrics: buckram::TableBlockBorderMetrics::Separated(
                 buckram::TableSeparatedBlockMetrics::default(),
             ),
@@ -5080,6 +5084,7 @@ mod tests {
             grid: &grid,
             inline: &inline,
             table_constraint: buckram::TableBlockConstraint::Auto,
+            table_box_sizing: buckram::TableBoxSizing::BorderBox,
             border_metrics: buckram::TableBlockBorderMetrics::Separated(
                 buckram::TableSeparatedBlockMetrics::default(),
             ),

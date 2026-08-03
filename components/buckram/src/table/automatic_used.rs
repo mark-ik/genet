@@ -348,7 +348,12 @@ fn distribute_columns(
             .collect::<Vec<_>>();
         remaining = distribute_proportional(&mut sizes, &max_content_weights, remaining);
     }
-    if remaining > TableInlineSizingResult::SUBPIXEL_TOLERANCE {
+    // A grid with no column tracks has nowhere to put the assignable width,
+    // and that is a table with no cells rather than a distribution that
+    // failed. Every other empty case is already covered: `eligible` falls
+    // back to every column, so a table that has tracks always has somewhere
+    // to put it.
+    if remaining > TableInlineSizingResult::SUBPIXEL_TOLERANCE && !sizes.is_empty() {
         return Err(TableInlineSizingError::GridSizeMismatch {
             expected: assignable_column_inline_size,
             actual: sizes.iter().sum(),
@@ -794,6 +799,45 @@ mod tests {
             result.column_sizes.iter().sum::<f32>() + result.undistributable_inline_size,
             result.used_grid_inline_size,
         );
+    }
+
+    #[test]
+    fn a_table_with_no_columns_keeps_its_own_width() {
+        let mut grid = grid_with_column_count(FlowAxes::HORIZONTAL_LTR, 1);
+        grid.columns.clear();
+        grid.cells.clear();
+        grid.rows.clear();
+        grid.slots.clear();
+        let sizing = super::super::TableInlineSizingInput {
+            grid: &grid,
+            available_inline_size: Some(300.0),
+            table_constraints: super::super::TableInlineConstraints {
+                preferred: super::super::InlineSizeConstraint::Value(
+                    super::super::AffineLengthPercentage::px(100.0),
+                ),
+                ..Default::default()
+            },
+            border_metrics: super::super::TableInlineBorderMetrics::Separated(
+                super::super::TableSeparatedBorderMetrics::default(),
+            ),
+            caption_min: super::super::CaptionMinContribution::NoCaption,
+            track_visibility: TableTrackVisibility::all_visible(&grid),
+        };
+        let measures = TableAutomaticColumnMeasures {
+            columns: Vec::new(),
+            span_distributions: Vec::new(),
+        };
+        let outcome = size_automatic_table_inline(&TableAutomaticInlineSizingInput {
+            sizing,
+            measures: &measures,
+        })
+        .expect("an empty table is not an error");
+        let TableAutomaticInlineSizingOutcome::Sized(result) = outcome else {
+            panic!("a definite width is a used size: {outcome:?}");
+        };
+        assert_eq!(result.used_table_inline_size, 100.0);
+        assert_eq!(result.used_grid_inline_size, 100.0);
+        assert!(result.column_sizes.is_empty());
     }
 
     #[test]

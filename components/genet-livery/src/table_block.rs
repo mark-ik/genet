@@ -16,9 +16,10 @@ use std::hash::Hash;
 use buckram::{
     AlgorithmKind, AlgorithmLayout, AlgorithmNodeId, AlgorithmTree, BoxId, CellBlockOffsets,
     FlowAxes, TableBlockBorderMetrics, TableBlockConstraint, TableBlockDeferral, TableBlockLayout,
-    TableBlockSizingInput, TableCellBlockStyle, TableCellFormatter, TableCellLayoutInput,
-    TableCellLayoutOutput, TableGrid, TableInlineSizingError, TableInlineSizingResult,
-    TableRowLayoutError, TableSeparatedBlockMetrics, TableTrackVisibility, layout_table_block,
+    TableBlockSizingInput, TableBoxSizing, TableCellBlockStyle, TableCellFormatter,
+    TableCellLayoutInput, TableCellLayoutOutput, TableGrid, TableInlineSizingError,
+    TableInlineSizingResult, TableRowLayoutError, TableSeparatedBlockMetrics, TableTrackVisibility,
+    layout_table_block,
 };
 use livery::{
     ComputedValues,
@@ -116,6 +117,7 @@ pub(crate) struct TableBlockInputs {
     pub cells: Vec<CellBlockInput>,
     pub rows: Vec<TableBlockConstraint>,
     pub table_constraint: TableBlockConstraint,
+    pub table_box_sizing: TableBoxSizing,
     pub border_metrics: TableBlockBorderMetrics,
     pub inline_spacing: f32,
 }
@@ -129,6 +131,7 @@ pub(crate) fn table_block_inputs<Id>(
     table: BoxId,
     computed: &ComputedValues,
     font_size: f32,
+    containing_block_size: Option<f32>,
     ledger: &mut TableBlockLedger,
 ) -> Option<TableBlockInputs>
 where
@@ -201,10 +204,45 @@ where
     Some(TableBlockInputs {
         cells,
         rows,
-        table_constraint: block_size_constraint(computed.height, font_size, root),
+        table_constraint: resolved_table_block_size(
+            block_size_constraint(computed.height, font_size, root),
+            containing_block_size,
+        ),
+        // The UA stylesheet gives a `<table>` element `border-box` and leaves
+        // a `display: table` box at `content-box`, so this is read from the
+        // computed style rather than assumed.
+        table_box_sizing: match computed.box_sizing {
+            livery::values::BoxSizing::ContentBox => TableBoxSizing::ContentBox,
+            livery::values::BoxSizing::BorderBox => TableBoxSizing::BorderBox,
+        },
         border_metrics,
         inline_spacing: spacing.unit.to_px(spacing.value, font_size, root),
     })
+}
+
+/// Resolve the table's own percentage block size against its containing
+/// block, which is Livery's to know and not Buckram's to guess.
+///
+/// This is ordinary CSS, unrelated to K4d4's rule for percentage *rows and
+/// cells*: those resolve against the table's own specified size, while the
+/// table itself resolves against its containing block like any other box.
+/// A percentage with no definite basis computes to `auto`.
+fn resolved_table_block_size(
+    constraint: TableBlockConstraint,
+    containing_block_size: Option<f32>,
+) -> TableBlockConstraint {
+    let TableBlockConstraint::Value(value) = constraint else {
+        return constraint;
+    };
+    if !value.needs_percentage_basis() {
+        return constraint;
+    }
+    match containing_block_size.and_then(|basis| value.resolve(basis)) {
+        Some(resolved) if resolved.is_finite() && resolved >= 0.0 => {
+            TableBlockConstraint::Value(buckram::AffineLengthPercentage::px(resolved))
+        },
+        _ => TableBlockConstraint::Auto,
+    }
 }
 
 fn lower_cell<Id>(
@@ -297,6 +335,7 @@ pub(crate) fn buckram_table_block(
         grid,
         inline,
         table_constraint: inputs.table_constraint,
+        table_box_sizing: inputs.table_box_sizing,
         border_metrics: inputs.border_metrics,
         available_block_size,
         track_visibility: TableTrackVisibility::all_visible(grid),

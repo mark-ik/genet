@@ -263,6 +263,7 @@ mod tests {
                 grid: &self.grid,
                 inline: &self.inline,
                 table_constraint,
+                table_box_sizing: crate::TableBoxSizing::BorderBox,
                 border_metrics: TableBlockBorderMetrics::Separated(
                     TableSeparatedBlockMetrics::default(),
                 ),
@@ -513,6 +514,75 @@ mod tests {
         let (rows, table) = interop_case(px(200.0), 10.0, &[(px(60.0), percent(1.0), 0.0)]);
         assert_eq!(rows, vec![180.0], "Q7");
         assert_eq!(table, 200.0, "Q7 table");
+    }
+
+    /// A table with a definite block size and no rows at all keeps that size.
+    ///
+    /// The distribution reaches a definite table height by growing rows, so a
+    /// table with no row to grow used to lose it outright and collapse to its
+    /// own borders and spacing. Empty tables with a height are common enough
+    /// that two WPT reftests catch it.
+    #[test]
+    fn a_table_with_no_rows_keeps_its_own_block_size() {
+        let case = Case::new(&[], vec![]);
+        let input = case.input(px(100.0));
+        let mut formatter = ScriptedFormatter {
+            cells: Vec::new(),
+            second_pass: 0.0,
+            requests: Vec::new(),
+        };
+        let layout = layout_table_block(&input, &[], &[], 0.0, |_, _| 0.0, &mut formatter)
+            .expect("an empty table lays out");
+        assert!(layout.sizing.row_sizes.is_empty());
+        assert_eq!(layout.sizing.used_table_block_size, 100.0);
+        let grid = layout
+            .fragments
+            .grid()
+            .expect("the grid still emits a fragment");
+        assert_eq!(grid.rect.block_size, 100.0);
+    }
+
+    /// The table's own box-sizing decides what its specified block size
+    /// measures.
+    ///
+    /// The UA stylesheet gives a `<table>` element `border-box` and leaves a
+    /// `display: table` box at `content-box`, so the same 65px height means a
+    /// 65px border box in one and a 65px content box in the other. With 35px
+    /// of block-axis padding those differ by exactly that padding, which is
+    /// what `table-has-box-sizing-border-box-002` measures.
+    #[test]
+    fn the_tables_own_box_sizing_decides_what_its_height_measures() {
+        let case = Case::new(&[], vec![]);
+        let padded = TableBlockBorderMetrics::Separated(TableSeparatedBlockMetrics {
+            table_offset_start: 0.0,
+            table_offset_end: 35.0,
+            block_spacing: 0.0,
+        });
+        let mut formatter = ScriptedFormatter {
+            cells: Vec::new(),
+            second_pass: 0.0,
+            requests: Vec::new(),
+        };
+
+        let mut content_box = case.input(px(65.0));
+        content_box.border_metrics = padded;
+        content_box.table_box_sizing = crate::TableBoxSizing::ContentBox;
+        let layout = layout_table_block(&content_box, &[], &[], 0.0, |_, _| 0.0, &mut formatter)
+            .expect("content-box table");
+        assert_eq!(
+            layout.sizing.used_table_block_size, 100.0,
+            "a content-box height sits inside the padding"
+        );
+
+        let mut border_box = case.input(px(65.0));
+        border_box.border_metrics = padded;
+        border_box.table_box_sizing = crate::TableBoxSizing::BorderBox;
+        let layout = layout_table_block(&border_box, &[], &[], 0.0, |_, _| 0.0, &mut formatter)
+            .expect("border-box table");
+        assert_eq!(
+            layout.sizing.used_table_block_size, 65.0,
+            "a border-box height already contains the padding"
+        );
     }
 
     /// Collapsed borders defer before any phase runs, so a deferral can never

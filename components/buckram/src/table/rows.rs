@@ -19,6 +19,25 @@ use super::{
     TableInlineSizingResult, TableTrackVisibility,
 };
 
+impl TableBlockSizingInput<'_> {
+    /// The part of a definite table block size the rows may occupy, with the
+    /// table's own box-sizing already applied. `None` when the table has no
+    /// definite block size.
+    ///
+    /// Everything downstream reads this rather than `table_constraint`
+    /// directly, so the box-sizing decision is made once: it is both the
+    /// target row distribution grows toward and the basis a percentage row or
+    /// cell height resolves against.
+    fn distributable_block_size(&self, undistributable: f32) -> Option<f32> {
+        let definite = definite_block_size(self.table_constraint)?;
+        let distributable = match self.table_box_sizing {
+            TableBoxSizing::ContentBox => definite,
+            TableBoxSizing::BorderBox => definite - undistributable,
+        };
+        distributable.is_finite().then(|| distributable.max(0.0))
+    }
+}
+
 /// A block-axis CSS size constraint before row layout has a basis.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TableBlockConstraint {
@@ -292,6 +311,11 @@ pub struct TableBlockSizingInput<'a> {
     pub grid: &'a TableGrid,
     pub inline: &'a TableInlineSizingResult,
     pub table_constraint: TableBlockConstraint,
+    /// The table's own box-sizing. This cannot be assumed: the UA stylesheet
+    /// gives a `<table>` element `border-box` and leaves a `display: table`
+    /// box at `content-box`, so the same specified height means two different
+    /// used sizes.
+    pub table_box_sizing: TableBoxSizing,
     pub border_metrics: TableBlockBorderMetrics,
     pub available_block_size: Option<f32>,
     pub track_visibility: TableTrackVisibility,
@@ -643,15 +667,16 @@ pub fn size_table_rows(
     }
 
     let rows_total = sizes.iter().sum::<f32>();
-    if let Some(definite) = definite_block_size(input.table_constraint)
-        && definite > rows_total + undistributable
+    let distributable = input.distributable_block_size(undistributable);
+    if let Some(distributable) = distributable
+        && distributable > rows_total
     {
         distribute_over_rows(
             &mut sizes,
             &constrained,
             0,
             grid.rows.len(),
-            definite - undistributable,
+            distributable,
             ZeroWeightFallback::EqualShares,
         );
     }
@@ -662,7 +687,13 @@ pub fn size_table_rows(
         row_offsets.push(cursor);
         cursor += size + metrics.block_spacing;
     }
-    let used_table_block_size = sizes.iter().sum::<f32>() + undistributable;
+    // K4d3's rule stated directly rather than only as a consequence of the
+    // distribution above: a definite table block size is a minimum. The
+    // distribution reaches it whenever there is a row to grow, but a table
+    // with no rows at all has nowhere to put it, and dropping it there would
+    // collapse an empty table with a height to nothing.
+    let used_table_block_size = (sizes.iter().sum::<f32>() + undistributable)
+        .max(distributable.unwrap_or(0.0) + undistributable);
     if !used_table_block_size.is_finite() || sizes.iter().any(|size| !size.is_finite()) {
         return Err(TableRowLayoutError::InvalidCellOutput { box_id: grid.grid });
     }
@@ -967,8 +998,7 @@ pub fn resolve_percentage_block_sizes(
     // Only a specified definite table height is a basis for a percentage row
     // or cell height.
     let mut sizing = first_pass.clone();
-    if let Some(table) = definite_block_size(input.table_constraint) {
-        let basis = (table - undistributable).max(0.0);
+    if let Some(basis) = input.distributable_block_size(undistributable) {
         let rows = row_constraints
             .iter()
             .map(|constraint| resolved_against(*constraint, basis).unwrap_or(*constraint))
@@ -1316,6 +1346,7 @@ mod tests {
             grid: &grid,
             inline: &inline,
             table_constraint: TableBlockConstraint::Auto,
+            table_box_sizing: TableBoxSizing::BorderBox,
             border_metrics: TableBlockBorderMetrics::Separated(
                 TableSeparatedBlockMetrics::default(),
             ),
@@ -1358,6 +1389,7 @@ mod tests {
             grid: &grid,
             inline: &inline,
             table_constraint: TableBlockConstraint::Auto,
+            table_box_sizing: TableBoxSizing::BorderBox,
             border_metrics: TableBlockBorderMetrics::CollapsedPendingK4g,
             available_block_size: None,
             track_visibility: TableTrackVisibility::all_visible(&grid),
@@ -1388,6 +1420,7 @@ mod tests {
             grid: &grid,
             inline: &inline,
             table_constraint: TableBlockConstraint::Auto,
+            table_box_sizing: TableBoxSizing::BorderBox,
             border_metrics: TableBlockBorderMetrics::Separated(
                 TableSeparatedBlockMetrics::default(),
             ),
@@ -1480,6 +1513,7 @@ mod tests {
             grid,
             inline,
             table_constraint: TableBlockConstraint::Auto,
+            table_box_sizing: TableBoxSizing::BorderBox,
             border_metrics: TableBlockBorderMetrics::Separated(
                 TableSeparatedBlockMetrics::default(),
             ),
@@ -1802,6 +1836,7 @@ mod tests {
             grid: &grid,
             inline: &inline,
             table_constraint: table,
+            table_box_sizing: TableBoxSizing::BorderBox,
             border_metrics: TableBlockBorderMetrics::Separated(metrics),
             available_block_size: None,
             track_visibility: TableTrackVisibility::all_visible(&grid),
@@ -1981,6 +2016,7 @@ mod tests {
             grid: &grid,
             inline: &inline,
             table_constraint: TableBlockConstraint::Auto,
+            table_box_sizing: TableBoxSizing::BorderBox,
             border_metrics: TableBlockBorderMetrics::CollapsedPendingK4g,
             available_block_size: None,
             track_visibility: TableTrackVisibility::all_visible(&grid),
@@ -2063,6 +2099,7 @@ mod tests {
             grid: &grid,
             inline: &inline,
             table_constraint: table,
+            table_box_sizing: TableBoxSizing::BorderBox,
             border_metrics: TableBlockBorderMetrics::Separated(
                 TableSeparatedBlockMetrics::default(),
             ),
@@ -2266,6 +2303,7 @@ mod tests {
             grid: &grid,
             inline: &inline,
             table_constraint: row_size.map_or(TableBlockConstraint::Auto, px),
+            table_box_sizing: TableBoxSizing::BorderBox,
             border_metrics: TableBlockBorderMetrics::Separated(
                 TableSeparatedBlockMetrics::default(),
             ),
@@ -2377,6 +2415,7 @@ mod tests {
             grid: &grid,
             inline: &inline,
             table_constraint: TableBlockConstraint::Auto,
+            table_box_sizing: TableBoxSizing::BorderBox,
             border_metrics: TableBlockBorderMetrics::Separated(metrics),
             available_block_size: None,
             track_visibility: TableTrackVisibility::all_visible(&grid),
@@ -2418,6 +2457,7 @@ mod tests {
             grid: &grid,
             inline: &inline,
             table_constraint: TableBlockConstraint::Auto,
+            table_box_sizing: TableBoxSizing::BorderBox,
             border_metrics: TableBlockBorderMetrics::Separated(
                 TableSeparatedBlockMetrics::default(),
             ),
