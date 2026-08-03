@@ -1129,14 +1129,42 @@ The rest of the movement is classified:
   pre-existing K4c work this does not touch.
 - **Unexamined (1):** `table-cell-overflow-explicit-height-002`.
 
-**Baselines:** `testing/genet/wpt-ledger/2026-08-02_buckram_k4d6b` holds the
-post-cutover maps, against the `_shadow` maps beside them.
+#### Second measurement, after the K4d4b fix
 
-What remains: fix K4d4's cell-percentage basis with browser measurement,
-re-measure the two corpora, examine the last unclassified test, splice
-K4d6a's structural fragments into `collect_fragments`, and delete
-`place_table_cell`, `table_is_flattenable`, and the table-to-Grid and
-row-to-Flex mappings in `algorithm_kind` and `anonymous_taffy_style`.
+Branch `k4d6b-cutover` at `5a1729ead6f` re-measured against the `_shadow`
+maps. `css/css-tables` **56 to 57**; `css/CSS2/tables` 68 to 65. Proof
+directory `testing/genet/wpt-ledger/2026-08-03_buckram_k4d6b_v2`.
+
+- **Improvements (4):** `table-as-item-cell-percentage-001`, `-003`, `-004`
+  from the cutover alone, and `-002` from the K4d4b fix, which is the case
+  that fix exists for.
+- **False-pass disclosures (3):** the `separated-border-model` cluster, as
+  above.
+- **1px rounding (1):** `colspan-004`, as above.
+- **Unexplained (1):** `table-cell-overflow-explicit-height-002` passes on
+  `main` and fails on the branch, deterministically over three runs each,
+  and **it should not be able to move**. Its cell carries `max-height: 20px`,
+  the block ledger for that exact document with its own author CSS reports
+  `laid_out: 0` and `UnmodeledConstraint(CellMaxBlockSize)`, so
+  `commit_table_block` never runs for it, and the cutover's only other
+  changes are two additive `AlgorithmTree` methods nothing calls on this
+  path.
+
+**That last one is the stop rule.** A rendering change with no mechanism
+means the mechanism is somewhere unexamined, and a gate whose receipt has to
+classify every moved test cannot accept "it moved and I do not know why".
+Finding it comes before landing.
+
+**Baselines:** `testing/genet/wpt-ledger/2026-08-02_buckram_k4d6b` holds the
+first post-cutover maps and `2026-08-03_buckram_k4d6b_v2` the second, both
+against the `_shadow` maps.
+
+What remains: find the mechanism behind
+`table-cell-overflow-explicit-height-002`, splice K4d6a's structural
+fragments into `collect_fragments`, and delete `place_table_cell`,
+`table_is_flattenable`, and the table-to-Grid and row-to-Flex mappings in
+`algorithm_kind` and `anonymous_taffy_style`. K4d4's cell-percentage basis
+is done and on `main` as K4d4b.
 
 ### Outcome
 
