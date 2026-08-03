@@ -863,6 +863,48 @@ blocked by the pre-existing unrelated `components/genet-livery/src/text.rs`
 warning, which this gate does not touch. Exact-file Rustfmt and
 `git diff --check` clean.
 
+### K4d4b interop matrix - 2026-08-03
+
+K4d6b's live cutover exposed a case K4d4's matrix never covered: a
+**percentage cell height whose row has a definite specified height**. Every
+K4d4 case gave the percentage cell an automatic row, so nothing distinguished
+"resolve against the table" from "resolve against the table, then fit the
+table". Measured with `interop-matrix.html` in the K4d4b proof directory,
+headless **Chrome 150.0.0.0** (`--dump-dom`) and **Firefox 153.0** (`--screenshot`).
+
+| Case | Chrome 150 | Firefox 153 |
+|---|---|---|
+| Q1 table 100, rows 50/50, cells 100% | rows 50 / 50, table 100 | same |
+| Q2 table 300, row 50, cell 100% | row 300 | same |
+| Q3 table auto, row 80, cell 50% | row 80 | same |
+| Q4 control: table 300, auto row, cell 50% | rows 150 / 150 | same |
+| Q5 table 400, row 20, cell 50% | rows 200 / 200 | same |
+| Q6 table 200, row 25%, cell 100% | rows 190 / 10 | same |
+| Q7 table 200, spacing 10, row 60, cell 100% | row 180 | same |
+
+**All seven agree**, so there is no divergence to resolve, and one rule
+accounts for every case:
+
+> A percentage row or cell height still resolves only against the table's
+> specified definite block size, exactly as K4d4 accepted. What K4d4 missed
+> is that the resulting growth is then **fitted back into that height**.
+
+K4d3's rule that a definite table block size is a *minimum* stands, and this
+does not contradict it. That rule is about rows sized by content or by their
+own length, which cannot give the space back. Percentage-derived growth was
+computed *from* the table's height, so letting it overflow doubles the table:
+Q1 is exactly `table-as-item-cell-percentage-002`, where two 50px rows with
+`height: 100%` cells produced a 200px table instead of a 100px square.
+
+`shrink_percentage_growth` implements it. Each row shrinks only across the
+distance between its K4d2 minimum and what the resolved percentages asked
+for, in proportion to that distance, and never below the minimum. A row that
+grew for content or a length has zero growth here and is untouched. Q6 is
+the case that pins the proportion to the *pre-distribution* minima rather
+than the first pass's sizes: floors of 50 and 10 against a demand of 200 and
+10 give 190 and 10, while measuring growth from an already-distributed first
+pass would give 95 and 105.
+
 ## K4d6. Fragment emission, live dispatch, and bridge deletion
 
 **Split into K4d6a and K4d6b.** K4d6a emits the table's fragment subtree as a

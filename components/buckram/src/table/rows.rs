@@ -948,6 +948,7 @@ fn resolved_against(constraint: TableBlockConstraint, basis: f32) -> Option<Tabl
 pub fn resolve_percentage_block_sizes(
     input: &TableBlockSizingInput<'_>,
     first_pass: &TableRowSizing,
+    measures: &[TableRowMeasure],
     cell_styles: &[TableCellBlockStyle],
     cell_outputs: &mut [(BoxId, TableCellLayoutOutput)],
     row_constraints: &[TableBlockConstraint],
@@ -985,8 +986,9 @@ pub fn resolve_percentage_block_sizes(
                 .zip(cell_styles)
                 .any(|(one, other)| one.specified != other.specified);
         if resolved_anything {
-            let measures = measure_single_span_rows(input, &styles, cell_outputs, &rows)?;
-            sizing = size_table_rows(input, &measures, &styles, cell_outputs)?;
+            let resolved_measures = measure_single_span_rows(input, &styles, cell_outputs, &rows)?;
+            sizing = size_table_rows(input, &resolved_measures, &styles, cell_outputs)?;
+            sizing = shrink_percentage_growth(sizing, measures, basis, metrics);
         }
     }
 
@@ -1040,6 +1042,74 @@ pub fn resolve_percentage_block_sizes(
     }
 
     Ok(TablePercentagePass { sizing, relaid_out })
+}
+
+/// Shrink percentage-derived row growth back into a definite table height.
+///
+/// K4d3 established that a definite table block size is a *minimum*: a table
+/// shorter than its rows keeps the rows. That is measured and correct for
+/// rows sized by their content or their own specified height, which cannot
+/// give the space back. Percentage-derived growth is the opposite: it was
+/// computed *from* the table's height, so letting it overflow that height
+/// would double the table, which is what
+/// `table-as-item-cell-percentage-002` catches.
+///
+/// So each row shrinks only across the distance between its K4d2 minimum and
+/// the size the resolved percentages asked for, in proportion to that
+/// distance, and never below the minimum. A row that grew for content or a
+/// length is untouched because its growth here is zero.
+///
+/// See the K4d4b interop matrix: Chrome 150 and Firefox 153 agree on all
+/// seven cases, and this single rule accounts for every one of them.
+fn shrink_percentage_growth(
+    resolved: TableRowSizing,
+    minima: &[TableRowMeasure],
+    distributable: f32,
+    metrics: TableSeparatedBlockMetrics,
+) -> TableRowSizing {
+    if minima.len() != resolved.row_sizes.len() {
+        return resolved;
+    }
+    let floors = minima
+        .iter()
+        .map(|measure| measure.min_block_size)
+        .collect::<Vec<_>>();
+    let floor_total = floors.iter().sum::<f32>();
+    let total = resolved.row_sizes.iter().sum::<f32>();
+    // A table shorter than its own content minimum still keeps that content.
+    let target = distributable.max(floor_total);
+    let excess = total - target;
+    if excess <= 0.0 {
+        return resolved;
+    }
+    let growth = resolved
+        .row_sizes
+        .iter()
+        .zip(&floors)
+        .map(|(size, floor)| (size - floor).max(0.0))
+        .collect::<Vec<_>>();
+    let growth_total = growth.iter().sum::<f32>();
+    if growth_total <= 0.0 || !growth_total.is_finite() {
+        return resolved;
+    }
+    let keep = ((growth_total - excess) / growth_total).clamp(0.0, 1.0);
+    let sizes = floors
+        .iter()
+        .zip(&growth)
+        .map(|(floor, grown)| floor + grown * keep)
+        .collect::<Vec<_>>();
+    let mut row_offsets = Vec::with_capacity(sizes.len());
+    let mut cursor = metrics.table_offset_start + metrics.block_spacing;
+    for size in &sizes {
+        row_offsets.push(cursor);
+        cursor += size + metrics.block_spacing;
+    }
+    let undistributable = resolved.used_table_block_size - total;
+    TableRowSizing {
+        used_table_block_size: sizes.iter().sum::<f32>() + undistributable,
+        row_offsets,
+        row_sizes: sizes,
+    }
 }
 
 /// K4d2: content-based minimum block sizes for every K4b row.
@@ -2018,6 +2088,7 @@ mod tests {
         let pass = resolve_percentage_block_sizes(
             &input,
             &first,
+            &measures,
             &styles,
             &mut outputs,
             &row_constraints,

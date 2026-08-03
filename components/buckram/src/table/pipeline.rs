@@ -61,6 +61,7 @@ pub fn layout_table_block(
     let percentage = resolve_percentage_block_sizes(
         input,
         &first_pass,
+        &measures,
         cell_styles,
         &mut cell_outputs,
         row_constraints,
@@ -400,6 +401,118 @@ mod tests {
         // The second pass never re-drives row sizing: the table keeps the
         // 200px its own constraint fixed.
         assert!((layout.sizing.used_table_block_size - 200.0).abs() < 0.05);
+    }
+
+    /// Run one K4d4b interop case: `rows` gives each row's constraint and its
+    /// single cell's `(constraint, content height)`. Returns the used row
+    /// sizes and the table's used block size, which is what the browsers
+    /// report.
+    fn interop_case(
+        table: TableBlockConstraint,
+        block_spacing: f32,
+        rows: &[(TableBlockConstraint, TableBlockConstraint, f32)],
+    ) -> (Vec<f32>, f32) {
+        let ids = (0..rows.len())
+            .map(|i| vec![3u8 + i as u8])
+            .collect::<Vec<_>>();
+        let refs = ids.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let case = Case::new(&refs, vec![100.0]);
+        let mut input = case.input(table);
+        input.border_metrics = TableBlockBorderMetrics::Separated(TableSeparatedBlockMetrics {
+            table_offset_start: 0.0,
+            table_offset_end: 0.0,
+            block_spacing,
+        });
+        let styles = rows
+            .iter()
+            .map(|(_, cell, _)| TableCellBlockStyle {
+                specified: *cell,
+                ..TableCellBlockStyle::default()
+            })
+            .collect::<Vec<_>>();
+        let constraints = rows.iter().map(|(row, _, _)| *row).collect::<Vec<_>>();
+        let mut formatter = ScriptedFormatter {
+            cells: rows
+                .iter()
+                .map(|(_, _, content)| (*content, None))
+                .collect(),
+            second_pass: 0.0,
+            requests: Vec::new(),
+        };
+        let layout = layout_table_block(
+            &input,
+            &styles,
+            &constraints,
+            0.0,
+            |_, _| 0.0,
+            &mut formatter,
+        )
+        .expect("table block layout");
+        (layout.sizing.row_sizes, layout.sizing.used_table_block_size)
+    }
+
+    /// The K4d4b interop matrix, where Chrome 150 and Firefox 153 agree on
+    /// all seven cases. K4d4 accepted the table's specified block size as the
+    /// basis for a percentage row or cell height, which is right, but never
+    /// covered a percentage cell in a row with a *definite* height. There the
+    /// resolved growth has to be fitted back into the table's own height, or
+    /// the table doubles.
+    #[test]
+    fn percentage_growth_fits_back_into_a_definite_table_height() {
+        let auto = TableBlockConstraint::Auto;
+
+        // Q1 is `table-as-item-cell-percentage-002`: two 50px rows whose
+        // cells are 100% tall must stay 50, not grow to 100 each.
+        let (rows, table) = interop_case(
+            px(100.0),
+            0.0,
+            &[(px(50.0), percent(1.0), 0.0), (px(50.0), percent(1.0), 0.0)],
+        );
+        assert_eq!(rows, vec![50.0, 50.0], "Q1");
+        assert_eq!(table, 100.0, "Q1 table");
+
+        // Q2: one row of 50 in a 300px table still takes the whole table.
+        let (rows, _) = interop_case(px(300.0), 0.0, &[(px(50.0), percent(1.0), 0.0)]);
+        assert_eq!(rows, vec![300.0], "Q2");
+
+        // Q3: no definite table height is no basis at all, so the row keeps
+        // its own 80.
+        let (rows, _) = interop_case(auto, 0.0, &[(px(80.0), percent(0.5), 0.0)]);
+        assert_eq!(rows, vec![80.0], "Q3");
+
+        // Q4 is K4d4's accepted control and must not move: an automatic row
+        // whose cell is 50% of a 300px table.
+        let (rows, _) = interop_case(
+            px(300.0),
+            0.0,
+            &[(auto, percent(0.5), 20.0), (auto, auto, 40.0)],
+        );
+        assert_eq!(rows, vec![150.0, 150.0], "Q4");
+
+        // Q5: the resolved 200 exceeds the row's own 20, and the table is
+        // tall enough to hold it, so nothing shrinks.
+        let (rows, _) = interop_case(
+            px(400.0),
+            0.0,
+            &[(px(20.0), percent(0.5), 0.0), (auto, auto, 30.0)],
+        );
+        assert_eq!(rows, vec![200.0, 200.0], "Q5");
+
+        // Q6 pins the proportion to the pre-distribution minima: floors of 50
+        // and 10 against a demand of 200 and 10 give 190 and 10. Measuring
+        // growth from the already-distributed first pass would give 95/105.
+        let (rows, _) = interop_case(
+            px(200.0),
+            0.0,
+            &[(percent(0.25), percent(1.0), 0.0), (auto, auto, 10.0)],
+        );
+        assert_eq!(rows, vec![190.0, 10.0], "Q6");
+
+        // Q7: separated spacing leaves 180 distributable, and the row fills
+        // exactly that.
+        let (rows, table) = interop_case(px(200.0), 10.0, &[(px(60.0), percent(1.0), 0.0)]);
+        assert_eq!(rows, vec![180.0], "Q7");
+        assert_eq!(table, 200.0, "Q7 table");
     }
 
     /// Collapsed borders defer before any phase runs, so a deferral can never
