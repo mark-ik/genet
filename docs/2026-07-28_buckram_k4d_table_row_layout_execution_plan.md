@@ -1106,63 +1106,67 @@ passed, 182 failed, 889 skipped; `unexpected=0` on both. Proof directory:
 `testing/genet/wpt-ledger/2026-08-02_buckram_k4d6b_shadow`. Those maps are
 also the baseline the cutover will be classified against.
 
-#### The cutover is written and measured, on branch `k4d6b-cutover`
+### K4d6b receipt (dispatch) - 2026-08-03
 
-Commit `fe6a7114a9c` writes every cell rectangle through the owned-context
-seam, sizes the table node from `used_table_block_size`, and switches its
-dispatch to `AlgorithmKind::Table`. A table Buckram defers keeps the Grid
-bridge it was built with, which is what `AlgorithmTree::set_kind` is for:
-whether Buckram can lay a table out is only known once the algorithm has
-run, so deciding at build time would mean guessing or giving up the
-fallback.
+**Base commit:** `2e49fca85e1` (accepted shadow, zero movement).
 
-It is held off `main` because it moves nine reftests and one of them is a
-**model defect it exposed rather than caused**. That defect is the blocker,
-and it belongs to K4d4:
+**Capability:** every live table Buckram can lay out now paints Buckram's
+own geometry. `commit_table_block` writes each cell rectangle through the
+owned-context seam, applies the alignment offset to the cell's contents,
+sizes the table node from `used_table_block_size`, and switches its dispatch
+to `AlgorithmKind::Table` so the backend reports that size without laying
+the cells out again.
 
-> `table-as-item-cell-percentage-002` expects a 100px square and renders
-> 100x200. With `table { height: 100px }`, `tr { height: 50px }`, and
-> `td { height: 100% }`, the cell percentage resolves against the table's
-> specified height rather than its row's, so each 50px row grows to 100 and
-> the table doubles. The test's own assertion is that cells "do not
-> re-resolve their percentage heights based on the table's height".
+**The fallback is per table, and that is what `AlgorithmTree::set_kind` is
+for.** Whether Buckram can lay a table out is only known once the algorithm
+has run, so the dispatch cannot be chosen when the node is built: deciding
+there would mean guessing or giving up the fallback entirely. A table that
+defers keeps the Grid bridge it was built with.
 
-K4d4 chose the table's specified block size as the basis for both rows and
-cells, on measured evidence. That is right for a **row** percentage and
-wrong for a **cell** percentage, whose basis is its row's height when the
-row has a definite one. Correcting it needs the same browser measurement
-K4d4 was built on, not a guess, so it is the next gate's work rather than a
-patch here. `001`, `003`, and `004` in the same family all **improve**,
-which is what makes the single regression readable as a basis error rather
-than a broken pass.
-
-The rest of the movement is classified:
+**WPT:** `css/css-tables` **56 to 58**; `css/CSS2/tables` 68 to 65. Six
+tests moved and every one has a mechanism. Proof directory
+`testing/genet/wpt-ledger/2026-08-03_buckram_k4d6b_v3`, against the
+`_shadow` maps.
 
 - **Improvements (3):** `table-as-item-cell-percentage-001`, `-003`, `-004`.
+  `-002` moved twice and landed where it started, since K4d4b is the fix for
+  the break the cutover caused, so it is not movement here.
 - **False-pass disclosures (3):** `separated-border-model-007`, `-008`,
-  `-009`. Before the cutover these rendered **zero red pixels** because the
-  table painted nothing at all; the reference is "no red", so an invisible
-  table passed. Now the table paints correct geometry (rows at 48 and 128,
-  table 208 tall, all verified) and the reftest exposes a **separate
-  pre-existing bug**: an absolutely positioned box at `top`/`left: 16px`
-  under `body { margin: 16px }` lands at 32,32 instead of 16,16, so its
+  `-009` rendered **zero red pixels** before, counted, because the table
+  painted nothing at all; the reference is "no red", so an invisible table
+  passed. Buckram's geometry is correct - rows at 48 and 128 in a 208px
+  table, per CSS 2.1 section 17.6.1 - and the honest failure exposes a
+  **pre-existing bug outside K4**: an absolutely positioned box at
+  `top`/`left: 16px` under `body { margin: 16px }` lands at 32,32, so its
   containing block is the body's content box rather than the initial
-  containing block. Proved with a table-free probe, so it owes nothing to
-  K4. It needs its own gate outside K4.
-- **1px rounding (1):** `colspan-004` shifts one row by 1px. Its column
+  containing block. Proved with a table-free probe. It needs its own gate.
+- **One-pixel rounding (1):** `colspan-004` shifts a row by 1px. Its column
   distribution, which is what the test targets, is byte-identical before and
-  after at 7/96/7 rather than the correct 5/100/5, so that colspan defect is
-  pre-existing K4c work this does not touch.
-- **Unexamined (1):** `table-cell-overflow-explicit-height-002`.
+  after at 7/96/7 where 5/100/5 is correct, so that colspan defect is
+  pre-existing K4c work.
 
-**Baselines:** `testing/genet/wpt-ledger/2026-08-02_buckram_k4d6b` holds the
-post-cutover maps, against the `_shadow` maps beside them.
+**Two gates came out of the measurement**, both landed here: K4d4b, because
+percentage growth has to fit back into a definite table height, and K4d4c,
+because `min-height` and `max-height` are ignored on cells and rows rather
+than being a gap.
 
-What remains: fix K4d4's cell-percentage basis with browser measurement,
-re-measure the two corpora, examine the last unclassified test, splice
-K4d6a's structural fragments into `collect_fragments`, and delete
-`place_table_cell`, `table_is_flattenable`, and the table-to-Grid and
-row-to-Flex mappings in `algorithm_kind` and `anonymous_taffy_style`.
+**The per-table fallback has a cost, and it is now measured.** A reftest
+renders two documents. `table-cell-overflow-explicit-height-002` failed
+while its own ledger reported `laid_out: 0`: the skip fired on the test
+file's table, the reference file had no `max-height` so it did not defer,
+and the two sides of the comparison were rendered by two different engines.
+Instrumenting the runner found that in one run after static reasoning had
+failed twice. Every remaining deferral carries the same risk until the
+bridge is deleted, which is what the rest of K4d6 is for.
+
+**Verification:** buckram 160, genet-livery all targets 0 failed; exact-file
+Rustfmt and `git diff --check` clean.
+
+**Not yet done in K4d6:** K4d6a's structural fragments are still not spliced
+into `collect_fragments`, so rows, row groups, columns and column groups
+still paint no fragment of their own. `place_table_cell`,
+`table_is_flattenable`, and the table-to-Grid and row-to-Flex mappings are
+still present, because tables that defer still need them.
 
 ### Outcome
 
