@@ -443,6 +443,33 @@ impl<S, Context, Source> AlgorithmTree<S, Context, Source> {
         }
     }
 
+    /// The rectangle an algorithm wrote, before the backend's rounding pass.
+    ///
+    /// An owned formatting context that adjusts its own subtree after writing
+    /// it must read back the same store it wrote, or it would fold one
+    /// rounding into the unrounded values and round twice.
+    pub fn unrounded_layout(&self, id: AlgorithmNodeId) -> AlgorithmLayout {
+        let layout = self.nodes[id.index()].unrounded_layout;
+        AlgorithmLayout {
+            x: layout.location.x,
+            y: layout.location.y,
+            width: layout.size.width,
+            height: layout.size.height,
+        }
+    }
+
+    /// Hand one node's dispatch to a Buckram algorithm after the fact.
+    ///
+    /// Almost every node's algorithm follows from its computed style and is
+    /// fixed when the node is built. A table is the exception: whether
+    /// Buckram can lay it out is only known once the algorithm has run, and a
+    /// table it defers has to keep the backend dispatch it was built with.
+    /// Deciding at build time would mean either guessing or giving up the
+    /// fallback.
+    pub fn set_kind(&mut self, id: AlgorithmNodeId, kind: AlgorithmKind) {
+        self.nodes[id.index()].kind = kind;
+    }
+
     /// Write a rectangle a Buckram algorithm already decided.
     ///
     /// A formatting context Buckram owns outright computes its own geometry

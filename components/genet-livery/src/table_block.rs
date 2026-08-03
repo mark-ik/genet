@@ -14,11 +14,11 @@
 use std::hash::Hash;
 
 use buckram::{
-    BoxId, CellBlockOffsets, FlowAxes, TableBlockBorderMetrics, TableBlockConstraint,
-    TableBlockDeferral, TableBlockLayout, TableBlockSizingInput, TableCellBlockStyle,
-    TableCellFormatter, TableCellLayoutInput, TableCellLayoutOutput, TableGrid,
-    TableInlineSizingError, TableInlineSizingResult, TableRowLayoutError,
-    TableSeparatedBlockMetrics, TableTrackVisibility, layout_table_block,
+    AlgorithmKind, AlgorithmLayout, AlgorithmNodeId, AlgorithmTree, BoxId, CellBlockOffsets,
+    FlowAxes, TableBlockBorderMetrics, TableBlockConstraint, TableBlockDeferral, TableBlockLayout,
+    TableBlockSizingInput, TableCellBlockStyle, TableCellFormatter, TableCellLayoutInput,
+    TableCellLayoutOutput, TableGrid, TableInlineSizingError, TableInlineSizingResult,
+    TableRowLayoutError, TableSeparatedBlockMetrics, TableTrackVisibility, layout_table_block,
 };
 use livery::{
     ComputedValues,
@@ -41,17 +41,7 @@ pub enum TableBlockSkip {
     DeferredInLowering(TableInlineSizingError),
     /// A grid cell built no algorithm node, so it cannot be formatted.
     IncompleteCells,
-    /// A cell or row carries a block-axis constraint Buckram has no contract
-    /// for yet. Dropping it silently would change the table.
-    UnmodeledConstraint(TableBlockProperty),
     Error(TableRowLayoutError),
-}
-
-/// A block-axis CSS property with no Buckram contract yet.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TableBlockProperty {
-    CellMaxBlockSize,
-    RowMaxBlockSize,
 }
 
 /// The block-axis quantity a verification disagreed on.
@@ -118,9 +108,6 @@ pub(crate) struct CellBlockInput {
     /// The cell's resolved inline offsets, which K4c's accepted result makes
     /// definite. `format_table_cells` subtracts them from the spanned columns.
     pub inline_offsets: f32,
-    /// A `min-height` floor on the cell's border box, kept apart from the
-    /// measured content exactly as Buckram's contract separates them.
-    pub min_block_size: f32,
 }
 
 /// Everything the block pipeline needs that only the caller's tree can
@@ -179,19 +166,17 @@ where
         },
     };
 
+    // `min-height` and `max-height` reach neither cells nor rows. CSS 2.1
+    // section 10.7 leaves their effect on table cells, rows, and row groups
+    // undefined, and the K4d4c matrix measured Chrome 150 and Firefox 153
+    // ignoring them outright in all eight cases. Ignoring them is therefore
+    // the modeled behavior, not a gap, so nothing defers for them.
     let mut cells = Vec::with_capacity(grid.cells.len());
     for cell in &grid.cells {
         let Some(style) = style_of(cell.source) else {
             ledger.skip(table, TableBlockSkip::IncompleteCells);
             return None;
         };
-        if style.max_height != Size::None {
-            ledger.skip(
-                table,
-                TableBlockSkip::UnmodeledConstraint(TableBlockProperty::CellMaxBlockSize),
-            );
-            return None;
-        }
         let lowered = match lower_cell(boxes, styles, &style, cell.source, axes, font_size) {
             Ok(lowered) => lowered,
             Err(error) => {
@@ -209,13 +194,6 @@ where
             rows.push(TableBlockConstraint::Auto);
             continue;
         };
-        if style.max_height != Size::None {
-            ledger.skip(
-                table,
-                TableBlockSkip::UnmodeledConstraint(TableBlockProperty::RowMaxBlockSize),
-            );
-            return None;
-        }
         rows.push(block_size_constraint(style.height, font_size, root));
     }
 
@@ -250,19 +228,9 @@ where
         .ok_or(TableInlineSizingError::Deferral(
             buckram::TableDeferral::PercentagePaddingPendingBasis,
         ))?;
-    let min_block_size = match block_size_constraint(computed.min_height, font_size, root) {
-        TableBlockConstraint::Value(value) if !value.needs_percentage_basis() => {
-            value.resolve(0.0).unwrap_or(0.0)
-        },
-        // A percentage or unreduced minimum has no basis here. Zero is the
-        // CSS initial value, so this is the same floor an absent min-height
-        // gives, not an invented one.
-        _ => 0.0,
-    };
     Ok(CellBlockInput {
         style,
         inline_offsets,
-        min_block_size,
     })
 }
 
@@ -382,6 +350,65 @@ where
 /// backend produced and the offsets Buckram will add back itself.
 pub(crate) fn cell_content_block_size(border_box: f32, offsets: CellBlockOffsets) -> f32 {
     (border_box - offsets.total().unwrap_or(0.0)).max(0.0)
+}
+
+/// Commit one table's Buckram block layout to the algorithm tree.
+///
+/// Every cell rectangle is written through the owned-context seam, each cell's
+/// contents are shifted by the alignment offset the table chose, and the table
+/// node is resized and re-dispatched so the backend reports that size without
+/// laying the cells out again.
+///
+/// Rectangles are logical and the live path is horizontal LTR throughout, so
+/// inline maps to x and block to y. A vertical writing mode reaches this only
+/// once K4f gives the table one, and the flow axes it would need are not
+/// invented here.
+pub(crate) fn commit_table_block<S, Context, Source>(
+    tree: &mut AlgorithmTree<S, Context, Source>,
+    table_node: AlgorithmNodeId,
+    layout: &TableBlockLayout,
+    inline: &TableInlineSizingResult,
+    node_of: impl Fn(BoxId) -> Option<AlgorithmNodeId>,
+) where
+    S: buckram::AlgorithmStyle,
+{
+    for placement in &layout.alignment.cells {
+        let Some(node) = node_of(placement.box_id) else {
+            continue;
+        };
+        tree.set_layout(
+            node,
+            AlgorithmLayout {
+                x: placement.rect.inline_start,
+                y: placement.rect.block_start,
+                width: placement.rect.inline_size,
+                height: placement.rect.block_size,
+            },
+        );
+        // The cell's border box now fills its whole row range, so its
+        // contents no longer sit where the formatting pass left them. CSS 2.1
+        // section 17.5.3 places them by the cell's alignment, which is a
+        // placement offset and never a change to the computed padding.
+        if placement.content_block_offset.abs() > f32::EPSILON {
+            for child in tree.children(node).to_vec() {
+                let mut child_layout = tree.unrounded_layout(child);
+                child_layout.y += placement.content_block_offset;
+                tree.set_layout(child, child_layout);
+            }
+        }
+    }
+    tree.set_layout(
+        table_node,
+        AlgorithmLayout {
+            // The table's own position stays the parent's decision; the
+            // backend overwrites it when it places this node.
+            x: tree.unrounded_layout(table_node).x,
+            y: tree.unrounded_layout(table_node).y,
+            width: inline.used_grid_inline_size,
+            height: layout.sizing.used_table_block_size,
+        },
+    );
+    tree.set_kind(table_node, AlgorithmKind::Table);
 }
 
 /// Fragments are pixel-rounded cumulatively while Buckram's output is
