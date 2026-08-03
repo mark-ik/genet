@@ -1162,11 +1162,51 @@ bridge is deleted, which is what the rest of K4d6 is for.
 **Verification:** buckram 160, genet-livery all targets 0 failed; exact-file
 Rustfmt and `git diff --check` clean.
 
-**Not yet done in K4d6:** K4d6a's structural fragments are still not spliced
-into `collect_fragments`, so rows, row groups, columns and column groups
-still paint no fragment of their own. `place_table_cell`,
-`table_is_flattenable`, and the table-to-Grid and row-to-Flex mappings are
-still present, because tables that defer still need them.
+### K4d6b receipt (fragments) - 2026-08-03
+
+**Capability:** K4d6a's structural subtree is committed.
+`commit_table_structure` pushes the row groups, rows, column groups, and
+columns Buckram emitted at the point fragment collection reaches the grid,
+on both build routes.
+
+**This is a capability the bridge could not have.** It flattened rows, row
+groups, and columns away before the backend saw them, so none of them ever
+produced a fragment and **a `<tr>` background could not paint at all**.
+`table_row_and_group_backgrounds_paint` proves it end to end through the
+paint list rather than through the fragment tree, because a fragment that
+never reaches a paint command is not a painted row.
+
+**Cells are deliberately not committed here.** The ordinary walk already
+produces them from the algorithm tree with their contents, baselines, and
+text. What it cannot produce is a box with no algorithm node, which is
+exactly what these four roles are.
+
+**Ordering is load-bearing.** The structural fragments are pushed before the
+walk descends into the cells, so each cell's structural-parent lookup finds
+its own row rather than falling back to the grid. K4d6a's guarantee that
+parents precede children is what lets one forward pass resolve every parent.
+
+**A track with no CSS box gets no fragment.** An implicitly created column
+has no identity to attribute one to, and borrowing a neighbour's would make
+a painted box attributable to a box that does not exist.
+
+**WPT:** both table corpora rerun against the K4d6b dispatch maps with
+**zero movement**, `unexpected=0` on both. Proof directory
+`testing/genet/wpt-ledger/2026-08-03_buckram_k4d6_fragments`. That is the
+expected result and not a null one: neither corpus sets a background on a
+row, group, or column, so the new fragments have nothing to paint there.
+The capability is proved by the paint-list fixture instead.
+
+**Verification:** buckram 160, genet-livery all targets 0 failed, 495 across
+the three crates; exact-file Rustfmt and `git diff --check` clean.
+
+**Not yet done in K4d6:** `place_table_cell`, `table_is_flattenable`, and the
+table-to-Grid and row-to-Flex mappings are still present, because a table
+Buckram defers still needs them. The remaining deferrals are collapsed
+borders (K4g), percentage inline padding with no basis, and captions (K4e).
+Deleting the bridge means closing those, and until then a page can mix both
+engines, which the `table-cell-overflow-explicit-height-002` diagnosis
+showed is observable.
 
 ### Outcome
 

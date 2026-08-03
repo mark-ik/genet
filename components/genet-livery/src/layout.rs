@@ -9,8 +9,8 @@ use buckram::{
     InternalTableRole, IntrinsicSizeCache, IntrinsicSizeKind, IntrinsicSizeQuery, IntrinsicSizes,
     LayoutResult, LogicalAxis, LogicalRect, PhysicalRect, PhysicalSides, PhysicalSize,
     PositioningScheme, TableCell, TableCellInput, TableCellLayoutInput, TableCellLayoutOutput,
-    TableCellLayoutPass, TableGrid, TableGridInputs, TableRowLayoutError, TableRowSpan,
-    TableTrackInput,
+    TableCellLayoutPass, TableFragmentRole, TableFragments, TableGrid, TableGridInputs,
+    TableRowLayoutError, TableRowSpan, TableTrackInput,
 };
 use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
 use livery::{
@@ -968,6 +968,7 @@ where
         grids: state.table_bridge_count,
     };
 
+    let tables = state.table_fragment_plane();
     let mut fragments = FragmentTree::default();
     let mut output = FragmentOutput {
         fragments: &mut fragments,
@@ -984,6 +985,7 @@ where
             height: viewport_height,
         },
         None,
+        &tables,
         &mut output,
     )?;
     state.verify_table_layout(|box_id| {
@@ -1386,6 +1388,7 @@ where
         grids: state.table_bridge_count,
     };
 
+    let tables = state.table_fragment_plane();
     let mut text_frame = TextFrame::default();
     let mut fragments = FragmentTree::default();
     let mut output = FragmentOutput {
@@ -1405,6 +1408,7 @@ where
             },
             parent: None,
         },
+        &tables,
         &mut output,
         &mut text_frame,
         styles,
@@ -1757,6 +1761,21 @@ where
         self.table_shadow.block = ledger;
     }
 
+    /// The structural fragments Buckram emitted for every table it laid out,
+    /// keyed by the grid box that owns them. Fragment collection commits them
+    /// where the walk reaches that grid.
+    fn table_fragment_plane(&self) -> TableFragmentPlane {
+        self.pending_tables
+            .iter()
+            .filter_map(|pending| {
+                pending
+                    .block
+                    .as_ref()
+                    .map(|block| (pending.table, block.fragments.clone()))
+            })
+            .collect()
+    }
+
     /// Assert the painted fragments honored every assigned column vector, and
     /// record how far the painted cells sit from Buckram's block rectangles.
     fn verify_table_layout(&mut self, live_rect_of: impl Fn(BoxId) -> Option<Fragment>) {
@@ -2088,6 +2107,21 @@ where
             }
         }
         self.table_shadow.block = ledger;
+    }
+
+    /// The structural fragments Buckram emitted for every table it laid out,
+    /// keyed by the grid box that owns them. Fragment collection commits them
+    /// where the walk reaches that grid.
+    fn table_fragment_plane(&self) -> TableFragmentPlane {
+        self.pending_tables
+            .iter()
+            .filter_map(|pending| {
+                pending
+                    .block
+                    .as_ref()
+                    .map(|block| (pending.table, block.fragments.clone()))
+            })
+            .collect()
     }
 
     /// Assert the painted fragments honored every assigned column vector, and
@@ -2750,6 +2784,66 @@ where
     }
 }
 
+/// The structural fragments Buckram emitted for each live table, keyed by the
+/// grid box that owns them.
+type TableFragmentPlane = HashMap<BoxId, TableFragments>;
+
+/// Commit the row groups, rows, column groups, and columns Buckram emitted.
+///
+/// Cells are deliberately left out: the ordinary walk already produces them
+/// from the algorithm tree, with their contents, baselines, and text. What the
+/// walk cannot produce is a box with no algorithm node, and that is every one
+/// of these. The bridge flattened rows and groups away before the backend saw
+/// them, so a `<tr>` background has never had a fragment to paint into.
+///
+/// These are pushed before the walk descends into the cells, so each cell's
+/// structural-parent lookup finds its own row rather than falling back to the
+/// grid. Buckram guarantees parents precede children, so one forward pass
+/// resolves every parent.
+///
+/// Rectangles are logical and the live path is horizontal LTR throughout, so
+/// inline maps to x and block to y.
+fn commit_table_structure(
+    emitted: &TableFragments,
+    grid_origin: Point<f32>,
+    grid_fragment: FragmentId,
+    output: &mut FragmentOutput<'_>,
+) {
+    let mut ids: Vec<Option<FragmentId>> = vec![None; emitted.fragments().len()];
+    for (index, fragment) in emitted.fragments().iter().enumerate() {
+        match fragment.role {
+            // The walk already pushed the grid's own fragment; record it so
+            // children can hang from it.
+            TableFragmentRole::Grid => {
+                ids[index] = Some(grid_fragment);
+                continue;
+            },
+            TableFragmentRole::Cell => continue,
+            _ => {},
+        }
+        // A track created implicitly by placement has no CSS box, so there is
+        // no identity to attribute a fragment to.
+        let Some(box_id) = fragment.box_id else {
+            continue;
+        };
+        let parent = fragment
+            .parent
+            .and_then(|at| ids.get(at).copied().flatten())
+            .unwrap_or(grid_fragment);
+        let rect = Fragment {
+            x: grid_origin.x + fragment.rect.inline_start,
+            y: grid_origin.y + fragment.rect.block_start,
+            width: fragment.rect.inline_size,
+            height: fragment.rect.block_size,
+        };
+        ids[index] = Some(output.fragments.push(
+            TreeFragment::from_horizontal_physical(box_id, rect),
+            Some(parent),
+            Some(parent),
+        ));
+    }
+}
+
 fn collect_fragments<Id>(
     tree: &AlgorithmTree<Style, TextMeasure, Option<BoxId>>,
     boxes: &GeneratedBoxTree<Id>,
@@ -2757,6 +2851,7 @@ fn collect_fragments<Id>(
     parent_origin: Point<f32>,
     containing_rect: Fragment,
     parent_fragment: Option<FragmentId>,
+    tables: &TableFragmentPlane,
     output: &mut FragmentOutput<'_>,
 ) -> Result<(), LayoutError>
 where
@@ -2804,11 +2899,15 @@ where
                     );
                     TreeFragment::from_physical_with_logical(box_id, rect, logical_rect, flow)
                 };
-                child_parent = Some(output.fragments.push(
+                let id = output.fragments.push(
                     fragment.with_baselines(fragment_baselines(tree, boxes, node, box_id, rect)),
                     parent,
                     parent,
-                ));
+                );
+                child_parent = Some(id);
+                if let Some(emitted) = tables.get(&box_id) {
+                    commit_table_structure(emitted, origin, id, output);
+                }
                 legacy_origin_node(boxes, box_id)
             },
             None => None,
@@ -2816,7 +2915,16 @@ where
         let _ = origin_node;
     }
     for child in tree.children(node) {
-        collect_fragments(tree, boxes, *child, origin, rect, child_parent, output)?;
+        collect_fragments(
+            tree,
+            boxes,
+            *child,
+            origin,
+            rect,
+            child_parent,
+            tables,
+            output,
+        )?;
     }
     Ok(())
 }
@@ -2826,6 +2934,7 @@ fn collect_inline_fragments<Id>(
     boxes: &GeneratedBoxTree<Id>,
     node: AlgorithmNodeId,
     cursor: FragmentCursor,
+    tables: &TableFragmentPlane,
     output: &mut FragmentOutput<'_>,
     text_frame: &mut TextFrame<Id>,
     styles: &StylePlane<Id>,
@@ -2919,6 +3028,9 @@ where
                     parent,
                     parent,
                 );
+                if let Some(emitted) = tables.get(&box_id) {
+                    commit_table_structure(emitted, origin, fragment_id, output);
+                }
                 child_parent.get_or_insert(fragment_id);
             }
         }
@@ -2933,6 +3045,7 @@ where
                 containing: rect,
                 parent: child_parent,
             },
+            tables,
             output,
             text_frame,
             styles,
@@ -4231,6 +4344,93 @@ mod tests {
             (second.y - first.y - 40.0).abs() < 0.5,
             "the second row must start just below a 40px first row:              {first:?} {second:?}"
         );
+    }
+
+    /// K4d6: a table row now has a fragment of its own.
+    ///
+    /// The Grid bridge flattened rows, row groups, and columns away before
+    /// the backend saw them, so none of them had any box to paint into: a
+    /// `<tr>` background could not render at all. Buckram emits the whole
+    /// structural subtree from the track model, so each one gets its exact
+    /// rectangle whether or not a cell happens to cover it.
+    #[test]
+    fn k4d6_rows_groups_and_columns_have_their_own_fragments() {
+        let dom = StaticDocument::parse(
+            "<table><colgroup><col></colgroup><tbody><tr id=a><td>one</td></tr><tr id=b><td>two</td></tr></tbody></table>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "table { display: table; table-layout: fixed; width: 200px; border-spacing: 0; }                  tbody { display: table-row-group; } tr { display: table-row; }                  td { display: table-cell; padding: 0; } #a { height: 40px; } #b { height: 60px; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+
+        let rect_of = |local: &str, nth: usize| {
+            fn walk(
+                dom: &StaticDocument,
+                node: <StaticDocument as LayoutDom>::NodeId,
+                local: &str,
+                out: &mut Vec<<StaticDocument as LayoutDom>::NodeId>,
+            ) {
+                if dom
+                    .element_name(node)
+                    .is_some_and(|n| n.local.as_ref() == local)
+                {
+                    out.push(node);
+                }
+                for child in dom.dom_children(node) {
+                    walk(dom, child, local, out);
+                }
+            }
+            let mut found = Vec::new();
+            walk(&dom, dom.document(), local, &mut found);
+            // A table element generates a wrapper and a grid; only one of
+            // them carries the fragment.
+            layout
+                .boxes()
+                .boxes_for_node(found[nth])
+                .iter()
+                .find_map(|box_id| layout.fragments().fragments_for_box(*box_id).next())
+                .unwrap_or_else(|| panic!("no fragment for {local}[{nth}]"))
+                .physical_rect()
+        };
+
+        let table = rect_of("table", 0);
+        let first = rect_of("tr", 0);
+        let second = rect_of("tr", 1);
+        let group = rect_of("tbody", 0);
+        let column = rect_of("col", 0);
+
+        // Each row spans the grid and holds exactly its own track.
+        assert!((first.height - 40.0).abs() < 0.5, "first row: {first:?}");
+        assert!((second.height - 60.0).abs() < 0.5, "second row: {second:?}");
+        assert!(
+            (second.y - first.y - 40.0).abs() < 0.5,
+            "rows must tile: {first:?} {second:?}"
+        );
+        assert!((first.width - 200.0).abs() < 0.5, "{first:?}");
+
+        // A group's rectangle is the exact union of its track range, not a
+        // box reconstructed from the cells inside it.
+        assert!((group.y - first.y).abs() < 0.5, "{group:?}");
+        assert!((group.height - 100.0).abs() < 0.5, "{group:?}");
+
+        // A column runs the table's whole block extent.
+        assert!((column.height - table.height).abs() < 0.5, "{column:?}");
+        assert!((column.width - 200.0).abs() < 0.5, "{column:?}");
     }
 
     /// K4d4c: `min-height` and `max-height` do not reach a table cell.

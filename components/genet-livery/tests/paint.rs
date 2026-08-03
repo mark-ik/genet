@@ -1904,3 +1904,50 @@ fn inline_blocks_occupy_atomic_space_in_the_text_line() {
 
     assert!(with_badge - without_badge > 29.0);
 }
+
+/// K4d6: a table row's background reaches the paint list.
+///
+/// The Grid bridge flattened rows, row groups, and columns away before the
+/// backend saw them, so none of them produced a fragment and a `<tr>`
+/// background could not paint at all. Buckram emits the whole structural
+/// subtree from its track model, so each one has a rectangle to paint into.
+#[test]
+fn table_row_and_group_backgrounds_paint() {
+    let list = render(
+        "<table><tbody><tr id=a><td>one</td></tr><tr id=b><td>two</td></tr></tbody></table>",
+        "table { display: table; table-layout: fixed; width: 200px; border-spacing: 0; } \
+         tbody { display: table-row-group; } tr { display: table-row; } \
+         td { display: table-cell; padding: 0; } \
+         #a { height: 40px; background-color: #ff0000; } \
+         #b { height: 60px; background-color: #0000ff; }",
+        1,
+    );
+
+    let rects = list
+        .commands()
+        .iter()
+        .filter_map(|command| match command {
+            PaintCmd::DrawRect(rect) => Some(rect),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let red = rects
+        .iter()
+        .find(|rect| rect.color == ColorF::new(1.0, 0.0, 0.0, 1.0))
+        .expect("the first row's background must paint");
+    let blue = rects
+        .iter()
+        .find(|rect| rect.color == ColorF::new(0.0, 0.0, 1.0, 1.0))
+        .expect("the second row's background must paint");
+
+    // Each row paints exactly its own track, across the whole grid.
+    let (red, blue) = (red.placement.bounds, blue.placement.bounds);
+    assert!((red.max.y - red.min.y - 40.0).abs() < 0.5, "{red:?}");
+    assert!((blue.max.y - blue.min.y - 60.0).abs() < 0.5, "{blue:?}");
+    assert!((red.max.x - red.min.x - 200.0).abs() < 0.5, "{red:?}");
+    assert!(
+        (blue.min.y - red.min.y - 40.0).abs() < 0.5,
+        "the rows must tile: {red:?} {blue:?}"
+    );
+}
