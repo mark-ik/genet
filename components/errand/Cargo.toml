@@ -1,6 +1,9 @@
 [package]
 name = "errand"
-version = "0.1.3"
+# 0.2.0, not 0.1.4: `parse::gopher::GopherItem` gained its Gopher+ marker
+# field when the grammar moved to gopher-protocol, and in 0.x the minor
+# version is the breaking position.
+version = "0.2.0"
 edition = "2024"
 # Own license line, not workspace: errand predates the genet adoption and is
 # published MIT/Apache (founding convention); genet's workspace default is MPL.
@@ -34,6 +37,12 @@ guppy-protocol = { workspace = true }
 # Spartan and nex transactions live in their spec-faithful sibling crates.
 spartan-protocol = { workspace = true }
 nex-protocol = { workspace = true }
+# Gopher and finger followed on 2026-08-03. gopher-protocol also owns the
+# gophermap grammar (`parse::gopher` re-exports it) and the Gopher+ successor;
+# finger-protocol also carries WebFinger, which errand deliberately does not
+# enable, since WebFinger is HTTP and errand does not speak HTTP.
+gopher-protocol = { workspace = true }
+finger-protocol = { workspace = true }
 # Misfin send delegates to the misfin crate's client, on the same ring
 # provider this crate builds rustls with (no C toolchain).
 misfin = { version = "0.0.4", default-features = false, features = ["client", "ring"] }

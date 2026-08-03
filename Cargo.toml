@@ -230,7 +230,7 @@ parley = { version = "0.10.0", default-features = true }
 # plan). inker + nematic publish (0.1.0); the rest inherit publish = false.
 # errand (the smolweb wire layer) + its protocol members adopted the same day,
 # all published crates keeping their identities.
-errand = { version = "=0.1.3", path = "components/errand" }
+errand = { version = "=0.2.0", path = "components/errand" }
 # The three spec crates moved to the smolweb workspace on 2026-07-23 (the repo
 # consolidation plan in mere's design docs): their names belong to the protocols'
 # communities, not to the engine that speaks them. genet keeps errand (the client
@@ -239,6 +239,15 @@ errand = { version = "=0.1.3", path = "components/errand" }
 nex-protocol = { version = "=0.1.1" }
 spartan-protocol = { version = "=0.1.1" }
 guppy-protocol = { version = "=0.1.1" }
+# gopher + finger followed the same way on 2026-08-03 (the smolweb home
+# decision in mere's design docs): the spec is theirs, the client integration
+# is ours. gopher-protocol carries the Gopher+ successor; finger-protocol
+# carries WebFinger, which errand does not want because it is HTTP, so errand
+# takes the classic wire protocol alone.
+gopher-protocol = { version = "=0.1.0" }
+finger-protocol = { version = "=0.1.0", default-features = false, features = [
+    "client",
+] }
 inker = { version = "=0.1.0", path = "components/inker" }
 genet-documents = { version = "=0.1.0", path = "components/genet-documents" }
 nematic = { version = "=0.1.0", path = "components/nematic" }

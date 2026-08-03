@@ -11,7 +11,11 @@ publish = true
 
 [dependencies]
 cambium = { version = "0.3.0", path = "../cambium" }
-errand = "0.1.3"
+# `workspace = true`, not a bare version: a bare `errand = "0.1.3"` resolved to
+# the *published* crate rather than this workspace's copy, so local changes to
+# errand never reached these views and the tests here silently exercised
+# crates.io instead.
+errand = { workspace = true }
 
 [dev-dependencies]
 layout_dom_api = { package = "layout-dom-api", path = "../../shared/layout-dom" }

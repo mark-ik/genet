@@ -30,7 +30,6 @@ mod gopher;
 mod guppy;
 mod misfin;
 mod nex;
-mod plain;
 mod spartan;
 mod titan;
 mod tls;
