@@ -441,6 +441,51 @@ table grid owns tracks and cell geometry.
   table margins, inline-table, floats around tables, writing-mode captions,
   and table CSSOM geometry cases.
 
+### K4e1 interop matrix - 2026-08-03
+
+What a caption contributes to table inline sizing, measured before
+implementing the `CaptionMinContribution::PendingK4e` seam that the
+2026-08-03 deferral census counted firing 17 times. Headless **Chrome
+150.0.0.0** (`--dump-dom`) and **Firefox 153.0** (`--screenshot`), matrix in
+the K4e1 proof directory. Chrome's subpixel figures are rounded here.
+
+| Case | Chrome 150 | Firefox 153 |
+|---|---|---|
+| C1 caption min-content wider, table auto | table 176, **cell 176** | table 176, **cell 8.8** |
+| C2 caption narrower than the table | table 176, cell 176 | same |
+| C3 caption wider, table `width: 50px` | table 176, **cell 176** | table 176, **cell 50** |
+| C4 `caption-side: bottom`, caption wider | table 176, **cell 176** | table 176, **cell 8.8** |
+| C5 caption `margin-left: 30px`, wider | table 206, cell 206 | table 206, cell 8.8 |
+| C6 breakable caption text | table 88 | same |
+| C7 caption `width: 300px` | table 300, cell 300 | table 300, cell 8.8 |
+
+**Both engines agree on every table width.** The caption's contribution is
+its **min-content** width (C6: breakable text contributes one run, 88, not
+the full 264), it **includes the caption's own margins** (C5: 176 + 30), a
+specified caption width participates normally (C7), and `caption-side` does
+not affect it (C4).
+
+**They diverge on whether the grid stretches to it.** Chrome widens the
+table grid and its columns to the caption-imposed width; Firefox leaves the
+grid at its own content width and lets only the wrapper be caption-wide. C3
+is the sharpest: with `width: 50px` on the table, Firefox keeps a 50px grid
+while Chrome discards the authored width and produces 176.
+
+**This changes what the existing seam should do, so it is deliberately not
+implemented yet.** `caption_min` currently feeds
+`used_table_inline_size` in `size_automatic_table_inline`, where it is maxed
+against the constrained table size. That encodes **Chrome's** behavior,
+including C3's override of an authored `width`, and it was wired in before
+this was measured. Under CSS 2.1 section 17.4 the captions' containing block
+is the wrapper, and the wrapper is exactly the box K4e introduces, so a
+caption plausibly belongs to wrapper sizing rather than to grid sizing at
+all.
+
+Deciding that is K4e's work and it needs the wrapper to exist first.
+Measuring the caption now and feeding the existing seam would have silently
+committed to Chrome's reading of C3 without anyone choosing it, which is why
+the 17 deferrals stay for the moment. They are a named gap, not a defect.
+
 ### Stop rules
 
 - Stop if captions are inserted as grid rows.
