@@ -43,18 +43,18 @@ nex-protocol = { workspace = true }
 # enable, since WebFinger is HTTP and errand does not speak HTTP.
 gopher-protocol = { workspace = true }
 finger-protocol = { workspace = true }
+# Gemini, the gemtext grammar, TOFU pinning, and titan all followed on
+# 2026-08-03: one spec, one crate. `parse::gemtext` re-exports its grammar and
+# the TOFU types are re-exported at errand's root, so hosts keep their paths.
+gemini-protocol = { workspace = true }
 # Misfin send delegates to the misfin crate's client, on the same ring
 # provider this crate builds rustls with (no C toolchain).
 misfin = { version = "0.0.4", default-features = false, features = ["client", "ring"] }
 tokio = { version = "1", default-features = false, features = ["net", "io-util", "time"] }
-# TLS for gemini: rustls 0.23 on the ring provider, with a trust-on-first-use
-# verifier (capsules are conventionally self-signed). aws-lc-rs is left off so the
-# crate builds without a C toolchain.
+# rustls stays for misfin alone: its `ClientIdentity` is typed in rustls's
+# pki_types. Gemini's TLS and the TOFU verifier moved to gemini-protocol.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
-# SHA-256 of leaf certificates for TOFU pinning. Already in the cone (rustls's
-# ring provider); declared directly because `tofu` now uses it.
-ring = "0.17"
 # RSS / Atom feed parsing (`parse::feed`). A light pure-Rust XML reader; kept an
 # unconditional dep (the cross-repo feature wall made a `parse-feed` gate
 # impractical, and quick-xml is small relative to the rustls/tokio cone).

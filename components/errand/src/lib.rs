@@ -32,8 +32,6 @@ mod misfin;
 mod nex;
 mod spartan;
 mod titan;
-mod tls;
-mod tofu;
 
 /// Smolweb document parsers: model-free, host-agnostic per-format parsers that turn
 /// a protocol's bytes into a small AST. Separate from the transport above; a consumer
@@ -46,7 +44,10 @@ pub mod parse;
 pub use gemini::exchange as gemini_exchange;
 pub use misfin::{ClientIdentity, MISFIN_PORT, send as misfin_send};
 pub use titan::upload as titan_upload;
-pub use tofu::{InMemoryTofu, PermissiveTofu, TofuStore, set_trust_store};
+// The TOFU store moved to gemini-protocol with the TLS it guards, and is
+// re-exported here so hosts that install one (genet-documents, mere's fetch)
+// keep the same `errand::` path and the same types.
+pub use gemini_protocol::{InMemoryTofu, PermissiveTofu, TofuStore, set_trust_store};
 pub use url::Url;
 
 /// A small-web scheme `errand` can route.
