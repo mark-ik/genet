@@ -493,6 +493,35 @@ wrapper. That is a rule to implement, not a behavior to discover.
 **One more, for K4d5's exported baselines.** CSS Tables 3: the table-root
 box, not the wrapper, is used for baseline alignment of an inline-table.
 
+#### The wrapper is sized from the grid, not from its containing block
+
+CSS Tables 3 section 3.1: a table `width` that computes to `auto` behaves as
+if `fit-content` were specified, so the grid shrink-wraps its content.
+Section 2.2.1 then makes the wrapper's width the grid's border-edge width.
+
+**So a `block` wrapper is not an ordinary block.** An ordinary block with
+`width: auto` fills its containing block; this one takes its width from its
+child. That is what the `float: left` in `to_taffy_style` has been
+approximating, and it means K4e2 cannot simply drop the hack and mark the
+wrapper `Display::Block` - it has to size the wrapper from the grid, which
+in this tree is intrinsic sizing rather than block auto-width.
+
+#### Two things the standard does not settle
+
+Both have conventional answers and neither blocks K4e1, but they are
+assumptions rather than citations and should be labeled as such wherever
+they land:
+
+- **The grid's containing block inside the wrapper.** Neither spec defines it
+  explicitly. The percentage rule above routes around the question for the
+  table's own `width` and `height`, which are the cases that would otherwise
+  be circular.
+- **What the anonymous wrapper inherits.** CSS 2.1's general rule gives an
+  anonymous box its parent's inherited values, which here is the table
+  element's *parent*, while the migrated properties come from the table
+  element's own computed values. That combination is consistent but is not
+  stated anywhere.
+
 #### It also explains the caption divergence
 
 CSS Tables 3 section 2.2.1 says the wrapper's width *is* the border-edge
