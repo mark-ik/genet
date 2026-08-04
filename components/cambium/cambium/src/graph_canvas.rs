@@ -37,6 +37,28 @@ pub const GRAPH_CANVAS_SWATCH_CSS: &str = r#"
     outline: 1px solid currentColor;
     outline-offset: 1px;
 }
+.graph-canvas-swatch-relation {
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    padding: 0;
+    touch-action: manipulation;
+}
+.graph-canvas-swatch-relation:focus-visible {
+    outline: 1px solid currentColor;
+    outline-offset: 1px;
+}
+.graph-canvas-swatch-relation.emphasized::after {
+    background-color: currentColor;
+    content: "";
+    height: 3px;
+    left: 0;
+    opacity: 0.72;
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 100%;
+}
 .graph-canvas-swatch-label {
     font-size: 10px;
     line-height: 1;
@@ -98,6 +120,23 @@ pub struct GraphCanvasEdge<Id> {
     pub to: Id,
 }
 
+/// One independently curatable relation cell in a graph-canvas Swatch.
+///
+/// `id` is owned by the consumer and must remain stable for the lifetime of
+/// the source relation. Unlike [`GraphCanvasEdge`], it deliberately does not
+/// collapse two relations that share endpoints. Visibility and emphasis are
+/// projection state: they do not change graph truth.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GraphCanvasRelation<Id> {
+    pub id: String,
+    pub from: Id,
+    pub to: Id,
+    pub kind: String,
+    pub label: String,
+    pub visible: bool,
+    pub emphasized: bool,
+}
+
 /// The bounded graph data, independent of view state and palette.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GraphCanvasSubgraph<Id, Kind> {
@@ -112,6 +151,9 @@ pub struct GraphCanvasSubgraph<Id, Kind> {
 pub struct GraphCanvasSwatch<Id, Kind> {
     pub leaf_key: u64,
     pub graph: GraphCanvasSubgraph<Id, Kind>,
+    /// Relation cells rendered in preference to the legacy endpoint-only
+    /// [`GraphCanvasSubgraph::edges`] when nonempty.
+    pub relations: Vec<GraphCanvasRelation<Id>>,
     pub selected: Option<Id>,
     pub focus: Option<Id>,
     pub hovered: Option<Id>,
@@ -144,6 +186,7 @@ impl<Id, Kind> GraphCanvasSwatch<Id, Kind> {
         Self {
             leaf_key,
             graph,
+            relations: Vec::new(),
             selected: None,
             focus: None,
             hovered: None,
@@ -188,6 +231,14 @@ impl<Id, Kind> GraphCanvasSwatch<Id, Kind> {
         self.show_labels = on;
         self
     }
+
+    /// Supply identity-bearing relation cells. When present, these replace the
+    /// legacy endpoint-only edges in the retained paint projection.
+    #[must_use]
+    pub fn with_relations(mut self, relations: Vec<GraphCanvasRelation<Id>>) -> Self {
+        self.relations = relations;
+        self
+    }
 }
 
 impl<Id: PartialEq, Kind> GraphCanvasSwatch<Id, Kind> {
@@ -214,16 +265,27 @@ impl<Id: PartialEq, Kind> GraphCanvasSwatch<Id, Kind> {
                 color: color_for_kind(&node.kind),
             })
             .collect();
-        let edges = self
-            .graph
-            .edges
-            .iter()
-            .filter_map(|edge| {
-                let from = self.node_index(Some(&edge.from))?;
-                let to = self.node_index(Some(&edge.to))?;
-                Some((from, to))
-            })
-            .collect();
+        let edges = if self.relations.is_empty() {
+            self.graph
+                .edges
+                .iter()
+                .filter_map(|edge| {
+                    let from = self.node_index(Some(&edge.from))?;
+                    let to = self.node_index(Some(&edge.to))?;
+                    Some((from, to))
+                })
+                .collect()
+        } else {
+            self.relations
+                .iter()
+                .filter(|relation| relation.visible)
+                .filter_map(|relation| {
+                    let from = self.node_index(Some(&relation.from))?;
+                    let to = self.node_index(Some(&relation.to))?;
+                    Some((from, to))
+                })
+                .collect()
+        };
         let mut leaf = GraphCanvas::new(
             nodes,
             edges,
@@ -255,6 +317,38 @@ impl<Id: PartialEq, Kind> GraphCanvasSwatch<Id, Kind> {
             .nodes
             .iter()
             .map(|node| (&node.id, self.viewport.project(node.position, size, inset)))
+            .collect()
+    }
+
+    /// Visible relation cells with their projected route endpoints. This is
+    /// shared by retained paint and native relation targets, so a relation is
+    /// neither hittable when hidden nor represented at a stale position.
+    pub fn projected_relations(&self) -> Vec<(&GraphCanvasRelation<Id>, (f32, f32), (f32, f32))> {
+        let size = Size {
+            width: self.width as f32,
+            height: self.height as f32,
+        };
+        let inset = self.node_radius + self.edge_width;
+        self.relations
+            .iter()
+            .filter(|relation| relation.visible)
+            .filter_map(|relation| {
+                let from = self
+                    .graph
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == relation.from)?;
+                let to = self
+                    .graph
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == relation.to)?;
+                Some((
+                    relation,
+                    self.viewport.project(from.position, size, inset),
+                    self.viewport.project(to.position, size, inset),
+                ))
+            })
             .collect()
     }
 
@@ -320,12 +414,14 @@ where
     Hover: Fn(&mut State, Option<Id>) + Clone + 'static,
     Expand: Fn(&mut State) + Clone + 'static,
 {
-    graph_canvas_swatch_with_focus_and_drag(
+    graph_canvas_swatch_with_focus_and_drag_and_relations(
         swatch,
         on_node_click,
         on_node_hover,
         |_state: &mut State, _id: Option<Id>| {},
         |_state: &mut State, _event: GraphCanvasNodeDrag<Id>| {},
+        |_state: &mut State, _id: String| {},
+        |_state: &mut State, _id: Option<String>| {},
         on_expand,
     )
 }
@@ -350,12 +446,14 @@ where
     Drag: Fn(&mut State, GraphCanvasNodeDrag<Id>) + Clone + 'static,
     Expand: Fn(&mut State) + Clone + 'static,
 {
-    graph_canvas_swatch_with_focus_and_drag(
+    graph_canvas_swatch_with_focus_and_drag_and_relations(
         swatch,
         on_node_click,
         on_node_hover,
         |_state: &mut State, _id: Option<Id>| {},
         on_node_drag,
+        |_state: &mut State, _id: String| {},
+        |_state: &mut State, _id: Option<String>| {},
         on_expand,
     )
 }
@@ -381,12 +479,60 @@ where
     Focus: Fn(&mut State, Option<Id>) + Clone + 'static,
     Expand: Fn(&mut State) + Clone + 'static,
 {
-    graph_canvas_swatch_with_focus_and_drag(
+    graph_canvas_swatch_with_focus_and_drag_and_relations(
         swatch,
         on_node_click,
         on_node_hover,
         on_node_focus,
         |_state: &mut State, _event: GraphCanvasNodeDrag<Id>| {},
+        |_state: &mut State, _id: String| {},
+        |_state: &mut State, _id: Option<String>| {},
+        on_expand,
+    )
+}
+
+/// Render a graph-canvas Swatch with captured node motion and independently
+/// targetable relation cells. Relation callbacks receive a consumer-owned
+/// stable relation id, so equal endpoint pairs remain separate cells.
+pub fn graph_canvas_swatch_with_drag_and_relations<
+    State,
+    AppAction,
+    Id,
+    Kind,
+    Click,
+    Hover,
+    Drag,
+    RelationClick,
+    RelationHover,
+    Expand,
+>(
+    swatch: &GraphCanvasSwatch<Id, Kind>,
+    on_node_click: Click,
+    on_node_hover: Hover,
+    on_node_drag: Drag,
+    on_relation_click: RelationClick,
+    on_relation_hover: RelationHover,
+    on_expand: Expand,
+) -> impl View<State, AppAction, GenetCtx, Element = GenetElement>
+where
+    State: 'static,
+    AppAction: 'static,
+    Id: Clone + PartialEq + 'static,
+    Click: Fn(&mut State, Id) + Clone + 'static,
+    Hover: Fn(&mut State, Option<Id>) + Clone + 'static,
+    Drag: Fn(&mut State, GraphCanvasNodeDrag<Id>) + Clone + 'static,
+    RelationClick: Fn(&mut State, String) + Clone + 'static,
+    RelationHover: Fn(&mut State, Option<String>) + Clone + 'static,
+    Expand: Fn(&mut State) + Clone + 'static,
+{
+    graph_canvas_swatch_with_focus_and_drag_and_relations(
+        swatch,
+        on_node_click,
+        on_node_hover,
+        |_state: &mut State, _id: Option<Id>| {},
+        on_node_drag,
+        on_relation_click,
+        on_relation_hover,
         on_expand,
     )
 }
@@ -422,6 +568,54 @@ where
     Hover: Fn(&mut State, Option<Id>) + Clone + 'static,
     Focus: Fn(&mut State, Option<Id>) + Clone + 'static,
     Drag: Fn(&mut State, GraphCanvasNodeDrag<Id>) + Clone + 'static,
+    Expand: Fn(&mut State) + Clone + 'static,
+{
+    graph_canvas_swatch_with_focus_and_drag_and_relations(
+        swatch,
+        on_node_click,
+        on_node_hover,
+        on_node_focus,
+        on_node_drag,
+        |_state: &mut State, _id: String| {},
+        |_state: &mut State, _id: Option<String>| {},
+        on_expand,
+    )
+}
+
+/// The full graph-canvas interaction surface, including independently
+/// targetable relation cells.
+pub fn graph_canvas_swatch_with_focus_and_drag_and_relations<
+    State,
+    AppAction,
+    Id,
+    Kind,
+    Click,
+    Hover,
+    Focus,
+    Drag,
+    RelationClick,
+    RelationHover,
+    Expand,
+>(
+    swatch: &GraphCanvasSwatch<Id, Kind>,
+    on_node_click: Click,
+    on_node_hover: Hover,
+    on_node_focus: Focus,
+    on_node_drag: Drag,
+    on_relation_click: RelationClick,
+    on_relation_hover: RelationHover,
+    on_expand: Expand,
+) -> impl View<State, AppAction, GenetCtx, Element = GenetElement>
+where
+    State: 'static,
+    AppAction: 'static,
+    Id: Clone + PartialEq + 'static,
+    Click: Fn(&mut State, Id) + Clone + 'static,
+    Hover: Fn(&mut State, Option<Id>) + Clone + 'static,
+    Focus: Fn(&mut State, Option<Id>) + Clone + 'static,
+    Drag: Fn(&mut State, GraphCanvasNodeDrag<Id>) + Clone + 'static,
+    RelationClick: Fn(&mut State, String) + Clone + 'static,
+    RelationHover: Fn(&mut State, Option<String>) + Clone + 'static,
     Expand: Fn(&mut State) + Clone + 'static,
 {
     let positions = swatch.projected_positions();
@@ -473,6 +667,52 @@ where
     } else {
         Vec::new()
     };
+    let relation_targets: Vec<_> = swatch
+        .projected_relations()
+        .into_iter()
+        .map(|(relation, (from_x, from_y), (to_x, to_y))| {
+            let dx = to_x - from_x;
+            let dy = to_y - from_y;
+            let length = (dx * dx + dy * dy).sqrt().max(1.0);
+            let midpoint_x = (from_x + to_x) / 2.0;
+            let midpoint_y = (from_y + to_y) / 2.0;
+            let angle = dy.atan2(dx).to_degrees();
+            let mut class = String::from("graph-canvas-swatch-relation");
+            if relation.emphasized {
+                class.push_str(" emphasized");
+            }
+            let mut target = el::<_, State, AppAction>("button", ())
+                .attr("class", class)
+                .attr("type", "button")
+                .attr("aria-label", format!("{}: {}", relation.kind, relation.label))
+                .attr("data-relation-id", relation.id.clone())
+                .attr(
+                    "style",
+                    format!(
+                        "position:absolute;left:{}px;top:{}px;width:{length}px;height:44px;transform:rotate({angle}deg);",
+                        midpoint_x - length / 2.0,
+                        midpoint_y - 22.0,
+                    ),
+                );
+            if relation.emphasized {
+                target = target.attr("aria-current", "true");
+            }
+            let click = on_relation_click.clone();
+            let click_id = relation.id.clone();
+            let hover = on_relation_hover.clone();
+            let hover_id = relation.id.clone();
+            on_hover(
+                on_click(target, move |state: &mut State, _: PointerClick| {
+                    click(state, click_id.clone());
+                }),
+                move |state: &mut State, event: HoverEvent| match event.phase {
+                    HoverPhase::Enter => hover(state, Some(hover_id.clone())),
+                    HoverPhase::Leave => hover(state, None),
+                    HoverPhase::Move => {}
+                },
+            )
+        })
+        .collect();
     let targets: Vec<_> = swatch
         .graph
         .nodes
@@ -576,13 +816,24 @@ where
         (
             custom_leaf::<State, AppAction>(swatch.leaf_key, swatch.width, swatch.height)
                 .attr("aria-hidden", "true"),
-            el("div", labels).attr("class", "graph-canvas-swatch-labels").attr(
-                "style",
-                format!(
-                    "position:absolute;left:0;top:0;width:{}px;height:{}px;",
-                    swatch.width, swatch.height
+            el("div", labels)
+                .attr("class", "graph-canvas-swatch-labels")
+                .attr(
+                    "style",
+                    format!(
+                        "position:absolute;left:0;top:0;width:{}px;height:{}px;",
+                        swatch.width, swatch.height
+                    ),
                 ),
-            ),
+            el("div", relation_targets)
+                .attr("class", "graph-canvas-swatch-relation-targets")
+                .attr(
+                    "style",
+                    format!(
+                        "position:absolute;left:0;top:0;width:{}px;height:{}px;",
+                        swatch.width, swatch.height
+                    ),
+                ),
             el("div", targets)
                 .attr("class", "graph-canvas-swatch-targets")
                 .attr(
@@ -622,6 +873,8 @@ mod tests {
         hovered: Option<u8>,
         focused: Option<u8>,
         dragged: Vec<GraphCanvasNodeDrag<u8>>,
+        relation_clicked: Vec<String>,
+        relation_hovered: Option<String>,
         expanded: bool,
     }
 
@@ -816,6 +1069,84 @@ mod tests {
             |state: &mut State, event| state.dragged.push(event),
             |state: &mut State| state.expanded = true,
         ))
+    }
+
+    fn relation_view(state: &State) -> TestView {
+        let swatch = model(state.hovered, state.focused).with_relations(vec![
+            GraphCanvasRelation {
+                id: "cites".into(),
+                from: 1,
+                to: 2,
+                kind: "Citation".into(),
+                label: "First node cites Second node".into(),
+                visible: true,
+                emphasized: true,
+            },
+            GraphCanvasRelation {
+                id: "quotes".into(),
+                from: 1,
+                to: 2,
+                kind: "Quotation".into(),
+                label: "First node quotes Second node".into(),
+                visible: true,
+                emphasized: false,
+            },
+            GraphCanvasRelation {
+                id: "hidden".into(),
+                from: 1,
+                to: 2,
+                kind: "Hidden".into(),
+                label: "This relation is hidden".into(),
+                visible: false,
+                emphasized: false,
+            },
+        ]);
+        Box::new(graph_canvas_swatch_with_drag_and_relations(
+            &swatch,
+            |state: &mut State, id| state.clicked.push(id),
+            |state: &mut State, id| state.hovered = id,
+            |state: &mut State, event| state.dragged.push(event),
+            |state: &mut State, id| state.relation_clicked.push(id),
+            |state: &mut State, id| state.relation_hovered = id,
+            |state: &mut State| state.expanded = true,
+        ))
+    }
+
+    #[test]
+    fn relation_cells_keep_parallel_endpoints_independent_and_hideable() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner =
+            GenetAppRunner::<_, _, _, ()>::new(dom.clone(), relation_view, State::default());
+        let root = runner.root();
+        let cites = find_attr(&dom.borrow(), root, "data-relation-id", "cites")
+            .expect("citation relation target");
+        let quotes = find_attr(&dom.borrow(), root, "data-relation-id", "quotes")
+            .expect("quotation relation target");
+        assert_ne!(cites, quotes, "parallel cells must get separate targets");
+        assert!(
+            find_attr(&dom.borrow(), root, "data-relation-id", "hidden").is_none(),
+            "hidden cells must not remain hittable"
+        );
+        assert_eq!(attr(&dom.borrow(), cites, "aria-current"), Some("true"));
+
+        runner.dispatch_hover(
+            quotes,
+            HoverEvent::new(HoverPhase::Enter, (2.0, 2.0), (20.0, 20.0)),
+        );
+        runner.dispatch_click(cites, PointerClick::at((2.0, 2.0)));
+        assert_eq!(runner.state().relation_hovered.as_deref(), Some("quotes"));
+        assert_eq!(runner.state().relation_clicked, ["cites"]);
+
+        let swatch = model(None, None).with_relations(vec![GraphCanvasRelation {
+            id: "hidden".into(),
+            from: 1,
+            to: 2,
+            kind: "Hidden".into(),
+            label: "This relation is hidden".into(),
+            visible: false,
+            emphasized: false,
+        }]);
+        assert!(swatch.projected_relations().is_empty());
     }
 
     #[test]

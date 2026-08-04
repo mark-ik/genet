@@ -441,6 +441,83 @@ table grid owns tracks and cell geometry.
   table margins, inline-table, floats around tables, writing-mode captions,
   and table CSSOM geometry cases.
 
+### What the standard says - 2026-08-04
+
+Read after the 2026-08-03 revert, because the property split is specified
+exactly and the revert was rediscovering it the expensive way.
+
+**CSS 2.1 section 17.4** gives the list verbatim:
+
+> The computed values of properties 'position', 'float', 'margin-\*', 'top',
+> 'right', 'bottom', and 'left' on the table element are used on the table
+> wrapper box and not the table box.
+
+and the complement:
+
+> all other values of non-inheritable properties are used on the table box
+> and not the table wrapper box.
+
+So `width`, `height`, `border`, `padding`, and `background` stay on the grid.
+That is the whole of K4e1's migration, and both revert mechanisms are on the
+list: `position` for the four `absolute-tables-*` cases, and the wrapper
+being the flow participant for the two flex-item cases.
+
+**CSS Tables 3 section 3.6.1 extends the list** with the properties that
+establish a containing block or a stacking context: `overflow`, `opacity`,
+`filter`, `clip`, `clip-path`, `isolation`, `mask-*`, `mix-blend-mode`,
+`transform-*`, and `perspective`. It also names the mechanism, which is not
+"zero them on the grid":
+
+> Where these values aren't applied to the table grid/wrapper, unset values
+> are used instead.
+
+The grid takes the *initial or inherited* value, so the migration is a
+per-property reset rather than a hand-written zero.
+
+**The wrapper's display is specified, and it replaces the shrink-to-fit
+hack.** CSS Tables 3: the wrapper is `inline-block` for an `inline-table`
+and `block` for a `table`, and it establishes a block formatting context.
+The `float: left` in `to_taffy_style` is standing in for exactly that
+`inline-block`, which is why K4e2 can delete it rather than reproduce it.
+
+**Percentages are already specified for the abspos case.** CSS 2.1:
+
+> Percentages on 'width' and 'height' on the table are relative to the table
+> wrapper box's containing block, not the table wrapper box itself.
+
+`absolute-tables-012` is `position: absolute; width: 50%`. With `position`
+on the wrapper the wrapper is the positioned box, and the grid's `50%`
+resolves against the wrapper's containing block rather than against the
+wrapper. That is a rule to implement, not a behavior to discover.
+
+**One more, for K4d5's exported baselines.** CSS Tables 3: the table-root
+box, not the wrapper, is used for baseline alignment of an inline-table.
+
+#### It also explains the caption divergence
+
+CSS Tables 3 section 2.2.1 says the wrapper's width *is* the border-edge
+width of the grid inside it. A caption wider than the grid cannot satisfy
+that rule and be laid out at its min-content width at the same time, and the
+two engines break the tie in opposite directions. Measured with
+`which-box.html` in the K4e1 proof directory, where the **row** discriminates
+the grid from the wrapper because a row spans the grid while a cell spans one
+column:
+
+| | Chrome 150 | Firefox 153 |
+|---|---|---|
+| table element rect | 176 | 176 |
+| row | **176** | **8.8** |
+| row, table with a 2px border | 172 | 8.8 |
+
+Chrome keeps the spec's rule and grows the **grid** to the caption. Firefox
+keeps the grid at its content width and grows the **wrapper**, breaking that
+rule. Both give the table element the same outer box, so the difference is
+invisible to `getBoundingClientRect` on the table and shows up only inside.
+
+That confirms the caption matrix's reading rather than overturning it, and
+it upgrades the K4e3 decision from picking an engine to picking which rule
+to keep.
+
 ### Sub-gates
 
 K4e lands serially like the rest. The order is forced by what each step
