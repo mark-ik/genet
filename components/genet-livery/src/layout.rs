@@ -1465,7 +1465,7 @@ where
                 // CSS 2.1 section 17.4 assigns to it; the grid sees them unset.
                 let computed =
                     if self.boxes[box_id].display.internal_table == Some(InternalTableRole::Grid) {
-                        grid_style(&computed)
+                        grid_style(&computed, containing_size)
                     } else {
                         computed
                     };
@@ -1571,6 +1571,12 @@ where
                         self.build_children(box_id, &computed, parent_font_size, containing_size)?;
                     let mut taffy_style = to_taffy_style(&computed, font_size);
                     shrink_wrapper_to_grid(self.boxes, box_id, &mut taffy_style);
+                    if let Some(width) = wrapper_width_from_grid(&to_taffy_style(
+                        &grid_style(&table, containing_size),
+                        font_size,
+                    )) {
+                        taffy_style.size.width = width;
+                    }
                     let block_style = to_block_style(self.boxes, box_id, &computed, font_size);
                     let node = self.tree.new_with_children_and_block_style(
                         algorithm_kind(&self.boxes[box_id], children.is_empty()),
@@ -2176,7 +2182,7 @@ where
                 // CSS 2.1 section 17.4 assigns to it; the grid sees them unset.
                 let computed =
                     if self.boxes[box_id].display.internal_table == Some(InternalTableRole::Grid) {
-                        grid_style(&computed)
+                        grid_style(&computed, containing_size)
                     } else {
                         computed
                     };
@@ -2374,6 +2380,12 @@ where
                         .collect::<Result<Vec<_>, _>>()?;
                     let mut taffy_style = to_taffy_style(&computed, font_size);
                     shrink_wrapper_to_grid(self.boxes, box_id, &mut taffy_style);
+                    if let Some(width) = wrapper_width_from_grid(&to_taffy_style(
+                        &grid_style(&table, containing_size),
+                        font_size,
+                    )) {
+                        taffy_style.size.width = width;
+                    }
                     let block_style = to_block_style(self.boxes, box_id, &computed, font_size);
                     let node = self.tree.new_with_children_and_block_style(
                         algorithm_kind(&self.boxes[box_id], children.is_empty()),
@@ -2836,6 +2848,33 @@ where
     {
         style.float = TaffyFloat::Left;
     }
+}
+
+/// The wrapper's width under CSS Tables 3 section 2.2.1: "the width of the
+/// table wrapper box is the border-edge width of the table grid box inside
+/// it."
+///
+/// A definite table width makes that computable before layout, which is what
+/// stops a wrapper from stretching when it is a flex or grid item - it is
+/// never `auto` in the sense stretching means, because the grid decides it.
+/// An `auto` table width, or a percentage padding with no basis yet, leaves
+/// the width to intrinsic sizing through the wrapper; that is K4e2, and until
+/// it lands such a wrapper shrink-wraps through `shrink_wrapper_to_grid`.
+fn wrapper_width_from_grid(grid: &Style) -> Option<Dimension> {
+    let width = grid.size.width.into_option()?;
+    if grid.box_sizing == BoxSizing::BorderBox {
+        return Some(Dimension::length(width));
+    }
+    let outside = [
+        grid.padding.left,
+        grid.padding.right,
+        grid.border.left,
+        grid.border.right,
+    ]
+    .into_iter()
+    .map(|edge| Dimension::from(edge).into_option())
+    .sum::<Option<f32>>()?;
+    Some(Dimension::length(width + outside))
 }
 
 fn anonymous_taffy_style<Id>(css_box: &CssBox<Id>) -> Style {
@@ -4449,6 +4488,116 @@ mod tests {
         );
     }
 
+    /// Lay out one document and return the physical rectangles of the table
+    /// wrapper box and the table grid box, in that order.
+    fn table_wrapper_and_grid(html: &str, css: &str) -> (PhysicalRect, PhysicalRect) {
+        let dom = StaticDocument::parse(html);
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&["html, body, div { margin: 0; padding: 0; border: 0; }", css]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let of_role = |role: InternalTableRole| {
+            layout
+                .boxes()
+                .iter()
+                .find(|(_, css_box)| css_box.display.internal_table == Some(role))
+                .and_then(|(box_id, _)| layout.fragments().fragments_for_box(box_id).next())
+                .unwrap_or_else(|| panic!("no fragment for {role:?}"))
+                .physical_rect()
+        };
+        (
+            of_role(InternalTableRole::Wrapper),
+            of_role(InternalTableRole::Grid),
+        )
+    }
+
+    /// K4e1: the wrapper and the grid are two boxes that split one element.
+    ///
+    /// CSS 2.1 section 17.4 uses `margin-*` on the wrapper and leaves `width`,
+    /// `border`, and `padding` on the grid. Both are observable at once: the
+    /// margin has to move the wrapper, and the grid's own border box has to
+    /// still contain the border and padding the wrapper does not have. CSS
+    /// Tables 3 section 2.2.1 then makes the two the same width, because the
+    /// wrapper's width *is* the grid's border-edge width.
+    #[test]
+    fn k4e1_the_wrapper_takes_the_margin_and_the_grid_keeps_its_own_box() {
+        let (wrapper, grid) = table_wrapper_and_grid(
+            "<div id=host><table><tr><td></td></tr></table></div>",
+            "#host { width: 300px; }\
+             table { display: table; box-sizing: content-box; width: 100px;\
+                     margin-left: 20px; border: 5px solid; padding: 3px;\
+                     border-spacing: 0; }\
+             tr { display: table-row; } td { display: table-cell; padding: 0; }",
+        );
+
+        // The margin is the wrapper's, so both boxes start past it.
+        assert!((wrapper.x - 20.0).abs() < 0.5, "wrapper: {wrapper:?}");
+        assert!((grid.x - 20.0).abs() < 0.5, "grid: {grid:?}");
+        // The grid's border edge is 100 of content plus its own padding and
+        // border, and the wrapper is exactly that wide - no wider, which is
+        // what would happen if it had kept the border and padding too.
+        assert!((grid.width - 116.0).abs() < 0.5, "grid: {grid:?}");
+        assert!(
+            (wrapper.width - grid.width).abs() < 0.5,
+            "the wrapper is the grid's border-edge width: {wrapper:?} {grid:?}"
+        );
+    }
+
+    /// K4e1: `position` is the wrapper's, and a percentage size skips it.
+    ///
+    /// CSS 2.1 section 17.4 again: "Percentages on 'width' and 'height' on the
+    /// table are relative to the table wrapper box's containing block, not the
+    /// table wrapper box itself." Without that rule the grid's `50%` resolves
+    /// against a wrapper that is itself waiting on the grid, and the pair
+    /// collapses to zero - which is what `absolute-tables-012` measures.
+    #[test]
+    fn k4e1_a_percentage_table_skips_the_wrapper_it_would_otherwise_wait_on() {
+        let (wrapper, grid) = table_wrapper_and_grid(
+            "<div id=host><table></table></div>",
+            "#host { position: relative; width: 200px; }\
+             table { display: table; position: absolute; width: 50%; height: 100px;\
+                     table-layout: fixed; border-spacing: 0; }",
+        );
+
+        for (name, rect) in [("wrapper", wrapper), ("grid", grid)] {
+            assert!((rect.width - 100.0).abs() < 0.5, "{name}: {rect:?}");
+            assert!((rect.height - 100.0).abs() < 0.5, "{name}: {rect:?}");
+        }
+    }
+
+    /// K4e1: a table flex item is the wrapper, and it does not stretch.
+    ///
+    /// Inserting the wrapper makes it, not the grid, the flex item. CSS
+    /// Tables 3 section 2.2.1 keeps its width the grid's, so a column flex
+    /// container's default `align-items: stretch` has nothing to stretch -
+    /// the width is not `auto`. `table-as-item-cell-percentage-002` fails the
+    /// moment the wrapper widens to the container instead.
+    #[test]
+    fn k4e1_a_table_flex_item_is_the_wrapper_and_keeps_the_grids_width() {
+        let (wrapper, grid) = table_wrapper_and_grid(
+            "<div id=host><table><tr><td></td></tr></table></div>",
+            "#host { display: flex; flex-direction: column; width: 300px; }\
+             table { display: table; width: 100px; height: 100px; border-spacing: 0; }\
+             tr { display: table-row; } td { display: table-cell; padding: 0; }",
+        );
+
+        assert!((wrapper.width - 100.0).abs() < 0.5, "wrapper: {wrapper:?}");
+        assert!((grid.width - 100.0).abs() < 0.5, "grid: {grid:?}");
+    }
+
     /// K4d6: a table row now has a fragment of its own.
     ///
     /// The Grid bridge flattened rows, row groups, and columns away before
@@ -4456,61 +4605,6 @@ mod tests {
     /// `<tr>` background could not render at all. Buckram emits the whole
     /// structural subtree from the track model, so each one gets its exact
     /// rectangle whether or not a cell happens to cover it.
-    #[test]
-    fn k4e1_probe() {
-        for (name, html, css) in [
-            (
-                "flex-item",
-                "<div class=flex><table><thead><tr><td></td></tr></thead>\
-                 <tbody><tr><td></td></tr></tbody></table></div>",
-                ".flex { display: flex; flex-direction: column; }\
-                 table { display: table; border-spacing: 0; width: 100px; height: 100px;\
-                         flex: none; background: green; }\
-                 thead { display: table-header-group; } tbody { display: table-row-group; }\
-                 tr { display: table-row; height: 50px; }\
-                 td { display: table-cell; height: 100%; padding: 0; }",
-            ),
-            (
-                "abspos",
-                "<div class=rel><table></table></div>",
-                ".rel { position: relative; width: 200px; }\
-                 table { display: table; position: absolute; width: 50%; height: 100px;\
-                         table-layout: fixed; background: green; }",
-            ),
-        ] {
-            let dom = StaticDocument::parse(html);
-            let styles = resolve_styles(
-                &dom,
-                &StyleSet::cambium(&["html, body, div { margin: 0; padding: 0; border: 0; }", css]),
-                &Device::screen(320.0, 240.0),
-                &InteractionStates::default(),
-            );
-            let mut text = TextSystem::new();
-            let (_, layout) = layout_with_text_system(
-                &dom,
-                &styles,
-                320.0,
-                240.0,
-                ViewportSizes::uniform(320.0, 240.0),
-                &mut text,
-                &HashMap::new(),
-            )
-            .expect("layout");
-            println!("--- {name} ---");
-            for (box_id, css_box) in layout.boxes().iter() {
-                let rect = layout
-                    .fragments()
-                    .fragments_for_box(box_id)
-                    .next()
-                    .map(|fragment| fragment.physical_rect());
-                println!(
-                    "{box_id:?} {:?} table={:?} {:?}",
-                    css_box.display.outside, css_box.display.internal_table, rect
-                );
-            }
-        }
-    }
-
     #[test]
     fn k4d6_rows_groups_and_columns_have_their_own_fragments() {
         let dom = StaticDocument::parse(

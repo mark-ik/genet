@@ -8,7 +8,10 @@
 //! grid/wrapper, unset values are used instead." So neither box is written by
 //! hand; each is the element's own style with one list copied across.
 
-use livery::{ComputedValues, PropertyId, values::Display as CssDisplay};
+use livery::{
+    ComputedValues, PropertyId,
+    values::{Display as CssDisplay, Length, LengthPercentage, Size},
+};
 
 /// Properties used on the table wrapper box and not on the table grid box.
 ///
@@ -72,7 +75,17 @@ pub(crate) fn wrapper_style(table: &ComputedValues) -> ComputedValues {
 /// Width, height, borders, padding, and background stay, which is CSS 2.1
 /// section 17.4's complement: "all other values of non-inheritable properties
 /// are used on the table box and not the table wrapper box".
-pub(crate) fn grid_style(table: &ComputedValues) -> ComputedValues {
+///
+/// `containing` is the *wrapper's* containing block, which the same section
+/// makes the basis for a percentage width or height on the table: "Percentages
+/// on 'width' and 'height' on the table are relative to the table wrapper
+/// box's containing block, not the table wrapper box itself." Resolving them
+/// here rather than leaving them to the layout engine is what keeps that rule
+/// out of a loop, because the wrapper is itself sized from the grid.
+pub(crate) fn grid_style(
+    table: &ComputedValues,
+    containing: (Option<f32>, Option<f32>),
+) -> ComputedValues {
     // Every migrated property is non-inheritable, so `unset` is the initial
     // value and one default style supplies all of them.
     let unset = ComputedValues::default();
@@ -80,15 +93,23 @@ pub(crate) fn grid_style(table: &ComputedValues) -> ComputedValues {
     for property in WRAPPER_PROPERTIES {
         style.copy_property_from(*property, &unset);
     }
+    style.width = against_the_wrappers_containing_block(style.width, containing.0);
+    style.height = against_the_wrappers_containing_block(style.height, containing.1);
     style
+}
+
+fn against_the_wrappers_containing_block(size: Size, basis: Option<f32>) -> Size {
+    match (size, basis) {
+        (Size::Value(LengthPercentage::Percentage(fraction)), Some(basis)) => {
+            Size::Value(LengthPercentage::Length(Length::px(fraction * basis)))
+        },
+        (size, _) => size,
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use livery::values::{
-        Float as CssFloat, Inset, Length, LengthPercentage, Margin, Padding,
-        Position as CssPosition, Size,
-    };
+    use livery::values::{Float as CssFloat, Inset, Margin, Padding, Position as CssPosition};
 
     use super::*;
 
@@ -120,7 +141,7 @@ mod tests {
     #[test]
     fn the_grid_sees_those_properties_unset_rather_than_zeroed() {
         let unset = ComputedValues::default();
-        let grid = grid_style(&table());
+        let grid = grid_style(&table(), (None, None));
         assert_eq!(grid.position, unset.position);
         assert_eq!(grid.float, unset.float);
         assert_eq!(grid.margin_top, unset.margin_top);
@@ -134,12 +155,30 @@ mod tests {
         let mut source = table();
         source.width = Size::Value(px(120.0));
         source.padding_top = Padding(px(5.0));
-        let grid = grid_style(&source);
+        let grid = grid_style(&source, (None, None));
         let wrapper = wrapper_style(&source);
         assert_eq!(grid.width, source.width);
         assert_eq!(grid.padding_top, source.padding_top);
         assert_eq!(wrapper.width, ComputedValues::default().width);
         assert_eq!(wrapper.padding_top, ComputedValues::default().padding_top);
+    }
+
+    #[test]
+    fn a_percentage_table_width_resolves_against_the_wrappers_containing_block() {
+        let mut source = table();
+        source.width = Size::Value(LengthPercentage::Percentage(0.5));
+        source.height = Size::Value(LengthPercentage::Percentage(0.25));
+        let grid = grid_style(&source, (Some(200.0), Some(80.0)));
+        assert_eq!(grid.width, Size::Value(px(100.0)));
+        assert_eq!(grid.height, Size::Value(px(20.0)));
+    }
+
+    #[test]
+    fn a_percentage_survives_an_indefinite_containing_block() {
+        let mut source = table();
+        source.width = Size::Value(LengthPercentage::Percentage(0.5));
+        let grid = grid_style(&source, (None, None));
+        assert_eq!(grid.width, source.width);
     }
 
     #[test]
@@ -149,6 +188,9 @@ mod tests {
             ..ComputedValues::default()
         };
         assert_eq!(wrapper_style(&source).display, CssDisplay::InlineBlock);
-        assert_eq!(grid_style(&source).display, CssDisplay::InlineTable);
+        assert_eq!(
+            grid_style(&source, (None, None)).display,
+            CssDisplay::InlineTable
+        );
     }
 }
