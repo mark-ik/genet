@@ -20,6 +20,9 @@ mod table_sizing;
 // K4c5b: Buckram owns live table inline sizing on every route; deferred
 // tables fall back to grid inference under named counters.
 pub mod table_shadow;
+// K4e1: the table wrapper box carries the properties CSS 2.1 section 17.4
+// and CSS Tables 3 section 3.6.1 take off the grid.
+mod table_wrapper;
 mod text;
 
 pub use buckram::{

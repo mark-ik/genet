@@ -54,6 +54,7 @@ use crate::{
     table_shadow::{
         PendingTable, TableShadowLedger, buckram_table_columns, verify_assigned_columns,
     },
+    table_wrapper::{grid_style, wrapper_style},
     text::{InlineLayout, InlineRequest, TextFrame},
 };
 
@@ -1460,6 +1461,14 @@ where
                 if computed.display == CssDisplay::Table {
                     self.table_bridge_count += 1;
                 }
+                // K4e1: the wrapper above this grid took the properties
+                // CSS 2.1 section 17.4 assigns to it; the grid sees them unset.
+                let computed =
+                    if self.boxes[box_id].display.internal_table == Some(InternalTableRole::Grid) {
+                        grid_style(&computed)
+                    } else {
+                        computed
+                    };
                 debug_assert!(
                     self.pending_table_handoff.is_none(),
                     "a table handoff must be consumed by its own build_box call"
@@ -1546,17 +1555,31 @@ where
                     .map(Some)
             },
             BoxOrigin::Pseudo { .. } | BoxOrigin::Anonymous { .. } => {
-                if self.boxes[box_id].display.internal_table == Some(InternalTableRole::Wrapper) {
-                    let children = self.boxes[box_id].children();
-                    if let [grid] = children
-                        && self.boxes[*grid].display.internal_table == Some(InternalTableRole::Grid)
-                    {
-                        // K4a exposes the CSS wrapper in Buckram's tree, but
-                        // K4e owns its flow, captions, and float avoidance.
-                        // Keep the existing table-as-grid bridge attached to
-                        // the grid until that dispatcher replaces it.
-                        return self.build_box(*grid, inherited, parent_font_size, containing_size);
-                    }
+                if let Some(element) = (self.boxes[box_id].display.internal_table
+                    == Some(InternalTableRole::Wrapper))
+                .then(|| wrapped_table_element(self.boxes, box_id))
+                .flatten()
+                {
+                    // K4e1: the wrapper is the box that participates in flow.
+                    // Its children keep the *table's* inherited context, so
+                    // they are built against the parent's font size and
+                    // containing block, not the wrapper's.
+                    let table = self.styles.get(element).cloned().unwrap_or_default();
+                    let computed = wrapper_style(&table);
+                    let font_size = font_size_px(&computed.font_size, parent_font_size);
+                    let children =
+                        self.build_children(box_id, &computed, parent_font_size, containing_size)?;
+                    let mut taffy_style = to_taffy_style(&computed, font_size);
+                    shrink_wrapper_to_grid(self.boxes, box_id, &mut taffy_style);
+                    let block_style = to_block_style(self.boxes, box_id, &computed, font_size);
+                    let node = self.tree.new_with_children_and_block_style(
+                        algorithm_kind(&self.boxes[box_id], children.is_empty()),
+                        block_style,
+                        taffy_style,
+                        &children,
+                        vec![box_id],
+                    );
+                    return Ok(Some(node));
                 }
                 let computed = inherited.cloned().unwrap_or_default();
                 let children =
@@ -2149,6 +2172,14 @@ where
                 if computed.display == CssDisplay::Table {
                     self.table_bridge_count += 1;
                 }
+                // K4e1: the wrapper above this grid took the properties
+                // CSS 2.1 section 17.4 assigns to it; the grid sees them unset.
+                let computed =
+                    if self.boxes[box_id].display.internal_table == Some(InternalTableRole::Grid) {
+                        grid_style(&computed)
+                    } else {
+                        computed
+                    };
                 let font_size = font_size_px(&computed.font_size, parent_font_size);
                 let mut child_containing_size =
                     resolved_child_containing_size(&computed, font_size, containing_size);
@@ -2324,14 +2355,34 @@ where
                 Ok(Some(node))
             },
             BoxOrigin::Pseudo { .. } | BoxOrigin::Anonymous { .. } => {
-                if self.boxes[box_id].display.internal_table == Some(InternalTableRole::Wrapper) {
-                    let children = self.boxes[box_id].children();
-                    if let [grid] = children
-                        && self.boxes[*grid].display.internal_table == Some(InternalTableRole::Grid)
-                    {
-                        // See InlineBuildState's corresponding K4a bridge.
-                        return self.build_box(*grid, inherited, parent_font_size, containing_size);
-                    }
+                if let Some(element) = (self.boxes[box_id].display.internal_table
+                    == Some(InternalTableRole::Wrapper))
+                .then(|| wrapped_table_element(self.boxes, box_id))
+                .flatten()
+                {
+                    // See InlineBuildState's corresponding K4e1 wrapper.
+                    let table = self.styles.get(element).cloned().unwrap_or_default();
+                    let computed = wrapper_style(&table);
+                    let font_size = font_size_px(&computed.font_size, parent_font_size);
+                    let children = self.boxes[box_id]
+                        .children()
+                        .iter()
+                        .filter_map(|child| {
+                            self.build_box(*child, inherited, parent_font_size, containing_size)
+                                .transpose()
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let mut taffy_style = to_taffy_style(&computed, font_size);
+                    shrink_wrapper_to_grid(self.boxes, box_id, &mut taffy_style);
+                    let block_style = to_block_style(self.boxes, box_id, &computed, font_size);
+                    let node = self.tree.new_with_children_and_block_style(
+                        algorithm_kind(&self.boxes[box_id], children.is_empty()),
+                        block_style,
+                        taffy_style,
+                        &children,
+                        Some(box_id),
+                    );
+                    return Ok(Some(node));
                 }
                 let computed = inherited.cloned().unwrap_or_default();
                 let children = self.boxes[box_id]
@@ -2732,6 +2783,58 @@ fn algorithm_kind<Id>(css_box: &CssBox<Id>, leaf: bool) -> AlgorithmKind {
             AlgorithmKind::Grid
         },
         _ => AlgorithmKind::Block,
+    }
+}
+
+/// The element a table wrapper box splits its computed values with.
+///
+/// A wrapper generated by fixup around stray table parts wraps an *anonymous*
+/// grid and owns no element of its own, so nothing migrates onto it and it
+/// stays an ordinary anonymous block. The wrapper's grid is its last child;
+/// captions are the earlier ones.
+fn wrapped_table_element<Id>(boxes: &GeneratedBoxTree<Id>, wrapper: BoxId) -> Option<Id>
+where
+    Id: Copy + Eq + Hash,
+{
+    let grid = boxes[wrapper]
+        .children()
+        .iter()
+        .copied()
+        .find(|child| boxes[*child].display.internal_table == Some(InternalTableRole::Grid))?;
+    legacy_origin_node(boxes, grid)
+}
+
+/// Shrink a block-level table wrapper to the grid inside it.
+///
+/// CSS Tables 3 section 3.1 makes an `auto` table width behave as
+/// `fit-content`, and section 2.2.1 makes the wrapper's width the grid's
+/// border-edge width, so a block wrapper is a block that takes its width from
+/// its child rather than from its containing block. Taffy's float
+/// shrink-to-fit is the closest thing available; this is the hack that used to
+/// sit on the grid in `to_taffy_style`, moved to the box that participates in
+/// flow. K4e2 replaces it with real intrinsic sizing through the wrapper.
+///
+/// Only a block-level in-flow wrapper has that problem. The wrapper of an
+/// inline-table is an atomic inline, an absolutely positioned wrapper is
+/// shrink-to-fit under CSS 2.1 section 10.3.7, and a flex or grid item is
+/// sized by its container - all three already shrink-wrap, and floating them
+/// instead would take them out of the formatting context they belong to.
+fn shrink_wrapper_to_grid<Id>(boxes: &GeneratedBoxTree<Id>, wrapper: BoxId, style: &mut Style)
+where
+    Id: Copy + Eq + Hash,
+{
+    let laid_out_as_an_item = boxes[wrapper].parent().is_some_and(|parent| {
+        matches!(
+            boxes[parent].formatting_context,
+            Some(FormattingContextKind::Flex | FormattingContextKind::Grid)
+        )
+    });
+    if boxes[wrapper].display.outside == Some(DisplayOutside::Block)
+        && !laid_out_as_an_item
+        && style.position != Position::Absolute
+        && style.float == TaffyFloat::None
+    {
+        style.float = TaffyFloat::Left;
     }
 }
 
@@ -3619,7 +3722,6 @@ fn collapsed_text_width(text: &str) -> usize {
 }
 
 fn to_taffy_style(computed: &ComputedValues, font_size: f32) -> Style {
-    let table = computed.display == CssDisplay::Table;
     let table_row = computed.display == CssDisplay::TableRow;
     let _ = table_row;
     let display = match computed.display {
@@ -3643,7 +3745,6 @@ fn to_taffy_style(computed: &ComputedValues, font_size: f32) -> Style {
         }
     };
     let float = match computed.float {
-        CssFloat::None if table => TaffyFloat::Left,
         CssFloat::None => TaffyFloat::None,
         CssFloat::Left => TaffyFloat::Left,
         CssFloat::Right => TaffyFloat::Right,
@@ -4355,6 +4456,61 @@ mod tests {
     /// `<tr>` background could not render at all. Buckram emits the whole
     /// structural subtree from the track model, so each one gets its exact
     /// rectangle whether or not a cell happens to cover it.
+    #[test]
+    fn k4e1_probe() {
+        for (name, html, css) in [
+            (
+                "flex-item",
+                "<div class=flex><table><thead><tr><td></td></tr></thead>\
+                 <tbody><tr><td></td></tr></tbody></table></div>",
+                ".flex { display: flex; flex-direction: column; }\
+                 table { display: table; border-spacing: 0; width: 100px; height: 100px;\
+                         flex: none; background: green; }\
+                 thead { display: table-header-group; } tbody { display: table-row-group; }\
+                 tr { display: table-row; height: 50px; }\
+                 td { display: table-cell; height: 100%; padding: 0; }",
+            ),
+            (
+                "abspos",
+                "<div class=rel><table></table></div>",
+                ".rel { position: relative; width: 200px; }\
+                 table { display: table; position: absolute; width: 50%; height: 100px;\
+                         table-layout: fixed; background: green; }",
+            ),
+        ] {
+            let dom = StaticDocument::parse(html);
+            let styles = resolve_styles(
+                &dom,
+                &StyleSet::cambium(&["html, body, div { margin: 0; padding: 0; border: 0; }", css]),
+                &Device::screen(320.0, 240.0),
+                &InteractionStates::default(),
+            );
+            let mut text = TextSystem::new();
+            let (_, layout) = layout_with_text_system(
+                &dom,
+                &styles,
+                320.0,
+                240.0,
+                ViewportSizes::uniform(320.0, 240.0),
+                &mut text,
+                &HashMap::new(),
+            )
+            .expect("layout");
+            println!("--- {name} ---");
+            for (box_id, css_box) in layout.boxes().iter() {
+                let rect = layout
+                    .fragments()
+                    .fragments_for_box(box_id)
+                    .next()
+                    .map(|fragment| fragment.physical_rect());
+                println!(
+                    "{box_id:?} {:?} table={:?} {:?}",
+                    css_box.display.outside, css_box.display.internal_table, rect
+                );
+            }
+        }
+    }
+
     #[test]
     fn k4d6_rows_groups_and_columns_have_their_own_fragments() {
         let dom = StaticDocument::parse(

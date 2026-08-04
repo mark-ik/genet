@@ -244,9 +244,9 @@ guppy-protocol = { version = "=0.1.1" }
 # is ours. gopher-protocol carries the Gopher+ successor; finger-protocol
 # carries WebFinger, which errand does not want because it is HTTP, so errand
 # takes the classic wire protocol alone.
-gopher-protocol = { version = "=0.1.0" }
-gemini-protocol = { version = "=0.1.0" }
-finger-protocol = { version = "=0.1.0", default-features = false, features = [
+gopher-protocol = { version = "=0.1.1" }
+gemini-protocol = { version = "=0.1.1" }
+finger-protocol = { version = "=0.1.1", default-features = false, features = [
     "client",
 ] }
 inker = { version = "=0.1.0", path = "components/inker" }

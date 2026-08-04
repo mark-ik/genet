@@ -20,12 +20,21 @@ readme = "README.md"
 path = "src/lib.rs"
 
 [features]
-# No features. The `parse` module (gemtext/gopher/nex/feed) compiles
-# unconditionally: the dep-free parsers cost nothing, and the feed parser's
-# quick-xml is light enough to keep as a plain dependency rather than a gate. (A
-# cargo feature added in a sibling repo is invisible to its dependents until the
-# crate is pushed, which made a `parse-feed` gate impractical in this workspace.)
+# The `parse` module (gemtext/gopher/nex/feed) compiles unconditionally: the
+# dep-free parsers cost nothing, and the feed parser's quick-xml is light enough
+# to keep as a plain dependency rather than a gate. (A cargo feature added in a
+# sibling repo is invisible to its dependents until the crate is pushed, which
+# made a `parse-feed` gate impractical in this workspace.)
 default = []
+# Serving: errand's other direction. Off by default, because a browser must
+# never carry listeners it will not run. Turns on the `server` half of each
+# protocol crate, which is where the wire work lives; what errand adds is the
+# `Source` trait and the projection of one source into each native format.
+serve = [
+    "gemini-protocol/server",
+    "gopher-protocol/server",
+    "finger-protocol/server",
+]
 
 [dependencies]
 url = "2.5"

@@ -40,6 +40,8 @@ mod titan;
 /// (RSS/Atom) parser, which needs an XML reader, sits behind the `parse-feed` feature.
 /// See [`parse`] for the per-format submodules.
 pub mod parse;
+#[cfg(feature = "serve")]
+pub mod serve;
 
 pub use gemini::exchange as gemini_exchange;
 pub use misfin::{ClientIdentity, MISFIN_PORT, send as misfin_send};
