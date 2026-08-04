@@ -12,8 +12,9 @@
 use sprigging::{ColorF, GraphCanvas, GraphGlyphNode, GraphViewport, Size};
 
 use crate::{
-    FocusEvent, FocusPhase, GenetCtx, GenetElement, HoverEvent, HoverPhase, PointerClick, View,
-    custom_leaf, el, focusable, on_click, on_focus, on_hover,
+    FocusEvent, FocusPhase, GenetCtx, GenetElement, HoverEvent, HoverPhase, PointerClick,
+    PointerEvent, PointerPhase, View, custom_leaf, el, focusable, on_click, on_focus, on_hover,
+    on_pointer,
 };
 
 /// Structural classes emitted by [`graph_canvas_swatch`]. Hosts own the palette.
@@ -29,6 +30,8 @@ pub const GRAPH_CANVAS_SWATCH_CSS: &str = r#"
     border-radius: 999px;
     cursor: pointer;
     padding: 0;
+    touch-action: none;
+    user-select: none;
 }
 .graph-canvas-swatch-node:focus-visible {
     outline: 1px solid currentColor;
@@ -73,6 +76,19 @@ pub struct GraphCanvasNode<Id, Kind> {
     /// share a title). The component does not interpret it — a driver or test
     /// selects on it; a screen reader still reads `label`.
     pub key: Option<String>,
+}
+
+/// One captured node-motion event from a [`GraphCanvasSwatch`].
+///
+/// `position` is in the graph's normalized `0..=1` coordinate system, after
+/// the Swatch has inverted its current viewport. A consumer owns the response:
+/// it may write a local position override, hand the position to a solver, or
+/// ignore the gesture. The component never edits graph truth.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GraphCanvasNodeDrag<Id> {
+    pub id: Id,
+    pub phase: PointerPhase,
+    pub position: (f32, f32),
 }
 
 /// One app-facing edge. Endpoints that are absent from the subgraph are skipped.
@@ -136,7 +152,10 @@ impl<Id, Kind> GraphCanvasSwatch<Id, Kind> {
             height: 128,
             node_radius: 5.0,
             edge_width: 1.0,
-            hit_size: 20.0,
+            // Keep the painted dot compact while leaving a touch-sized native
+            // target around it. Consumers can opt into a larger visual radius
+            // without sacrificing a dependable base interaction area.
+            hit_size: 44.0,
             label: "Related graph".to_string(),
             show_expand: true,
             show_labels: false,
@@ -238,6 +257,47 @@ impl<Id: PartialEq, Kind> GraphCanvasSwatch<Id, Kind> {
             .map(|node| (&node.id, self.viewport.project(node.position, size, inset)))
             .collect()
     }
+
+    /// Convert a leaf-local pointer position back into the graph's normalized
+    /// coordinate system. This is the inverse of the projection used by paint
+    /// and native node targets, clamped to the graph's visible bounds so a
+    /// captured drag cannot create an unreachable position.
+    pub fn graph_position_at(&self, local: (f32, f32)) -> (f32, f32) {
+        graph_position_at(
+            self.viewport,
+            Size {
+                width: self.width as f32,
+                height: self.height as f32,
+            },
+            self.node_radius + self.edge_width,
+            local,
+        )
+    }
+}
+
+fn graph_position_at(
+    viewport: GraphViewport,
+    size: Size,
+    inset: f32,
+    local: (f32, f32),
+) -> (f32, f32) {
+    let width = (size.width - 2.0 * inset).max(0.0);
+    let height = (size.height - 2.0 * inset).max(0.0);
+    let zoom = viewport.zoom.max(0.01);
+    let x = if width > 0.0 {
+        (local.0 - inset) / width
+    } else {
+        0.5
+    };
+    let y = if height > 0.0 {
+        (local.1 - inset) / height
+    } else {
+        0.5
+    };
+    (
+        ((x - 0.5 - viewport.pan.0) / zoom + 0.5).clamp(0.0, 1.0),
+        ((y - 0.5 - viewport.pan.1) / zoom + 0.5).clamp(0.0, 1.0),
+    )
 }
 
 /// Render a bounded graph canvas with one native node target per painted node.
@@ -260,11 +320,42 @@ where
     Hover: Fn(&mut State, Option<Id>) + Clone + 'static,
     Expand: Fn(&mut State) + Clone + 'static,
 {
-    graph_canvas_swatch_with_focus(
+    graph_canvas_swatch_with_focus_and_drag(
         swatch,
         on_node_click,
         on_node_hover,
         |_state: &mut State, _id: Option<Id>| {},
+        |_state: &mut State, _event: GraphCanvasNodeDrag<Id>| {},
+        on_expand,
+    )
+}
+
+/// Render a graph-canvas Swatch with captured node motion. This is the
+/// interaction variant of [`graph_canvas_swatch`]: click and hover retain their
+/// existing meanings while `on_node_drag` receives Down/Move/Up in normalized
+/// graph coordinates.
+pub fn graph_canvas_swatch_with_drag<State, AppAction, Id, Kind, Click, Hover, Drag, Expand>(
+    swatch: &GraphCanvasSwatch<Id, Kind>,
+    on_node_click: Click,
+    on_node_hover: Hover,
+    on_node_drag: Drag,
+    on_expand: Expand,
+) -> impl View<State, AppAction, GenetCtx, Element = GenetElement>
+where
+    State: 'static,
+    AppAction: 'static,
+    Id: Clone + PartialEq + 'static,
+    Click: Fn(&mut State, Id) + Clone + 'static,
+    Hover: Fn(&mut State, Option<Id>) + Clone + 'static,
+    Drag: Fn(&mut State, GraphCanvasNodeDrag<Id>) + Clone + 'static,
+    Expand: Fn(&mut State) + Clone + 'static,
+{
+    graph_canvas_swatch_with_focus_and_drag(
+        swatch,
+        on_node_click,
+        on_node_hover,
+        |_state: &mut State, _id: Option<Id>| {},
+        on_node_drag,
         on_expand,
     )
 }
@@ -290,8 +381,57 @@ where
     Focus: Fn(&mut State, Option<Id>) + Clone + 'static,
     Expand: Fn(&mut State) + Clone + 'static,
 {
+    graph_canvas_swatch_with_focus_and_drag(
+        swatch,
+        on_node_click,
+        on_node_hover,
+        on_node_focus,
+        |_state: &mut State, _event: GraphCanvasNodeDrag<Id>| {},
+        on_expand,
+    )
+}
+
+/// Render a graph-canvas Swatch with focus and captured node-motion callbacks.
+///
+/// The component emits motion only; the consumer keeps ownership of position,
+/// solver, and persistence policy. Existing callers can keep using
+/// [`graph_canvas_swatch`] or [`graph_canvas_swatch_with_focus`].
+pub fn graph_canvas_swatch_with_focus_and_drag<
+    State,
+    AppAction,
+    Id,
+    Kind,
+    Click,
+    Hover,
+    Focus,
+    Drag,
+    Expand,
+>(
+    swatch: &GraphCanvasSwatch<Id, Kind>,
+    on_node_click: Click,
+    on_node_hover: Hover,
+    on_node_focus: Focus,
+    on_node_drag: Drag,
+    on_expand: Expand,
+) -> impl View<State, AppAction, GenetCtx, Element = GenetElement>
+where
+    State: 'static,
+    AppAction: 'static,
+    Id: Clone + PartialEq + 'static,
+    Click: Fn(&mut State, Id) + Clone + 'static,
+    Hover: Fn(&mut State, Option<Id>) + Clone + 'static,
+    Focus: Fn(&mut State, Option<Id>) + Clone + 'static,
+    Drag: Fn(&mut State, GraphCanvasNodeDrag<Id>) + Clone + 'static,
+    Expand: Fn(&mut State) + Clone + 'static,
+{
     let positions = swatch.projected_positions();
     let hit_size = swatch.hit_size.max(1.0);
+    let size = Size {
+        width: swatch.width as f32,
+        height: swatch.height as f32,
+    };
+    let inset = swatch.node_radius + swatch.edge_width;
+    let viewport = swatch.viewport;
     // Visible node labels (opt-in): plain positioned text beside each node,
     // aria-hidden (the button already carries the accessible name) and
     // pointer-transparent (they must not steal the node's clicks).
@@ -379,7 +519,11 @@ where
             let enter_id = node.id.clone();
             let focus = on_node_focus.clone();
             let focus_id = node.id.clone();
-            focusable(on_focus(
+            let drag = on_node_drag.clone();
+            let drag_id = node.id.clone();
+            let target_left = x - hit_size / 2.0;
+            let target_top = y - hit_size / 2.0;
+            on_pointer(focusable(on_focus(
                 on_hover(
                     on_click(target, move |state: &mut State, _: PointerClick| {
                         click(state, click_id.clone());
@@ -394,7 +538,22 @@ where
                     FocusPhase::Gained => focus(state, Some(focus_id.clone())),
                     FocusPhase::Lost => focus(state, None),
                 },
-            ))
+            )), move |state: &mut State, event: PointerEvent| {
+                let position = graph_position_at(
+                    viewport,
+                    size,
+                    inset,
+                    (target_left + event.local.0, target_top + event.local.1),
+                );
+                drag(
+                    state,
+                    GraphCanvasNodeDrag {
+                        id: drag_id.clone(),
+                        phase: event.phase,
+                        position,
+                    },
+                );
+            })
         })
         .collect();
 
@@ -462,6 +621,7 @@ mod tests {
         clicked: Vec<u8>,
         hovered: Option<u8>,
         focused: Option<u8>,
+        dragged: Vec<GraphCanvasNodeDrag<u8>>,
         expanded: bool,
     }
 
@@ -625,5 +785,79 @@ mod tests {
             ),
             Some(projected[0].1)
         );
+    }
+
+    #[test]
+    fn graph_position_inverts_the_viewport_projection() {
+        let mut swatch = model(None, None);
+        swatch.viewport = GraphViewport {
+            pan: (0.12, -0.08),
+            zoom: 1.35,
+        };
+        let point = (0.73, 0.21);
+        let size = Size {
+            width: swatch.width as f32,
+            height: swatch.height as f32,
+        };
+        let leaf = swatch
+            .viewport
+            .project(point, size, swatch.node_radius + swatch.edge_width);
+        let recovered = swatch.graph_position_at(leaf);
+        assert!((recovered.0 - point.0).abs() < 1e-5, "{recovered:?}");
+        assert!((recovered.1 - point.1).abs() < 1e-5, "{recovered:?}");
+    }
+
+    fn drag_view(state: &State) -> TestView {
+        let swatch = model(state.hovered, state.focused);
+        Box::new(graph_canvas_swatch_with_drag(
+            &swatch,
+            |state: &mut State, id| state.clicked.push(id),
+            |state: &mut State, id| state.hovered = id,
+            |state: &mut State, event| state.dragged.push(event),
+            |state: &mut State| state.expanded = true,
+        ))
+    }
+
+    #[test]
+    fn node_drag_captures_and_reports_normalized_graph_positions() {
+        let dom: DomHandle = Rc::new(RefCell::new(ScriptedDom::new()));
+        let mut runner =
+            GenetAppRunner::<_, _, _, ()>::new(dom.clone(), drag_view, State::default());
+        let root = runner.root();
+        let first =
+            find_attr(&dom.borrow(), root, "aria-label", "First node").expect("first node target");
+
+        runner.dispatch_pointer_down(
+            first,
+            PointerEvent::new(PointerPhase::Down, (10.0, 10.0), (20.0, 20.0)),
+        );
+        assert_eq!(runner.pointer_capture(), Some(first));
+        runner.dispatch_pointer_move(PointerEvent::new(
+            PointerPhase::Move,
+            (120.0, 10.0),
+            (20.0, 20.0),
+        ));
+        runner.dispatch_pointer_up(PointerEvent::new(
+            PointerPhase::Up,
+            (120.0, 10.0),
+            (20.0, 20.0),
+        ));
+
+        let dragged = &runner.state().dragged;
+        assert_eq!(
+            dragged.iter().map(|event| event.phase).collect::<Vec<_>>(),
+            vec![PointerPhase::Down, PointerPhase::Move, PointerPhase::Up]
+        );
+        assert!(
+            dragged[1].position.0 > dragged[0].position.0,
+            "a rightward drag advances the normalized x position: {dragged:?}"
+        );
+        assert!(
+            dragged.iter().all(|event| event.id == 1
+                && (0.0..=1.0).contains(&event.position.0)
+                && (0.0..=1.0).contains(&event.position.1)),
+            "every emitted event keeps the node id and clamps graph coordinates: {dragged:?}"
+        );
+        assert_eq!(runner.pointer_capture(), None, "Up releases capture");
     }
 }

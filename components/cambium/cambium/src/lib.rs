@@ -94,8 +94,9 @@ pub use disclosure::{
 };
 pub use editor::{EditHistory, pair_close, wrap_selection};
 pub use graph_canvas::{
-    GRAPH_CANVAS_SWATCH_CSS, GraphCanvasEdge, GraphCanvasNode, GraphCanvasSubgraph,
-    GraphCanvasSwatch, graph_canvas_swatch, graph_canvas_swatch_with_focus,
+    GRAPH_CANVAS_SWATCH_CSS, GraphCanvasEdge, GraphCanvasNode, GraphCanvasNodeDrag,
+    GraphCanvasSubgraph, GraphCanvasSwatch, graph_canvas_swatch, graph_canvas_swatch_with_drag,
+    graph_canvas_swatch_with_focus, graph_canvas_swatch_with_focus_and_drag,
 };
 pub use grid::{GridView, data_grid};
 pub use menu::{MENU_CLASS, MENU_ROW_ACTIVE_CLASS, MENU_ROW_CLASS, menu};

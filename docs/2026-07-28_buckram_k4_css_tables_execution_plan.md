@@ -441,7 +441,47 @@ table grid owns tracks and cell geometry.
   table margins, inline-table, floats around tables, writing-mode captions,
   and table CSSOM geometry cases.
 
-### K4e1 interop matrix - 2026-08-03
+### Sub-gates
+
+K4e lands serially like the rest. The order is forced by what each step
+needs from the one before, and the caption question above is the clearest
+case: it cannot be answered until the wrapper exists as a box.
+
+- **K4e1. Wrapper participation, as one step.** The wrapper becomes a real
+  node with the grid as its single child, *and* margins, float, position,
+  and outer display move from the grid to it in the same change. The grid
+  keeps width, borders, padding, and table-ness. Both emit fragments.
+
+  **This cannot be split into "add the box" and "move the properties",
+  which was tried and reverted on 2026-08-03.** Introducing the wrapper
+  alone moved seven reftests in `css/css-tables` with no improvements,
+  58 to 51, and the two mechanisms are both structural rather than
+  incidental:
+
+  - `table-as-item-cell-percentage-002` and `-003` put the table in a flex
+    container. Inserting a wrapper makes the *wrapper* the flex item and
+    the table an ordinary block inside it.
+  - `absolute-tables-008`, `-010`, `-011`, and `-012` put
+    `position: absolute` on the table element. That property belongs to the
+    wrapper under CSS 2.1 section 17.4, so while it still sits on the grid
+    the abspos box ends up nested inside a static wrapper that should not
+    exist in its containing-block chain.
+
+  Both are the property split, arriving early. The intermediate state is
+  not a smaller step but a wrong one: the box being added is exactly the box
+  that has to carry the properties.
+- **K4e2. Block table and inline-table sizing.** Shrink-to-fit through the
+  wrapper rather than through the `float: left` compatibility hack, auto
+  margins, and float avoidance on K3's block equations.
+- **K4e3. Captions.** Resolve the divergence measured above, lay captions
+  out between the wrapper's margins and the table's borders, and decide
+  whether `CaptionMinContribution` belongs to wrapper sizing or grid sizing.
+- **K4e4. CSSOM, hit testing, and removal.** Make wrapper/grid/caption
+  selection explicit, and delete the compatibility routes: the wrapper skip
+  in `build_box`, the wrapper/grid exclusion in `box_is_inline`, and the
+  table `float: left` hack in `to_taffy_style`.
+
+### K4e caption interop matrix - 2026-08-03 (research, ahead of its gate)
 
 What a caption contributes to table inline sizing, measured before
 implementing the `CaptionMinContribution::PendingK4e` seam that the
