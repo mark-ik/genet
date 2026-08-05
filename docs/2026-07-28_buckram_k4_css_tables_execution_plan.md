@@ -672,14 +672,97 @@ wrapper skip in `build_box` is gone, but the wrapper/grid exclusion in
   the wrapper, and `wrapper_width_from_grid` is the definite-width half of the
   rule that replaces it; K4e2 owns the `auto` half, which is intrinsic sizing
   through the wrapper rather than block auto-width.
+### K4e2 receipt - 2026-08-04
+
+Base commit: `8d24c0d14d4`.
+
+**Capability:** the wrapper takes the grid's border-edge width and
+participates in normal flow. `float: left` no longer stands in for
+shrink-to-fit on any table Buckram sizes.
+
+**The rule turned out to be an assignment, not a measurement.** CSS Tables 3
+section 2.2.1 makes the wrapper's width the grid's border-edge width, and
+Buckram's table inline sizing already computes that number before the main
+layout pass. The shrink-wrapping happens inside the table algorithm that owns
+it; the wrapper reads the answer. `size_wrapper_from_grid` assigns it as soon
+as `buckram_table_columns` returns, and an `auto` table width is no harder
+than a specified one.
+
+That is what `used_grid_inline_size` is for, and the distinction cost one
+failing test to find: `used_table_inline_size` is the used value of the
+`width` property, which under `content-box` is the content box. A table with
+`width: 100px; border: 5px; padding: 3px` gives 100 and 116; the wrapper wants
+116.
+
+**The route not taken.** The plan expected this to go through Buckram's
+intrinsic shrink-to-fit lane, and it was built that way first: a third
+shrink-to-fit root beside floats and atomic inlines, the wrapper marked as a
+BFC, empty leaves admitted to intrinsic measurement, table children admitted
+to the block lane. Each step uncovered the next, and the last one - a `Table`
+child is an independent formatting context a Buckram block parent defers -
+would have meant widening K3's block dispatch and giving `AlgorithmKind::Table`
+an intrinsic size, which is a gate of its own. All of it was reverted once the
+assignment turned out to be available. Buckram is unchanged by K4e2.
+
+**Auto margins came free.** A float resolves `auto` margins to zero, so
+`table { margin: 0 auto }` could not centre a table. An in-flow block with a
+definite width centres the way any other block does, on K3's equations, with
+no table-specific code.
+
+**Float avoidance likewise.** The wrapper is an ordinary in-flow BFC now, and
+moves below a float on the same route every other BFC uses.
+
+**WPT:** `css/css-tables` 58 to **62**, `css/CSS2/tables` 65 to **118**. Net
+**+57**, 58 improvements against 1 regression. Thirty of the improvements are
+`fixed-table-layout-*`, where the table's width was right all along and its
+place on the page was not - the float had it out of normal flow.
+Proof directory `testing/genet/wpt-ledger/2026-08-04_buckram_k4e2`.
+
+**The one regression is a false pass being exposed, and it is routed.**
+`border-collapse-offset-001.xht` puts a collapsed-border table in an
+absolutely positioned div; its reference renders the same markup with
+`cellspacing="0"`, so the reference's table is **separated** and Buckram sizes
+it. Measured directly: the abspos div is 8 wide in both documents before
+K4e2 - its borders and nothing else - and 118 in the reference after, which is
+correct. The test still measures 8 because a deferred table has no width to
+assign and its wrapper keeps the fallback float, which an abspos box's
+shrink-to-fit does not include. Both documents were wrong the same way and so
+matched; one is now right. Collapsed borders are 201 of the deferral set, and
+this closes with K4g and needs nothing here.
+
+Same two-document trap as `table-cell-overflow-explicit-height-002` in K4d: a
+reftest renders two files, and a skip that fires on one is invisible until the
+pair disagrees.
+
+**Pure fixture:** none. K4e2 adds no Buckram behavior.
+
+**Adapter fixture:** `k4e2_an_auto_width_wrapper_measures_the_grid_instead_of_filling`
+and `k4e2_auto_margins_centre_a_table`, both asserting through emitted
+fragment geometry. The first is the case the float hack could reach and the
+assignment now reaches exactly; the second is the case the float hack could
+not reach at all.
+
+**Verification:** 509 tests across the three crates, 0 failed.
+`cargo clippy -p buckram` clean; `-p genet-livery` blocked by the same four
+pre-existing Clippy 1.97.0 warnings recorded in the K4e1 receipt. Rustfmt and
+`git diff --check` clean on touched files.
+
+**Not yet done in K4e2:** the `float: left` fallback survives for tables
+Buckram defers, and its domain is now exactly that set. It is applied when the
+tree is built and retired the moment a width arrives - and only where this
+route put it there, never where the author wrote `float` on the table and K4e1
+migrated it onto the wrapper. `wrapper_width_from_grid` also stays, because a
+flex or grid item's style has to be right before layout rather than after.
+
 - **K4e3. Captions.** Resolve the divergence measured above, lay captions
   out between the wrapper's margins and the table's borders, and decide
   whether `CaptionMinContribution` belongs to wrapper sizing or grid sizing.
 - **K4e4. CSSOM, hit testing, and removal.** Make wrapper/grid/caption
   selection explicit, and delete the remaining compatibility routes: the
-  wrapper/grid exclusion in `box_is_inline`, and `shrink_wrapper_to_grid`
-  once K4e2 has replaced it. The wrapper skip in `build_box` and the table
-  `float: left` in `to_taffy_style` are already gone as of K4e1. Paint and
+  wrapper/grid exclusion in `box_is_inline`, and `wrapper_needs_float_fallback`
+  once K4g has emptied the deferral set that is now its whole domain. The
+  wrapper skip in `build_box` and the table `float: left` in `to_taffy_style`
+  are already gone as of K4e1. Paint and
   `getBoundingClientRect` currently read the style plane by DOM node and take
   whichever of the two boxes comes first, which is the wrapper; that is the
   accident this sub-gate replaces with a decision, and it is what makes the

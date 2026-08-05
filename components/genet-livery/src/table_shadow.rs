@@ -142,6 +142,10 @@ pub struct PendingTable<Id> {
     pub table: BoxId,
     pub node: Id,
     pub taffy_table: AlgorithmNodeId,
+    /// The table wrapper box's node, once K4e1's wrapper has been built. It is
+    /// built after the grid, so it registers itself here rather than arriving
+    /// with the rest.
+    pub wrapper: Option<AlgorithmNodeId>,
     pub grid: TableGrid,
     /// One entry per K4b grid cell, in topology order.
     pub cell_nodes: Vec<Option<AlgorithmNodeId>>,

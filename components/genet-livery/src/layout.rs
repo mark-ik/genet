@@ -1517,6 +1517,7 @@ where
                         table: box_id,
                         node: dom_node,
                         taffy_table: node,
+                        wrapper: None,
                         grid,
                         cell_nodes,
                         font_size,
@@ -1570,6 +1571,9 @@ where
                     let children =
                         self.build_children(box_id, &computed, parent_font_size, containing_size)?;
                     let mut taffy_style = to_taffy_style(&computed, font_size);
+                    if wrapper_needs_float_fallback(self.boxes, box_id, &taffy_style) {
+                        taffy_style.float = TaffyFloat::Left;
+                    }
                     if let Some(width) = wrapper_width_from_grid(&to_taffy_style(
                         &grid_style(&table, containing_size),
                         font_size,
@@ -1585,24 +1589,12 @@ where
                         &children,
                         vec![box_id],
                     );
-                    #[cfg(test)]
-                    probe_shrink_gate(
-                        &self.tree,
-                        node,
-                        &self.boxes[box_id],
-                        &computed,
-                        block_style,
-                        kind,
-                    );
-                    if supports_intrinsic_shrink_to_fit(
-                        &self.tree,
-                        node,
-                        &self.boxes[box_id],
-                        &computed,
-                        block_style,
-                        kind,
-                    ) {
-                        self.tree.enable_intrinsic_shrink_to_fit(node);
+                    if let Some(pending) = self
+                        .pending_tables
+                        .iter_mut()
+                        .find(|pending| pending.node == element)
+                    {
+                        pending.wrapper = Some(node);
                     }
                     return Ok(Some(node));
                 }
@@ -1722,9 +1714,41 @@ where
                     inline.column_sizes.iter().copied().map(length).collect();
             }
             pending.assigned = columns;
+            self.size_wrapper_from_grid(pending);
         }
         self.apply_buckram_table_rows(text, &mut pendings);
         self.pending_tables = pendings;
+    }
+
+    /// Give the wrapper the grid's border-edge width, which is CSS Tables 3
+    /// section 2.2.1: "the width of the table wrapper box is the border-edge
+    /// width of the table grid box inside it."
+    ///
+    /// Buckram's table inline sizing has just produced that width, so the rule
+    /// is an assignment rather than a measurement, and an `auto` table width is
+    /// no harder than a specified one - the shrink-wrapping already happened,
+    /// inside the table algorithm that owns it.
+    ///
+    /// A table Buckram deferred has no such width. Its wrapper falls back to
+    /// the `float: left` shrink-to-fit that stood in for this rule before
+    /// K4e2, whose domain is now exactly the deferral set.
+    fn size_wrapper_from_grid(&mut self, pending: &PendingTable<D::NodeId>) {
+        let (Some(wrapper), Some(inline)) = (pending.wrapper, pending.assigned.as_ref()) else {
+            return;
+        };
+        // The fallback float was applied when the tree was built, before this
+        // width existed. Retire it here rather than leaving both in play - but
+        // only where it was this route that put it there, never where the
+        // author wrote `float` on the table and K4e1 migrated it.
+        let authored_float = self
+            .styles
+            .get(pending.node)
+            .is_some_and(|computed| computed.float != CssFloat::None);
+        let style = self.tree.style_mut(wrapper);
+        style.size.width = Dimension::length(inline.used_grid_inline_size);
+        if !authored_float {
+            style.float = TaffyFloat::None;
+        }
     }
 
     /// Run Buckram's block pipeline for every table whose columns it assigned.
@@ -2077,9 +2101,41 @@ where
                     inline.column_sizes.iter().copied().map(length).collect();
             }
             pending.assigned = columns;
+            self.size_wrapper_from_grid(pending);
         }
         self.apply_buckram_table_rows(&mut pendings);
         self.pending_tables = pendings;
+    }
+
+    /// Give the wrapper the grid's border-edge width, which is CSS Tables 3
+    /// section 2.2.1: "the width of the table wrapper box is the border-edge
+    /// width of the table grid box inside it."
+    ///
+    /// Buckram's table inline sizing has just produced that width, so the rule
+    /// is an assignment rather than a measurement, and an `auto` table width is
+    /// no harder than a specified one - the shrink-wrapping already happened,
+    /// inside the table algorithm that owns it.
+    ///
+    /// A table Buckram deferred has no such width. Its wrapper falls back to
+    /// the `float: left` shrink-to-fit that stood in for this rule before
+    /// K4e2, whose domain is now exactly the deferral set.
+    fn size_wrapper_from_grid(&mut self, pending: &PendingTable<D::NodeId>) {
+        let (Some(wrapper), Some(inline)) = (pending.wrapper, pending.assigned.as_ref()) else {
+            return;
+        };
+        // The fallback float was applied when the tree was built, before this
+        // width existed. Retire it here rather than leaving both in play - but
+        // only where it was this route that put it there, never where the
+        // author wrote `float` on the table and K4e1 migrated it.
+        let authored_float = self
+            .styles
+            .get(pending.node)
+            .is_some_and(|computed| computed.float != CssFloat::None);
+        let style = self.tree.style_mut(wrapper);
+        style.size.width = Dimension::length(inline.used_grid_inline_size);
+        if !authored_float {
+            style.float = TaffyFloat::None;
+        }
     }
 
     /// Run Buckram's block pipeline for every table whose columns it assigned.
@@ -2296,6 +2352,7 @@ where
                         table: box_id,
                         node: dom_node,
                         taffy_table: node,
+                        wrapper: None,
                         grid,
                         cell_nodes: std::mem::take(&mut table_cell_nodes),
                         font_size,
@@ -2398,6 +2455,9 @@ where
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     let mut taffy_style = to_taffy_style(&computed, font_size);
+                    if wrapper_needs_float_fallback(self.boxes, box_id, &taffy_style) {
+                        taffy_style.float = TaffyFloat::Left;
+                    }
                     if let Some(width) = wrapper_width_from_grid(&to_taffy_style(
                         &grid_style(&table, containing_size),
                         font_size,
@@ -2413,24 +2473,12 @@ where
                         &children,
                         Some(box_id),
                     );
-                    #[cfg(test)]
-                    probe_shrink_gate(
-                        &self.tree,
-                        node,
-                        &self.boxes[box_id],
-                        &computed,
-                        block_style,
-                        kind,
-                    );
-                    if supports_intrinsic_shrink_to_fit(
-                        &self.tree,
-                        node,
-                        &self.boxes[box_id],
-                        &computed,
-                        block_style,
-                        kind,
-                    ) {
-                        self.tree.enable_intrinsic_shrink_to_fit(node);
+                    if let Some(pending) = self
+                        .pending_tables
+                        .iter_mut()
+                        .find(|pending| pending.node == element)
+                    {
+                        pending.wrapper = Some(node);
                     }
                     return Ok(Some(node));
                 }
@@ -2578,16 +2626,10 @@ where
             size_containment.width = true;
         }
     }
-    // CSS Tables 3 section 2.2.1 gives the table wrapper box a block
-    // formatting context and the grid's width, so it shrink-wraps whatever
-    // its own `display` says. K4e2 puts both on Buckram's block equations.
-    let table_wrapper = css_box.display.internal_table == Some(InternalTableRole::Wrapper);
-    let establishes_bfc = table_wrapper
-        || matches!(
-            css_box.display.inside,
-            Some(DisplayInside::FlowRoot | DisplayInside::Flex | DisplayInside::Grid)
-        )
-        || matches!(
+    let establishes_bfc = matches!(
+        css_box.display.inside,
+        Some(DisplayInside::FlowRoot | DisplayInside::Flex | DisplayInside::Grid)
+    ) || matches!(
         computed.display,
         CssDisplay::InlineBlock
             | CssDisplay::Table
@@ -2674,13 +2716,8 @@ where
             CssClear::Both => ClearSide::Both,
         },
         establishes_bfc,
-        // A wrapper's `width` is always auto - the table's stayed on the grid
-        // - and section 2.2.1 makes it the grid's border-edge width either
-        // way, so it shrink-wraps whether or not the table had one.
-        shrink_to_fit: table_wrapper
-            || (matches!(computed.width, CssSize::Auto)
-                && (computed.display == CssDisplay::InlineBlock
-                    || computed.float != CssFloat::None)),
+        shrink_to_fit: matches!(computed.width, CssSize::Auto)
+            && (computed.display == CssDisplay::InlineBlock || computed.float != CssFloat::None),
         replaced: css_box.replaced,
         aspect_ratio: match computed.aspect_ratio {
             AspectRatio::Auto => None,
@@ -2817,52 +2854,20 @@ fn supports_intrinsic_shrink_to_fit<Id, Context, Source>(
         && block_style.float != FloatSide::None;
     let atomic_inline_root = css_box.display.outside == Some(DisplayOutside::Inline)
         && block_style.float == FloatSide::None;
-    // K4e2: a table wrapper box is the third kind of shrink-to-fit root. It is
-    // block-level and unfloated, which an ordinary block cannot combine with
-    // shrink-to-fit, but CSS Tables 3 section 2.2.1 sizes it from the grid
-    // rather than from its containing block.
-    let table_wrapper_root = css_box.display.internal_table == Some(InternalTableRole::Wrapper)
-        && block_style.float == FloatSide::None;
     kind == AlgorithmKind::Block
         && matches!(
             css_box.display.inside,
             Some(DisplayInside::Flow | DisplayInside::FlowRoot)
         )
-        && (css_box.display.internal_table.is_none() || table_wrapper_root)
+        && css_box.display.internal_table.is_none()
         && block_style.position == BuckramBlockPosition::Static
         && block_style.shrink_to_fit
         && !block_style.replaced
         && computed.vertical_align == VerticalAlign::Baseline
         && block_style.flow.is_horizontal()
         && block_style.containing_flow.is_horizontal()
-        && (float_root || atomic_inline_root || table_wrapper_root)
+        && (float_root || atomic_inline_root)
         && tree.supports_intrinsic_shrink_to_fit(node)
-}
-
-#[cfg(test)]
-fn probe_shrink_gate<Id, Context, Source>(
-    tree: &AlgorithmTree<Style, Context, Source>,
-    node: AlgorithmNodeId,
-    css_box: &CssBox<Id>,
-    computed: &ComputedValues,
-    block_style: BlockStyle,
-    kind: AlgorithmKind,
-) {
-    eprintln!(
-        "GATE kind={kind:?} inside={:?} table={:?} pos={:?} stf={} replaced={} valign={:?} \
-         flow_h={} cf_h={} wrapper_root={} tree_ok={}",
-        css_box.display.inside,
-        css_box.display.internal_table,
-        block_style.position,
-        block_style.shrink_to_fit,
-        block_style.replaced,
-        computed.vertical_align,
-        block_style.flow.is_horizontal(),
-        block_style.containing_flow.is_horizontal(),
-        css_box.display.internal_table == Some(InternalTableRole::Wrapper)
-            && block_style.float == FloatSide::None,
-        tree.supports_intrinsic_shrink_to_fit(node),
-    );
 }
 
 fn algorithm_kind<Id>(css_box: &CssBox<Id>, leaf: bool) -> AlgorithmKind {
@@ -2904,10 +2909,9 @@ where
 /// A definite table width makes that computable before layout, which is what
 /// stops a wrapper from stretching when it is a flex or grid item - it is
 /// never `auto` in the sense stretching means, because the grid decides it.
-/// Buckram's block equations reach the same width from the other direction for
-/// an in-flow wrapper, through the intrinsic shrink-to-fit lane; this is the
-/// answer for the boxes those equations do not size, and for the `auto` table
-/// widths that lane resolves by measuring instead.
+/// K4e2 resolves the `auto` case from Buckram's own table sizing instead of
+/// guessing at it, but that runs after the tree is built, and a flex item's
+/// style has to be right before it.
 fn wrapper_width_from_grid(grid: &Style) -> Option<Dimension> {
     let width = grid.size.width.into_option()?;
     if grid.box_sizing == BoxSizing::BorderBox {
@@ -2923,6 +2927,33 @@ fn wrapper_width_from_grid(grid: &Style) -> Option<Dimension> {
     .map(|edge| Dimension::from(edge).into_option())
     .sum::<Option<f32>>()?;
     Some(Dimension::length(width + outside))
+}
+
+/// Whether a wrapper needs the `float: left` shrink-to-fit compatibility route.
+///
+/// Only a block-level in-flow wrapper does. The wrapper of an inline-table is
+/// an atomic inline, an absolutely positioned wrapper is shrink-to-fit under
+/// CSS 2.1 section 10.3.7, and a flex or grid item is sized by its container -
+/// all three already shrink-wrap, and floating them instead would take them
+/// out of the formatting context they belong to.
+fn wrapper_needs_float_fallback<Id>(
+    boxes: &GeneratedBoxTree<Id>,
+    wrapper: BoxId,
+    style: &Style,
+) -> bool
+where
+    Id: Copy + Eq + Hash,
+{
+    let laid_out_as_an_item = boxes[wrapper].parent().is_some_and(|parent| {
+        matches!(
+            boxes[parent].formatting_context,
+            Some(FormattingContextKind::Flex | FormattingContextKind::Grid)
+        )
+    });
+    boxes[wrapper].display.outside == Some(DisplayOutside::Block)
+        && !laid_out_as_an_item
+        && style.position != Position::Absolute
+        && style.float == TaffyFloat::None
 }
 
 fn anonymous_taffy_style<Id>(css_box: &CssBox<Id>) -> Style {
@@ -4678,7 +4709,7 @@ mod tests {
         let (wrapper, grid) = table_wrapper_and_grid(
             "<div id=host><table><tr><td></td></tr></table></div>",
             "#host { width: 300px; }\
-             table { display: table; border-spacing: 0;\
+             table { display: table; border-spacing: 0; width: 100px;\
                      margin-left: auto; margin-right: auto; }\
              tr { display: table-row; }\
              td { display: table-cell; padding: 0; width: 100px; height: 10px; }",
