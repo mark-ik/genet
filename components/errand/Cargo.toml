@@ -74,4 +74,4 @@ quick-xml = "0.39"
 tracing = "0.1"
 
 [dev-dependencies]
-tokio = { version = "1", default-features = false, features = ["rt", "macros", "net", "io-util"] }
+tokio = { version = "1", default-features = false, features = ["rt", "macros", "net", "io-util", "sync"] }

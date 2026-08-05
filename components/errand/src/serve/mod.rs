@@ -23,7 +23,11 @@
 //! This is the publishing half of the rule that a format we do not own is
 //! projected into faithfully and never extended.
 
+pub mod adapt;
+pub mod dir;
 pub mod project;
+
+pub use dir::Directory;
 
 use std::future::Future;
 
@@ -188,5 +192,78 @@ mod tests {
             })
             .await;
         assert_eq!(missing, None);
+    }
+
+    /// The whole chain, on a real socket: a directory of files becomes a
+    /// `Source`, the adapter binds it to gopher's server, and gopher's own
+    /// client fetches it back. Nothing here is mocked.
+    #[tokio::test]
+    async fn a_directory_is_served_and_fetched_over_gopher() {
+        use std::sync::Arc;
+
+        // A tiny capsule on disk.
+        let root = std::env::temp_dir().join(format!("errand-serve-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        std::fs::write(root.join("hello.txt"), b"well met
+").unwrap();
+        std::fs::write(root.join("notes").join("a.gmi"), b"# A
+").unwrap();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let handler = adapt::gopher(Arc::new(Directory::new(&root)), "127.0.0.1", port);
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            let _ = gopher_protocol::serve(
+                listener,
+                handler,
+                gopher_protocol::ServerConfig::default(),
+                async {
+                    let _ = stopped.await;
+                },
+            )
+            .await;
+        });
+
+        // A file comes back verbatim.
+        let page = gopher_protocol::fetch(&format!("gopher://127.0.0.1:{port}/0hello.txt"))
+            .await
+            .unwrap();
+        assert_eq!(page.body, b"well met
+");
+
+        // The root is a directory, so it comes back as a real gophermap that
+        // gopher's own parser accepts.
+        let menu = gopher_protocol::fetch(&format!("gopher://127.0.0.1:{port}/1"))
+            .await
+            .unwrap();
+        let items = gopher_protocol::parse_menu(&String::from_utf8_lossy(&menu.body));
+        let displays: Vec<_> = items.iter().map(|i| i.display.as_str()).collect();
+        assert!(displays.contains(&"notes/"), "got {displays:?}");
+        assert!(displays.contains(&"hello.txt"), "got {displays:?}");
+
+        // Directories sort before files.
+        let first_resource = items.iter().find(|i| i.url.is_some()).unwrap();
+        assert_eq!(first_resource.display, "notes/");
+
+        // A missing path is gopher's error item, not a truncated reply.
+        let missing = gopher_protocol::fetch(&format!("gopher://127.0.0.1:{port}/0nope.txt"))
+            .await
+            .unwrap();
+        let items = gopher_protocol::parse_menu(&String::from_utf8_lossy(&missing.body));
+        assert_eq!(items[0].kind, gopher_protocol::GopherKind::Error);
+
+        // And traversal is refused over the wire, not just in the unit test.
+        let escaped = gopher_protocol::fetch(&format!("gopher://127.0.0.1:{port}/0../../etc/hosts"))
+            .await
+            .unwrap();
+        let items = gopher_protocol::parse_menu(&String::from_utf8_lossy(&escaped.body));
+        assert_eq!(items[0].kind, gopher_protocol::GopherKind::Error);
+
+        let _ = stop.send(());
+        let _ = server.await;
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
