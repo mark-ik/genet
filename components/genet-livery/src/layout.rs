@@ -20,13 +20,12 @@ use livery::{
     values::{
         Alignment as CssAlignment, AspectRatio, BorderStyle, BorderWidth,
         BoxSizing as CssBoxSizing, CaptionSide, Clear as CssClear, ContainerType,
-        Display as CssDisplay,
-        FlexDirection as CssFlexDirection, FlexWrap as CssFlexWrap, Float as CssFloat, FontSize,
-        Gap as CssGap, GridAutoFlow as CssGridAutoFlow, GridPlacement as CssGridPlacement,
-        GridTemplate as CssGridTemplate, GridTrack as CssGridTrack, Inset, Length,
-        LengthPercentage as CssLengthPercentage, LineHeight, Margin, Overflow as CssOverflow,
-        Position as CssPosition, RelativeLengthEnvironment, Size as CssSize, VerticalAlign,
-        WhiteSpaceCollapse,
+        Display as CssDisplay, FlexDirection as CssFlexDirection, FlexWrap as CssFlexWrap,
+        Float as CssFloat, FontSize, Gap as CssGap, GridAutoFlow as CssGridAutoFlow,
+        GridPlacement as CssGridPlacement, GridTemplate as CssGridTemplate,
+        GridTrack as CssGridTrack, Inset, Length, LengthPercentage as CssLengthPercentage,
+        LineHeight, Margin, Overflow as CssOverflow, Position as CssPosition,
+        RelativeLengthEnvironment, Size as CssSize, VerticalAlign, WhiteSpaceCollapse,
     },
 };
 use taffy::{
@@ -1573,8 +1572,7 @@ where
                     let font_size = font_size_px(&computed.font_size, parent_font_size);
                     let mut caption_nodes = Vec::new();
                     let mut children = Vec::new();
-                    for child in
-                        wrapper_children_in_caption_order(self.boxes, self.styles, box_id)
+                    for child in wrapper_children_in_caption_order(self.boxes, self.styles, box_id)
                     {
                         let Some(child_node) =
                             self.build_box(child, inherited, parent_font_size, containing_size)?
@@ -2164,7 +2162,8 @@ where
         captions
             .iter()
             .map(|(caption, margins)| {
-                self.measure_intrinsic_width(*caption, AlgorithmAvailableSpace::MinContent) + margins
+                self.measure_intrinsic_width(*caption, AlgorithmAvailableSpace::MinContent)
+                    + margins
             })
             .reduce(f32::max)
             .filter(|minimum| minimum.is_finite() && *minimum >= 0.0)
@@ -2556,8 +2555,7 @@ where
                     let font_size = font_size_px(&computed.font_size, parent_font_size);
                     let mut caption_nodes = Vec::new();
                     let mut children = Vec::new();
-                    for child in
-                        wrapper_children_in_caption_order(self.boxes, self.styles, box_id)
+                    for child in wrapper_children_in_caption_order(self.boxes, self.styles, box_id)
                     {
                         let Some(child_node) =
                             self.build_box(child, inherited, parent_font_size, containing_size)?
@@ -4780,11 +4778,7 @@ mod tests {
     }
 
     /// Every rectangle laid out for one table role, in tree order.
-    fn table_role_rects(
-        html: &str,
-        css: &str,
-        role: InternalTableRole,
-    ) -> Vec<PhysicalRect> {
+    fn table_role_rects(html: &str, css: &str, role: InternalTableRole) -> Vec<PhysicalRect> {
         table_boxes(html, css)
             .into_iter()
             .filter(|(each, _)| *each == role)
@@ -4920,6 +4914,48 @@ mod tests {
         assert!((wrapper.width - 100.0).abs() < 0.5, "wrapper: {wrapper:?}");
         assert!((wrapper.x - 100.0).abs() < 0.5, "wrapper: {wrapper:?}");
         assert!((grid.x - 100.0).abs() < 0.5, "grid: {grid:?}");
+    }
+
+    /// K4e3: a captioned table stops deferring.
+    ///
+    /// The point of the gate. `CaptionMinContribution::PendingK4e` was a named
+    /// gap rather than a defect, and the 2026-08-03 census counted it firing
+    /// 17 times; a measured caption closes it, and Buckram sizes the table
+    /// instead of declining it.
+    #[test]
+    fn k4e3_a_captioned_table_no_longer_defers() {
+        let dom = StaticDocument::parse(
+            "<div id=host><table><caption>a caption</caption>\
+             <tr><td>one</td><td>two</td></tr></table></div>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&["#host { width: 400px; } \
+                 table { display: table; border-spacing: 0; } \
+                 caption { display: table-caption; margin: 0; padding: 0; } \
+                 tr { display: table-row; } td { display: table-cell; padding: 0; }"]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+
+        let ledger = layout.table_shadow_ledger();
+        assert_eq!(
+            ledger.deferral_count(buckram::TableDeferral::CaptionMinPendingK4e),
+            0,
+            "a measured caption must not defer: {ledger:?}"
+        );
+        assert_assigned_and_honored(ledger);
     }
 
     /// K4e3: a caption wider than the table widens the *grid*.

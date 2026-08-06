@@ -803,6 +803,30 @@ number.
 `k4e3_caption_side_moves_the_caption_without_changing_the_table`, all asserting
 through emitted fragment geometry. Each uses a specified caption width so the
 expected number does not depend on font metrics.
+`k4e3_a_captioned_table_no_longer_defers` asserts the gate's actual point
+through the ledger: zero `CaptionMinPendingK4e`, and the table assigned,
+verified, and honored.
+
+**WPT:** `css/css-tables` unchanged at 62, `css/CSS2/tables` 118 to **119**,
+zero regressions. The improvement is `anonymous-table-box-width-001`, listed as
+a K4e target from the start. A `+1` beside K4e2's `+57` is the same shape as
+the K4c empty-table receipt and means the same thing: the captioned tables
+were mostly rendering correctly through the bridge already, and what changed is
+that Buckram owns them instead of declining them. The measure that moved is the
+ledger - 17 deferrals to zero.
+Proof directory `testing/genet/wpt-ledger/2026-08-04_buckram_k4e3`.
+
+**Verification:** 512 tests across the three crates, 0 failed.
+`cargo clippy -p buckram` clean; `-p genet-livery` blocked by the same four
+pre-existing Clippy 1.97.0 warnings recorded in the K4e1 receipt. Rustfmt and
+`git diff --check` clean on touched files.
+
+**Not yet done in K4e3:** a caption whose measurement does not arrive still
+defers, which is the safety net rather than a gap with a known trigger.
+Multiple captions stack in source order within a side, but their block-axis
+margins are Taffy's ordinary block layout rather than anything caption-aware.
+Writing modes are untouched: `wrapper_children_in_caption_order` orders in the
+block axis of a horizontal flow, and a vertical-flow table's captions are K6's.
 
 - **K4e4. CSSOM, hit testing, and removal.** Make wrapper/grid/caption
   selection explicit, and delete the remaining compatibility routes: the
