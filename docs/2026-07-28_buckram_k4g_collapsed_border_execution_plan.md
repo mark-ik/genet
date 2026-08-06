@@ -224,6 +224,53 @@ K4c and K4d receive a projected intrinsic or used offset only after K4g3 has
 selected that projection from current interoperability evidence. They must
 not choose `first`, `last`, `maximum`, or `average` on their own.
 
+### The spanning-side projection, measured - 2026-08-06
+
+The seam above says K4c and K4d may not choose `first`, `last`, `maximum`, or
+`average` on their own, and must wait for interoperability evidence. Here it
+is. Proof directory
+`testing/genet/wpt-ledger/2026-08-06_buckram_k4g3_interop`.
+
+**The quantity.** The used offset between the spanning cell's border-box edge
+and its content-box edge on the shared side, read against a fixed probe that
+exactly fills the content box. Border-box to border-box is `0.00` in both
+engines everywhere, so the whole collapsed border lives inside the two cells'
+offsets and this offset is the scalar K4c/K4d would consume.
+`getComputedStyle` is unusable for it: both engines return specified widths,
+and a spanning cell reports `0px` on a side whose used offset is 5.
+
+**Chrome 150 is `maximum`,** scoped to the spanning cell's own segments rather
+than the whole row or column edge. Scored over 18 segment sequences: `max`
+18/18, `first` 12/18, `last` 6/18, `average` 2/18.
+
+**Firefox 153 is none of the four.** It is order-dependent: the same two
+winners reversed give 5.00 and 2.50. Its numbers fit `acc = seg[0]/2` then
+`acc = max(acc/2, seg[i]/2)` per later segment on all 18, including sequences
+chosen to break it. That recurrence is an inference; the order dependence is
+the measurement, and five relayout passes agree.
+
+**The tiebreak is CSS 2.1 section 17.6.2's centering rule, and it is
+observable in pixels.** Both engines centre every painted segment on its grid
+line. For case 6/30/6, Chrome's spanning content box ends at y=101 and the
+30px border paints 102-131, abutting exactly. Firefox's content box also ends
+at 101 and the same border paints 94-123, so eight rows of border are drawn
+over the spanning cell's own content. Firefox honours the centering rule when
+it paints and contradicts it when it sizes.
+
+**Decision: `maximum`.** It is what Chrome does, and it is the unique smallest
+of the four candidates that leaves room for every segment's half-border under
+the centering rule. K4g3 implements that; K4c and K4d receive it as a
+projected scalar per side.
+
+**Two things this does not settle.** Whether `hidden` is excluded from the
+projection or participates as a zero cannot be distinguished under `maximum`,
+because a zero changes no maximum; Firefox's behaviour shows a participating
+zero in Gecko, and the question only becomes decisive if the projection is
+ever revisited. And a probe of this quantity must anchor its content to the
+measured side: an early case read 10.00 and looked like a row-wide maximum
+when it was leftover row space, and two independent corrections both give
+1.00.
+
 ## Resolution and layout sequence
 
 The accepted data flow is:
