@@ -10,6 +10,7 @@ use crate::{BoxId, CssBoxTree, InternalTableRole};
 
 mod automatic;
 mod automatic_used;
+mod borders;
 mod fixed;
 mod fragments;
 mod pipeline;
@@ -25,6 +26,11 @@ pub use automatic_used::{
     TableAutomaticInlineSizingIndefinite, TableAutomaticInlineSizingInput,
     TableAutomaticInlineSizingOutcome, cache_automatic_table_grid_intrinsic_sizes,
     size_automatic_table_inline,
+};
+pub use borders::{
+    GridEdgeOrientation, TableBorderCandidate, TableBorderCandidates, TableBorderError,
+    TableBorderOrderKey, TableBorderOrigin, TableBorderSide, TableBorderSides, TableBorderSource,
+    TableBorderStyle, TableGridEdge, collect_table_border_candidates,
 };
 pub use fixed::{
     TableFixedColumnGroupInput, TableFixedColumnInput, TableFixedInlineSizingInput,

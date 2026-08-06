@@ -316,6 +316,67 @@ performing conflict resolution.
 No generic border painting is deleted in K4g1. Record the exact candidate
 sources and edge counts for every pure and live fixture.
 
+### K4g1 receipt - 2026-08-06
+
+Base commit: `bad53b5cb2f`.
+
+**Capability:** `components/buckram/src/table/borders.rs` answers one question
+- *which borders meet here* - for every atomic segment of a table grid, and
+answers nothing else. No winner is selected, no geometry is consulted, and no
+paint changes.
+
+**The contracts landed as the plan specified them**, with two spellings
+settled by writing them down. `TableBorderOrigin` and `TableBorderStyle` are
+declared in CSS 2.1 section 17.6.2's own precedence order, so their derived
+`Ord` *is* the precedence relation and K4g2 compares them directly rather than
+restating the table. `TableBorderSide` is retained on every candidate, because
+a segment's winner being one row's block-end rather than the next row's
+block-start survives into paint even where the two land on one line.
+
+**Invariants held by construction rather than by assertion:**
+
+- A candidate covering several atomic segments becomes several candidates, one
+  per segment. A spanning cell's side is never one edge, which is the stop rule
+  the plan states about spanning sides, and the fixture reads the count.
+- `hidden` and `none` are collected. A resolved `hidden` paints nothing, but
+  "suppressed here" and "no candidate here" are different answers and K4g2 has
+  to tell them apart.
+- Collection order is fixed by role - table, groups, tracks, cells - so the
+  ledger is invariant under paint traversal, which the plan requires and which
+  a role-ordered loop gives for free.
+- K4f's collapsed tracks keep their intersections and their candidates. Removing
+  them here would delete the model rather than the rendering.
+- A negative or non-finite width is an error rather than a clamp: a clamped
+  width would enter sizing as a real zero-width border.
+
+**Colour stays generic.** `TableBorderCandidate<Color>` never inspects its
+payload; resolution compares style, width, origin, and order, and carries the
+winner's colour through. That is what keeps Livery's colour model out of the
+table model without an opaque handle.
+
+**Pure fixture:** seven in `borders.rs` - interior-line coverage from both
+sides, a spanning side's per-track segments, `hidden`/`none` survival, a row
+group projecting over exactly its range and never onto an interior line, a
+collapsed track keeping its edges, a rejected negative width, and the
+precedence order being the enums' own order.
+
+**Adapter fixture:** none. K4g1 has no adapter surface yet - Livery lowers
+nothing into these types until K4g2 needs winners.
+
+**WPT:** unchanged by design. The plan's removal receipt for this gate says no
+generic border painting is deleted here, and nothing that renders today takes
+a different route.
+
+**Verification:** 528 tests across the three crates (buckram 172), 0 failed.
+`cargo clippy -p buckram` clean. Rustfmt and `git diff --check` clean.
+
+**Not yet done in K4g1:** the adapter mapping from Livery's physical computed
+sides into the grid's logical axes, which the plan lists here but which has no
+consumer until K4g2 - writing it now would be a lowering with nothing to
+lower into. `TableBorderOrderKey` is defined but the direction-corrected index
+that fills it is the adapter's, and unwritten. Vertical writing modes are
+representable and untested.
+
 ## K4g2. CSS2 conflict precedence per segment
 
 ### Outcome
