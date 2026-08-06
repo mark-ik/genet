@@ -1,6 +1,10 @@
 {
   "command": "reftest",
-  "engine": "boa",
+  "engine": "none",
+  "manifest_sha256": "d5ec5be9bf1a75ed00d7e7ab28afe8a694a55e11682ba74305874d70b18dd422",
+  "renderer": "stylo",
+  "runner_sha256": "176cccca85acbd5a5d75421eec4048badfcc15319173b78f65d056c5d447c183",
+  "subset": "css/mediaqueries",
   "tests": {
     "css/mediaqueries/aspect-ratio-001.html": "pass",
     "css/mediaqueries/aspect-ratio-002.html": "pass",
@@ -75,22 +79,10 @@
       "status": "skip"
     },
     "css/mediaqueries/mq-calc-001.html": "pass",
-    "css/mediaqueries/mq-calc-002.html": {
-      "reason": "needs-script",
-      "status": "skip"
-    },
-    "css/mediaqueries/mq-calc-003.html": {
-      "reason": "needs-script",
-      "status": "skip"
-    },
-    "css/mediaqueries/mq-calc-004.html": {
-      "reason": "needs-script",
-      "status": "skip"
-    },
-    "css/mediaqueries/mq-calc-005.html": {
-      "reason": "needs-script",
-      "status": "skip"
-    },
+    "css/mediaqueries/mq-calc-002.html": "pass",
+    "css/mediaqueries/mq-calc-003.html": "pass",
+    "css/mediaqueries/mq-calc-004.html": "fail",
+    "css/mediaqueries/mq-calc-005.html": "fail",
     "css/mediaqueries/mq-calc-006.html": "pass",
     "css/mediaqueries/mq-calc-007.html": "pass",
     "css/mediaqueries/mq-calc-008.html": "pass",
@@ -192,22 +184,10 @@
       "reason": "non-reftest",
       "status": "skip"
     },
-    "css/mediaqueries/relative-units-001.html": {
-      "reason": "needs-script",
-      "status": "skip"
-    },
-    "css/mediaqueries/relative-units-002.html": {
-      "reason": "needs-script",
-      "status": "skip"
-    },
-    "css/mediaqueries/relative-units-003.html": {
-      "reason": "needs-script",
-      "status": "skip"
-    },
-    "css/mediaqueries/relative-units-004.html": {
-      "reason": "needs-script",
-      "status": "skip"
-    },
+    "css/mediaqueries/relative-units-001.html": "fail",
+    "css/mediaqueries/relative-units-002.html": "fail",
+    "css/mediaqueries/relative-units-003.html": "fail",
+    "css/mediaqueries/relative-units-004.html": "fail",
     "css/mediaqueries/relative-units-005.html": {
       "reason": "non-reftest",
       "status": "skip"

@@ -2313,11 +2313,130 @@ fn reftest_ref(html: &str) -> Option<(MatchKind, String)> {
     None
 }
 
-/// Skip reftests needing things we cannot run: scripts (no JS yet).
-/// Inline + linked CSS and local images are loaded; remote resources just
-/// render as missing.
+/// Skip reftests whose pixels depend on script having run. Inline + linked CSS
+/// and local images are loaded; remote resources just render as missing.
+///
+/// Reftests render with no JS engine, so the question is not "is there script"
+/// but "would running it change the screenshot". A document with no `<script>`
+/// at all is runnable, as before. One with script is runnable only if every
+/// script is a property read (`document.body.offsetTop;`) and nothing else in
+/// the document can hand script a way in. That read is a WPT idiom for forcing
+/// a style/layout flush partway through parsing, so the flushed and unflushed
+/// renders are the same picture; the tests using it are otherwise static.
+///
+/// Everything ambiguous skips. A script we cannot read (`src=`), a tag we
+/// cannot pair with its close, an event handler we will not fire, and
+/// `reftest-wait` (WPT's contract that the screenshot waits for script) all
+/// count as needing script.
 fn needs_script(html: &str) -> bool {
-    html.to_ascii_lowercase().contains("<script")
+    let lower = html.to_ascii_lowercase();
+    let mut saw_script = false;
+    let mut cursor = 0;
+    // Lexical, not DOM: a `<script` inside a comment or in text counts as a
+    // script here. That over-counts, which is the safe direction.
+    while let Some(offset) = lower[cursor..].find("<script") {
+        saw_script = true;
+        let open = cursor + offset;
+        let Some(tag_end) = lower[open..].find('>').map(|i| open + i) else {
+            return true;
+        };
+        if has_attribute(&lower[open..tag_end], "src") {
+            return true;
+        }
+        let body = tag_end + 1;
+        let Some(close) = lower[body..].find("</script").map(|i| body + i) else {
+            return true;
+        };
+        if !is_read_only_script(&html[body..close]) {
+            return true;
+        }
+        cursor = close;
+    }
+    if !saw_script {
+        return false;
+    }
+    // Inert script elements settle only the script elements. These two say the
+    // document expects script to run regardless of what the elements contain.
+    lower.contains("reftest-wait") || has_event_handler_attribute(&lower)
+}
+
+/// A script body that can only read: every statement is a bare property access,
+/// with no call, assignment, operator, or control flow. Reading a DOM property
+/// paints nothing, and a body restricted to reads cannot have installed a
+/// getter that would.
+fn is_read_only_script(body: &str) -> bool {
+    let body = body.trim();
+    // XHTML tests wrap script bodies in CDATA; the wrapper is syntax, not code.
+    let body = body
+        .strip_prefix("<![CDATA[")
+        .and_then(|b| b.strip_suffix("]]>"))
+        .unwrap_or(body);
+    body.split(';')
+        .map(str::trim)
+        .all(|statement| statement.is_empty() || is_property_path(statement))
+}
+
+/// `foo`, `document.body.offsetTop` — an identifier path and nothing else.
+fn is_property_path(text: &str) -> bool {
+    !text.is_empty()
+        && text.split('.').all(|segment| {
+            let mut chars = segment.chars();
+            chars
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+                && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+        })
+}
+
+/// An `on…=` attribute anywhere in the lowercased source: an entry point this
+/// runner will not fire, so whatever it would have painted is not what we
+/// screenshot.
+fn has_event_handler_attribute(lower: &str) -> bool {
+    let bytes = lower.as_bytes();
+    let mut cursor = 0;
+    while let Some(offset) = lower[cursor..].find("on") {
+        let start = cursor + offset;
+        cursor = start + 2;
+        // An attribute name starts after whitespace inside a tag.
+        if start == 0 || !bytes[start - 1].is_ascii_whitespace() {
+            continue;
+        }
+        let mut end = cursor;
+        while bytes.get(end).is_some_and(u8::is_ascii_lowercase) {
+            end += 1;
+        }
+        if end == cursor {
+            continue;
+        }
+        if attribute_value_follows(bytes, end) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether `name` appears as an attribute name in a lowercased open tag.
+fn has_attribute(tag: &str, name: &str) -> bool {
+    let bytes = tag.as_bytes();
+    let mut cursor = 0;
+    while let Some(offset) = tag[cursor..].find(name) {
+        let start = cursor + offset;
+        cursor = start + name.len();
+        if start > 0
+            && bytes[start - 1].is_ascii_whitespace()
+            && attribute_value_follows(bytes, cursor)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn attribute_value_follows(bytes: &[u8], mut at: usize) -> bool {
+    while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
+        at += 1;
+    }
+    bytes.get(at) == Some(&b'=')
 }
 
 /// WPT `<meta name="fuzzy" content="...">` tolerance, as
@@ -2953,6 +3072,61 @@ mod tests {
             Some(ReftestRenderer::Livery)
         );
         assert_eq!(ReftestRenderer::parse("boa"), None);
+    }
+
+    #[test]
+    fn a_document_without_script_still_runs() {
+        assert!(!needs_script("<p>hello</p>"));
+        assert!(!needs_script("<div onload-ish>no attribute here</div>"));
+    }
+
+    #[test]
+    fn a_read_only_script_does_not_need_script() {
+        // The WPT flush idiom, in both the shapes the corpus uses.
+        assert!(!needs_script(
+            "<div/><script type=\"text/javascript\">document.body.offsetWidth</script>"
+        ));
+        assert!(!needs_script(
+            "<script>\n  document.body.offsetTop;\n</script>"
+        ));
+        assert!(!needs_script(
+            "<script><![CDATA[ document.body.offsetWidth; ]]></script>"
+        ));
+        assert!(!needs_script("<script></script>"));
+    }
+
+    #[test]
+    fn anything_a_script_could_change_still_skips() {
+        assert!(needs_script("<script>document.body.remove();</script>"));
+        assert!(needs_script("<script>t.style.color = 'red'</script>"));
+        assert!(needs_script(
+            "<script>document.body.offsetWidth; x.remove()</script>"
+        ));
+        assert!(needs_script("<script>// just a comment</script>"));
+        assert!(needs_script(
+            "<script src=\"/common/rendering-utils.js\"></script>"
+        ));
+        assert!(needs_script("<script SRC='x.js'></script>"));
+    }
+
+    #[test]
+    fn an_inert_script_does_not_excuse_the_rest_of_the_document() {
+        // A body that reads nothing still leaves these two ways in.
+        assert!(needs_script(
+            "<html class=\"reftest-wait\"><script>document.body.offsetTop;</script>"
+        ));
+        assert!(needs_script(
+            "<body onload=\"doTest()\"><script>document.body.offsetTop;</script>"
+        ));
+        assert!(needs_script(
+            "<body ONLOAD = 'doTest()'><script>document.body.offsetTop;</script>"
+        ));
+    }
+
+    #[test]
+    fn unreadable_script_markup_skips() {
+        assert!(needs_script("<script>document.body.offsetTop;"));
+        assert!(needs_script("<script"));
     }
 }
 
