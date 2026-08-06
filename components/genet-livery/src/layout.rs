@@ -160,6 +160,14 @@ where
         self.buckram.get(node)
     }
 
+    /// The node's principal box's fragment: a table element's grid box, which
+    /// owns background, borders, and used `width`/`height` under CSS 2.1
+    /// section 17.4. Rectangle queries and paint-effect anchors use
+    /// [`Self::get`], whose first box is the outermost - the wrapper.
+    pub fn principal_fragment(&self, node: Id) -> Option<&TreeFragment> {
+        self.buckram.principal_fragment(node)
+    }
+
     pub fn len(&self) -> usize {
         self.buckram.len()
     }
@@ -540,7 +548,10 @@ where
         style.margin_left = zero;
     }
     let fragments = layout(dom, &measuring, viewport_width, viewport_height)?;
-    let Some(fragment) = fragments.get(node) else {
+    // K4e4: used `width` and `height` are properties of the principal box.
+    // For a table element that is the grid, whose border box excludes the
+    // captions the wrapper contains.
+    let Some(fragment) = fragments.principal_fragment(node) else {
         return Ok(None);
     };
     let containing_inline_size = dom.parent(node).and_then(|parent| {
@@ -1039,7 +1050,20 @@ where
             {
                 return None;
             }
-            (!has_atomic_inline_ancestor(dom, styles, boxes, node)).then_some(box_id)
+            if has_atomic_inline_ancestor(dom, styles, boxes, node) {
+                return None;
+            }
+            // K4e4: an inline-table's principal box is the grid, but its atom
+            // is the wrapper above it - the box that carries the element's
+            // margins and contains its captions.
+            if css_box.display.internal_table == Some(InternalTableRole::Grid)
+                && let Some(wrapper) = css_box.parent().filter(|parent| {
+                    boxes[*parent].display.internal_table == Some(InternalTableRole::Wrapper)
+                })
+            {
+                return Some(wrapper);
+            }
+            Some(box_id)
         })
         .collect::<Vec<_>>();
     let mut plane = AtomicLayoutPlane::default();
@@ -1459,7 +1483,10 @@ where
         match self.boxes[box_id].origin {
             BoxOrigin::Element(node) => {
                 let computed = self.styles.get(node).cloned().unwrap_or_default();
-                if computed.display == CssDisplay::Table {
+                if matches!(
+                    computed.display,
+                    CssDisplay::Table | CssDisplay::InlineTable
+                ) {
                     self.table_bridge_count += 1;
                 }
                 // K4e1: the wrapper above this grid took the properties
@@ -1952,11 +1979,13 @@ where
     ) -> Result<Vec<AlgorithmNodeId>, LayoutError> {
         // A `display: table` box takes its flattened cells directly, matching
         // the precomputed atomic subtree.
-        if parent_style.display == CssDisplay::Table
-            && self
-                .boxes
-                .origin_node(parent)
-                .is_some_and(|node| table_is_flattenable(self.dom, self.styles, node))
+        if matches!(
+            parent_style.display,
+            CssDisplay::Table | CssDisplay::InlineTable
+        ) && self
+            .boxes
+            .origin_node(parent)
+            .is_some_and(|node| table_is_flattenable(self.dom, self.styles, node))
         {
             let table = build_table_grid(self.boxes, self.dom, parent);
             let mut cell_nodes = Vec::with_capacity(table.cells.len());
@@ -2356,7 +2385,10 @@ where
         match self.boxes[box_id].origin {
             BoxOrigin::Element(node) => {
                 let computed = self.styles.get(node).cloned().unwrap_or_default();
-                if computed.display == CssDisplay::Table {
+                if matches!(
+                    computed.display,
+                    CssDisplay::Table | CssDisplay::InlineTable
+                ) {
                     self.table_bridge_count += 1;
                 }
                 // K4e1: the wrapper above this grid took the properties
@@ -2383,8 +2415,10 @@ where
                 }
                 // A `display: table` box takes its flattened cells directly,
                 // so the row-group and row boxes never enter the tree.
-                let table = (computed.display == CssDisplay::Table
-                    && table_is_flattenable(self.dom, self.styles, node))
+                let table = (matches!(
+                    computed.display,
+                    CssDisplay::Table | CssDisplay::InlineTable
+                ) && table_is_flattenable(self.dom, self.styles, node))
                 .then(|| build_table_grid(self.boxes, self.dom, box_id));
                 let mut table_cell_nodes = Vec::new();
                 let children = if let Some(table) = table.as_ref() {
@@ -2697,13 +2731,11 @@ where
     Id: Copy + Eq + Hash,
 {
     let css_box = &boxes[box_id];
+    // K4e4 deleted K4a's wrapper/grid exclusion here: an inline-table's
+    // wrapper is inline-level and rides the atomic-inline lane. The grid
+    // never reaches this test, because a wrapper's children are built
+    // directly rather than through flow-children grouping.
     css_box.display.outside == Some(DisplayOutside::Inline)
-        // K4a preserves the existing block-flow bridge for the wrapper/grid
-        // pair. K4e replaces this compatibility route with table dispatch.
-        && !matches!(
-            css_box.display.internal_table,
-            Some(InternalTableRole::Wrapper | InternalTableRole::Grid)
-        )
         && css_box.float == FloatSide::None
         && matches!(
             css_box.positioning,
@@ -2759,6 +2791,7 @@ where
         computed.display,
         CssDisplay::InlineBlock
             | CssDisplay::Table
+            | CssDisplay::InlineTable
             | CssDisplay::TableCell
             | CssDisplay::TableCaption
     ) || matches!(
@@ -3635,6 +3668,9 @@ where
 {
     styles.get(id).is_some_and(|style| {
         style.display == CssDisplay::InlineBlock
+            // K4e4: an inline-table is an atomic inline like an inline-block;
+            // its wrapper occupies line space as a unit.
+            || style.display == CssDisplay::InlineTable
             || (style.display == CssDisplay::Inline && is_replaced_element(dom, id))
     })
 }
@@ -3745,6 +3781,10 @@ fn collect_hit_candidates<D>(
     D::NodeId: Copy + Eq + Hash,
 {
     let style = state.styles.get(id);
+    // K4e4: the hit target is the node's outermost box - a table element's
+    // wrapper - so the caption area belongs to the table when nothing deeper
+    // claims it, and the caption element wins inside its own rectangle by
+    // paint order.
     let fragment = state.fragments.get(id);
     let visible_fragment = fragment.map(|fragment| Fragment {
         x: fragment.x - ancestor_scroll.0,
@@ -4021,8 +4061,10 @@ fn to_taffy_style(computed: &ComputedValues, font_size: f32) -> Style {
         CssDisplay::Flex => Display::Flex,
         CssDisplay::Grid => Display::Grid,
         // A table box is laid out as a grid whose children are its
-        // TableGrid starts; K4d replaces this compatibility bridge.
-        CssDisplay::Table => Display::Grid,
+        // TableGrid starts; K4d replaces this compatibility bridge. An
+        // inline-table's grid is the same box - inline-ness lives on the
+        // wrapper (K4e4).
+        CssDisplay::Table | CssDisplay::InlineTable => Display::Grid,
         CssDisplay::TableRow => Display::Flex,
         _ => Display::Block,
     };
@@ -4956,6 +4998,90 @@ mod tests {
             "a measured caption must not defer: {ledger:?}"
         );
         assert_assigned_and_honored(ledger);
+    }
+
+    /// K4e4: used `width` and `height` answer from the grid, not the wrapper.
+    ///
+    /// The `height` property stayed on the grid under CSS 2.1 section 17.4,
+    /// so `getComputedStyle(table).height` reports the grid's border box - the
+    /// 40px of rows, not the 70px wrapper that also contains the caption.
+    #[test]
+    fn k4e4_used_height_of_a_captioned_table_is_the_grids() {
+        let dom =
+            StaticDocument::parse("<table><caption>above</caption><tr><td>one</td></tr></table>");
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "table { display: table; table-layout: fixed; width: 200px; border-spacing: 0; } \
+                 caption { display: table-caption; height: 30px; margin: 0; padding: 0; } \
+                 tr { display: table-row; height: 40px; } \
+                 td { display: table-cell; padding: 0; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let table = {
+            fn find(
+                dom: &StaticDocument,
+                node: <StaticDocument as LayoutDom>::NodeId,
+            ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+                if dom
+                    .element_name(node)
+                    .is_some_and(|name| name.local.as_ref() == "table")
+                {
+                    return Some(node);
+                }
+                dom.dom_children(node)
+                    .into_iter()
+                    .find_map(|child| find(dom, child))
+            }
+            find(&dom, dom.document()).expect("the table exists")
+        };
+        let used = used_value_context(&dom, &styles, 320.0, 240.0, table)
+            .expect("layout")
+            .expect("the table has a fragment");
+
+        assert!((used.border_box.0 - 200.0).abs() < 0.5, "{used:?}");
+        assert!(
+            (used.border_box.1 - 40.0).abs() < 0.5,
+            "the used height is the grid's, without the caption: {used:?}"
+        );
+    }
+
+    /// K4e4: an inline-table occupies line space as an atom.
+    ///
+    /// Deleting K4a's wrapper/grid exclusion from `box_is_inline` lets the
+    /// wrapper join the inline group, and the atomic-inline lane lays its
+    /// subtree out separately - the same route an inline-block rides. The
+    /// receipt is placement: the table sits to the right of the text that
+    /// precedes it in the same line, at the grid's own width, instead of
+    /// dropping to a line of its own as the block it used to be built as.
+    #[test]
+    fn k4e4_an_inline_table_sits_in_the_text_line() {
+        let (wrapper, grid) = table_wrapper_and_grid(
+            "<div id=host>before<span class=t><span class=r>\
+             <span class=c>cell</span></span></span></div>",
+            "#host { width: 300px; font-family: monospace; font-size: 10px;\
+                     line-height: 20px; }\
+             .t { display: inline-table; border-spacing: 0; }\
+             .r { display: table-row; }\
+             .c { display: table-cell; padding: 0; width: 50px; height: 12px; }",
+        );
+
+        assert!((grid.width - 50.0).abs() < 0.5, "grid: {grid:?}");
+        assert!(
+            (wrapper.width - grid.width).abs() < 0.5,
+            "{wrapper:?} {grid:?}"
+        );
+        // In the line, after the word, not below it.
+        assert!(
+            wrapper.x > 30.0,
+            "the atom must sit after 'before': {wrapper:?}"
+        );
+        assert!(
+            wrapper.y < 20.0,
+            "the atom must sit in the first line: {wrapper:?}"
+        );
     }
 
     /// K4e3: a caption wider than the table widens the *grid*.

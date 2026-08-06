@@ -10,7 +10,7 @@ use std::{
 
 use buckram::{
     BoxId, BoxOrigin, CssBoxTree, DisplayInside, DisplayOutside, FloatLineConstraints,
-    FormattingContextKind,
+    FormattingContextKind, InternalTableRole,
 };
 use layout_dom_api::{LayoutDom, NodeKind};
 use livery::{
@@ -1738,29 +1738,7 @@ where
                     || (css_box.display.outside == Some(DisplayOutside::Inline)
                         && css_box.display.inside == Some(DisplayInside::FlowRoot));
                 if atomic {
-                    if let Some(fragment) = self.fragments.atomic_box_rect(box_id).copied() {
-                        let font_size = super::paint::used_font_size(&style);
-                        let (line_width, line_box_height, margin_left, margin_top) =
-                            inline_margin_box(&style, fragment, font_size, self.percentage_basis);
-                        self.inline_boxes.push(InlineAtom {
-                            source: box_id,
-                            owners: self.owners.clone(),
-                            index: self.text.len(),
-                            fragment,
-                            line_width,
-                            line_box_height,
-                            margin_left,
-                            margin_top,
-                            edge: false,
-                            paint: true,
-                            vertical_align: style.vertical_align,
-                            font_size,
-                            line_height: super::layout::line_height_px(
-                                &style.line_height,
-                                font_size,
-                            ),
-                        });
-                    }
+                    self.push_atomic_box(box_id, &style);
                     return;
                 }
 
@@ -1780,12 +1758,59 @@ where
                 }
             },
             BoxOrigin::Anonymous { .. } => {
+                // K4e4: an inline-table's wrapper is the atom that occupies
+                // line space - the box that carries the element's margins
+                // (CSS 2.1 section 17.4) and contains its captions. Without
+                // this arm the wrapper would be walked as an ordinary inline
+                // container and the grid's blocks shredded into the line.
+                if css_box.display.internal_table == Some(InternalTableRole::Wrapper)
+                    && css_box.display.outside == Some(DisplayOutside::Inline)
+                    && let Some(owner) =
+                        css_box.origin.node().and_then(|node| self.styles.get(node))
+                {
+                    if owner.display == Display::None {
+                        return;
+                    }
+                    let mut style = crate::table_wrapper::wrapper_style(owner);
+                    // Alignment in the line is the table element's own
+                    // vertical-align; it is not on the wrapper's migrated
+                    // property list, and for_child reset it.
+                    style.vertical_align = owner.vertical_align;
+                    self.push_atomic_box(box_id, &style);
+                    return;
+                }
                 for child in css_box.children() {
                     self.collect(*child, inherited);
                 }
             },
             BoxOrigin::Pseudo { .. } => {},
         }
+    }
+
+    /// One atomic inline box: its whole subtree was laid out separately and
+    /// its rectangle occupies line space as a unit.
+    fn push_atomic_box(&mut self, box_id: BoxId, style: &ComputedValues) {
+        let Some(fragment) = self.fragments.atomic_box_rect(box_id).copied() else {
+            return;
+        };
+        let font_size = super::paint::used_font_size(style);
+        let (line_width, line_box_height, margin_left, margin_top) =
+            inline_margin_box(style, fragment, font_size, self.percentage_basis);
+        self.inline_boxes.push(InlineAtom {
+            source: box_id,
+            owners: self.owners.clone(),
+            index: self.text.len(),
+            fragment,
+            line_width,
+            line_box_height,
+            margin_left,
+            margin_top,
+            edge: false,
+            paint: true,
+            vertical_align: style.vertical_align,
+            font_size,
+            line_height: super::layout::line_height_px(&style.line_height, font_size),
+        });
     }
 
     fn push_edge(&mut self, source: BoxId, style: &ComputedValues, owners: &[BoxId], start: bool) {

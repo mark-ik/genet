@@ -839,6 +839,86 @@ block axis of a horizontal flow, and a vertical-flow table's captions are K6's.
   accident this sub-gate replaces with a decision, and it is what makes the
   migrated `opacity` and `transform` observable.
 
+### K4e4 receipt - 2026-08-06
+
+Base commit: `bbdd5855e78`.
+
+**Capability:** every single-rectangle consumer of a table element's geometry
+names which of the two boxes it reads, and an inline-table occupies line space
+as an atomic inline instead of being built as a block.
+
+**The accident, named.** `LayoutResult::get(node)` answers with the first
+registered box's fragment, and boxes register in materialization order,
+outermost first - so a table element answered with its wrapper because of an
+ordering coincidence. `get` keeps that behavior as the deliberate outer-box
+lookup, documented as such, and `principal_fragment` arrives beside it for the
+element's own box. The selections:
+
+- Background, border, and shadow paint on the **grid** (CSS 2.1 section 17.4).
+  Before this gate a captioned table's background covered its caption, because
+  it painted on the wrapper.
+- Used `width` and `height` for CSSOM answer from the **grid**: the height of
+  a captioned table is its rows, not rows plus caption.
+- `opacity` and `transform` anchor to the **wrapper** (CSS Tables 3 section
+  3.6.1), so the layer and the coordinate space wrap the captions. This is
+  what makes K4e1's migration of those two properties observable.
+- The overflow clip stays on the **wrapper**, whose property it is.
+- The hit target and rectangle queries stay the **wrapper**: the caption area
+  belongs to the table when nothing deeper claims it, and the caption element
+  wins inside its own rectangle by paint order.
+
+**Inline-table rides the atomic-inline lane.** K4a's wrapper/grid exclusion in
+`box_is_inline` is deleted; an inline-table's wrapper joins the inline group
+like an inline-block. Three mechanisms had to arrive together: the atomic
+subtree roots at the *wrapper* rather than the principal grid (the atom is the
+box with the margins and the captions), the text walker's anonymous arm emits
+the wrapper as an `InlineAtom` styled by `wrapper_style` of its owner with the
+element's own `vertical-align`, and the pending-table gates widen from
+`display == Table` to include `InlineTable` - without that last one the grid
+rode the bridge unsized inside the atom and filled the viewport.
+
+**The fixed algorithm's caption guard fell, found by a fixture.** The paint
+fixture's captioned `table-layout: fixed` table came out one line tall: the
+ledger showed `CaptionMinPendingK4e`, because Buckram's fixed algorithm
+refused *any* caption and K4e3 had closed the automatic path only. The guard
+is now the same floor the automatic path applies - `max(caption_min)` on the
+requested size, C3's override of an authored width included - and only an
+unmeasured caption defers. That is the second time this shape appeared
+(K4d4c's two-document reftest was the first): the named deferral was doing its
+job, and the fixture that tripped it was about something else entirely.
+
+**Pure fixture:** `a_measured_caption_floors_a_fixed_tables_size` in
+`fixed.rs`, covering the floor and the still-deferring unmeasured case.
+
+**Adapter fixture:** `a_tables_background_paints_on_the_grid_and_spares_the_caption`
+and `a_tables_opacity_layer_wraps_its_caption` through the paint list;
+`k4e4_used_height_of_a_captioned_table_is_the_grids` through
+`used_value_context`; `k4e4_an_inline_table_sits_in_the_text_line` through
+fragment geometry - after a word, in the first line, at the grid's width.
+
+**WPT:** `css/css-tables` unchanged at 62, `css/CSS2/tables` 119 to **129**.
+Ten of the eleven improvements are `caption-side-applies-to-006` through
+`-015`, the family that tests `caption-side` on inline-tables; the eleventh is
+`table-vertical-align-baseline-008`. The one regression is
+`border-collapse-empty-row`, the K4e2 false-pass pair on its third
+appearance: the reference's four *separated* inline-tables are now sized and
+flow inline while the test's four *collapsed* ones still defer to K4g. Routed
+there with the other 200.
+Proof directory `testing/genet/wpt-ledger/2026-08-06_buckram_k4e4`.
+
+**Verification:** 517 tests across the three crates (buckram 164), 0 failed.
+`cargo clippy -p buckram` clean; `-p genet-livery` blocked by the same four
+pre-existing Clippy 1.97.0 warnings recorded in the K4e1 receipt. Rustfmt and
+`git diff --check` clean on touched files.
+
+**Not yet done in K4e4:** an inline-table atom aligns in the line by the
+bottom of its margin box rather than by the table-root's exported baseline,
+which is K4d5's seam; `table-vertical-align-baseline-008` passing shows the
+bottom edge coincides for the common single-row case. A collapsed-border
+inline-table's atom falls back to an unsized wrapper. `getClientRects` as a
+multi-fragment API does not exist yet; the wrapper-rect decision here is the
+single-rectangle one.
+
 ### K4e caption interop matrix - 2026-08-03 (research, ahead of its gate)
 
 What a caption contributes to table inline sizing, measured before

@@ -196,21 +196,18 @@ pub fn size_fixed_table_inline(
             TableDeferral::TrackVisibilityPendingK4f,
         ));
     }
-    if !matches!(
-        input.sizing.caption_min,
-        super::CaptionMinContribution::NoCaption
-    ) {
-        return Err(TableInlineSizingError::Deferral(
-            TableDeferral::CaptionMinPendingK4e,
-        ));
-    }
+    // K4e4: a measured caption floors the table size in fixed layout the same
+    // way it does in the automatic algorithm, where C3 of the K4e1 interop
+    // matrix shows the floor overriding even an authored width. Only an
+    // unmeasured caption still defers, through `measured`.
+    let caption_min = input.sizing.caption_min.measured()?.unwrap_or(0.0);
 
     let Some(mut requested_table_size) = resolve_table_width(&input.sizing)? else {
         return Ok(TableFixedInlineSizingOutcome::Automatic(
             fixed_layout_fallback(input.sizing.table_constraints.preferred),
         ));
     };
-    requested_table_size = clamp_table_size(requested_table_size, &input.sizing)?;
+    requested_table_size = clamp_table_size(requested_table_size, &input.sizing)?.max(caption_min);
 
     let (table_offsets, separated_spacing, undistributable) = separated_metrics(&input.sizing)?;
     let requested_grid_size = table_size_to_grid_size(
@@ -628,6 +625,29 @@ mod tests {
                 panic!("expected fixed sizing, fell back to {reason:?}")
             },
         }
+    }
+
+    /// K4e4: a measured caption floors a fixed table's size the same way it
+    /// floors an automatic one - C3 of the K4e1 interop matrix shows the
+    /// floor overriding even an authored width. An unmeasured caption still
+    /// defers under the named gap.
+    #[test]
+    fn a_measured_caption_floors_a_fixed_tables_size() {
+        let grid = grid(false);
+        let mut with_floor = input(&grid, 90.0);
+        with_floor.sizing.caption_min = super::super::CaptionMinContribution::Measured(240.0);
+        let result = fixed(&with_floor);
+        assert_eq!(result.used_table_inline_size, 240.0);
+        assert_eq!(result.column_sizes.iter().sum::<f32>(), 240.0);
+
+        let mut pending = input(&grid, 90.0);
+        pending.sizing.caption_min = super::super::CaptionMinContribution::PendingK4e;
+        assert_eq!(
+            size_fixed_table_inline(&pending),
+            Err(TableInlineSizingError::Deferral(
+                super::super::TableDeferral::CaptionMinPendingK4e,
+            ))
+        );
     }
 
     #[test]

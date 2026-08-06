@@ -295,8 +295,29 @@ where
     /// Compatibility lookup for current single-rectangle consumers.
     ///
     /// New fragment-aware consumers use [`Self::fragments_for_node`].
+    ///
+    /// K4e4 makes the choice this makes explicit: boxes are registered in
+    /// materialization order, outermost first, so a node that generates an
+    /// anonymous box around its principal box answers with the outer one. For
+    /// a table element that is the table wrapper box, which is the box that
+    /// participates in flow, carries `transform` and `opacity` under CSS
+    /// Tables 3 section 3.6.1, and contains the captions - the right box for
+    /// rectangle queries, hit targets, and paint-effect anchors.
     pub fn get(&self, node: Id) -> Option<&Fragment> {
         self.fragments_for_node(node).next()
+    }
+
+    /// The fragment of the node's principal box: the element's own box rather
+    /// than an anonymous box generated around it.
+    ///
+    /// A table element's principal box is the table grid box, which owns its
+    /// background, borders, and the `width` and `height` properties under
+    /// CSS 2.1 section 17.4. Everything else answers with [`Self::get`].
+    pub fn principal_fragment(&self, node: Id) -> Option<&Fragment> {
+        self.boxes
+            .principal_box(node)
+            .and_then(|principal| self.fragments.fragments_for_box(principal).next())
+            .or_else(|| self.get(node))
     }
 
     pub fn len(&self) -> usize {

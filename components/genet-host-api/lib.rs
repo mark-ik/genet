@@ -11,6 +11,7 @@
 use std::fmt;
 use std::str::FromStr;
 
+pub mod settings;
 pub mod tile;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

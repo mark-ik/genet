@@ -1910,6 +1910,86 @@ fn inline_blocks_occupy_atomic_space_in_the_text_line() {
 /// The Grid bridge flattened rows, row groups, and columns away before the
 /// backend saw them, so none of them produced a fragment and a `<tr>`
 /// background could not paint at all. Buckram emits the whole structural
+/// K4e4: a table's background paints on the grid, not on the wrapper.
+///
+/// CSS 2.1 section 17.4 leaves `background` on the table grid box, and the
+/// wrapper contains the captions, so painting the element's background on the
+/// wrapper would wrongly cover the caption. The caption here is 30px tall
+/// above a 40px grid: the table's red must start below it and be grid-sized.
+#[test]
+fn a_tables_background_paints_on_the_grid_and_spares_the_caption() {
+    let list = render(
+        "<table><caption>above</caption><tr><td>one</td></tr></table>",
+        "table { display: table; table-layout: fixed; width: 200px; border-spacing: 0; \
+                 background-color: #ff0000; } \
+         caption { display: table-caption; height: 30px; margin: 0; padding: 0; } \
+         tr { display: table-row; height: 40px; } \
+         td { display: table-cell; padding: 0; }",
+        1,
+    );
+
+    let red = list
+        .commands()
+        .iter()
+        .filter_map(|command| match command {
+            PaintCmd::DrawRect(rect) if rect.color == ColorF::new(1.0, 0.0, 0.0, 1.0) => {
+                Some(rect.placement.bounds)
+            },
+            _ => None,
+        })
+        .next()
+        .expect("the table's background must paint");
+
+    assert!((red.max.y - red.min.y - 40.0).abs() < 0.5, "{red:?}");
+    assert!((red.max.x - red.min.x - 200.0).abs() < 0.5, "{red:?}");
+    assert!(
+        red.min.y >= 30.0 - 0.5,
+        "the background must start below the 30px caption: {red:?}"
+    );
+}
+
+/// K4e4: `opacity` belongs to the wrapper, so its layer wraps the caption.
+///
+/// CSS Tables 3 section 3.6.1 moves `opacity` onto the table wrapper box.
+/// Observable as ordering: the caption's background must paint between the
+/// PushLayer and PopLayer the table's opacity opens and closes.
+#[test]
+fn a_tables_opacity_layer_wraps_its_caption() {
+    let list = render(
+        "<table><caption>above</caption><tr><td>one</td></tr></table>",
+        "table { display: table; table-layout: fixed; width: 200px; border-spacing: 0; \
+                 opacity: 0.5; } \
+         caption { display: table-caption; height: 30px; margin: 0; padding: 0; \
+                   background-color: #0000ff; } \
+         tr { display: table-row; height: 40px; } \
+         td { display: table-cell; padding: 0; }",
+        1,
+    );
+
+    let commands = list.commands();
+    let push = commands
+        .iter()
+        .position(|command| matches!(command, PaintCmd::PushLayer(layer) if (layer.opacity - 0.5).abs() < 0.01))
+        .expect("the table's opacity must open a layer");
+    let pop = commands
+        .iter()
+        .rposition(|command| matches!(command, PaintCmd::PopLayer))
+        .expect("the layer must close");
+    let caption = commands
+        .iter()
+        .position(|command| {
+            matches!(command, PaintCmd::DrawRect(rect)
+                if rect.color == ColorF::new(0.0, 0.0, 1.0, 1.0))
+        })
+        .expect("the caption's background must paint");
+
+    assert!(
+        push < caption && caption < pop,
+        "the caption must paint inside the table's opacity layer: \
+         push={push} caption={caption} pop={pop}"
+    );
+}
+
 /// subtree from its track model, so each one has a rectangle to paint into.
 #[test]
 fn table_row_and_group_backgrounds_paint() {

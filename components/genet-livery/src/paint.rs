@@ -272,6 +272,10 @@ fn emit_node<D>(
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
+    // K4e4: `transform` and `opacity` anchor to `get`, the node's outermost
+    // box. For a table element that is the wrapper, which carries both under
+    // CSS Tables 3 section 3.6.1, so the layer and the coordinate space wrap
+    // the captions along with the grid.
     let transform = styles
         .get(id)
         .filter(|style| style.display != Display::None && style.visibility == Visibility::Visible)
@@ -370,7 +374,11 @@ where
                 }
                 emit_inline_replaced_image(dom, text.frame, fragments, id, list);
             } else if let Some(fragment) = fragments
-                .get(id)
+                // K4e4: decorations address the principal box. For a table
+                // element that is the grid, which owns background and borders
+                // under CSS 2.1 section 17.4 - painting them on the wrapper
+                // would wrongly cover the captions.
+                .principal_fragment(id)
                 .filter(|fragment| paintable_fragment(fragment))
             {
                 emit_shadow(list, style, fragment);
@@ -380,6 +388,9 @@ where
                 emit_replaced_image(dom, list, id, style, fragment);
                 emit_border(list, style, fragment);
             }
+            // The overflow clip stays on the outer box: CSS Tables 3 section
+            // 3.6.1 puts `overflow` on the table wrapper box, so a clipping
+            // table clips at the box that contains its captions.
             if !matches!(style.display, Display::Inline | Display::InlineBlock)
                 && let Some(fragment) = fragments.get(id)
                 && let Some(clip) = descendant_clip(style, fragment, list.viewport)
