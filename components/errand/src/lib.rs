@@ -30,6 +30,7 @@ mod gopher;
 mod guppy;
 mod misfin;
 mod nex;
+mod scroll;
 mod spartan;
 mod titan;
 
@@ -45,6 +46,7 @@ pub mod serve;
 
 pub use gemini::exchange as gemini_exchange;
 pub use misfin::{ClientIdentity, MISFIN_PORT, send as misfin_send};
+pub use scroll::fetch_with as scroll_fetch;
 pub use titan::upload as titan_upload;
 // The TOFU store moved to gemini-protocol with the TLS it guards, and is
 // re-exported here so hosts that install one (genet-documents, mere's fetch)
@@ -69,6 +71,9 @@ pub enum Scheme {
     Guppy,
     /// `titan://`, TLS on port 1965 (upload companion to gemini).
     Titan,
+    /// `scroll://`, TLS on port 5699 (gemini's shape plus language
+    /// negotiation, document metadata, and UDC classification).
+    Scroll,
 }
 
 impl Scheme {
@@ -82,6 +87,7 @@ impl Scheme {
             Scheme::Nex => 1900,
             Scheme::Guppy => 6775,
             Scheme::Titan => 1965,
+            Scheme::Scroll => 5699,
         }
     }
 
@@ -95,6 +101,7 @@ impl Scheme {
             "nex" => Some(Scheme::Nex),
             "guppy" => Some(Scheme::Guppy),
             "titan" => Some(Scheme::Titan),
+            "scroll" => Some(Scheme::Scroll),
             _ => None,
         }
     }
@@ -258,6 +265,7 @@ async fn fetch_url_inner(url: &Url) -> Result<Response, Error> {
         Some(Scheme::Nex) => nex::fetch(url).await,
         Some(Scheme::Guppy) => guppy::fetch(url).await,
         Some(Scheme::Titan) => titan::fetch(url).await,
+        Some(Scheme::Scroll) => scroll::fetch(url).await,
         None => Err(Error::UnsupportedScheme(url.scheme().to_string())),
     }
 }

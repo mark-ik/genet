@@ -146,6 +146,10 @@ pub struct PendingTable<Id> {
     /// built after the grid, so it registers itself here rather than arriving
     /// with the rest.
     pub wrapper: Option<AlgorithmNodeId>,
+    /// Each caption's node and the horizontal margins around it, resolved when
+    /// the wrapper was built. K4e3 measures the node and adds the margins to
+    /// get the floor a caption puts under the table's inline size.
+    pub captions: Vec<(AlgorithmNodeId, f32)>,
     pub grid: TableGrid,
     /// One entry per K4b grid cell, in topology order.
     pub cell_nodes: Vec<Option<AlgorithmNodeId>>,
@@ -181,6 +185,7 @@ pub(crate) fn buckram_table_columns<D>(
     computed: &ComputedValues,
     font_size: f32,
     containing_width: Option<f32>,
+    caption_min: Option<f32>,
     cell_border_box_intrinsics: &[Option<IntrinsicSizes>],
     ledger: &mut TableShadowLedger,
 ) -> Option<TableInlineSizingResult>
@@ -198,6 +203,7 @@ where
             computed,
             font_size,
             containing_width,
+            caption_min,
         ) {
             Ok(input) => input,
             Err(error) => {
@@ -229,6 +235,7 @@ where
         computed,
         font_size,
         containing_width,
+        caption_min,
         cell_border_box_intrinsics,
         ledger,
     )
@@ -245,6 +252,7 @@ fn automatic_columns<D>(
     computed: &ComputedValues,
     font_size: f32,
     containing_width: Option<f32>,
+    caption_min: Option<f32>,
     cell_border_box_intrinsics: &[Option<IntrinsicSizes>],
     ledger: &mut TableShadowLedger,
 ) -> Option<TableInlineSizingResult>
@@ -260,6 +268,7 @@ where
         computed,
         font_size,
         containing_width,
+        caption_min,
     ) {
         Ok(sizing) => sizing,
         Err(error) => {
@@ -401,6 +410,7 @@ fn sizing_input<'a, D>(
     computed: &ComputedValues,
     font_size: f32,
     containing_width: Option<f32>,
+    caption_min: Option<f32>,
 ) -> Result<buckram::TableInlineSizingInput<'a>, TableInlineSizingError>
 where
     D: LayoutDom,
@@ -420,14 +430,18 @@ where
         },
     };
 
-    // A caption contributes a minimum that only K4e can measure. Deferring is
-    // the whole point: inventing zero here would look like support.
+    // K4e3 measures the caption through the live intrinsic machinery and hands
+    // the result in. The DOM check stays as the safety net it always was: a
+    // table that has a caption but arrived without a measurement still defers,
+    // because inventing zero here would look like support.
     let caption_min = if dom.dom_children(table_node).into_iter().any(|child| {
         styles
             .get(child)
             .is_some_and(|style| style.display == CssDisplay::TableCaption)
     }) {
-        CaptionMinContribution::PendingK4e
+        caption_min.map_or(CaptionMinContribution::PendingK4e, |minimum| {
+            CaptionMinContribution::Measured(minimum)
+        })
     } else {
         CaptionMinContribution::NoCaption
     };
@@ -499,6 +513,7 @@ fn fixed_input<'a, D>(
     computed: &ComputedValues,
     font_size: f32,
     containing_width: Option<f32>,
+    caption_min: Option<f32>,
 ) -> Result<TableFixedInlineSizingInput<'a>, TableInlineSizingError>
 where
     D: LayoutDom,
@@ -513,6 +528,7 @@ where
         computed,
         font_size,
         containing_width,
+        caption_min,
     )?;
     let style_of = |source: BoxId| {
         boxes

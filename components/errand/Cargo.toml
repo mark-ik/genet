@@ -3,7 +3,7 @@ name = "errand"
 # 0.2.0, not 0.1.4: `parse::gopher::GopherItem` gained its Gopher+ marker
 # field when the grammar moved to gopher-protocol, and in 0.x the minor
 # version is the breaking position.
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 # Own license line, not workspace: errand predates the genet adoption and is
 # published MIT/Apache (founding convention); genet's workspace default is MPL.
@@ -56,6 +56,9 @@ finger-protocol = { workspace = true }
 # 2026-08-03: one spec, one crate. `parse::gemtext` re-exports its grammar and
 # the TOFU types are re-exported at errand's root, so hosts keep their paths.
 gemini-protocol = { workspace = true }
+# Scroll (2026-08-06): language-negotiated fetch, document metadata, UDC
+# classes, and the scrolltext grammar re-exported at `parse::scrolltext`.
+scroll-protocol = { workspace = true }
 # Misfin send delegates to the misfin crate's client, on the same ring
 # provider this crate builds rustls with (no C toolchain).
 misfin = { version = "0.0.4", default-features = false, features = ["client", "ring"] }

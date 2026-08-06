@@ -14,3 +14,4 @@ pub mod feed;
 pub mod gemtext;
 pub mod gopher;
 pub mod nex;
+pub mod scrolltext;

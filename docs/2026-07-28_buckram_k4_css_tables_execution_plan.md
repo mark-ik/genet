@@ -757,6 +757,53 @@ flex or grid item's style has to be right before layout rather than after.
 - **K4e3. Captions.** Resolve the divergence measured above, lay captions
   out between the wrapper's margins and the table's borders, and decide
   whether `CaptionMinContribution` belongs to wrapper sizing or grid sizing.
+### K4e3 receipt - 2026-08-04
+
+Base commit: `ff594bc879c`.
+
+**Capability:** a caption is measured, contributes its floor to the table's
+inline size, and lands on the side `caption-side` names.
+`CaptionMinContribution::PendingK4e` no longer fires for a table whose caption
+can be measured.
+
+**The divergence is resolved in favour of the rule, not the engine.** Chrome
+grows the grid to a caption wider than it; Firefox leaves the grid at its
+content width and grows only the wrapper. CSS Tables 3 section 2.2.1 says the
+wrapper's width *is* the grid's border-edge width - Firefox's answer
+contradicts that and Chrome's keeps it, so this keeps the rule. It is also the
+answer the code already had: `caption_min` was wired into
+`used_table_inline_size` before the divergence was measured, and K4e1 then made
+the invariant load-bearing by sizing the wrapper from the grid for real.
+
+**What a caption contributes.** Its min-content width plus its horizontal
+margins, which is C5 and C6 of the interop matrix. Unlike a cell measurement
+this does *not* neutralize the caption's own `width`: C7 pins that a specified
+caption width participates like any other box. Several captions each put a
+floor down and the widest wins.
+
+**Placement.** Buckram's box tree keeps every caption before the grid, which is
+source order. `wrapper_children_in_caption_order` produces visual order - top
+captions, grid, bottom captions - preserving source order within a side, so two
+top captions stack as written. The side is placement only: C4 pins that it does
+not change what the caption contributes, which the fixture asserts by laying the
+same table out both ways and comparing the grid's width and the wrapper's
+height.
+
+**Boundary retained:** the DOM check in `table_inline_input` stays as the safety
+net it always was. A table that has a caption but arrived without a measurement
+still defers under `CaptionMinPendingK4e`, because inventing zero would look
+like support.
+
+**Pure fixture:** none. Buckram's `CaptionMinContribution::Measured` path and
+its arithmetic already existed and were already covered; K4e3 supplies the
+number.
+
+**Adapter fixture:** `k4e3_a_caption_widens_the_grid_and_its_columns`,
+`k4e3_a_captions_margins_count_toward_what_it_contributes`, and
+`k4e3_caption_side_moves_the_caption_without_changing_the_table`, all asserting
+through emitted fragment geometry. Each uses a specified caption width so the
+expected number does not depend on font metrics.
+
 - **K4e4. CSSOM, hit testing, and removal.** Make wrapper/grid/caption
   selection explicit, and delete the remaining compatibility routes: the
   wrapper/grid exclusion in `box_is_inline`, and `wrapper_needs_float_fallback`

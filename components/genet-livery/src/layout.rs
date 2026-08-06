@@ -19,7 +19,8 @@ use livery::{
     stylesheet::ContainerSnapshot,
     values::{
         Alignment as CssAlignment, AspectRatio, BorderStyle, BorderWidth,
-        BoxSizing as CssBoxSizing, Clear as CssClear, ContainerType, Display as CssDisplay,
+        BoxSizing as CssBoxSizing, CaptionSide, Clear as CssClear, ContainerType,
+        Display as CssDisplay,
         FlexDirection as CssFlexDirection, FlexWrap as CssFlexWrap, Float as CssFloat, FontSize,
         Gap as CssGap, GridAutoFlow as CssGridAutoFlow, GridPlacement as CssGridPlacement,
         GridTemplate as CssGridTemplate, GridTrack as CssGridTrack, Inset, Length,
@@ -52,7 +53,8 @@ use crate::{
         commit_table_block, table_block_inputs, verify_table_block,
     },
     table_shadow::{
-        PendingTable, TableShadowLedger, buckram_table_columns, verify_assigned_columns,
+        LIVE_ROOT_FONT_SIZE, PendingTable, TableShadowLedger, buckram_table_columns,
+        verify_assigned_columns,
     },
     table_wrapper::{grid_style, wrapper_style},
     text::{InlineLayout, InlineRequest, TextFrame},
@@ -1518,6 +1520,7 @@ where
                         node: dom_node,
                         taffy_table: node,
                         wrapper: None,
+                        captions: Vec::new(),
                         grid,
                         cell_nodes,
                         font_size,
@@ -1568,8 +1571,33 @@ where
                     let table = self.styles.get(element).cloned().unwrap_or_default();
                     let computed = wrapper_style(&table);
                     let font_size = font_size_px(&computed.font_size, parent_font_size);
-                    let children =
-                        self.build_children(box_id, &computed, parent_font_size, containing_size)?;
+                    let mut caption_nodes = Vec::new();
+                    let mut children = Vec::new();
+                    for child in
+                        wrapper_children_in_caption_order(self.boxes, self.styles, box_id)
+                    {
+                        let Some(child_node) =
+                            self.build_box(child, inherited, parent_font_size, containing_size)?
+                        else {
+                            continue;
+                        };
+                        if self.boxes[child].display.internal_table
+                            == Some(InternalTableRole::Caption)
+                        {
+                            let caption = self
+                                .boxes
+                                .origin_node(child)
+                                .and_then(|node| self.styles.get(node))
+                                .cloned()
+                                .unwrap_or_default();
+                            let em = font_size_px(&caption.font_size, font_size);
+                            caption_nodes.push((
+                                child_node,
+                                caption_horizontal_margins(&caption, em, containing_size.0),
+                            ));
+                        }
+                        children.push(child_node);
+                    }
                     let mut taffy_style = to_taffy_style(&computed, font_size);
                     if wrapper_needs_float_fallback(self.boxes, box_id, &taffy_style) {
                         taffy_style.float = TaffyFloat::Left;
@@ -1595,6 +1623,7 @@ where
                         .find(|pending| pending.node == element)
                     {
                         pending.wrapper = Some(node);
+                        pending.captions = caption_nodes;
                     }
                     return Ok(Some(node));
                 }
@@ -1675,6 +1704,62 @@ where
         IntrinsicSizes::new(min, max.max(min))
     }
 
+    /// The floor a caption puts under the table's inline size.
+    ///
+    /// Its own min-content width plus its horizontal margins, which is what
+    /// C5 and C6 of the K4e1 interop matrix pin. Unlike a cell measurement
+    /// this does *not* neutralize the caption's own `width`: C7 shows a
+    /// specified caption width participating like any other box, so a
+    /// `width: 300px` caption puts a floor of 300 under the table. Several
+    /// captions each put their own floor down and the widest one wins.
+    fn measure_caption_min(
+        &mut self,
+        text: &mut TextSystem,
+        captions: &[(AlgorithmNodeId, f32)],
+    ) -> Option<f32> {
+        let (dom, styles, boxes, atomic) = (self.dom, self.styles, self.boxes, self.atomic);
+        captions
+            .iter()
+            .map(|(caption, margins)| {
+                self.tree.compute_layout_with_measure(
+                    *caption,
+                    AlgorithmSize::new(
+                        AlgorithmAvailableSpace::MinContent,
+                        AlgorithmAvailableSpace::MaxContent,
+                    ),
+                    |known, available, _, context, _| {
+                        let Some(context) = context else {
+                            return AlgorithmSize::new(0.0, 0.0);
+                        };
+                        let width = match available.width {
+                            AlgorithmAvailableSpace::Definite(width) => width,
+                            AlgorithmAvailableSpace::MinContent => 0.01,
+                            AlgorithmAvailableSpace::MaxContent => f32::INFINITY,
+                        };
+                        let (measured_width, measured_height) = measure_inline_context(
+                            text,
+                            dom,
+                            styles,
+                            boxes,
+                            atomic,
+                            context,
+                            InlineMeasureGeometry {
+                                width: known.width.unwrap_or(width),
+                                line_constraints: None,
+                            },
+                        );
+                        AlgorithmSize::new(
+                            known.width.unwrap_or(measured_width),
+                            known.height.unwrap_or(measured_height),
+                        )
+                    },
+                );
+                self.tree.layout(*caption).width + margins
+            })
+            .reduce(f32::max)
+            .filter(|minimum| minimum.is_finite() && *minimum >= 0.0)
+    }
+
     /// K4c5b and K4d6b: compute Buckram's columns for every noted table and
     /// pin them as explicit grid tracks, then lay out the block axis through
     /// the pipeline Buckram owns. Runs before the main layout pass; the
@@ -1694,6 +1779,7 @@ where
                     cell_node.and_then(|node| self.measure_cell_intrinsics(text, node))
                 })
                 .collect::<Vec<_>>();
+            let caption_min = self.measure_caption_min(text, &pending.captions.clone());
             let columns = buckram_table_columns(
                 self.dom,
                 self.boxes,
@@ -1704,6 +1790,7 @@ where
                 &computed,
                 pending.font_size,
                 pending.containing_width,
+                caption_min,
                 &intrinsics,
                 &mut self.table_shadow,
             );
@@ -2065,6 +2152,24 @@ where
         IntrinsicSizes::new(min, max.max(min))
     }
 
+    /// The floor a caption puts under the table's inline size.
+    ///
+    /// Its own min-content width plus its horizontal margins, which is what
+    /// C5 and C6 of the K4e1 interop matrix pin. Unlike a cell measurement
+    /// this does *not* neutralize the caption's own `width`: C7 shows a
+    /// specified caption width participating like any other box, so a
+    /// `width: 300px` caption puts a floor of 300 under the table. Several
+    /// captions each put their own floor down and the widest one wins.
+    fn measure_caption_min(&mut self, captions: &[(AlgorithmNodeId, f32)]) -> Option<f32> {
+        captions
+            .iter()
+            .map(|(caption, margins)| {
+                self.measure_intrinsic_width(*caption, AlgorithmAvailableSpace::MinContent) + margins
+            })
+            .reduce(f32::max)
+            .filter(|minimum| minimum.is_finite() && *minimum >= 0.0)
+    }
+
     /// K4c5b and K4d6b: compute Buckram's columns for every noted table and
     /// pin them as explicit grid tracks, then lay out the block axis. Runs
     /// after the tree is built and before the main layout pass; the queries
@@ -2081,6 +2186,7 @@ where
                 .into_iter()
                 .map(|cell_node| cell_node.and_then(|node| self.measure_cell_intrinsics(node)))
                 .collect::<Vec<_>>();
+            let caption_min = self.measure_caption_min(&pending.captions.clone());
             let columns = buckram_table_columns(
                 self.dom,
                 self.boxes,
@@ -2091,6 +2197,7 @@ where
                 &computed,
                 pending.font_size,
                 pending.containing_width,
+                caption_min,
                 &intrinsics,
                 &mut self.table_shadow,
             );
@@ -2353,6 +2460,7 @@ where
                         node: dom_node,
                         taffy_table: node,
                         wrapper: None,
+                        captions: Vec::new(),
                         grid,
                         cell_nodes: std::mem::take(&mut table_cell_nodes),
                         font_size,
@@ -2446,14 +2554,33 @@ where
                     let table = self.styles.get(element).cloned().unwrap_or_default();
                     let computed = wrapper_style(&table);
                     let font_size = font_size_px(&computed.font_size, parent_font_size);
-                    let children = self.boxes[box_id]
-                        .children()
-                        .iter()
-                        .filter_map(|child| {
-                            self.build_box(*child, inherited, parent_font_size, containing_size)
-                                .transpose()
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
+                    let mut caption_nodes = Vec::new();
+                    let mut children = Vec::new();
+                    for child in
+                        wrapper_children_in_caption_order(self.boxes, self.styles, box_id)
+                    {
+                        let Some(child_node) =
+                            self.build_box(child, inherited, parent_font_size, containing_size)?
+                        else {
+                            continue;
+                        };
+                        if self.boxes[child].display.internal_table
+                            == Some(InternalTableRole::Caption)
+                        {
+                            let caption = self
+                                .boxes
+                                .origin_node(child)
+                                .and_then(|node| self.styles.get(node))
+                                .cloned()
+                                .unwrap_or_default();
+                            let em = font_size_px(&caption.font_size, font_size);
+                            caption_nodes.push((
+                                child_node,
+                                caption_horizontal_margins(&caption, em, containing_size.0),
+                            ));
+                        }
+                        children.push(child_node);
+                    }
                     let mut taffy_style = to_taffy_style(&computed, font_size);
                     if wrapper_needs_float_fallback(self.boxes, box_id, &taffy_style) {
                         taffy_style.float = TaffyFloat::Left;
@@ -2479,6 +2606,7 @@ where
                         .find(|pending| pending.node == element)
                     {
                         pending.wrapper = Some(node);
+                        pending.captions = caption_nodes;
                     }
                     return Ok(Some(node));
                 }
@@ -2927,6 +3055,54 @@ fn wrapper_width_from_grid(grid: &Style) -> Option<Dimension> {
     .map(|edge| Dimension::from(edge).into_option())
     .sum::<Option<f32>>()?;
     Some(Dimension::length(width + outside))
+}
+
+/// The wrapper's children in the order they are laid out.
+///
+/// CSS 2.1 section 17.4.1 puts a caption above or below the table grid inside
+/// the wrapper's margins, according to `caption-side`. Buckram's box tree
+/// keeps every caption before the grid, which is the order the source implies;
+/// this is the order the page shows. Within a side, source order is kept, so
+/// two top captions stack in the order they were written.
+fn wrapper_children_in_caption_order<Id>(
+    boxes: &GeneratedBoxTree<Id>,
+    styles: &StylePlane<Id>,
+    wrapper: BoxId,
+) -> Vec<BoxId>
+where
+    Id: Copy + Eq + Hash,
+{
+    let below = |child: BoxId| {
+        boxes[child].display.internal_table == Some(InternalTableRole::Caption)
+            && boxes
+                .origin_node(child)
+                .and_then(|node| styles.get(node))
+                .is_some_and(|computed| computed.caption_side == CaptionSide::Bottom)
+    };
+    let children = boxes[wrapper].children();
+    children
+        .iter()
+        .copied()
+        .filter(|child| !below(*child))
+        .chain(children.iter().copied().filter(|child| below(*child)))
+        .collect()
+}
+
+/// The horizontal margins a caption carries into its contribution.
+///
+/// C5 of the K4e1 interop matrix pins that both engines include them: a
+/// 176-wide caption with `margin-left: 30px` puts a floor of 206 under the
+/// table, not 176.
+fn caption_horizontal_margins(computed: &ComputedValues, em: f32, basis: Option<f32>) -> f32 {
+    let resolve = |margin: Margin| match margin {
+        // An auto margin on a caption resolves against a width the table does
+        // not have yet, and neither engine lets it widen the table.
+        Margin::Auto => 0.0,
+        Margin::Value(value) => {
+            absolute_length_percentage(value, em, LIVE_ROOT_FONT_SIZE, basis.unwrap_or(0.0))
+        },
+    };
+    resolve(computed.margin_left) + resolve(computed.margin_right)
 }
 
 /// Whether a wrapper needs the `float: left` shrink-to-fit compatibility route.
@@ -4567,9 +4743,8 @@ mod tests {
         );
     }
 
-    /// Lay out one document and return the physical rectangles of the table
-    /// wrapper box and the table grid box, in that order.
-    fn table_wrapper_and_grid(html: &str, css: &str) -> (PhysicalRect, PhysicalRect) {
+    /// Lay out one document and return every table-role box's rectangle.
+    fn table_boxes(html: &str, css: &str) -> Vec<(InternalTableRole, PhysicalRect)> {
         let dom = StaticDocument::parse(html);
         let styles = resolve_styles(
             &dom,
@@ -4588,18 +4763,45 @@ mod tests {
             &HashMap::new(),
         )
         .expect("layout");
-        let of_role = |role: InternalTableRole| {
-            layout
-                .boxes()
-                .iter()
-                .find(|(_, css_box)| css_box.display.internal_table == Some(role))
-                .and_then(|(box_id, _)| layout.fragments().fragments_for_box(box_id).next())
+        layout
+            .boxes()
+            .iter()
+            .filter_map(|(box_id, css_box)| {
+                Some((
+                    css_box.display.internal_table?,
+                    layout
+                        .fragments()
+                        .fragments_for_box(box_id)
+                        .next()?
+                        .physical_rect(),
+                ))
+            })
+            .collect()
+    }
+
+    /// Every rectangle laid out for one table role, in tree order.
+    fn table_role_rects(
+        html: &str,
+        css: &str,
+        role: InternalTableRole,
+    ) -> Vec<PhysicalRect> {
+        table_boxes(html, css)
+            .into_iter()
+            .filter(|(each, _)| *each == role)
+            .map(|(_, rect)| rect)
+            .collect()
+    }
+
+    /// The table wrapper box and the table grid box, in that order.
+    fn table_wrapper_and_grid(html: &str, css: &str) -> (PhysicalRect, PhysicalRect) {
+        let one = |role| {
+            *table_role_rects(html, css, role)
+                .first()
                 .unwrap_or_else(|| panic!("no fragment for {role:?}"))
-                .physical_rect()
         };
         (
-            of_role(InternalTableRole::Wrapper),
-            of_role(InternalTableRole::Grid),
+            one(InternalTableRole::Wrapper),
+            one(InternalTableRole::Grid),
         )
     }
 
@@ -4718,6 +4920,96 @@ mod tests {
         assert!((wrapper.width - 100.0).abs() < 0.5, "wrapper: {wrapper:?}");
         assert!((wrapper.x - 100.0).abs() < 0.5, "wrapper: {wrapper:?}");
         assert!((grid.x - 100.0).abs() < 0.5, "grid: {grid:?}");
+    }
+
+    /// K4e3: a caption wider than the table widens the *grid*.
+    ///
+    /// The two engines break CSS Tables 3 section 2.2.1 apart here, measured
+    /// in the K4e1 interop matrix: Chrome grows the grid and its columns to
+    /// the caption, Firefox leaves the grid at its own content width and lets
+    /// only the wrapper be caption-wide. Section 2.2.1 says the wrapper's
+    /// width *is* the grid's border-edge width, which Firefox's answer
+    /// contradicts and Chrome's keeps, so this keeps the rule.
+    ///
+    /// C7 of that matrix is the sharpest case to assert, because a specified
+    /// caption width fixes the expected number without depending on font
+    /// metrics: the caption's 300 reaches the single column.
+    #[test]
+    fn k4e3_a_caption_widens_the_grid_and_its_columns() {
+        let html = "<div id=host><table><caption>x</caption>\
+                    <tr><td></td></tr></table></div>";
+        let css = "#host { width: 400px; }\
+                   table { display: table; border-spacing: 0; }\
+                   caption { display: table-caption; width: 300px; margin: 0; padding: 0; }\
+                   tr { display: table-row; }\
+                   td { display: table-cell; padding: 0; height: 10px; }";
+        let (wrapper, grid) = table_wrapper_and_grid(html, css);
+        let cells = table_role_rects(html, css, InternalTableRole::Cell);
+
+        assert!((grid.width - 300.0).abs() < 0.5, "grid: {grid:?}");
+        assert!((cells[0].width - 300.0).abs() < 0.5, "cell: {:?}", cells[0]);
+        // Section 2.2.1 still holds: the wrapper is the grid's width.
+        assert!(
+            (wrapper.width - grid.width).abs() < 0.5,
+            "{wrapper:?} {grid:?}"
+        );
+    }
+
+    /// K4e3: a caption's own margins are part of the floor it puts down.
+    ///
+    /// C5 of the interop matrix, where both engines agree: a 176-wide caption
+    /// with `margin-left: 30px` contributes 206. Asserted with a specified
+    /// width so the number does not depend on font metrics.
+    #[test]
+    fn k4e3_a_captions_margins_count_toward_what_it_contributes() {
+        let html = "<div id=host><table><caption>x</caption>\
+                    <tr><td></td></tr></table></div>";
+        let css = "#host { width: 400px; }\
+                   table { display: table; border-spacing: 0; }\
+                   caption { display: table-caption; width: 200px; margin-left: 30px;\
+                             padding: 0; }\
+                   tr { display: table-row; }\
+                   td { display: table-cell; padding: 0; height: 10px; }";
+        let (_, grid) = table_wrapper_and_grid(html, css);
+
+        assert!((grid.width - 230.0).abs() < 0.5, "grid: {grid:?}");
+    }
+
+    /// K4e3: `caption-side` decides which side of the grid a caption lands on.
+    ///
+    /// CSS 2.1 section 17.4.1 lays a caption above or below the grid inside
+    /// the wrapper's margins. Buckram's box tree keeps every caption before
+    /// the grid, so a bottom caption has to be reordered on the way into
+    /// layout - and C4 of the matrix pins that the side does not change what
+    /// the caption contributes to sizing.
+    #[test]
+    fn k4e3_caption_side_moves_the_caption_without_changing_the_table() {
+        let html = "<div id=host><table><caption>x</caption>\
+                    <tr><td></td></tr></table></div>";
+        let above = "#host { width: 400px; }\
+                     table { display: table; border-spacing: 0; }\
+                     caption { display: table-caption; width: 300px; height: 20px;\
+                               margin: 0; padding: 0; }\
+                     tr { display: table-row; }\
+                     td { display: table-cell; padding: 0; height: 10px; }";
+        let below = format!("{above} caption {{ caption-side: bottom; }}");
+
+        let (top_wrapper, top_grid) = table_wrapper_and_grid(html, above);
+        let top_caption = table_role_rects(html, above, InternalTableRole::Caption)[0];
+        let (bottom_wrapper, bottom_grid) = table_wrapper_and_grid(html, &below);
+        let bottom_caption = table_role_rects(html, &below, InternalTableRole::Caption)[0];
+
+        assert!(
+            top_caption.y < top_grid.y,
+            "a top caption sits above the grid: {top_caption:?} {top_grid:?}"
+        );
+        assert!(
+            bottom_caption.y > bottom_grid.y,
+            "a bottom caption sits below the grid: {bottom_caption:?} {bottom_grid:?}"
+        );
+        // The side is placement only; the sizing it forces is the same.
+        assert!((top_grid.width - bottom_grid.width).abs() < 0.5);
+        assert!((top_wrapper.height - bottom_wrapper.height).abs() < 0.5);
     }
 
     /// K4d6: a table row now has a fragment of its own.
