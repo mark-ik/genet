@@ -282,6 +282,72 @@ impl TableTrackVisibility {
     fn matches_grid(&self, grid: &TableGrid) -> bool {
         self.rows.len() == grid.rows.len() && self.columns.len() == grid.columns.len()
     }
+
+    pub fn has_collapsed(&self) -> bool {
+        self.rows
+            .iter()
+            .chain(self.columns.iter())
+            .any(|state| *state == TableTrackVisibilityState::Collapsed)
+    }
+
+    pub fn column_is_collapsed(&self, index: usize) -> bool {
+        self.columns.get(index) == Some(&TableTrackVisibilityState::Collapsed)
+    }
+
+    pub fn row_is_collapsed(&self, index: usize) -> bool {
+        self.rows.get(index) == Some(&TableTrackVisibilityState::Collapsed)
+    }
+
+    /// Whether any cell spans across a collapsed track boundary.
+    ///
+    /// CSS Tables 3 does not merely narrow such a cell: it clips the cell's
+    /// content at the collapsed track's edge, which is a rendering rule rather
+    /// than a sizing one and has no seam yet. A cell wholly inside collapsed
+    /// tracks, or wholly outside them, needs no clip - only one that straddles
+    /// the boundary does.
+    pub fn spans_a_collapsed_boundary(&self, grid: &TableGrid) -> bool {
+        grid.cells.iter().any(|cell| {
+            let straddles = |collapsed: &dyn Fn(usize) -> bool, start: usize, span: usize| {
+                let mut tracks = start..start.saturating_add(span);
+                tracks.any(collapsed) && (start..start.saturating_add(span)).any(|i| !collapsed(i))
+            };
+            straddles(
+                &|index| self.column_is_collapsed(index),
+                cell.column,
+                cell.column_span,
+            ) || straddles(
+                &|index| self.row_is_collapsed(index),
+                cell.row,
+                cell.row_span,
+            )
+        })
+    }
+}
+
+/// Remove collapsed columns from a distribution that was computed as if every
+/// track were visible.
+///
+/// CSS 2.1 section 17.5.5: a collapsed column is not rendered and the table's
+/// width is reduced by exactly what that column occupied, while the other
+/// columns keep the widths they were given. So the collapse is a subtraction
+/// after the distribution rather than an input to it, which is also what keeps
+/// K4f's stop rule - the constraints that produced the widths are still the
+/// constraints, and nothing was deleted before they were consulted.
+pub fn collapse_columns(
+    visibility: &TableTrackVisibility,
+    column_sizes: &mut [f32],
+    used_grid_inline_size: &mut f32,
+    used_table_inline_size: &mut f32,
+) {
+    let mut removed = 0.0;
+    for (index, size) in column_sizes.iter_mut().enumerate() {
+        if visibility.column_is_collapsed(index) {
+            removed += *size;
+            *size = 0.0;
+        }
+    }
+    *used_grid_inline_size = (*used_grid_inline_size - removed).max(0.0);
+    *used_table_inline_size = (*used_table_inline_size - removed).max(0.0);
 }
 
 /// Named distinctions deferred to later K4 gates. These names describe CSS

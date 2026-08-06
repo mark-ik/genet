@@ -120,6 +120,9 @@ pub(crate) struct TableBlockInputs {
     pub table_box_sizing: TableBoxSizing,
     pub border_metrics: TableBlockBorderMetrics,
     pub inline_spacing: f32,
+    /// K4f's row and column mask, built once during lowering so the two axes
+    /// collapse the same tracks.
+    pub track_visibility: TableTrackVisibility,
 }
 
 /// Lower one live table's block axis. Returns `None` with a named skip when
@@ -217,6 +220,7 @@ where
         },
         border_metrics,
         inline_spacing: spacing.unit.to_px(spacing.value, font_size, root),
+        track_visibility: crate::table_shadow::track_visibility(boxes, styles, grid),
     })
 }
 
@@ -338,7 +342,7 @@ pub(crate) fn buckram_table_block(
         table_box_sizing: inputs.table_box_sizing,
         border_metrics: inputs.border_metrics,
         available_block_size,
-        track_visibility: TableTrackVisibility::all_visible(grid),
+        track_visibility: inputs.track_visibility.clone(),
     };
     match layout_table_block(
         &input,

@@ -10,7 +10,7 @@ use crate::{IntrinsicSizeCache, IntrinsicSizes, LogicalAxis};
 use super::{
     InlineSizeConstraint, TableAutomaticColumnMeasures, TableBoxSizing, TableDeferral,
     TableInlineBorderMetrics, TableInlineProperty, TableInlineSizingError, TableInlineSizingInput,
-    TableInlineSizingResult, TableTrackVisibilityState,
+    TableInlineSizingResult,
 };
 
 /// Complete K4c4 input. K4c3's measures retain the K4b logical column order
@@ -127,11 +127,21 @@ pub fn size_automatic_table_inline(
         table_offsets,
     )?;
     let assignable_column_inline_size = (used_grid_inline_size - undistributable).max(0.0);
-    let column_sizes = distribute_columns(
+    let mut column_sizes = distribute_columns(
         input.measures,
         used_table_inline_size,
         assignable_column_inline_size,
     )?;
+    // K4f: a collapsed column is removed after the distribution, never before
+    // it - the widths the other columns received are the widths they keep.
+    let mut used_grid_inline_size = used_grid_inline_size;
+    let mut used_table_inline_size = used_table_inline_size;
+    super::collapse_columns(
+        &input.sizing.track_visibility,
+        &mut column_sizes,
+        &mut used_grid_inline_size,
+        &mut used_table_inline_size,
+    );
 
     TableInlineSizingResult::new(
         &input.sizing,
@@ -166,18 +176,6 @@ fn validate(input: &TableAutomaticInlineSizingInput<'_>) -> Result<(), TableInli
     }
     for measure in input.measures.columns.iter().copied() {
         measure.validate()?;
-    }
-    if input
-        .sizing
-        .track_visibility
-        .columns
-        .iter()
-        .chain(input.sizing.track_visibility.rows.iter())
-        .any(|visibility| *visibility == TableTrackVisibilityState::Collapsed)
-    {
-        return Err(TableInlineSizingError::Deferral(
-            TableDeferral::TrackVisibilityPendingK4f,
-        ));
     }
     Ok(())
 }

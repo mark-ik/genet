@@ -9,7 +9,6 @@ use crate::BoxId;
 use super::{
     InlineSizeConstraint, TableBoxSizing, TableCellInlineMeasure, TableDeferral,
     TableInlineConstraints, TableInlineProperty, TableInlineSizingError, TableInlineSizingInput,
-    TableTrackVisibilityState,
 };
 
 /// CSS constraints for one normalized K4b column in automatic layout.
@@ -331,17 +330,6 @@ pub fn measure_automatic_columns(
 fn ensure_automatic_prerequisites(
     sizing: &TableInlineSizingInput<'_>,
 ) -> Result<(), TableInlineSizingError> {
-    if sizing
-        .track_visibility
-        .columns
-        .iter()
-        .chain(sizing.track_visibility.rows.iter())
-        .any(|visibility| *visibility == TableTrackVisibilityState::Collapsed)
-    {
-        return Err(TableInlineSizingError::Deferral(
-            TableDeferral::TrackVisibilityPendingK4f,
-        ));
-    }
     // Cell offsets include declared borders. Their use is only sound in the
     // separated model until K4g supplies collapsed-border winners.
     sizing.separated_undistributable_inline_size()?;
@@ -1150,7 +1138,7 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_borders_and_tracks_remain_explicit_deferrals() {
+    fn a_collapsed_border_remains_an_explicit_deferral() {
         let grid = grid(vec![node(4, InternalTableRole::Cell, vec![])], &[]);
         let mut automatic = input(&grid, vec![measure(grid.cells[0].source, 1.0, 1.0)]);
         automatic.sizing.border_metrics =
@@ -1161,16 +1149,26 @@ mod tests {
                 TableDeferral::CollapsedBorderMetricsPendingK4g
             ))
         );
+    }
 
+    /// K4f: a collapsed column still measures.
+    ///
+    /// K4f's stop rule is that `visibility: collapse` must not delete sizing
+    /// inputs. The measurement pass is exactly where deleting one would show,
+    /// so a collapsed track measures like any other and the collapse is
+    /// applied afterwards, when the distribution is already decided.
+    #[test]
+    fn a_collapsed_column_still_contributes_its_measure() {
+        let grid = grid(vec![node(4, InternalTableRole::Cell, vec![])], &[]);
+        let mut automatic = input(&grid, vec![measure(grid.cells[0].source, 1.0, 7.0)]);
         automatic.sizing.border_metrics = super::super::TableInlineBorderMetrics::Separated(
             TableSeparatedBorderMetrics::default(),
         );
-        automatic.sizing.track_visibility.columns[0] = TableTrackVisibilityState::Collapsed;
-        assert_eq!(
-            measure_automatic_columns(&automatic),
-            Err(TableInlineSizingError::Deferral(
-                TableDeferral::TrackVisibilityPendingK4f
-            ))
-        );
+        automatic.sizing.track_visibility.columns[0] =
+            super::super::TableTrackVisibilityState::Collapsed;
+
+        let measures = measure_automatic_columns(&automatic).expect("collapsed tracks measure");
+        assert_eq!(measures.columns[0].min_content, 1.0);
+        assert_eq!(measures.columns[0].max_content, 7.0);
     }
 }

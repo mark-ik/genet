@@ -46,7 +46,7 @@ pub use sizing::{
     TableBoxSizing, TableCellInlineMeasure, TableCellInlineStyle, TableDeferral,
     TableInlineBorderMetrics, TableInlineConstraints, TableInlineProperty, TableInlineSizingError,
     TableInlineSizingInput, TableInlineSizingResult, TableIntrinsicMeasureProvider,
-    TableSeparatedBorderMetrics, TableTrackVisibility, TableTrackVisibilityState,
+    TableSeparatedBorderMetrics, TableTrackVisibility, TableTrackVisibilityState, collapse_columns,
     collect_table_cell_inline_measures, query_table_cell_inline_sizes,
 };
 

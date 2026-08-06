@@ -681,10 +681,26 @@ pub fn size_table_rows(
         );
     }
 
+    // K4f: a collapsed row is removed after the distribution, never before it.
+    // CSS 2.1 section 17.5.5 reduces the table's height by exactly what the
+    // row occupied and leaves every other row the height it was given, so the
+    // collapse is a subtraction rather than an input - which is also what
+    // keeps the constraints that produced those heights intact.
+    for (index, size) in sizes.iter_mut().enumerate() {
+        if input.track_visibility.row_is_collapsed(index) {
+            *size = 0.0;
+        }
+    }
+
     let mut row_offsets = Vec::with_capacity(grid.rows.len());
     let mut cursor = metrics.table_offset_start + metrics.block_spacing;
-    for size in &sizes {
+    for (index, size) in sizes.iter().enumerate() {
         row_offsets.push(cursor);
+        // A collapsed row takes its following spacing interval with it;
+        // leaving one behind would show the row's absence as a gap.
+        if input.track_visibility.row_is_collapsed(index) {
+            continue;
+        }
         cursor += size + metrics.block_spacing;
     }
     // K4d3's rule stated directly rather than only as a consequence of the
@@ -692,8 +708,13 @@ pub fn size_table_rows(
     // distribution reaches it whenever there is a row to grow, but a table
     // with no rows at all has nowhere to put it, and dropping it there would
     // collapse an empty table with a height to nothing.
-    let used_table_block_size = (sizes.iter().sum::<f32>() + undistributable)
-        .max(distributable.unwrap_or(0.0) + undistributable);
+    let collapsed_spacing = metrics.block_spacing
+        * (0..grid.rows.len())
+            .filter(|index| input.track_visibility.row_is_collapsed(*index))
+            .count() as f32;
+    let used_table_block_size = ((sizes.iter().sum::<f32>() + undistributable) - collapsed_spacing)
+        .max(0.0)
+        .max(distributable.unwrap_or(0.0) + undistributable - collapsed_spacing);
     if !used_table_block_size.is_finite() || sizes.iter().any(|size| !size.is_finite()) {
         return Err(TableRowLayoutError::InvalidCellOutput { box_id: grid.grid });
     }

@@ -5000,6 +5000,68 @@ mod tests {
         assert_assigned_and_honored(ledger);
     }
 
+    /// K4f: `visibility: collapse` removes a row's space, not just its ink.
+    ///
+    /// CSS 2.1 section 17.5.5 reduces the table's height by exactly what the
+    /// collapsed row occupied and leaves the other rows the heights they were
+    /// given. Three 20px rows come to 60; collapsing the middle one leaves 40,
+    /// with the third row moved up into the gap rather than a hole left where
+    /// the second used to be.
+    #[test]
+    fn k4f_a_collapsed_row_gives_its_space_back_to_the_table() {
+        let html = "<div id=host><table><tr id=a><td></td></tr>\
+                    <tr id=b><td></td></tr><tr id=c><td></td></tr></table></div>";
+        let visible = "#host { width: 300px; }\
+                       table { display: table; border-spacing: 0; }\
+                       tr { display: table-row; }\
+                       td { display: table-cell; padding: 0; width: 40px; height: 20px; }";
+        let collapsed = format!("{visible} #b {{ visibility: collapse; }}");
+
+        let (_, before) = table_wrapper_and_grid(html, visible);
+        let (_, after) = table_wrapper_and_grid(html, &collapsed);
+        let rows = table_role_rects(html, &collapsed, InternalTableRole::Row);
+
+        assert!((before.height - 60.0).abs() < 0.5, "before: {before:?}");
+        assert!((after.height - 40.0).abs() < 0.5, "after: {after:?}");
+        assert!(
+            (rows[1].height - 0.0).abs() < 0.5,
+            "collapsed: {:?}",
+            rows[1]
+        );
+        assert!(
+            (rows[2].y - rows[0].y - 20.0).abs() < 0.5,
+            "the third row closes the gap: {:?} {:?}",
+            rows[0],
+            rows[2]
+        );
+    }
+
+    /// K4f: a collapsed column gives its width back the same way.
+    ///
+    /// Applied through the column group here, which section 17.5.5 also
+    /// allows: a collapsed `<colgroup>` collapses every column in its range.
+    #[test]
+    fn k4f_a_collapsed_column_group_gives_its_width_back() {
+        let html = "<div id=host><table><colgroup id=g><col></colgroup>\
+                    <colgroup><col></colgroup>\
+                    <tr><td></td><td></td></tr></table></div>";
+        let visible = "#host { width: 300px; }\
+                       table { display: table; border-spacing: 0; }\
+                       colgroup { display: table-column-group; }\
+                       col { display: table-column; }\
+                       tr { display: table-row; }\
+                       td { display: table-cell; padding: 0; width: 40px; height: 20px; }";
+        let collapsed = format!("{visible} #g {{ visibility: collapse; }}");
+
+        let (_, before) = table_wrapper_and_grid(html, visible);
+        let (wrapper, after) = table_wrapper_and_grid(html, &collapsed);
+
+        assert!((before.width - 80.0).abs() < 0.5, "before: {before:?}");
+        assert!((after.width - 40.0).abs() < 0.5, "after: {after:?}");
+        // K4e2's rule still holds through the collapse.
+        assert!((wrapper.width - after.width).abs() < 0.5, "{wrapper:?}");
+    }
+
     /// K4e4: used `width` and `height` answer from the grid, not the wrapper.
     ///
     /// The `height` property stayed on the grid under CSS 2.1 section 17.4,

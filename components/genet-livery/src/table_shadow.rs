@@ -22,12 +22,13 @@ use buckram::{
     TableCellInlineMeasure, TableDeferral, TableFixedInlineSizingInput,
     TableFixedInlineSizingOutcome, TableGrid, TableInlineBorderMetrics, TableInlineSizingError,
     TableInlineSizingResult, TableSeparatedBorderMetrics, TableTrackVisibility,
-    measure_automatic_columns, size_automatic_table_inline, size_fixed_table_inline,
+    TableTrackVisibilityState, measure_automatic_columns, size_automatic_table_inline,
+    size_fixed_table_inline,
 };
 use layout_dom_api::LayoutDom;
 use livery::{
     ComputedValues,
-    values::{BorderCollapse, Display as CssDisplay, TableLayout as CssTableLayout},
+    values::{BorderCollapse, Display as CssDisplay, TableLayout as CssTableLayout, Visibility},
 };
 
 use crate::{
@@ -262,6 +263,7 @@ where
 {
     let sizing = match sizing_input(
         dom,
+        boxes,
         styles,
         grid,
         table_node,
@@ -401,9 +403,61 @@ fn classify(error: TableInlineSizingError) -> TableShadowSkip {
     }
 }
 
+/// K4f: which row and column tracks `visibility: collapse` removes.
+///
+/// CSS 2.1 section 17.5.5 applies the value to rows, row groups, columns, and
+/// column groups; a group collapses every track in its range. The mask is
+/// built from track and group identity rather than from cells, so a track with
+/// no cell in it still collapses.
+pub(crate) fn track_visibility<Id>(
+    boxes: &GeneratedBoxTree<Id>,
+    styles: &StylePlane<Id>,
+    grid: &TableGrid,
+) -> TableTrackVisibility
+where
+    Id: Copy + Eq + Hash,
+{
+    let collapsed = |source: BoxId| {
+        boxes
+            .origin_node(source)
+            .and_then(|node| styles.get(node))
+            .is_some_and(|computed| computed.visibility == Visibility::Collapse)
+    };
+    let mask = |tracks: &[buckram::TableTrack], groups: &[buckram::TableTrackGroup]| {
+        let mut states = tracks
+            .iter()
+            .map(|track| match track.source.is_some_and(&collapsed) {
+                true => TableTrackVisibilityState::Collapsed,
+                false => TableTrackVisibilityState::Visible,
+            })
+            .collect::<Vec<_>>();
+        for group in groups.iter().filter(|group| collapsed(group.source)) {
+            for state in states.iter_mut().skip(group.start).take(group.span) {
+                *state = TableTrackVisibilityState::Collapsed;
+            }
+        }
+        states
+    };
+    let visibility = TableTrackVisibility {
+        rows: mask(&grid.rows, &grid.row_groups),
+        columns: mask(&grid.columns, &grid.column_groups),
+    };
+    // CSS Tables 3 does not merely narrow a cell that straddles a collapsed
+    // track: it clips the cell's content at that track's edge, which is a
+    // rendering rule with no seam yet. Collapsing the track without the clip
+    // would render the cell wrong, and deferring the whole table would drop it
+    // back onto the bridge - so such a table keeps every track visible, which
+    // is what it did before K4f and is a smaller wrong answer than either.
+    if visibility.spans_a_collapsed_boundary(grid) {
+        return TableTrackVisibility::all_visible(grid);
+    }
+    visibility
+}
+
 /// Lower the table box's own geometry into the shared sizing input.
 fn sizing_input<'a, D>(
     dom: &D,
+    boxes: &GeneratedBoxTree<D::NodeId>,
     styles: &StylePlane<D::NodeId>,
     grid: &'a TableGrid,
     table_node: D::NodeId,
@@ -452,7 +506,7 @@ where
         table_constraints: table_inline_constraints(computed, font_size, root_font_size),
         border_metrics,
         caption_min,
-        track_visibility: TableTrackVisibility::all_visible(grid),
+        track_visibility: track_visibility(boxes, styles, grid),
     })
 }
 
@@ -522,6 +576,7 @@ where
     let root_font_size = LIVE_ROOT_FONT_SIZE;
     let sizing = sizing_input(
         dom,
+        boxes,
         styles,
         grid,
         table_node,

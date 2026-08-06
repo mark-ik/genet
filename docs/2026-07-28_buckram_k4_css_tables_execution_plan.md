@@ -1018,6 +1018,67 @@ Complete the separated-border model and table-specific rendering order.
 Delete generic block paint assumptions for table-internal fragments where
 table paint order overrides them.
 
+### K4f receipt (collapsed tracks) - 2026-08-06
+
+Base commit: `ad8688ab3b6`. Scoped to the `visibility: collapse` item; the
+separated-border paint items below remain open.
+
+**The guard was dead code, and that is the finding.** Buckram has carried a
+`TrackVisibilityPendingK4f` deferral in all three sizing paths since K4c, and
+the 2026-08-03 census counted it firing zero times. Not because no page
+collapses a track - because Livery only ever passed
+`TableTrackVisibility::all_visible`. The mask was never built, the guard could
+never fire, and every table with `visibility: collapse` was sized as though the
+property were absent. A named deferral that cannot fire reads exactly like a
+feature nobody needs; this one reported zero for four gates.
+
+**Capability:** Livery builds the mask from row, row-group, column, and
+column-group identity, and Buckram removes a collapsed track's size after the
+distribution. CSS 2.1 section 17.5.5: the table's size is reduced by exactly
+what the track occupied and every other track keeps the size it was given. A
+collapsed row takes its following border-spacing interval with it.
+
+**The stop rule is satisfied by construction.** "`visibility: collapse` must
+not delete sizing inputs" - the collapse is a subtraction applied after the
+distribution, so the constraints that produced the sizes were all consulted.
+`a_collapsed_column_still_contributes_its_measure` asserts it at the
+measurement pass, which is where a deleted input would show.
+
+**A spanning cell keeps its tracks visible.** CSS Tables 3 clips a cell that
+straddles a collapsed track at that track's edge, which is a rendering rule
+with no seam yet. `visibility-collapse-colspan-003` broke on the first run and
+the first fix - a narrower deferral for exactly that case - did not work,
+because deferring drops the table onto the bridge and the dead guard meant
+these tables were previously being *sized*. The deferral was a regression by
+introduction rather than a restoration. The conservatism now lives in the
+adapter's mask builder: such a table keeps every track visible, which is what
+it did before K4f, and Buckram's algorithms carry no special case for it.
+
+**Pure fixture:** `a_collapsed_column_still_contributes_its_measure`, and
+`a_collapsed_border_remains_an_explicit_deferral` narrowed to the K4g gap it
+was always about.
+
+**Adapter fixture:** `k4f_a_collapsed_row_gives_its_space_back_to_the_table`
+and `k4f_a_collapsed_column_group_gives_its_width_back`, both through emitted
+fragment geometry, the second applying the collapse through a group and
+checking K4e2's wrapper rule still holds across it.
+
+**WPT:** `css/css-tables` unchanged at 62, `css/CSS2/tables` 129 to **130**,
+zero regressions. Proof directory
+`testing/genet/wpt-ledger/2026-08-06_buckram_k4f`.
+
+**Verification:** 521 tests across the three crates (buckram 165), 0 failed.
+`cargo clippy -p buckram` clean; `-p genet-livery` blocked by the same four
+pre-existing Clippy 1.97.0 warnings recorded in the K4e1 receipt. Rustfmt and
+`git diff --check` clean on touched files.
+
+**Not yet done in K4f:** cell clipping across a collapsed track, and with it
+the tables that keep every track visible today. `empty-cells`, the per-layer
+table backgrounds, DOM-order cell paint, and the border-spacing paint items in
+this gate's Work list are untouched - the census puts nearly all of their WPT
+files in the skip set (manual tests with no reference), so their value is in
+the model rather than in the ratchet.
+
 ## K4g. Collapsed-border conflict resolution and paint
 
 **Execution plan:** [Buckram K4g collapsed border execution

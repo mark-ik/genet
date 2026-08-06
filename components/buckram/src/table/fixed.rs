@@ -10,7 +10,7 @@ use crate::BoxId;
 use super::{
     InlineSizeConstraint, TableBoxSizing, TableCellInlineMeasure, TableDeferral,
     TableInlineBorderMetrics, TableInlineConstraints, TableInlineProperty, TableInlineSizingError,
-    TableInlineSizingInput, TableInlineSizingResult, TableTrackVisibilityState,
+    TableInlineSizingInput, TableInlineSizingResult,
 };
 
 /// CSS constraints for one normalized K4b column track.
@@ -184,18 +184,6 @@ pub fn size_fixed_table_inline(
     if grid.columns.is_empty() {
         return Err(TableInlineSizingError::FixedLayoutWithoutColumns);
     }
-    if input
-        .sizing
-        .track_visibility
-        .columns
-        .iter()
-        .chain(input.sizing.track_visibility.rows.iter())
-        .any(|visibility| *visibility == TableTrackVisibilityState::Collapsed)
-    {
-        return Err(TableInlineSizingError::Deferral(
-            TableDeferral::TrackVisibilityPendingK4f,
-        ));
-    }
     // K4e4: a measured caption floors the table size in fixed layout the same
     // way it does in the automatic algorithm, where C3 of the K4e1 interop
     // matrix shows the floor overriding even an authored width. Only an
@@ -270,12 +258,21 @@ pub fn size_fixed_table_inline(
         .into_iter()
         .map(|size| size.expect("all unresolved columns receive an equal share"))
         .collect::<Vec<_>>();
-    let used_grid_inline_size = column_sizes.iter().sum::<f32>() + undistributable;
-    let used_table_inline_size = grid_size_to_table_size(
+    let mut column_sizes = column_sizes;
+    let mut used_grid_inline_size = column_sizes.iter().sum::<f32>() + undistributable;
+    let mut used_table_inline_size = grid_size_to_table_size(
         used_grid_inline_size,
         input.sizing.table_constraints.box_sizing,
         table_offsets,
     )?;
+    // K4f: a collapsed column is removed after the distribution, never before
+    // it - the widths the other columns received are the widths they keep.
+    super::collapse_columns(
+        &input.sizing.track_visibility,
+        &mut column_sizes,
+        &mut used_grid_inline_size,
+        &mut used_table_inline_size,
+    );
     let intrinsic_sizes =
         crate::IntrinsicSizes::new(used_table_inline_size, used_table_inline_size)
             .ok_or(TableInlineSizingError::InvalidResultSize)?;
