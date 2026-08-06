@@ -1171,6 +1171,64 @@ K4 closure does not claim table fragmentation or complete positioning.
 Those gaps are named K6 and K5 work, and the table remains on Buckram's engine
 path while they are open.
 
+## Corpus census correction - 2026-08-06
+
+Two errors in how these corpora had been read, both of which changed what the
+remaining work looks like.
+
+### Most of the corpus is skipped, not failing
+
+`css/CSS2/tables` reports 1139 files. 889 of them **skip**: 767 as
+`non-reftest` and 122 as `needs-script`. Only 250 run, and after K4f 130 pass
+and 120 fail. `css/css-tables` is 328 files, 198 skipped, 62 passing and 68
+failing.
+
+Counting `status != "pass"` as failure inflates every family. `border-spacing`
+looked like 81 failures and is 1; `empty-cells` looked like 29 and is 0. The
+real remaining total across both corpora is **188**, not the ~1200 a naive
+count gives.
+
+The 767 `non-reftest` files are genuinely manual tests with no reference. The
+122 `needs-script` files are reftests skipped by a substring check for
+`<script>`, which is blunter than it needs to be; that is being audited
+separately.
+
+### The largest remaining family is not what its name says
+
+`table-anonymous-objects-059` through `-098` is 40 failures, the biggest group
+in either corpus, and reads as a box-generation defect. It is not one.
+
+Three things were measured and all three are correct:
+
+1. **Anonymous inference geometry.** Laying out `infer-first-row`'s shape - bare
+   `table-cell` children of a `display: table` box, followed by an explicit row
+   group - produces cell rectangles *identical* to the equivalent HTML
+   `<table>`, cell for cell, including the inferred row preceding the explicit
+   group's rows.
+2. **The overlay these tests are built on.** A `position: relative` parent, a
+   relative in-flow child, and an `position: absolute; top: 0` sibling: both
+   children land at the same origin with the same height.
+3. **The two positioning routes the test and its reference use.** The
+   reference places its tables with `left: 1px` on an abspos box; the test uses
+   `padding: 1px` on a wrapper. Both land at exactly (1, 1) with identical
+   size.
+
+Every one of the 40 fails in the `local` bucket - a localized large difference
+- and never in `dims` or `whole`. So page-level layout is right and something
+small differs. These tests stack red text under green text and pass only when
+the two coincide exactly, which makes them a *rendering-coincidence* family
+rather than a table-model one.
+
+**What the next probe needs.** Localizing this requires comparing the two
+renders pixel-for-pixel, and `genet-wpt` has no image-dump surface for a single
+test. That, not more static reading, is the blocker.
+
+**Roadmap effect.** These 40 should not be counted as table work. The largest
+genuinely-table family left is K4g's: `fixed-table-layout-003d*` through
+`003f*` (26), `collapsed-borders-painting-order` (12),
+`collapsing-border-model` (8), `border-conflict-element` (5), and
+`border-collapse-spanning-cells` (4).
+
 ## Acceptance ladder for every gate
 
 1. **Model proof:** pure Buckram fixtures name the CSS distinction.
