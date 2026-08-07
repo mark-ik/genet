@@ -560,6 +560,7 @@ Usage:
     genet-wpt list        <subset>   enumerate + classify tests in a subset
     genet-wpt run         <subset>   crash-smoke a subset (parse + layout)
     genet-wpt reftest     <subset>   render + pixel-compare reftests (needs a GPU)
+    genet-wpt dump        <subset>   render each reftest and its reference to PNGs
     genet-wpt testharness <subset>   run testharness.js tests + collect results (Boa)
     genet-wpt manifest    <subset>   enumerate from MANIFEST.json (authoritative; H1)
     genet-wpt conformance <subset>   join exact results to the manifest; report absolute totals
@@ -2601,10 +2602,6 @@ fn resolve_ref(test_path: &Path, href: &str, tests_root: &Path) -> Option<PathBu
     })
 }
 
-fn images_equal(a: &render::Image, b: &render::Image) -> bool {
-    a.dimensions() == b.dimensions() && a.as_raw() == b.as_raw()
-}
-
 fn reftest(tests: &[TestCase], args: &Args) {
     let renderer = match render::Renderer::boot() {
         Ok(r) => r,
@@ -2733,11 +2730,7 @@ fn reftest(tests: &[TestCase], args: &Args) {
                 let label = diff_label(&s);
                 *buckets.entry(label).or_insert(0) += 1;
                 if args.verbose {
-                    let pct = if s.total > 0 {
-                        s.differing * 100 / s.total
-                    } else {
-                        0
-                    };
+                    let pct = (s.differing * 100).checked_div(s.total).unwrap_or(0);
                     println!(
                         "FAIL  {k} [{label:5}] diff={pct}% maxδ={} {}",
                         s.max_channel_diff,
@@ -2850,11 +2843,7 @@ fn dump(tests: &[TestCase], args: &Args) {
         let _ = t.save(&tp);
         let _ = r.save(&rp);
         let s = diff_stats(&t, &r);
-        let pct = if s.total > 0 {
-            s.differing * 100 / s.total
-        } else {
-            0
-        };
+        let pct = (s.differing * 100).checked_div(s.total).unwrap_or(0);
         println!(
             "DUMP {} -> {} / {}  (diff={pct}% maxδ={})",
             test.name(),

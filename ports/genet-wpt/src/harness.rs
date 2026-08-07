@@ -61,6 +61,12 @@ impl MediaQueryHandler for WptMediaQueries {
 /// `Close`, or `Error` if the body fails partway (e.g. a `Content-Encoding`
 /// decode error: the response resolved, but body reads reject). `Fail` is a
 /// network error before the headers.
+// The receiving half of fetch streaming is wired and matched; nothing in the
+// runner constructs these yet, because no subcommand drives a streaming fetch.
+#[expect(
+    dead_code,
+    reason = "receiving half of fetch streaming, not yet driven"
+)]
 pub enum FetchCompletion {
     StartStream(u64, FetchOutcome),
     Chunk(u64, Vec<u8>),
@@ -222,6 +228,10 @@ pub fn run_test_with_style(
 /// `webgl-test-utils.js`) draws against a real backend. The factory is minted
 /// per `getContext`; pass `None` for the graphics-free default.
 #[allow(clippy::too_many_arguments)]
+// The free-function form of the Boa harness entry point. `run_test` is the
+// one every subcommand calls; this one takes the WebGL handler the WebGL
+// conformance lane will need and nothing drives yet.
+#[expect(dead_code, reason = "WebGL harness entry point, not yet driven")]
 pub fn run_test_with_webgl(
     testharness_js: &str,
     html: &str,
@@ -293,6 +303,9 @@ pub struct NovaHarnessTemplate {
     rt: Runtime<script_engine_nova::NovaEngine>,
 }
 
+// Nova is selectable as `--engine nova`, but the subcommands reach it
+// through the shared template rather than these two wrappers.
+#[expect(dead_code, reason = "Nova convenience wrappers, reached another way")]
 impl NovaHarnessTemplate {
     pub fn new(testharness_js: &str) -> Result<Self, String> {
         let mut rt = Runtime::<script_engine_nova::NovaEngine>::new()
@@ -578,7 +591,7 @@ fn process_testdriver_actions<E: ScriptEngine>(
             None => "__tdSettle()".to_string(),
         };
         let _ = rt.eval(&call);
-        let _ = rt.run_microtasks();
+        rt.run_microtasks();
     };
     let sequences: Vec<webdriver::actions::ActionSequence> = match serde_json::from_str(&json) {
         Ok(s) => s,
@@ -1060,12 +1073,12 @@ test(function() {
   var sheet = document.styleSheets[0];
   assert_true(document.styleSheets.length === 1, 'one author sheet');
   assert_true(sheet.cssRules.length === 1, 'one initial rule');
-  assert_true(getComputedStyle(card).color === '#ff0000', 'initial color');
+  assert_true(getComputedStyle(card).color === 'rgb(255, 0, 0)', 'initial color');
   assert_true(sheet.insertRule('.card { --accent: #0000ff; }', 1) === 1, 'insert index');
-  assert_true(getComputedStyle(card).color === '#0000ff', 'mutated color');
+  assert_true(getComputedStyle(card).color === 'rgb(0, 0, 255)', 'mutated color');
   assert_true(getComputedStyle(card).getPropertyValue('--accent') === '#0000ff', 'custom value');
   sheet.deleteRule(1);
-  assert_true(getComputedStyle(card).color === '#ff0000', 'deleted rule');
+  assert_true(getComputedStyle(card).color === 'rgb(255, 0, 0)', 'deleted rule');
 }, 'Livery CSSOM composes through the WPT harness');
 </script>"#;
         let results = unwrap_ran(run_test_with_style(

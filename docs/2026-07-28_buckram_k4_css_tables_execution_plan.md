@@ -1220,8 +1220,13 @@ the two coincide exactly, which makes them a *rendering-coincidence* family
 rather than a table-model one.
 
 **What the next probe needs.** Localizing this requires comparing the two
-renders pixel-for-pixel, and `genet-wpt` has no image-dump surface for a single
-test. That, not more static reading, is the blocker.
+renders pixel for pixel. `genet-wpt dump <subset>` does exactly that - it
+renders each reftest and its reference to PNGs and prints the diff percentage.
+
+This paragraph first recorded that no such surface existed, which was wrong:
+`dump` is dispatched in `main.rs` but was missing from the usage text, so
+`--help` did not list it. The usage text now does. Nothing blocks the next
+probe.
 
 **Roadmap effect.** These 40 should not be counted as table work. The largest
 genuinely-table family left is K4g's: `fixed-table-layout-003d*` through

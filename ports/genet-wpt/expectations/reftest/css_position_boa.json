@@ -529,7 +529,10 @@
       "reason": "needs-script",
       "status": "skip"
     },
-    "css/css-position/position-fixed-overflow-print.html": "pass",
+    "css/css-position/position-fixed-overflow-print.html": {
+      "status": "skip",
+      "reason": "non-reftest"
+    },
     "css/css-position/position-fixed-root-element-flex.html": "pass",
     "css/css-position/position-fixed-root-element-grid.html": "pass",
     "css/css-position/position-fixed-scroll-nested-fixed.html": {
@@ -540,7 +543,10 @@
       "reason": "needs-script",
       "status": "skip"
     },
-    "css/css-position/position-fixed-video-controls-print.html": "fail",
+    "css/css-position/position-fixed-video-controls-print.html": {
+      "status": "skip",
+      "reason": "non-reftest"
+    },
     "css/css-position/position-relative-001.html": "fail",
     "css/css-position/position-relative-002.html": "fail",
     "css/css-position/position-relative-003.html": "fail",
@@ -814,8 +820,8 @@
       "status": "skip"
     },
     "css/css-position/sticky/position-sticky-offset-print.html": {
-      "reason": "needs-script",
-      "status": "skip"
+      "status": "skip",
+      "reason": "non-reftest"
     },
     "css/css-position/sticky/position-sticky-offset-top-left.html": {
       "reason": "non-reftest",
