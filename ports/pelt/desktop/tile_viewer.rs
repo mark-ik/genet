@@ -284,7 +284,13 @@ mod windowed {
             }
             let attributes = Window::default_attributes()
                 .with_title("Pelt — tiles")
-                .with_inner_size(PhysicalSize::new(self.width, self.height));
+                .with_inner_size(PhysicalSize::new(self.width, self.height))
+                // Hidden until the first frame has installed the accessibility
+                // adapter: `accesskit_windows` subclasses the window and must do
+                // so before it is shown, while the adapter itself cannot exist
+                // until there is a laid-out tree to hand it. Showing here panics
+                // on Windows. It also means the window never appears unpainted.
+                .with_visible(false);
             let window = match event_loop.create_window(attributes) {
                 Ok(window) => Arc::new(window),
                 Err(err) => {
@@ -301,7 +307,15 @@ mod windowed {
             // routes it. The adapter installs on the first laid-out frame, in
             // `sync_a11y`, once there is a tree to hand it.
             let wake_window = window.clone();
-            self.a11y = Some(AccessKitBridge::new(move || wake_window.request_redraw()));
+            let mut bridge = AccessKitBridge::new(move || wake_window.request_redraw());
+            // `accesskit_windows` subclasses the window and must do so before it
+            // is first shown. The tree here is whatever the shell has before any
+            // frame has run; `sync_a11y` replaces it every frame after.
+            let (tree, route) = self.shell.a11y_tree();
+            self.a11y_route = route.into_iter().collect();
+            let _ = bridge.install(&window, tree);
+            self.a11y = Some(bridge);
+            window.set_visible(true);
             let options = NetrenderOptions {
                 tile_cache_size: Some(64),
                 enable_vello: true,
