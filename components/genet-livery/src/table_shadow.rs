@@ -455,6 +455,10 @@ where
 }
 
 /// Lower the table box's own geometry into the shared sizing input.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the shared lowering both algorithms call; every argument is a               distinct CSS input rather than a group with a name"
+)]
 fn sizing_input<'a, D>(
     dom: &D,
     boxes: &GeneratedBoxTree<D::NodeId>,

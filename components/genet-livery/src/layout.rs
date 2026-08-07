@@ -990,14 +990,16 @@ where
         &state.tree,
         &boxes,
         root,
-        Point { x: 0.0, y: 0.0 },
-        Fragment {
-            x: 0.0,
-            y: 0.0,
-            width: viewport_width,
-            height: viewport_height,
+        FragmentCursor {
+            origin: Point { x: 0.0, y: 0.0 },
+            containing: Fragment {
+                x: 0.0,
+                y: 0.0,
+                width: viewport_width,
+                height: viewport_height,
+            },
+            parent: None,
         },
-        None,
         &tables,
         &mut output,
     )?;
@@ -3278,9 +3280,7 @@ fn collect_fragments<Id>(
     tree: &AlgorithmTree<Style, TextMeasure, Option<BoxId>>,
     boxes: &GeneratedBoxTree<Id>,
     node: AlgorithmNodeId,
-    parent_origin: Point<f32>,
-    containing_rect: Fragment,
-    parent_fragment: Option<FragmentId>,
+    cursor: FragmentCursor,
     tables: &TableFragmentPlane,
     output: &mut FragmentOutput<'_>,
 ) -> Result<(), LayoutError>
@@ -3289,8 +3289,8 @@ where
 {
     let computed = tree.layout(node);
     let origin = Point {
-        x: parent_origin.x + computed.x,
-        y: parent_origin.y + computed.y,
+        x: cursor.origin.x + computed.x,
+        y: cursor.origin.y + computed.y,
     };
     let rect = Fragment {
         x: origin.x,
@@ -3298,7 +3298,7 @@ where
         width: computed.width,
         height: computed.height,
     };
-    let mut child_parent = parent_fragment;
+    let mut child_parent = cursor.parent;
     {
         let source = *tree.source(node);
         let origin_node = match source {
@@ -3310,7 +3310,7 @@ where
                         .last()
                         .copied()
                 });
-                let parent = structural_parent.or(parent_fragment);
+                let parent = structural_parent.or(cursor.parent);
                 let flow = boxes[box_id].flow;
                 let fragment = if flow.is_horizontal() {
                     TreeFragment::from_horizontal_physical(box_id, rect)
@@ -3323,8 +3323,8 @@ where
                             height: computed.height,
                         },
                         PhysicalSize {
-                            width: containing_rect.width,
-                            height: containing_rect.height,
+                            width: cursor.containing.width,
+                            height: cursor.containing.height,
                         },
                     );
                     TreeFragment::from_physical_with_logical(box_id, rect, logical_rect, flow)
@@ -3349,9 +3349,11 @@ where
             tree,
             boxes,
             *child,
-            origin,
-            rect,
-            child_parent,
+            FragmentCursor {
+                origin,
+                containing: rect,
+                parent: child_parent,
+            },
             tables,
             output,
         )?;
@@ -3359,6 +3361,10 @@ where
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one recursive walk; six of the eight are context invariant across               the whole walk and the other two are the per-node cursor"
+)]
 fn collect_inline_fragments<Id>(
     tree: &AlgorithmTree<Style, InlineMeasure, Vec<BoxId>>,
     boxes: &GeneratedBoxTree<Id>,

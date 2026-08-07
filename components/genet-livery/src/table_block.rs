@@ -127,6 +127,7 @@ pub(crate) struct TableBlockInputs {
 
 /// Lower one live table's block axis. Returns `None` with a named skip when
 /// any part of the lowering has no contract yet.
+#[expect(clippy::too_many_arguments, reason = "one call site per route")]
 pub(crate) fn table_block_inputs<Id>(
     boxes: &GeneratedBoxTree<Id>,
     styles: &StylePlane<Id>,

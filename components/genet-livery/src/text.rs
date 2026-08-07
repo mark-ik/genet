@@ -1393,14 +1393,13 @@ where
             .text_clusters
             .iter()
             .filter(|cluster| cluster.source == source)
+            // Distance from the offset to the cluster, zero when inside it.
             .min_by_key(|cluster| {
-                if offset < cluster.range.start {
-                    cluster.range.start - offset
-                } else if offset > cluster.range.end {
-                    offset - cluster.range.end
-                } else {
-                    0
-                }
+                cluster
+                    .range
+                    .start
+                    .saturating_sub(offset)
+                    .max(offset.saturating_sub(cluster.range.end))
             })?;
         let rect = transform(source, cluster.fragment);
         let length = cluster.range.end.saturating_sub(cluster.range.start);
