@@ -73,7 +73,14 @@ impl EvalOutput {
 /// callbacks), which mod and DOM scripting use. Lua, Rhai, and JS all satisfy
 /// this cheaply; a backend whose language has a native operation cap (Rhai)
 /// gets `eval_block`'s budget for free.
-pub trait BlockEvaluator {
+/// `Send` because an evaluator is owned by whatever document endpoint holds
+/// it, and those are scheduled across threads by their hosts. It is a bound on
+/// the backend rather than on the caller: a language runtime that is
+/// thread-hostile has to say so by not implementing this, instead of leaving
+/// every endpoint above it unschedulable for reasons nobody can see from here.
+/// `Sync` is deliberately not required, since evaluation takes `&mut self` and
+/// no two threads share one evaluator.
+pub trait BlockEvaluator: Send {
     /// The fence language tag this evaluator handles (e.g. `"rhai"`, `"lua"`).
     fn language(&self) -> &str;
 
