@@ -1219,14 +1219,45 @@ small differs. These tests stack red text under green text and pass only when
 the two coincide exactly, which makes them a *rendering-coincidence* family
 rather than a table-model one.
 
-**What the next probe needs.** Localizing this requires comparing the two
-renders pixel for pixel. `genet-wpt dump <subset>` does exactly that - it
-renders each reftest and its reference to PNGs and prints the diff percentage.
+### The cause, found with `dump` - 2026-08-06
 
-This paragraph first recorded that no such surface existed, which was wrong:
-`dump` is dispatched in `main.rs` but was missing from the usage text, so
-`--help` did not list it. The usage text now does. Nothing blocks the next
-probe.
+`genet-wpt dump` renders a reftest and its reference to PNGs and prints the
+diff. This paragraph first recorded that no such surface existed, which was
+wrong: `dump` is dispatched in `main.rs` and was only missing from the usage
+text, so `--help` did not list it. It does now.
+
+The dump shows red and green text drifting apart, and the drift *grows across
+the three columns*, which is a per-column difference rather than a single
+offset. The reference renders perfectly, its two HTML tables coinciding
+exactly.
+
+Reproducing the shape narrowed it in three steps. Both tables in normal flow,
+at the width that forces the automatic algorithm to distribute a shortfall:
+byte-identical geometry. The green one moved into the `position: absolute`
+overlay the test actually uses: still identical, and now overlapping. The
+HTML table's `border-spacing` and cell padding switched from the CSS that had
+been standing in for them to the attributes the test really carries:
+
+| | grid width | first cell x | cell width | row height |
+|---|---:|---:|---:|---:|
+| CSS table | 738 | 1 | 246 | 37 |
+| HTML table, `cellpadding="0" cellspacing="0"` | **752** | **3** | **248** | **39** |
+
+**`cellpadding` and `cellspacing` are not honoured.** The table keeps the UA
+defaults - 2px border-spacing and 1px cell padding - although the attributes
+say zero. Two pixels per column boundary is exactly the drift the dump shows.
+
+So the family is a **presentational-attribute gap**, not a table-model one and
+not an anonymous-box one. Livery has no attribute-to-style mapping at all:
+`cellpadding` and `cellspacing` appear only in `script-runtime-api` as
+reflected IDL attributes, never as declarations. HTML's presentational hints
+are a cascade feature - derived declarations entering at the bottom of the
+author origin - so the work belongs in `livery/src/cascade.rs` and
+`genet-livery/src/style.rs`, and it is a lane of its own rather than a fix
+inside K4.
+
+Its reach is wider than these 40: `border`, `width`, `bgcolor`, and `align`
+are the same mechanism, and every one of them is currently ignored.
 
 **Roadmap effect.** These 40 should not be counted as table work. The largest
 genuinely-table family left is K4g's: `fixed-table-layout-003d*` through
