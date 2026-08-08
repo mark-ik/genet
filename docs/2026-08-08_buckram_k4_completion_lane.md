@@ -154,6 +154,19 @@ color does not participate in the ranking.
 all-`none` fixtures prove a total deterministic comparator. A source audit
 finds one winner selector.
 
+**2026-08-08 receipt:** B1's source landed in shared checkpoint
+`9b596b7709d` before verification, then received a narrow gate correction and
+receipt. Buckram retains one logical winner grid carrying `ComputedColor`,
+with exact candidate ledgers and no duplicate winner for identical inputs.
+Livery maps physical sides once through `FlowAxes` and reverses only the RTL
+logical-inline tiebreak. The grid is retained on `PendingTable`; K4g3 metric
+deferrals still prevent it from changing sizing, fragments, or paint. Buckram
+(178), Livery (170 passed, 5 existing C2/C3 deferrals), and all
+`genet-livery` targets pass; strict Clippy passes for Buckram and
+`genet-livery`. The combined strict command is blocked by 146 unchanged Livery
+diagnostics. The release WPT build passed as a compile receipt only; B1 does
+not move collapsed-table geometry or paint.
+
 ## B2. Spanning-side rule and collapsed metrics
 
 Execute K4g3. Use the recorded Chrome/Firefox matrix as prior research, then

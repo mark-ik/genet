@@ -9,7 +9,7 @@ use buckram::{
     PhysicalSide, ResolvedTableBorderGrid, TableAutomaticColumnGroupInput,
     TableAutomaticColumnInput, TableBlockConstraint, TableBorderError, TableBorderOrderKey,
     TableBorderOrigin, TableBorderResolutionError, TableBorderSides, TableBorderSource,
-    TableBorderStyle, TableBoxSizing, TableCellAlignment, TableCellBlockStyle,
+    TableBorderSources, TableBorderStyle, TableBoxSizing, TableCellAlignment, TableCellBlockStyle,
     TableCellInlineStyle, TableDeferral, TableFixedColumnGroupInput, TableFixedColumnInput,
     TableGrid, TableInlineConstraints, TableInlineProperty, TableInlineSizingError,
     collect_table_border_candidates,
@@ -158,12 +158,14 @@ where
     let candidates = collect_table_border_candidates(
         grid,
         &crate::table_shadow::track_visibility(boxes, styles, grid),
-        table,
-        &row_groups,
-        &rows,
-        &column_groups,
-        &columns,
-        &cells,
+        TableBorderSources {
+            table,
+            row_groups,
+            rows,
+            column_groups,
+            columns,
+            cells,
+        },
     )?;
     Ok(candidates.resolve()?)
 }
@@ -637,11 +639,13 @@ mod tests {
 
     #[test]
     fn computed_size_constraints_preserve_affine_percentages_and_box_sizing() {
-        let mut computed = ComputedValues::default();
-        computed.width = "calc(12px + 40%)".parse().expect("width");
-        computed.min_width = "10px".parse().expect("min width");
-        computed.max_width = "fit-content(90%)".parse().expect("max width");
-        computed.box_sizing = BoxSizing::BorderBox;
+        let computed = ComputedValues {
+            width: "calc(12px + 40%)".parse().expect("width"),
+            min_width: "10px".parse().expect("min width"),
+            max_width: "fit-content(90%)".parse().expect("max width"),
+            box_sizing: BoxSizing::BorderBox,
+            ..ComputedValues::default()
+        };
 
         let style = table_cell_inline_style(&computed, FlowAxes::HORIZONTAL_LTR, 16.0, 16.0)
             .expect("basis-free style lowering");
@@ -658,13 +662,15 @@ mod tests {
 
     #[test]
     fn logical_edges_follow_writing_direction_before_buckram_receives_them() {
-        let mut computed = ComputedValues::default();
-        computed.padding_left = "1px".parse().expect("left padding");
-        computed.padding_right = "2px".parse().expect("right padding");
-        computed.border_left_style = "solid".parse().expect("left border style");
-        computed.border_left_width = "3px".parse().expect("left border width");
-        computed.border_right_style = "solid".parse().expect("right border style");
-        computed.border_right_width = "4px".parse().expect("right border width");
+        let computed = ComputedValues {
+            padding_left: "1px".parse().expect("left padding"),
+            padding_right: "2px".parse().expect("right padding"),
+            border_left_style: "solid".parse().expect("left border style"),
+            border_left_width: "3px".parse().expect("left border width"),
+            border_right_style: "solid".parse().expect("right border style"),
+            border_right_width: "4px".parse().expect("right border width"),
+            ..ComputedValues::default()
+        };
 
         let ltr = table_cell_inline_style(&computed, FlowAxes::HORIZONTAL_LTR, 16.0, 16.0)
             .expect("LTR style");
@@ -683,8 +689,10 @@ mod tests {
 
     #[test]
     fn percentage_padding_is_carried_unresolved_and_math_stays_unreduced() {
-        let mut computed = ComputedValues::default();
-        computed.padding_left = "10%".parse().expect("percentage padding");
+        let mut computed = ComputedValues {
+            padding_left: "10%".parse().expect("percentage padding"),
+            ..ComputedValues::default()
+        };
         let style = table_cell_inline_style(&computed, FlowAxes::HORIZONTAL_LTR, 16.0, 16.0)
             .expect("a padding percentage reaches Buckram unresolved");
         // Livery does not own the containing-block basis, so it neither

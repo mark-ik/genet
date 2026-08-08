@@ -505,6 +505,56 @@ or paint order.
 Delete any duplicate border-precedence helper introduced by paint or sizing.
 The pure K4g2 comparator is the only winner selector.
 
+### K4g2 receipt - 2026-08-08
+
+**Base:** `37f52132cbd` (the B0 contextual-color receipt). The shared
+checkpoint `9b596b7709d` captured the B1 implementation together with
+unrelated work before its verification completed; it is recorded here as an
+implementation checkpoint, not as an isolated gate commit. The follow-up
+gate commit contains only the B1 correction and receipt paths.
+
+**Capability:** `compare_table_border_candidates` is the one pure selector.
+It ranks `hidden`, `none`, used width, CSS2 style, origin, and the adapter's
+direction-corrected logical order key. Source identity and side only make an
+otherwise malformed input total. A repeated identical input has one ledger
+winner and a `DuplicateIdentity` diagnostic loss; two equal identities with
+different colors remain a lowering error rather than becoming vector-order
+dependent.
+
+Every atomic edge resolves to exactly one of: a carried winner, a `hidden`
+winner with explicit suppression, or an all-`none` omission. The winner ledger
+records each candidate and its decisive loss. The original winner style is
+retained; future paint asks `collapsed_paint_style()` to map `inset` to
+`ridge` and `outset` to `groove`.
+
+**Adapter:** Livery lowers physical computed sides once through the table
+box's `FlowAxes`, retains the winning `ComputedColor` expression as payload,
+and derives order from K4b logical row and column positions. RTL reverses only
+the inline positional tie. `TableBorderSources` keeps table, group, track,
+and cell style inputs separate, so an implicit track receives an explicit
+`none` source rather than borrowing the table's borders. `PendingTable` retains
+the resolved grid. K4g3 still owns its metric projection: the existing
+collapsed metric and block-metric deferrals remain, and neither sizing geometry
+nor paint consumes this grid yet.
+
+**Proof:** Buckram's 178 library tests cover the precedence steps,
+permutations, hidden and none, relief-style mapping, group sources, and a
+duplicate identity. The Livery adapter test covers physical-to-logical
+lowering, vertical flow, and the LTR/RTL order reversal. `cargo test -p
+livery --offline` passed 170 tests with five pre-existing C2/C3 deferrals;
+`cargo test -p genet-livery --all-targets --offline` passed all targets.
+`cargo clippy -p buckram -p genet-livery --no-deps --offline -- -D warnings`
+passed. The combined strict command remains blocked only by Livery's 146
+unchanged diagnostics, whose source is byte-identical to the B1 base. `cargo
+build -p genet-wpt --release --all-features --offline` passed. It is a compile
+receipt only because B1 does not put a collapsed table through geometry or
+paint.
+
+**Audit:** source search finds one comparator definition and its resolver/test
+uses. `PendingTable::collapsed_borders` is assigned only during table lowering;
+the K4g metric deferrals are still the only collapsed sizing and fragment
+inputs.
+
 ## K4g3. Spanning-side harmonization and metric projection
 
 ### Outcome

@@ -169,6 +169,20 @@ pub struct TableBorderSource<Color> {
     pub order: TableBorderOrderKey,
 }
 
+/// All border-owning table roles lowered from one normalized table grid.
+///
+/// Group, track, and cell vectors are intentionally distinct: borrowing the
+/// table's computed sides for an implicit track would fabricate a CSS source.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableBorderSources<Color> {
+    pub table: TableBorderSource<Color>,
+    pub row_groups: Vec<TableBorderSource<Color>>,
+    pub rows: Vec<TableBorderSource<Color>>,
+    pub column_groups: Vec<TableBorderSource<Color>>,
+    pub columns: Vec<TableBorderSource<Color>>,
+    pub cells: Vec<TableBorderSource<Color>>,
+}
+
 /// Why a candidate set could not be built.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TableBorderError {
@@ -196,7 +210,8 @@ pub enum TableBorderError {
 /// `SourceIdentity` and `SourceSide` are not CSS precedence. They only make
 /// a malformed adapter input with equal order keys deterministic. A valid
 /// lowering supplies direction-corrected order keys, so ordinary CSS ties
-/// end at [`Self::Order`].
+/// end at [`Self::Order`]. `DuplicateIdentity` records a repeated identical
+/// candidate; it is not a CSS comparison and does not select a second winner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TableBorderPrecedence {
     Hidden,
@@ -207,6 +222,7 @@ pub enum TableBorderPrecedence {
     Order,
     SourceIdentity,
     SourceSide,
+    DuplicateIdentity,
 }
 
 /// The resolution status of one candidate in an atomic-segment ledger.
@@ -388,15 +404,15 @@ where
     Ok(ResolvedTableBorderGrid { segments })
 }
 
-fn resolve_edge<'a, Color: Clone + PartialEq>(
+fn resolve_edge<'a, Color>(
     edge: TableGridEdge,
     candidates: impl Iterator<Item = &'a TableBorderCandidate<Color>>,
 ) -> Result<ResolvedTableBorder<Color>, TableBorderResolutionError>
 where
-    Color: 'a,
+    Color: Clone + PartialEq + 'a,
 {
     let candidates = candidates.collect::<Vec<_>>();
-    let Some(mut winner) = candidates.first().copied() else {
+    let Some(_) = candidates.first() else {
         return Ok(ResolvedTableBorder {
             edge,
             winner: None,
@@ -405,10 +421,12 @@ where
         });
     };
 
-    for candidate in candidates.iter().copied().skip(1) {
+    let mut winner_index = 0;
+    for (index, candidate) in candidates.iter().enumerate().skip(1) {
+        let winner = candidates[winner_index];
         let (ordering, _) = compare_table_border_candidates(candidate, winner);
         match ordering {
-            Ordering::Greater => winner = candidate,
+            Ordering::Greater => winner_index = index,
             Ordering::Less => {},
             Ordering::Equal if candidate.color != winner.color => {
                 return Err(TableBorderResolutionError::IndistinguishableCandidates {
@@ -424,15 +442,22 @@ where
     let all_none = candidates
         .iter()
         .all(|candidate| candidate.style == TableBorderStyle::None);
+    let winner = candidates[winner_index];
     let ledger = candidates
-        .into_iter()
-        .map(|candidate| {
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| {
             let disposition = if all_none {
                 TableBorderDisposition::OmittedNone
+            } else if index == winner_index {
+                TableBorderDisposition::Winner
             } else {
                 let (ordering, at) = compare_table_border_candidates(candidate, winner);
                 match ordering {
-                    Ordering::Equal => TableBorderDisposition::Winner,
+                    Ordering::Equal => TableBorderDisposition::Lost {
+                        winner: winner.source,
+                        at: TableBorderPrecedence::DuplicateIdentity,
+                    },
                     Ordering::Less => TableBorderDisposition::Lost {
                         winner: winner.source,
                         at: at.expect("a non-equal border comparison names its rule"),
@@ -443,7 +468,7 @@ where
                 }
             };
             TableBorderLedgerEntry {
-                candidate: candidate.clone(),
+                candidate: (*candidate).clone(),
                 disposition,
             }
         })
@@ -508,13 +533,16 @@ impl TrackRange {
 pub fn collect_table_border_candidates<Color: Clone>(
     grid: &TableGrid,
     visibility: &TableTrackVisibility,
-    table: TableBorderSource<Color>,
-    row_groups: &[TableBorderSource<Color>],
-    rows: &[TableBorderSource<Color>],
-    column_groups: &[TableBorderSource<Color>],
-    columns: &[TableBorderSource<Color>],
-    cells: &[TableBorderSource<Color>],
+    sources: TableBorderSources<Color>,
 ) -> Result<TableBorderCandidates<Color>, TableBorderError> {
+    let TableBorderSources {
+        table,
+        row_groups,
+        rows,
+        column_groups,
+        columns,
+        cells,
+    } = sources;
     if visibility.rows.len() != grid.rows.len() || visibility.columns.len() != grid.columns.len() {
         return Err(TableBorderError::TrackVisibilityShape);
     }
@@ -823,12 +851,14 @@ mod tests {
             collect_table_border_candidates(
                 grid,
                 visibility,
-                self.table.clone(),
-                &self.row_groups,
-                &self.rows,
-                &self.column_groups,
-                &self.columns,
-                &self.cells,
+                TableBorderSources {
+                    table: self.table.clone(),
+                    row_groups: self.row_groups.clone(),
+                    rows: self.rows.clone(),
+                    column_groups: self.column_groups.clone(),
+                    columns: self.columns.clone(),
+                    cells: self.cells.clone(),
+                },
             )
         }
     }
@@ -1126,6 +1156,35 @@ mod tests {
                         winner: cell,
                         at: TableBorderPrecedence::Width,
                     }
+        }));
+    }
+
+    #[test]
+    fn an_exact_duplicate_has_one_winner_and_a_diagnostic_loss() {
+        let grid = table_2x2(&[]);
+        let candidate = candidate(
+            &grid,
+            grid.cells[0].source,
+            TableBorderStyle::Solid,
+            3.0,
+            TableBorderOrigin::Cell,
+            0,
+        );
+        let resolved = resolved(vec![candidate.clone(), candidate]);
+        assert_eq!(
+            resolved
+                .ledger
+                .iter()
+                .filter(|entry| entry.disposition == TableBorderDisposition::Winner)
+                .count(),
+            1
+        );
+        assert!(resolved.ledger.iter().any(|entry| {
+            entry.disposition
+                == TableBorderDisposition::Lost {
+                    winner: grid.cells[0].source,
+                    at: TableBorderPrecedence::DuplicateIdentity,
+                }
         }));
     }
 

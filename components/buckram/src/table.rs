@@ -31,8 +31,8 @@ pub use borders::{
     GridEdgeOrientation, ResolvedTableBorder, ResolvedTableBorderGrid, TableBorderCandidate,
     TableBorderCandidates, TableBorderDisposition, TableBorderError, TableBorderLedgerEntry,
     TableBorderOrderKey, TableBorderOrigin, TableBorderPrecedence, TableBorderResolutionError,
-    TableBorderSide, TableBorderSides, TableBorderSource, TableBorderStyle, TableGridEdge,
-    collect_table_border_candidates, compare_table_border_candidates,
+    TableBorderSide, TableBorderSides, TableBorderSource, TableBorderSources, TableBorderStyle,
+    TableGridEdge, collect_table_border_candidates, compare_table_border_candidates,
     resolve_table_border_candidates,
 };
 pub use fixed::{
