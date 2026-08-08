@@ -195,13 +195,17 @@ claims CSSOM, animation, or headed-paint semantics.
 - `cargo test -p livery --offline`: 170 passed, 5 intentionally ignored;
 - `cargo test -p buckram --lib --offline`: 172 passed;
 - `cargo test -p genet-livery --all-targets --offline`: 195 passed;
-- the combined strict Clippy command is blocked by 146 pre-existing Livery
-  selector and color-space warnings; after boxing the retained expression,
-  it reports no C1 warning;
+- the combined strict Clippy command is blocked outside C1: 146 existing
+  Livery selector/color-space warnings and three existing
+  `genet-livery/src/table_sizing.rs` test initializers rejected by Rust 1.97;
+  after boxing the retained expression, it reports no C1 warning;
+- `cargo build -p genet-wpt --release --all-features --offline`: passed;
 - `rustfmt --edition 2024 --check` on all touched Rust paths; and
 - `git diff --check`.
 
-**Commit:** `Add Livery contextual computed color` (this commit).
+**Code checkpoint:** `11a22ee9ac3` holds the C1 implementation inside the
+shared in-flight checkpoint. The B0 receipt commit records only this evidence;
+it does not include table work.
 
 **Next:** C2 supplies `color-scheme`, element-context computation, and the
 host-owned system palette. C3 owns the full CSSOM, animation, and paint
