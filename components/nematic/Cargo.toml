@@ -34,8 +34,12 @@ genet-static-dom = { path = "../genet-static-dom", optional = true }
 # 2026-07-10 adoption); nematic owns only the AST -> block lowering.
 errand = { workspace = true }
 pulldown-cmark = { version = "0.13", default-features = false }
-# Djot pull-parser for the knot djot-substrate proof-of-concept (knot/djot.rs;
-# design doc §10). Additive alongside pulldown-cmark during the migration.
+# Djot pull-parser. Djot is THE knot grammar, not a proof-of-concept: the
+# design doc's §10.5 migration finished on 2026-05-31 and `text/x-knot` routes
+# to `nematic.knot-djot` by default. pulldown-cmark below is not a leftover of
+# that migration; it serves foreign markdown and the pinned `nematic.knot`
+# compat engine, which the design doc deliberately keeps ("preserves 'paste
+# anything' for import while djot is the native author format").
 jotdown = "0.10"
 serde = { workspace = true }
 serde_json = { workspace = true }
