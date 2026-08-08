@@ -918,13 +918,13 @@ Proof directory `testing/genet/wpt-ledger/2026-08-06_buckram_k4e4`.
 pre-existing Clippy 1.97.0 warnings recorded in the K4e1 receipt. Rustfmt and
 `git diff --check` clean on touched files.
 
-**Not yet done in K4e4:** an inline-table atom aligns in the line by the
-bottom of its margin box rather than by the table-root's exported baseline,
-which is K4d5's seam; `table-vertical-align-baseline-008` passing shows the
-bottom edge coincides for the common single-row case. A collapsed-border
-inline-table's atom falls back to an unsized wrapper. `getClientRects` as a
-multi-fragment API does not exist yet; the wrapper-rect decision here is the
-single-rectangle one.
+**B3b update - 2026-08-08:** an inline-table atom now consumes K4d5's exported
+first table baseline, translated from its grid to the wrapper that rides the
+line. The two-row live fixture rejects the prior margin-box-bottom substitution;
+the common single-row WPT pass is no longer the only evidence for this seam. A
+collapsed-border inline-table's atom still falls back to an unsized wrapper.
+`getClientRects` as a multi-fragment API does not exist yet; the wrapper-rect
+decision here is the single-rectangle one.
 
 ### K4e caption interop matrix - 2026-08-03 (research, ahead of its gate)
 

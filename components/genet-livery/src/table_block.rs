@@ -472,6 +472,10 @@ pub(crate) fn commit_table_block<S, Context, Source>(
             height: layout.sizing.used_table_block_size,
         },
     );
+    // K4d5 is the one authority for a table's first and last baselines. Keep
+    // that output on the algorithm node so an inline-table atom can consume
+    // the first baseline instead of substituting its block-end edge.
+    tree.set_baselines(table_node, layout.alignment.baselines);
     tree.set_kind(table_node, AlgorithmKind::Table);
 }
 

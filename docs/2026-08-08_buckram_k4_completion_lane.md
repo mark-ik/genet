@@ -253,6 +253,23 @@ The focused interop recheck remains aligned: Chrome 151.0.0.0 dumps T4 as
 `target-buckram-b3/row-group-interop-recheck`. This subreceipt does not claim
 the separate inline-table baseline, vertical-caption, or census parts of B3.
 
+### B3b. Inline-table first baseline - 2026-08-08
+
+`commit_table_block` now preserves K4d5's first and last baseline set on the
+table algorithm node. The atomic-inline pass reads the first value before its
+post-layout verification consumes the pending table, translates it from the
+grid's block-start to the wrapper's margin-box block-start, and gives it to the
+inline atom. That translation uses the painted grid origin, so a caption above
+the grid cannot accidentally become part of the table baseline.
+
+The text path applies that value only to baseline-family `vertical-align`
+values. Other atomic boxes retain their prior block-end fallback and top,
+middle, and bottom alignment retain their existing line-topology rules. The
+live fixture gives the first and second rows 40px and 60px: the first row's
+baseline agrees with its inline text peer, rejecting the former 100px wrapper
+block-end substitution. This subreceipt leaves B3 vertical captions and the
+deferral census open.
+
 ## B4. Collapsed sizing and overflow
 
 Execute K4g4. Feed B2 metrics into the accepted K4c and K4d algorithms. Do

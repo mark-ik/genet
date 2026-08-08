@@ -43,6 +43,12 @@ pub(crate) trait FragmentLookup<Id> {
     fn atomic_box_rect(&self, _box_id: BoxId) -> Option<&Fragment> {
         None
     }
+
+    /// A first baseline from the atomic box's margin-box block-start. The
+    /// default leaves existing atomic boxes on Parley's block-end fallback.
+    fn atomic_box_baseline(&self, _box_id: BoxId) -> Option<f32> {
+        None
+    }
 }
 
 impl<Id> FragmentLookup<Id> for LiveryLayout<Id>
@@ -879,15 +885,25 @@ impl TextSystem {
                         let vertical_shift = if inline_box.edge {
                             0.0
                         } else {
-                            vertical_align_shift(
+                            let baseline_shift = matches!(
                                 inline_box.vertical_align,
-                                inline_box.font_size,
-                                inline_box.line_height,
-                                &metrics,
-                                base_y,
-                                height,
-                                true,
+                                VerticalAlign::Baseline
+                                    | VerticalAlign::Sub
+                                    | VerticalAlign::Super
+                                    | VerticalAlign::Length(_)
                             )
+                            .then_some(metrics.baseline - (base_y + inline_box.baseline))
+                            .unwrap_or(0.0);
+                            baseline_shift
+                                + vertical_align_shift(
+                                    inline_box.vertical_align,
+                                    inline_box.font_size,
+                                    inline_box.line_height,
+                                    &metrics,
+                                    base_y,
+                                    height,
+                                    true,
+                                )
                         };
                         result.push(ShapedItem::InlineBox {
                             source: inline_box.source,
@@ -1085,6 +1101,8 @@ where
                     let mut fragment = run.fragment;
                     translate_fragment(&mut fragment, origin);
                     let line_y = run.line_y + origin.1;
+                    #[cfg(test)]
+                    let line_baseline = run.line_baseline + origin.1;
                     let mut glyphs = run.glyphs.clone();
                     for glyph in &mut glyphs {
                         glyph.point.x += origin.0;
@@ -1095,6 +1113,8 @@ where
                         continue;
                     };
                     frame.record_inline_fragment(source_node, fragment, line_y);
+                    #[cfg(test)]
+                    frame.record_inline_baseline(source_node, line_baseline);
                     for cluster in &run.clusters {
                         let Some(cluster_node) = node_for(cluster.source) else {
                             continue;
@@ -1121,6 +1141,8 @@ where
                         );
                         placement.record(*owner, decorated, line_y);
                         frame.record_inline_fragment(owner_node, decorated, line_y);
+                        #[cfg(test)]
+                        frame.record_inline_baseline(owner_node, line_baseline);
                         command_owners.push(owner_node);
                     }
                     frame.used_fonts.insert(run.font_instance);
@@ -1193,6 +1215,8 @@ pub(crate) struct TextFrame<Id> {
     prepared_sources: HashSet<Id>,
     inline_fragments: HashMap<Id, Vec<Fragment>>,
     inline_line_keys: HashMap<Id, Vec<f32>>,
+    #[cfg(test)]
+    inline_baselines: HashMap<Id, Vec<f32>>,
     painted_decorations: HashSet<Id>,
     used_fonts: HashSet<FontInstanceKey>,
     text_order: Vec<Id>,
@@ -1210,6 +1234,8 @@ impl<Id> Default for TextFrame<Id> {
             prepared_sources: HashSet::new(),
             inline_fragments: HashMap::new(),
             inline_line_keys: HashMap::new(),
+            #[cfg(test)]
+            inline_baselines: HashMap::new(),
             painted_decorations: HashSet::new(),
             used_fonts: HashSet::new(),
             text_order: Vec::new(),
@@ -1274,6 +1300,31 @@ where
         self.inline_line_keys
             .get(&source)
             .and_then(|lines| lines.first().copied())
+    }
+
+    /// The first shaped line baseline for an inline source, in document
+    /// coordinates. Test receipts use it to compare another baseline provider
+    /// against the line that placed it without inferring one from a fragment's
+    /// block edge.
+    #[cfg(test)]
+    pub(crate) fn first_inline_baseline(&self, source: Id) -> Option<f32> {
+        self.inline_baselines
+            .get(&source)
+            .and_then(|baselines| baselines.first().copied())
+    }
+
+    #[cfg(test)]
+    fn record_inline_baseline(&mut self, source: Id, baseline: f32) {
+        if !baseline.is_finite() {
+            return;
+        }
+        let baselines = self.inline_baselines.entry(source).or_default();
+        if baselines
+            .last()
+            .is_none_or(|previous| (previous - baseline).abs() > 0.5)
+        {
+            baselines.push(baseline);
+        }
     }
 
     fn record_inline_fragment(&mut self, source: Id, fragment: Fragment, line_y: f32) {
@@ -1589,6 +1640,9 @@ struct InlineAtom<Id> {
     fragment: Fragment,
     line_width: f32,
     line_box_height: f32,
+    /// First baseline from this atom's margin-box block-start. Non-table
+    /// atomic boxes keep their prior block-end fallback here.
+    baseline: f32,
     margin_left: f32,
     margin_top: f32,
     edge: bool,
@@ -1795,6 +1849,11 @@ where
         let font_size = super::paint::used_font_size(style);
         let (line_width, line_box_height, margin_left, margin_top) =
             inline_margin_box(style, fragment, font_size, self.percentage_basis);
+        let baseline = self
+            .fragments
+            .atomic_box_baseline(box_id)
+            .filter(|baseline| baseline.is_finite() && *baseline >= 0.0)
+            .map_or(line_box_height, |baseline| margin_top + baseline);
         self.inline_boxes.push(InlineAtom {
             source: box_id,
             owners: self.owners.clone(),
@@ -1802,6 +1861,7 @@ where
             fragment,
             line_width,
             line_box_height,
+            baseline,
             margin_left,
             margin_top,
             edge: false,
@@ -1829,6 +1889,7 @@ where
                     },
                     line_width: width,
                     line_box_height: 0.0,
+                    baseline: 0.0,
                     margin_left: 0.0,
                     margin_top: 0.0,
                     edge: true,
@@ -1868,6 +1929,7 @@ where
             },
             line_width: 0.0,
             line_box_height: height,
+            baseline: height,
             margin_left: 0.0,
             margin_top: 0.0,
             edge: false,
@@ -1888,6 +1950,7 @@ where
             fragment: Fragment::default(),
             line_width: 0.0,
             line_box_height: super::layout::line_height_px(&style.line_height, font_size),
+            baseline: super::layout::line_height_px(&style.line_height, font_size),
             margin_left: 0.0,
             margin_top: 0.0,
             edge: false,
@@ -1962,6 +2025,7 @@ where
                             fragment,
                             line_width,
                             line_box_height,
+                            baseline: line_box_height,
                             margin_left,
                             margin_top,
                             edge: false,
@@ -1988,6 +2052,7 @@ where
                             fragment,
                             line_width,
                             line_box_height,
+                            baseline: line_box_height,
                             margin_left,
                             margin_top,
                             edge: false,
@@ -2053,6 +2118,7 @@ where
                     },
                     line_width: width,
                     line_box_height: 0.0,
+                    baseline: 0.0,
                     margin_left: 0.0,
                     margin_top: 0.0,
                     edge: true,
@@ -2097,6 +2163,7 @@ where
             },
             line_width: 0.0,
             line_box_height: height,
+            baseline: height,
             margin_left: 0.0,
             margin_top: 0.0,
             edge: false,
@@ -2117,6 +2184,7 @@ where
             fragment: Fragment::default(),
             line_width: 0.0,
             line_box_height: super::layout::line_height_px(&style.line_height, font_size),
+            baseline: super::layout::line_height_px(&style.line_height, font_size),
             margin_left: 0.0,
             margin_top: 0.0,
             edge: false,

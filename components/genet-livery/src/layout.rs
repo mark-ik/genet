@@ -72,6 +72,10 @@ struct AtomicSubtree {
 #[derive(Clone, Debug, Default)]
 struct AtomicLayoutPlane {
     fragments: HashMap<BoxId, Fragment>,
+    // K4d5 table-grid first baselines, expressed from their inline-table
+    // wrapper's margin-box block-start. Only inline-table wrappers populate
+    // this map; other atomic boxes retain the existing block-end fallback.
+    inline_baselines: HashMap<BoxId, f32>,
     subtrees: Vec<AtomicSubtree>,
     // Accumulated K4c5a shadow ledgers from each atomic root's BuildState,
     // which are otherwise dropped exactly as table_bridge_count still is.
@@ -81,6 +85,10 @@ struct AtomicLayoutPlane {
 impl AtomicLayoutPlane {
     pub fn get(&self, box_id: BoxId) -> Option<&Fragment> {
         self.fragments.get(&box_id)
+    }
+
+    pub fn inline_baseline(&self, box_id: BoxId) -> Option<f32> {
+        self.inline_baselines.get(&box_id).copied()
     }
 }
 
@@ -94,6 +102,10 @@ where
 
     fn atomic_box_rect(&self, box_id: BoxId) -> Option<&Fragment> {
         self.get(box_id)
+    }
+
+    fn atomic_box_baseline(&self, box_id: BoxId) -> Option<f32> {
+        self.inline_baseline(box_id)
     }
 }
 
@@ -1157,8 +1169,48 @@ where
 
         let mut fragments = Vec::new();
         collect_atomic_fragments(&state.tree, root, Point { x: 0.0, y: 0.0 }, &mut fragments);
-        // Widths are stable across the origin shift below, so verification
-        // can read them either side of it.
+        let Some(root_rect) = fragments
+            .iter()
+            .find_map(|(candidate, rect)| (*candidate == box_id).then_some(*rect))
+        else {
+            // Widths are stable across the origin shift below, so verification
+            // can read them either side of it. It consumes the pending list,
+            // which does not matter for a root that supplied no fragment.
+            state.verify_table_layout(|needle| {
+                fragments
+                    .iter()
+                    .find(|(candidate, _)| *candidate == needle)
+                    .map(|(_, rect)| *rect)
+            });
+            plane
+                .table_shadow
+                .merge(std::mem::take(&mut state.table_shadow));
+            continue;
+        };
+        // The wrapper can have captions before the grid, so derive the
+        // baseline from the actual grid origin rather than assuming that the
+        // grid begins at the atomic root. Buckram's K4d5 baseline remains
+        // grid-relative; text layout receives the wrapper-relative value.
+        for pending in &state.pending_tables {
+            let Some(wrapper) = pending.grid.wrapper else {
+                continue;
+            };
+            let Some(grid_rect) = fragments
+                .iter()
+                .find_map(|(candidate, rect)| (*candidate == pending.grid.grid).then_some(*rect))
+            else {
+                continue;
+            };
+            let Some(first) = state.tree.baselines(pending.taffy_table).first else {
+                continue;
+            };
+            let baseline = grid_rect.y - root_rect.y + first;
+            if baseline.is_finite() && baseline >= 0.0 {
+                plane.inline_baselines.insert(wrapper, baseline);
+            }
+        }
+        // Verify after the baseline handoff: verification consumes the pending
+        // list, while the handoff needs the same grid node and K4d5 output.
         state.verify_table_layout(|needle| {
             fragments
                 .iter()
@@ -1168,12 +1220,6 @@ where
         plane
             .table_shadow
             .merge(std::mem::take(&mut state.table_shadow));
-        let Some(root_rect) = fragments
-            .iter()
-            .find_map(|(candidate, rect)| (*candidate == box_id).then_some(*rect))
-        else {
-            continue;
-        };
         for (candidate, rect) in &mut fragments {
             rect.x -= root_rect.x;
             rect.y -= root_rect.y;
@@ -5285,6 +5331,84 @@ mod tests {
         assert!(
             wrapper.y < 20.0,
             "the atom must sit in the first line: {wrapper:?}"
+        );
+    }
+
+    /// B3: K4d5's first table baseline positions a baseline-aligned
+    /// inline-table. The second row makes the table much taller than its first
+    /// row, so the old wrapper block-end fallback would put the first cell's
+    /// text far above its inline peer.
+    #[test]
+    fn b3_inline_table_uses_its_first_table_baseline() {
+        fn by_id(
+            dom: &StaticDocument,
+            node: <StaticDocument as LayoutDom>::NodeId,
+            expected: &str,
+        ) -> Option<<StaticDocument as LayoutDom>::NodeId> {
+            if dom.attributes(node).any(|attribute| {
+                attribute.name.ns.as_ref().is_empty()
+                    && attribute.name.local.as_ref() == "id"
+                    && attribute.value == expected
+            }) {
+                return Some(node);
+            }
+            dom.dom_children(node)
+                .find_map(|child| by_id(dom, child, expected))
+        }
+
+        let dom = StaticDocument::parse(
+            "<div id=host><span id=peer>peer</span><span id=table class=t><span class=r>\
+             <span id=first class=c>table</span></span>\
+             <span class=r><span class=c id=second>lower</span></span></span></div>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "html, body, div, span { margin: 0; padding: 0; border: 0; }\
+                 #host { width: 320px; font-family: monospace; font-size: 10px; line-height: 20px; }\
+                 .t { display: inline-table; border-spacing: 0; vertical-align: baseline; }\
+                 .r { display: table-row; } .c { display: table-cell; padding: 0; }\
+                 #first { height: 40px; } #second { height: 60px; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let peer_node = by_id(&dom, dom.document(), "peer").expect("peer");
+        let peer = layout
+            .text_frame()
+            .and_then(|frame| frame.first_inline_baseline(peer_node))
+            .expect("peer shaped-line baseline");
+        let first_cell = layout
+            .get(by_id(&dom, dom.document(), "first").expect("first cell"))
+            .expect("first cell fragment");
+        // This table's default cell baseline is its first row's cell block
+        // end. Its row is 40px while the full table is 100px, so the receipt
+        // rejects the old 100px wrapper block-end fallback.
+        let cell = first_cell.physical_rect().y + first_cell.physical_rect().height;
+        let rect = |id| {
+            layout
+                .get(by_id(&dom, dom.document(), id).expect(id))
+                .expect(id)
+                .physical_rect()
+        };
+
+        assert!(
+            (peer - cell).abs() < 0.5,
+            "the inline peer and first table-row baseline must agree: peer={peer}, cell={cell}, peer_rect={:?}, cell_rect={:?}, table_rect={:?}",
+            rect("peer"),
+            rect("first"),
+            rect("table"),
         );
     }
 
