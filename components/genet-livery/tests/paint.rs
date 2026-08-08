@@ -2031,3 +2031,250 @@ fn table_row_and_group_backgrounds_paint() {
         "the rows must tile: {red:?} {blue:?}"
     );
 }
+
+/// B5: the separated model paints each structural background layer before
+/// cells, and cells retain DOM order even when their spans change placement.
+#[test]
+fn separated_table_backgrounds_follow_table_phase_and_cell_dom_order() {
+    let list = render(
+        "<table><colgroup id=cg><col id=col></colgroup><tbody id=rg><tr id=row>\
+         <td id=first rowspan=2></td><td id=second></td></tr><tr><td id=third></td></tr>\
+         </tbody></table>",
+        "table { display: table; table-layout: fixed; width: 120px; border-spacing: 0; \
+                  background-color: #111111; } \
+         colgroup { display: table-column-group; background-color: #ff0000; } \
+         col { display: table-column; background-color: #00ff00; } \
+         tbody { display: table-row-group; background-color: #0000ff; } \
+         tr { display: table-row; height: 20px; background-color: #ffff00; } \
+         td { display: table-cell; padding: 0; } \
+         #first { background-color: #ff00ff; } \
+         #second { background-color: #00ffff; } \
+         #third { background-color: #ffffff; }",
+        1,
+    );
+    let color = |red: u8, green: u8, blue: u8| {
+        ColorF::new(
+            f32::from(red) / 255.0,
+            f32::from(green) / 255.0,
+            f32::from(blue) / 255.0,
+            1.0,
+        )
+    };
+    let index = |needle| {
+        list.commands()
+            .iter()
+            .position(|command| matches!(command, PaintCmd::DrawRect(rect) if rect.color == needle))
+            .unwrap_or_else(|| panic!("missing table layer {needle:?}"))
+    };
+
+    let table = index(color(0x11, 0x11, 0x11));
+    let column_group = index(color(0xff, 0, 0));
+    let column = index(color(0, 0xff, 0));
+    let row_group = index(color(0, 0, 0xff));
+    let row = index(color(0xff, 0xff, 0));
+    let first = index(color(0xff, 0, 0xff));
+    let second = index(color(0, 0xff, 0xff));
+    let third = index(color(0xff, 0xff, 0xff));
+
+    assert!(
+        table < column_group
+            && column_group < column
+            && column < row_group
+            && row_group < row
+            && row < first,
+        "table paint phases: table={table} colgroup={column_group} col={column} \
+         rowgroup={row_group} row={row} first={first}"
+    );
+    assert!(
+        first < second && second < third,
+        "cells paint in DOM order despite the first cell's rowspan: {first}, {second}, {third}"
+    );
+}
+
+/// B5: `empty-cells: hide` consults the cell's content, not its nonzero track
+/// rectangle. The whitespace-only cell loses both its background and border.
+#[test]
+fn empty_cells_hide_suppresses_an_actual_blank_cells_ink() {
+    let html = "<table><tbody><tr><td id=empty></td><td>content</td></tr></tbody></table>";
+    let base = "table { display: table; table-layout: fixed; width: 100px; border-spacing: 0; } \
+                tbody { display: table-row-group; } tr { display: table-row; } \
+                td { display: table-cell; padding: 0; height: 20px; \
+                background-color: #ff0000; border: 3px solid #0000ff; }";
+    let shown = render(html, &format!("{base} td {{ empty-cells: show; }}"), 1);
+    let hidden = render(html, &format!("{base} td {{ empty-cells: hide; }}"), 1);
+    let red = ColorF::new(1.0, 0.0, 0.0, 1.0);
+
+    let count = |list: &genet_livery::LiveryPaintList| {
+        list.commands()
+            .iter()
+            .filter(|command| matches!(command, PaintCmd::DrawRect(rect) if rect.color == red))
+            .count()
+    };
+    let borders = |list: &genet_livery::LiveryPaintList| {
+        list.commands()
+            .iter()
+            .filter(|command| matches!(command, PaintCmd::DrawBorder(_)))
+            .count()
+    };
+
+    assert_eq!(
+        count(&shown),
+        2,
+        "both cell boxes paint when shown"
+    );
+    assert_eq!(count(&hidden), 1, "only the non-empty cell remains");
+    assert_eq!(borders(&shown), borders(&hidden) + 1);
+}
+
+/// B5: border spacing is already part of Buckram's track geometry. The table
+/// layer fills the gaps, while the two cell fragments remain one 10px interval
+/// apart rather than receiving spacing a second time.
+#[test]
+fn separated_table_background_fills_single_sized_border_spacing_gaps() {
+    let list = render(
+        "<table><tr><td id=one></td><td id=two></td></tr></table>",
+        "table { display: table; table-layout: fixed; width: 100px; border-spacing: 10px; \
+                 background-color: #0000ff; } \
+         tr { display: table-row; } td { display: table-cell; padding: 0; height: 20px; } \
+         #one { background-color: #ff0000; } #two { background-color: #00ff00; }",
+        1,
+    );
+    let rect = |color| {
+        list.commands()
+            .iter()
+            .find_map(|command| match command {
+                PaintCmd::DrawRect(rect) if rect.color == color => Some(rect.placement.bounds),
+                _ => None,
+            })
+            .expect("background layer")
+    };
+    let table = rect(ColorF::new(0.0, 0.0, 1.0, 1.0));
+    let one = rect(ColorF::new(1.0, 0.0, 0.0, 1.0));
+    let two = rect(ColorF::new(0.0, 1.0, 0.0, 1.0));
+
+    assert!((table.max.x - table.min.x - 100.0).abs() < 0.5, "{table:?}");
+    assert!((one.min.x - table.min.x - 10.0).abs() < 0.5, "{one:?} {table:?}");
+    assert!((two.min.x - one.max.x - 10.0).abs() < 0.5, "{one:?} {two:?}");
+    assert!((table.max.x - two.max.x - 10.0).abs() < 0.5, "{two:?} {table:?}");
+}
+
+/// B5: a cell crossing a collapsed column keeps its content inside the
+/// accepted post-collapse cell edge, then lets the column disappear from the
+/// table's used width.
+#[test]
+fn a_cell_spanning_a_collapsed_column_gets_an_exact_content_clip() {
+    let list = render(
+        "<table><col id=gone><col><tr><td id=span colspan=2><i></i></td></tr></table>",
+        "table { display: table; table-layout: fixed; width: 100px; border-spacing: 0; } \
+         col { display: table-column; width: 50px; } #gone { visibility: collapse; } \
+         tr { display: table-row; } td { display: table-cell; padding: 0; height: 20px; } \
+         i { display: block; width: 100px; height: 10px; background-color: #ff0000; }",
+        1,
+    );
+    let red = list
+        .commands()
+        .iter()
+        .position(|command| {
+            matches!(command, PaintCmd::DrawRect(rect) if rect.color == ColorF::new(1.0, 0.0, 0.0, 1.0))
+        })
+        .expect("the spanning cell's child paints inside a clip");
+    let clip = list.commands()[..red]
+        .iter()
+        .rev()
+        .find_map(|command| match command {
+            PaintCmd::PushClip(spec) => match spec.kind {
+                ClipKind::Rect(rect) => Some(rect),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("collapsed-span content clip");
+    let close = list.commands()[red + 1..]
+        .iter()
+        .position(|command| matches!(command, PaintCmd::PopClip))
+        .expect("collapsed-span clip closes after the child");
+
+    assert!((clip.max.x - clip.min.x - 50.0).abs() < 0.5, "{clip:?}");
+    assert!(close < 3, "the clip must close with the cell, not the table");
+}
+
+/// B5: the table grid owns its shadow, while `overflow` clips at the wrapper
+/// that also contains a caption. This keeps the two CSS Tables 3 boxes from
+/// being silently conflated by the paint path.
+#[test]
+fn table_shadow_uses_the_grid_while_overflow_clips_the_wrapper() {
+    let list = render(
+        "<table><caption>caption</caption><tr><td></td></tr></table>",
+        "table { display: table; table-layout: fixed; width: 120px; border-spacing: 0; \
+                 overflow-x: hidden; overflow-y: hidden; background-color: #ff0000; \
+                 box-shadow: 0 0 4px #000000; } \
+         caption { display: table-caption; height: 30px; margin: 0; padding: 0; \
+                   background-color: #0000ff; } \
+         tr { display: table-row; height: 40px; } td { display: table-cell; padding: 0; }",
+        1,
+    );
+    let caption = list
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::DrawRect(rect) if rect.color == ColorF::new(0.0, 0.0, 1.0, 1.0) => {
+                Some(rect.placement.bounds)
+            },
+            _ => None,
+        })
+        .expect("caption background");
+    let shadow = list
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::DrawShadow(shadow) => Some(shadow.box_bounds),
+            _ => None,
+        })
+        .expect("table grid shadow");
+    let clip = list
+        .commands()
+        .iter()
+        .find_map(|command| match command {
+            PaintCmd::PushClip(spec) => match &spec.kind {
+                ClipKind::Rect(rect) => Some(*rect),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("table wrapper overflow clip");
+
+    assert!((shadow.max.y - shadow.min.y - 40.0).abs() < 0.5, "{shadow:?}");
+    assert!(
+        shadow.min.y >= caption.max.y - 0.5,
+        "the grid shadow must start below the caption: {shadow:?} {caption:?}"
+    );
+    assert!(
+        clip.min.y <= caption.min.y + 0.5 && clip.max.y >= shadow.max.y - 0.5,
+        "the wrapper clip covers both caption and grid: {clip:?} {caption:?} {shadow:?}"
+    );
+}
+
+/// B5: inline-table atoms retain the same structural paint fragments after
+/// their local layout tree is merged into the page fragment tree.
+#[test]
+fn inline_table_atoms_keep_their_structural_background_layers() {
+    let list = render(
+        "<div><span class=t><span class=r><span class=c></span></span></span></div>",
+        "div { font-size: 16px; } .t { display: inline-table; width: 80px; border-spacing: 0; \
+                                      background-color: #0000ff; } \
+         .r { display: table-row; height: 20px; background-color: #00ff00; } \
+         .c { display: table-cell; padding: 0; background-color: #ff0000; }",
+        1,
+    );
+    let index = |color| {
+        list.commands()
+            .iter()
+            .position(|command| matches!(command, PaintCmd::DrawRect(rect) if rect.color == color))
+            .expect("inline-table paint layer")
+    };
+    let table = index(ColorF::new(0.0, 0.0, 1.0, 1.0));
+    let row = index(ColorF::new(0.0, 1.0, 0.0, 1.0));
+    let cell = index(ColorF::new(1.0, 0.0, 0.0, 1.0));
+
+    assert!(table < row && row < cell, "{table} {row} {cell}");
+}

@@ -197,9 +197,7 @@ mod title_tests {
 #[cfg(all(test, feature = "livery"))]
 mod livery_route_tests {
     use genet_documents::{LiveryDocumentSession, LiverySessionEngine, LocalFetcher};
-    use inker::{
-        DocumentSession, SessionEngine, SessionRegistry, SessionScrollKey, SessionSpawnRequest,
-    };
+    use inker::{SessionRegistry, SessionScrollKey, SessionSpawnRequest};
     use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
     use netrender::{Scene, SceneOp};
 

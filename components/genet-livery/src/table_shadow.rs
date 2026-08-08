@@ -471,15 +471,6 @@ where
         rows: mask(&grid.rows, &grid.row_groups),
         columns: mask(&grid.columns, &grid.column_groups),
     };
-    // CSS Tables 3 does not merely narrow a cell that straddles a collapsed
-    // track: it clips the cell's content at that track's edge, which is a
-    // rendering rule with no seam yet. Collapsing the track without the clip
-    // would render the cell wrong, and deferring the whole table would drop it
-    // back onto the bridge - so such a table keeps every track visible, which
-    // is what it did before K4f and is a smaller wrong answer than either.
-    if visibility.spans_a_collapsed_boundary(grid) {
-        return TableTrackVisibility::all_visible(grid);
-    }
     visibility
 }
 

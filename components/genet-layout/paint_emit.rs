@@ -1188,6 +1188,15 @@ pub(crate) fn walk<Id>(
     if let Some(ref kind) = clip_path {
         commands.push(PaintCmd::PushClip(ClipSpec { kind: kind.clone() }));
     }
+    // Legacy CSS `clip`, in the same local border-box space and balanced the same
+    // way. It nests inside `clip-path` because the two intersect when both apply.
+    // Not `clip_rect`: that name is already the overflow clip, declared above.
+    let legacy_clip = (!is_anon)
+        .then(|| legacy_clip_of(cv, l.size.width, l.size.height))
+        .flatten();
+    if let Some(ref kind) = legacy_clip {
+        commands.push(PaintCmd::PushClip(ClipSpec { kind: kind.clone() }));
+    }
     // Absolute origin to pass to children (this node's origin + its location), so a
     // deferred descendant records where to place itself.
     let child_origin = (origin.0 + l.location.x, origin.1 + l.location.y);
@@ -1596,6 +1605,9 @@ pub(crate) fn walk<Id>(
         commands.push(PaintCmd::PopTransform);
     }
     if clip_rect.is_some() {
+        commands.push(PaintCmd::PopClip);
+    }
+    if legacy_clip.is_some() {
         commands.push(PaintCmd::PopClip);
     }
     if clip_path.is_some() {
@@ -3650,6 +3662,47 @@ fn clip_path_of(cv: &ComputedValues, w: f32, h: f32) -> Option<ClipKind> {
         // `path()` / `shape()` are follow-ups.
         BasicShape::PathOrShape(_) => None,
     }
+}
+
+/// CSS `clip`: the legacy rect clip, in the same local border-box space as
+/// `clip_path_of` above.
+///
+/// It applies to absolutely positioned elements only (css-masking 1 sect. 6 /
+/// CSS 2.1 sect. 11.1.2), which is what makes the visually-hidden skip-link
+/// idiom work: `position: fixed; width: 1px; height: 1px; padding: 10px 14px;
+/// overflow: hidden; clip: rect(0,0,0,0)`. `overflow: hidden` clips to the
+/// *padding* box, and that box is still 29x21 and still painted, so without
+/// `clip` the link shows as a small filled rectangle over the top-left corner
+/// of every page carrying one.
+///
+/// The four offsets resolve the way stylo's own `ClipRect::for_border_rect`
+/// resolves them: all four are measured from the border-box top-left, `top` and
+/// `left` falling back to zero and `right` and `bottom` to the box's width and
+/// height.
+fn legacy_clip_of(cv: &ComputedValues, w: f32, h: f32) -> Option<ClipKind> {
+    use style::values::computed::{LengthOrAuto, PositionProperty};
+    use style::values::generics::GenericClipRectOrAuto;
+
+    if !matches!(
+        cv.get_box().position,
+        PositionProperty::Absolute | PositionProperty::Fixed
+    ) {
+        return None;
+    }
+    let GenericClipRectOrAuto::Rect(ref rect) = cv.get_effects().clip else {
+        return None;
+    };
+    let offset = |value: &LengthOrAuto, edge: f32| match value {
+        LengthOrAuto::Auto => edge,
+        LengthOrAuto::LengthPercentage(length) => length.px(),
+    };
+    let (left, top) = (offset(&rect.left, 0.0), offset(&rect.top, 0.0));
+    let (right, bottom) = (offset(&rect.right, w), offset(&rect.bottom, h));
+    // An inverted rect clips everything away rather than painting backwards.
+    Some(ClipKind::Rect(LayoutRect::new(
+        LayoutPoint::new(left, top),
+        LayoutPoint::new(right.max(left), bottom.max(top)),
+    )))
 }
 
 /// Read an element's cascaded `opacity` as `Some(alpha)` when it is less than

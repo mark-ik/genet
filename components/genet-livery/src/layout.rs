@@ -1,4 +1,9 @@
-use std::{collections::HashMap, error::Error, fmt, hash::Hash};
+use std::{
+    collections::{HashMap, HashSet},
+    error::Error,
+    fmt,
+    hash::Hash,
+};
 
 use buckram::{
     AlgorithmAvailableSpace, AlgorithmKind, AlgorithmNodeId, AlgorithmSize, AlgorithmTree,
@@ -10,7 +15,7 @@ use buckram::{
     LayoutResult, LogicalAxis, LogicalRect, PhysicalRect, PhysicalSide, PhysicalSides,
     PhysicalSize, PositioningScheme, TableCell, TableCellInput, TableCellLayoutInput,
     TableCellLayoutOutput, TableCellLayoutPass, TableFragmentRole, TableFragments, TableGrid,
-    TableGridInputs, TableRowLayoutError, TableRowSpan, TableTrackInput,
+    TableGridInputs, TableRowLayoutError, TableRowSpan, TableTrackInput, TableTrackVisibility,
 };
 use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
 use livery::{
@@ -67,6 +72,7 @@ pub(crate) type Fragment = PhysicalRect;
 struct AtomicSubtree {
     root: BoxId,
     fragments: Vec<(BoxId, Fragment)>,
+    tables: TableFragmentPlane,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -80,6 +86,7 @@ struct AtomicLayoutPlane {
     // Accumulated K4c5a shadow ledgers from each atomic root's BuildState,
     // which are otherwise dropped exactly as table_bridge_count still is.
     table_shadow: TableShadowLedger,
+    table_paint: TablePaintPlane,
 }
 
 impl AtomicLayoutPlane {
@@ -116,6 +123,7 @@ pub struct LiveryLayout<Id> {
     text_frame: Option<TextFrame<Id>>,
     block_algorithms: BlockAlgorithmCounts,
     table_bridges: TableBridgeCounts,
+    table_paint: TablePaintPlane,
     table_shadow: TableShadowLedger,
 }
 
@@ -142,6 +150,7 @@ where
         text_frame: Option<TextFrame<Id>>,
         block_algorithms: BlockAlgorithmCounts,
         table_bridges: TableBridgeCounts,
+        table_paint: TablePaintPlane,
         table_shadow: TableShadowLedger,
     ) -> Self {
         Self {
@@ -149,6 +158,7 @@ where
             text_frame,
             block_algorithms,
             table_bridges,
+            table_paint,
             table_shadow,
         }
     }
@@ -195,6 +205,38 @@ where
 
     pub fn table_bridge_counts(&self) -> TableBridgeCounts {
         self.table_bridges
+    }
+
+    /// K4f's retained table paint model. Structural table boxes are emitted by
+    /// Buckram, but their background phase cannot be reconstructed from DOM
+    /// traversal once row and column boxes have been flattened away.
+    pub(crate) fn table_paint_for_node(&self, node: Id) -> Option<&TablePaintModel> {
+        self.buckram
+            .boxes()
+            .principal_box(node)
+            .and_then(|grid| self.table_paint.table(grid))
+    }
+
+    /// Whether a node's own decoration is painted by the separated-table
+    /// phase, rather than the ordinary DOM walk.
+    pub(crate) fn table_paint_manages_node(&self, node: Id) -> bool {
+        self.buckram
+            .boxes()
+            .boxes_for_node(node)
+            .iter()
+            .copied()
+            .any(|box_id| self.table_paint.manages(box_id))
+    }
+
+    /// Whether the node's descendants must clip at the accepted edge of a
+    /// cell spanning a collapsed track.
+    pub(crate) fn table_cell_requires_clip(&self, node: Id) -> bool {
+        self.buckram
+            .boxes()
+            .boxes_for_node(node)
+            .iter()
+            .copied()
+            .any(|box_id| self.table_paint.clips_cell(box_id))
     }
 
     /// K4c5a's shadow comparison of Buckram's fixed sizing against the live
@@ -994,7 +1036,8 @@ where
         grids: state.table_bridge_count,
     };
 
-    let tables = state.table_fragment_plane();
+    let table_paint = state.table_paint_plane();
+    let tables = table_paint.fragments();
     let mut fragments = FragmentTree::default();
     let mut output = FragmentOutput {
         fragments: &mut fragments,
@@ -1037,6 +1080,7 @@ where
             taffy: taffy_blocks,
         },
         table_bridges,
+        table_paint,
         table_shadow,
     ))
 }
@@ -1167,6 +1211,8 @@ where
             },
         );
 
+        let table_paint = state.table_paint_plane();
+        let tables = table_paint.fragments();
         let mut fragments = Vec::new();
         collect_atomic_fragments(&state.tree, root, Point { x: 0.0, y: 0.0 }, &mut fragments);
         let Some(root_rect) = fragments
@@ -1220,6 +1266,7 @@ where
         plane
             .table_shadow
             .merge(std::mem::take(&mut state.table_shadow));
+        plane.table_paint.merge(table_paint);
         for (candidate, rect) in &mut fragments {
             rect.x -= root_rect.x;
             rect.y -= root_rect.y;
@@ -1228,6 +1275,7 @@ where
         plane.subtrees.push(AtomicSubtree {
             root: box_id,
             fragments,
+            tables,
         });
     }
     Ok(plane)
@@ -1286,28 +1334,100 @@ fn merge_atomic_subtrees<Id>(
             .unwrap_or_default();
         let offset = (final_root.x - local_root.x, final_root.y - local_root.y);
 
+        // First materialize the atom's wrapper, captions, and table grids.
+        // A table-internal child waits for `commit_table_structure` below so
+        // its normal content can later attach to the emitted structural cell
+        // rather than to an accidental root fallback.
+        let grids = subtree.tables.keys().copied().collect::<HashSet<_>>();
         for (box_id, local) in &subtree.fragments {
-            if *box_id == subtree.root || !fragments.fragment_ids_for_box(*box_id).is_empty() {
+            let mut parent = boxes[*box_id].parent();
+            let mut inside_grid = false;
+            while let Some(ancestor) = parent {
+                if grids.contains(&ancestor) {
+                    inside_grid = true;
+                    break;
+                }
+                parent = boxes[ancestor].parent();
+            }
+            if inside_grid && !grids.contains(box_id) {
                 continue;
             }
-            let rect = Fragment {
-                x: local.x + offset.0,
-                y: local.y + offset.1,
-                width: local.width,
-                height: local.height,
+            append_atomic_fragment(
+                boxes,
+                fragments,
+                subtree.root,
+                root_id,
+                offset,
+                *box_id,
+                *local,
+            );
+        }
+
+        // Atomic inline roots bypass the ordinary fragment collector, so
+        // commit the same Buckram-owned structural subtree here once the
+        // atomic boxes have their final page-relative origin.
+        for (grid, emitted) in &subtree.tables {
+            let Some(grid_id) = fragments.fragment_ids_for_box(*grid).first().copied() else {
+                continue;
             };
-            let parent = boxes[*box_id]
-                .parent()
-                .and_then(|parent_box| fragments.fragment_ids_for_box(parent_box).last().copied())
-                .or(Some(root_id));
-            fragments.push(
-                TreeFragment::from_horizontal_physical(*box_id, rect)
-                    .with_baselines(Baselines::synthesized_from_block_end(rect.height)),
-                parent,
-                parent,
+            let Some(grid_fragment) = fragments.get(grid_id) else {
+                continue;
+            };
+            let origin = Point {
+                x: grid_fragment.x,
+                y: grid_fragment.y,
+            };
+            let mut output = FragmentOutput { fragments };
+            commit_table_structure(emitted, origin, grid_id, &mut output);
+        }
+
+        // The second pass fills in ordinary descendants. Grid and cell boxes
+        // already exist, so their text and replaced content inherit the
+        // structural parent just committed above.
+        for (box_id, local) in &subtree.fragments {
+            append_atomic_fragment(
+                boxes,
+                fragments,
+                subtree.root,
+                root_id,
+                offset,
+                *box_id,
+                *local,
             );
         }
     }
+}
+
+fn append_atomic_fragment<Id>(
+    boxes: &GeneratedBoxTree<Id>,
+    fragments: &mut FragmentTree,
+    root_box: BoxId,
+    root_id: FragmentId,
+    offset: (f32, f32),
+    box_id: BoxId,
+    local: Fragment,
+) where
+    Id: Copy + Eq + Hash,
+{
+    if box_id == root_box || !fragments.fragment_ids_for_box(box_id).is_empty() {
+        return;
+    }
+    let rect = Fragment {
+        x: local.x + offset.0,
+        y: local.y + offset.1,
+        width: local.width,
+        height: local.height,
+    };
+    let parent = boxes[box_id]
+        .parent()
+        .and_then(|parent_box| fragments.fragment_ids_for_box(parent_box).last().copied())
+        .or(Some(root_id));
+    fragments.push(
+        TreeFragment::from_horizontal_physical(box_id, rect)
+            .with_baselines(Baselines::synthesized_from_block_end(rect.height)),
+        parent,
+        parent,
+    );
 }
 
 fn layout_inline_groups<D>(
@@ -1463,7 +1583,8 @@ where
         grids: state.table_bridge_count,
     };
 
-    let tables = state.table_fragment_plane();
+    let mut table_paint = state.table_paint_plane();
+    let tables = table_paint.fragments();
     let mut text_frame = TextFrame::default();
     let mut fragments = FragmentTree::default();
     let mut output = FragmentOutput {
@@ -1505,6 +1626,7 @@ where
     table_shadow.merge(atomic.table_shadow.clone());
     drop(state);
     merge_atomic_subtrees(atomic, &boxes, &mut fragments);
+    table_paint.merge(atomic.table_paint.clone());
     Ok(LiveryLayout::new(
         LayoutResult::new(boxes.into_tree(), fragments),
         Some(text_frame),
@@ -1513,6 +1635,7 @@ where
             taffy: taffy_blocks,
         },
         table_bridges,
+        table_paint,
         table_shadow,
     ))
 }
@@ -2031,19 +2154,9 @@ where
         self.table_shadow.block = ledger;
     }
 
-    /// The structural fragments Buckram emitted for every table it laid out,
-    /// keyed by the grid box that owns them. Fragment collection commits them
-    /// where the walk reaches that grid.
-    fn table_fragment_plane(&self) -> TableFragmentPlane {
-        self.pending_tables
-            .iter()
-            .filter_map(|pending| {
-                pending
-                    .block
-                    .as_ref()
-                    .map(|block| (pending.table, block.fragments.clone()))
-            })
-            .collect()
+    /// The retained structural paint model for every table Buckram laid out.
+    fn table_paint_plane(&self) -> TablePaintPlane {
+        table_paint_plane(&self.pending_tables, self.boxes, self.styles)
     }
 
     /// Assert the painted fragments honored every assigned column vector, and
@@ -2463,19 +2576,9 @@ where
         self.table_shadow.block = ledger;
     }
 
-    /// The structural fragments Buckram emitted for every table it laid out,
-    /// keyed by the grid box that owns them. Fragment collection commits them
-    /// where the walk reaches that grid.
-    fn table_fragment_plane(&self) -> TableFragmentPlane {
-        self.pending_tables
-            .iter()
-            .filter_map(|pending| {
-                pending
-                    .block
-                    .as_ref()
-                    .map(|block| (pending.table, block.fragments.clone()))
-            })
-            .collect()
+    /// The retained structural paint model for every table Buckram laid out.
+    fn table_paint_plane(&self) -> TablePaintPlane {
+        table_paint_plane(&self.pending_tables, self.boxes, self.styles)
     }
 
     /// Assert the painted fragments honored every assigned column vector, and
@@ -3355,13 +3458,133 @@ where
 /// grid box that owns them.
 type TableFragmentPlane = HashMap<BoxId, TableFragments>;
 
-/// Commit the row groups, rows, column groups, and columns Buckram emitted.
+/// Retained paint data for one table whose geometry Buckram accepted.
 ///
-/// Cells are deliberately left out: the ordinary walk already produces them
-/// from the algorithm tree, with their contents, baselines, and text. What the
-/// walk cannot produce is a box with no algorithm node, and that is every one
-/// of these. The bridge flattened rows and groups away before the backend saw
-/// them, so a `<tr>` background has never had a fragment to paint into.
+/// The fragment vector is the paint-order authority for table-internal boxes;
+/// the live fragment tree supplies the final physical coordinates. The clip
+/// set records the CSS Tables 3 rendering rule for a cell that crosses a
+/// collapsed track boundary.
+#[derive(Clone, Debug)]
+pub(crate) struct TablePaintModel {
+    fragments: TableFragments,
+    separated: bool,
+    clipped_cells: HashSet<BoxId>,
+}
+
+impl TablePaintModel {
+    pub(crate) fn fragments(&self) -> &[buckram::TableFragment] {
+        self.fragments.fragments()
+    }
+
+    pub(crate) fn is_separated(&self) -> bool {
+        self.separated
+    }
+
+    fn manages(&self, box_id: BoxId) -> bool {
+        self.separated
+            && self.fragments.fragments().iter().any(|fragment| {
+                fragment.box_id == Some(box_id) && fragment.role != TableFragmentRole::Grid
+            })
+    }
+
+    fn clips_cell(&self, box_id: BoxId) -> bool {
+        self.clipped_cells.contains(&box_id)
+    }
+}
+
+/// The paint-side index of every table that completed Buckram's block phase.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TablePaintPlane {
+    tables: HashMap<BoxId, TablePaintModel>,
+}
+
+impl TablePaintPlane {
+    fn table(&self, grid: BoxId) -> Option<&TablePaintModel> {
+        self.tables.get(&grid)
+    }
+
+    fn manages(&self, box_id: BoxId) -> bool {
+        self.tables.values().any(|table| table.manages(box_id))
+    }
+
+    fn clips_cell(&self, box_id: BoxId) -> bool {
+        self.tables.values().any(|table| table.clips_cell(box_id))
+    }
+
+    fn fragments(&self) -> TableFragmentPlane {
+        self.tables
+            .iter()
+            .map(|(grid, table)| (*grid, table.fragments.clone()))
+            .collect()
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.tables.extend(other.tables);
+    }
+}
+
+fn table_cell_spans_collapsed_track(
+    visibility: &TableTrackVisibility,
+    cell: &TableCell,
+) -> bool {
+    let straddles = |collapsed: &dyn Fn(usize) -> bool, start: usize, span: usize| {
+        let mut tracks = start..start.saturating_add(span);
+        tracks.clone().any(collapsed) && tracks.any(|index| !collapsed(index))
+    };
+    straddles(
+        &|index| visibility.column_is_collapsed(index),
+        cell.column,
+        cell.column_span,
+    ) || straddles(
+        &|index| visibility.row_is_collapsed(index),
+        cell.row,
+        cell.row_span,
+    )
+}
+
+fn table_paint_plane<Id>(
+    pending_tables: &[PendingTable<Id>],
+    boxes: &GeneratedBoxTree<Id>,
+    styles: &StylePlane<Id>,
+) -> TablePaintPlane
+where
+    Id: Copy + Eq + Hash,
+{
+    let mut tables = HashMap::new();
+    for pending in pending_tables {
+        let Some(block) = &pending.block else {
+            continue;
+        };
+        let visibility = crate::table_shadow::track_visibility(boxes, styles, &pending.grid);
+        let clipped_cells = pending
+            .grid
+            .cells
+            .iter()
+            .filter(|cell| table_cell_spans_collapsed_track(&visibility, cell))
+            .map(|cell| cell.source)
+            .collect();
+        let separated = styles
+            .get(pending.node)
+            .is_some_and(|style| style.border_collapse == BorderCollapse::Separate);
+        tables.insert(
+            pending.table,
+            TablePaintModel {
+                fragments: block.fragments.clone(),
+                separated,
+                clipped_cells,
+            },
+        );
+    }
+    TablePaintPlane { tables }
+}
+
+/// Commit every table-internal fragment Buckram emitted.
+///
+/// B5 makes the emitted cell fragment authoritative too: an empty cell may
+/// have no ordinary algorithm fragment, but still owns a background, border,
+/// and an `empty-cells` decision. The ordinary walk reuses this fragment when
+/// it reaches a cell so text, baselines, and descendants retain their normal
+/// path without registering a second cell box.
 ///
 /// These are pushed before the walk descends into the cells, so each cell's
 /// structural-parent lookup finds its own row rather than falling back to the
@@ -3394,7 +3617,6 @@ fn commit_table_structure(
                 );
                 continue;
             },
-            TableFragmentRole::Cell => continue,
             _ => {},
         }
         // A track created implicitly by placement has no CSS box, so there is
@@ -3447,40 +3669,50 @@ where
         let source = *tree.source(node);
         let origin_node = match source {
             Some(box_id) => {
-                let structural_parent = boxes[box_id].parent().and_then(|parent_box| {
-                    output
-                        .fragments
-                        .fragment_ids_for_box(parent_box)
-                        .last()
-                        .copied()
-                });
-                let parent = structural_parent.or(cursor.parent);
-                let flow = boxes[box_id].flow;
-                let fragment = if flow.is_horizontal() {
-                    TreeFragment::from_horizontal_physical(box_id, rect)
+                if let Some(existing) = output
+                    .fragments
+                    .fragment_ids_for_box(box_id)
+                    .last()
+                    .copied()
+                {
+                    child_parent = Some(existing);
                 } else {
-                    let logical_rect = flow.logical_rect(
-                        PhysicalRect {
-                            x: computed.x,
-                            y: computed.y,
-                            width: computed.width,
-                            height: computed.height,
-                        },
-                        PhysicalSize {
-                            width: cursor.containing.width,
-                            height: cursor.containing.height,
-                        },
+                    let structural_parent = boxes[box_id].parent().and_then(|parent_box| {
+                        output
+                            .fragments
+                            .fragment_ids_for_box(parent_box)
+                            .last()
+                            .copied()
+                    });
+                    let parent = structural_parent.or(cursor.parent);
+                    let flow = boxes[box_id].flow;
+                    let fragment = if flow.is_horizontal() {
+                        TreeFragment::from_horizontal_physical(box_id, rect)
+                    } else {
+                        let logical_rect = flow.logical_rect(
+                            PhysicalRect {
+                                x: computed.x,
+                                y: computed.y,
+                                width: computed.width,
+                                height: computed.height,
+                            },
+                            PhysicalSize {
+                                width: cursor.containing.width,
+                                height: cursor.containing.height,
+                            },
+                        );
+                        TreeFragment::from_physical_with_logical(box_id, rect, logical_rect, flow)
+                    };
+                    let id = output.fragments.push(
+                        fragment
+                            .with_baselines(fragment_baselines(tree, boxes, node, box_id, rect)),
+                        parent,
+                        parent,
                     );
-                    TreeFragment::from_physical_with_logical(box_id, rect, logical_rect, flow)
-                };
-                let id = output.fragments.push(
-                    fragment.with_baselines(fragment_baselines(tree, boxes, node, box_id, rect)),
-                    parent,
-                    parent,
-                );
-                child_parent = Some(id);
-                if let Some(emitted) = tables.get(&box_id) {
-                    commit_table_structure(emitted, origin, id, output);
+                    child_parent = Some(id);
+                    if let Some(emitted) = tables.get(&box_id) {
+                        commit_table_structure(emitted, origin, id, output);
+                    }
                 }
                 legacy_origin_node(boxes, box_id)
             },
@@ -3561,6 +3793,15 @@ where
         source_ids.sort_unstable();
         source_ids.dedup();
         for box_id in source_ids {
+            if let Some(existing) = output
+                .fragments
+                .fragment_ids_for_box(box_id)
+                .last()
+                .copied()
+            {
+                child_parent.get_or_insert(existing);
+                continue;
+            }
             let structural_parent = boxes[box_id].parent().and_then(|parent_box| {
                 output
                     .fragments

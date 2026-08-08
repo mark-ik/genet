@@ -9,10 +9,10 @@ use layout_dom_api::{LayoutDom, NodeKind};
 use livery::{
     ComputedValues,
     values::{
-        BackgroundImage, BackgroundRepeat, BorderStyle as CssBorderStyle,
+        BackgroundImage, BackgroundRepeat, BorderCollapse, BorderStyle as CssBorderStyle,
         BoxShadow as CssBoxShadow, Color, ComputedColor, Display, FontSize, Length,
-        LengthPercentage, LengthUnit, Matrix2D, Overflow as CssOverflow, Position, Radius,
-        Visibility, ZIndex,
+        EmptyCells, LengthPercentage, LengthUnit, Matrix2D, Overflow as CssOverflow, Position,
+        Radius, Visibility, ZIndex,
     },
 };
 use paint_list_api::{
@@ -27,9 +27,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     LiveryLayout, StylePlane,
-    layout::{Fragment, border_width_px},
+    layout::{Fragment, TablePaintModel, border_width_px},
     text::{TextFrame, TextSystem},
 };
+use buckram::TableFragmentRole;
 
 /// Genet paint output produced by the Livery CSS/layout path.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -321,6 +322,12 @@ fn emit_node<D>(
         list.commands
             .push(PaintCmd::PushTransform(transform.clone()));
     }
+    if let Some(table) = fragments
+        .table_paint_for_node(id)
+        .filter(|table| table.is_separated())
+    {
+        emit_separated_table_backgrounds(dom, styles, fragments, table, list);
+    }
     emit_children_in_stacking_order(
         dom,
         styles,
@@ -335,7 +342,7 @@ fn emit_node<D>(
     if scroll_transform.is_some() {
         list.commands.push(PaintCmd::PopTransform);
     }
-    if clips_descendants {
+    for _ in 0..clips_descendants {
         list.commands.push(PaintCmd::PopClip);
     }
     if opacity.is_some() {
@@ -354,12 +361,12 @@ fn begin_node<'a, D>(
     scope: PaintScope<'a, D::NodeId>,
     text: &mut PaintText<'_, D::NodeId>,
     list: &mut LiveryPaintList,
-) -> Option<(Option<&'a ComputedValues>, bool)>
+) -> Option<(Option<&'a ComputedValues>, usize)>
 where
     D: LayoutDom,
     D::NodeId: Copy + Eq + Hash,
 {
-    let mut clips_descendants = false;
+    let mut clips_descendants = 0;
     let inherited = match dom.kind(id) {
         NodeKind::Element => {
             let style = styles.get(id)?;
@@ -382,12 +389,14 @@ where
                 .principal_fragment(id)
                 .filter(|fragment| paintable_fragment(fragment))
             {
-                emit_shadow(list, style, fragment);
-                if !background_propagated {
-                    emit_background(list, style, fragment);
+                if !fragments.table_paint_manages_node(id) {
+                    emit_shadow(list, style, fragment);
+                    if !background_propagated {
+                        emit_background(list, style, fragment);
+                    }
+                    emit_replaced_image(dom, list, id, style, fragment);
+                    emit_border(list, style, fragment);
                 }
-                emit_replaced_image(dom, list, id, style, fragment);
-                emit_border(list, style, fragment);
             }
             // The overflow clip stays on the outer box: CSS Tables 3 section
             // 3.6.1 puts `overflow` on the table wrapper box, so a clipping
@@ -397,7 +406,19 @@ where
                 && let Some(clip) = descendant_clip(style, fragment, list.viewport)
             {
                 list.commands.push(PaintCmd::PushClip(clip));
-                clips_descendants = true;
+                clips_descendants += 1;
+            }
+            // CSS Tables 3 clips a cell that crosses a collapsed track at the
+            // accepted, post-collapse cell edge. The table layout model marks
+            // precisely those cells; a generic overflow rule cannot infer it.
+            if fragments.table_cell_requires_clip(id)
+                && let Some(fragment) = fragments.principal_fragment(id)
+                && paintable_fragment(fragment)
+            {
+                list.commands.push(PaintCmd::PushClip(ClipSpec {
+                    kind: ClipKind::Rect(bounds(fragment)),
+                }));
+                clips_descendants += 1;
             }
             Some(style)
         },
@@ -420,6 +441,127 @@ where
         _ => scope.inherited,
     };
     Some((inherited, clips_descendants))
+}
+
+/// Paint CSS 2.1's separated-table background layers from Buckram's emitted
+/// table fragments. DOM traversal cannot establish this order: columns may
+/// have no layout child, and a spanning cell's grid position is not its DOM
+/// position.
+fn emit_separated_table_backgrounds<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    fragments: &LiveryLayout<D::NodeId>,
+    table: &TablePaintModel,
+    list: &mut LiveryPaintList,
+) where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    for phase in 0..5 {
+        for table_fragment in table.fragments() {
+            let belongs_to_phase = match phase {
+                0 => matches!(table_fragment.role, TableFragmentRole::ColumnGroup),
+                1 => matches!(table_fragment.role, TableFragmentRole::Column),
+                2 => matches!(table_fragment.role, TableFragmentRole::RowGroup(_)),
+                3 => matches!(table_fragment.role, TableFragmentRole::Row),
+                4 => matches!(table_fragment.role, TableFragmentRole::Cell),
+                _ => false,
+            };
+            if !belongs_to_phase {
+                continue;
+            }
+            let Some(box_id) = table_fragment.box_id else {
+                continue;
+            };
+            let Some(node) = fragments.boxes().origin_node(box_id) else {
+                continue;
+            };
+            let Some(style) = styles.get(node) else {
+                continue;
+            };
+            if style.display == Display::None || style.visibility != Visibility::Visible {
+                continue;
+            }
+            let Some(fragment) = fragments.fragments().fragments_for_box(box_id).next() else {
+                continue;
+            };
+            if !paintable_fragment(fragment) {
+                continue;
+            }
+            let empty_hidden = matches!(table_fragment.role, TableFragmentRole::Cell)
+                && style.border_collapse == BorderCollapse::Separate
+                && style.empty_cells == EmptyCells::Hide
+                && !table_cell_has_visible_content(dom, styles, node, true);
+            if empty_hidden {
+                continue;
+            }
+            emit_background(list, style, fragment);
+            // In the separated model `empty-cells: hide` hides the complete
+            // cell box. Structural tracks have background layers but no
+            // independently painted borders; the table and cell boxes own
+            // their borders.
+            if matches!(table_fragment.role, TableFragmentRole::Cell) {
+                emit_border(list, style, fragment);
+            }
+        }
+    }
+}
+
+/// A blank `<td>` is not inferred from its rectangle. Text, replacement
+/// content, and visible descendant decoration make it non-empty; whitespace
+/// and empty inline wrappers do not.
+fn table_cell_has_visible_content<D>(
+    dom: &D,
+    styles: &StylePlane<D::NodeId>,
+    id: D::NodeId,
+    is_root: bool,
+) -> bool
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash,
+{
+    match dom.kind(id) {
+        NodeKind::Text => dom.text(id).is_some_and(|text| !text.trim().is_empty()),
+        NodeKind::Element => {
+            let Some(style) = styles.get(id) else {
+                return false;
+            };
+            if style.display == Display::None || style.visibility != Visibility::Visible {
+                return false;
+            }
+            let replaced = dom.element_name(id).is_some_and(|name| {
+                matches!(
+                    name.local.as_ref(),
+                    "audio" | "canvas" | "embed" | "iframe" | "img" | "input" | "object"
+                        | "svg" | "video"
+                )
+            });
+            if replaced || (!is_root && has_visible_box_decoration(style)) {
+                return true;
+            }
+            dom.dom_children(id)
+                .any(|child| table_cell_has_visible_content(dom, styles, child, false))
+        },
+        NodeKind::Document | NodeKind::DocumentFragment | NodeKind::Comment => dom
+            .dom_children(id)
+            .any(|child| table_cell_has_visible_content(dom, styles, child, false)),
+        NodeKind::Doctype | NodeKind::ProcessingInstruction => false,
+    }
+}
+
+fn has_visible_box_decoration(style: &ComputedValues) -> bool {
+    if has_background(style) || matches!(style.box_shadow, CssBoxShadow::Value(_)) {
+        return true;
+    }
+    let em = used_font_size(style);
+    [
+        (style.border_top_style, style.border_top_width),
+        (style.border_right_style, style.border_right_width),
+        (style.border_bottom_style, style.border_bottom_width),
+        (style.border_left_style, style.border_left_width),
+    ]
+    .into_iter()
+    .any(|(border_style, width)| border_width_px(border_style, width, em) > 0.0)
 }
 
 struct StackingItem<Id> {
@@ -637,6 +779,12 @@ fn emit_normal_node<'a, D>(
         list.commands
             .push(PaintCmd::PushTransform(transform.clone()));
     }
+    if let Some(table) = fragments
+        .table_paint_for_node(id)
+        .filter(|table| table.is_separated())
+    {
+        emit_separated_table_backgrounds(dom, styles, fragments, table, list);
+    }
     emit_normal_children(
         dom,
         styles,
@@ -650,7 +798,7 @@ fn emit_normal_node<'a, D>(
     if scroll_transform.is_some() {
         list.commands.push(PaintCmd::PopTransform);
     }
-    if clips_descendants {
+    for _ in 0..clips_descendants {
         list.commands.push(PaintCmd::PopClip);
     }
 }

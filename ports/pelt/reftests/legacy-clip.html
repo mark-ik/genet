@@ -1,0 +1,27 @@
+<!doctype html>
+<!-- Legacy CSS `clip`. It applies to absolutely positioned elements only
+     (css-masking 1 section 6), and its four offsets are all measured from the
+     border-box top-left. `.hidden` is the visually-hidden skip-link idiom:
+     overflow:hidden alone still paints the 29x21 padding box, so only `clip`
+     takes it off the screen. `.kept` is the position gate -- same declaration,
+     static box, so the clip must be ignored and the whole strip paints. -->
+<html><head><style>
+  body { margin: 0; font: 16px/1 monospace; }
+  .hidden {
+    position: fixed; top: 0; left: 0;
+    width: 1px; height: 1px; padding: 10px 14px;
+    overflow: hidden; clip: rect(0, 0, 0, 0);
+    background: #c00; color: #fff;
+  }
+  .kept { clip: rect(0, 0, 0, 0); background: #0c0; height: 40px; }
+  .partial {
+    position: absolute; top: 60px; left: 0;
+    width: 200px; height: 100px; background: #00c;
+    clip: rect(10px, 150px, 60px, 20px);
+  }
+</style></head>
+<body>
+  <a class="hidden" href="#main">Skip to content</a>
+  <div class="kept">static, so clip does not apply</div>
+  <div class="partial">absolute, clipped to a 130x50 window</div>
+</body></html>
