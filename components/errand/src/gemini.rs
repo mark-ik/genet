@@ -62,14 +62,8 @@ pub(crate) fn map_error(error: gemini_protocol::ClientError) -> Error {
         Gemini::Connect(message) => Error::Connect(message),
         Gemini::Io(message) => Error::Io(message),
         Gemini::Protocol(message) => Error::Protocol(message),
-        Gemini::CertificateChanged {
-            host,
-            pinned,
-            seen,
-        } => Error::CertificateChanged {
-            host,
-            pinned,
-            seen,
+        Gemini::CertificateChanged { host, pinned, seen } => {
+            Error::CertificateChanged { host, pinned, seen }
         },
     }
 }

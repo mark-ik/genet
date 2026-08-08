@@ -115,20 +115,20 @@ where
                         Key::Named(NamedKey::ArrowRight) => {
                             s.step(1, len);
                             event.prevent_default();
-                        }
+                        },
                         Key::Named(NamedKey::ArrowLeft) => {
                             s.step(-1, len);
                             event.prevent_default();
-                        }
+                        },
                         Key::Named(NamedKey::Home) => {
                             s.selected = 0;
                             event.prevent_default();
-                        }
+                        },
                         Key::Named(NamedKey::End) if len > 0 => {
                             s.selected = len - 1;
                             event.prevent_default();
-                        }
-                        _ => {}
+                        },
+                        _ => {},
                     },
                 ),
                 selected,

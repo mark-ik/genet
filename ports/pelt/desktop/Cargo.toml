@@ -35,6 +35,9 @@ tile-surface = [
 # static <file>` works out of the box; `--no-default-features` keeps the light
 # contracts + smoke build.
 viewer = ["tile-surface", "dep:genet-winit-host", "dep:wgpu"]
+# Registry-routed clean-room static engine. Kept separate from `viewer` so a
+# normal Pelt build cannot silently switch the default engine.
+livery = ["viewer", "genet-documents/livery"]
 # The scripted profile (V4): a live `ScriptedDom` document whose inline `<script>`
 # runs through `script-runtime-api` on a JS engine, mutating the DOM, rendered each
 # frame. GPU-free at the core (scene production only); the headed run reuses the

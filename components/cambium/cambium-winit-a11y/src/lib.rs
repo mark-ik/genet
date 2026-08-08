@@ -103,7 +103,15 @@ impl A11yHost {
         let skip = |_: &ScriptedDom, _: NodeId| false;
         let projection = {
             let mut source = SpriggingA11y(leaves);
-            project(dom, layout.fragments(), root, &id_of, &skip, &mut source, true)
+            project(
+                dom,
+                layout.fragments(),
+                root,
+                &id_of,
+                &skip,
+                &mut source,
+                true,
+            )
         };
 
         let mut nodes = Vec::with_capacity(projection.nodes.len());

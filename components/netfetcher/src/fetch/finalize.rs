@@ -16,10 +16,10 @@ use crate::cors;
 use crate::decode::decode_stream;
 use crate::response::{ResponseBody, ResponseType};
 use crate::sri;
-use crate::{altsvc, hsts};
 use crate::{FetchContext, Request, Response};
+use crate::{altsvc, hsts};
 
-use super::cache_phase::{over_cache_size_cap, strip_body_encoding_headers, CachingBody};
+use super::cache_phase::{CachingBody, over_cache_size_cap, strip_body_encoding_headers};
 use super::transport::RawResponse;
 use super::util::header_val;
 
@@ -58,7 +58,7 @@ pub(super) fn record_response_metadata(
             match altsvc::parse_alt_svc(value) {
                 altsvc::AltSvc::H3 { port, max_age } => cx.alt_svc.record_h3(host, port, max_age),
                 altsvc::AltSvc::Clear => cx.alt_svc.clear(host),
-                altsvc::AltSvc::None => {}
+                altsvc::AltSvc::None => {},
             }
         }
     }

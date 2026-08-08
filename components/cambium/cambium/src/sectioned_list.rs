@@ -102,9 +102,8 @@ where
     OA: OptionalAction<Action> + 'static,
     OnRow: Fn(&mut State, usize, usize) -> OA + Clone + 'static,
 {
-    let mut children: Vec<
-        Box<dyn crate::AnyView<State, Action, GenetCtx, GenetElement>>,
-    > = Vec::new();
+    let mut children: Vec<Box<dyn crate::AnyView<State, Action, GenetCtx, GenetElement>>> =
+        Vec::new();
     for (si, section) in sections.iter().enumerate() {
         children.push(Box::new(
             el::<_, State, Action>("div", section.title.clone())
@@ -139,8 +138,8 @@ where
                         // The key activation reports through the same handler;
                         // its optional action bubbles from the key dispatch.
                         let _ = key_row(state, si, ri);
-                    }
-                    _ => {}
+                    },
+                    _ => {},
                 },
             ))));
         }
@@ -216,6 +215,9 @@ mod tests {
             all[0]
         };
         runner.dispatch_click(header, PointerClick::at((1.0, 1.0)));
-        assert!(runner.state().hits.is_empty(), "a header click reports nothing");
+        assert!(
+            runner.state().hits.is_empty(),
+            "a header click reports nothing"
+        );
     }
 }

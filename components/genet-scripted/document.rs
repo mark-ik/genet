@@ -51,10 +51,9 @@ use engine_observables_api::DomArenaStats;
 #[cfg(feature = "render")]
 use engine_observables_api::LayoutBatchStats;
 #[cfg(feature = "render")]
-use genet_layout::{
-    ImageLoader, IncrementalLayout, ScrollKey, ScrollOffsets, TextRange, TextSelection,
-    author_stylesheets_with_loader, inline_stylesheets,
-};
+use genet_document_resources::ResolvedDocumentResources;
+#[cfg(feature = "render")]
+use genet_layout::{IncrementalLayout, ScrollKey, ScrollOffsets, TextRange, TextSelection};
 #[cfg(feature = "render")]
 use genet_render::translated_frame_from_session_dom;
 #[cfg(feature = "render")]
@@ -162,19 +161,6 @@ pub struct ScriptedDocument<E: ScriptEngine> {
     frozen: bool,
     /// Virtual-clock stamp of the last hidden-state timer pump (the 1s clamp).
     last_hidden_pump_ms: f64,
-}
-
-#[cfg(feature = "render")]
-struct ScriptResourceLoader<'a> {
-    fetcher: &'a dyn ResourceFetcher,
-    base_url: &'a str,
-}
-
-#[cfg(feature = "render")]
-impl ImageLoader for ScriptResourceLoader<'_> {
-    fn load(&self, url: &str) -> Option<Vec<u8>> {
-        self.fetcher.fetch(&crate::resolve_href(self.base_url, url))
-    }
 }
 
 impl<E: ScriptEngine> ScriptedDocument<E> {
@@ -294,12 +280,13 @@ impl<E: ScriptEngine> ScriptedDocument<E> {
                 .iter()
                 .map(|s| s.to_string())
                 .collect();
-            if let Some((fetcher, base_url)) = loader {
-                let resource_loader = ScriptResourceLoader { fetcher, base_url };
-                sheets.extend(author_stylesheets_with_loader(&doc, &resource_loader));
-            } else {
-                sheets.extend(inline_stylesheets(&doc));
-            }
+            let resources = match loader {
+                Some((fetcher, base_url)) => {
+                    ResolvedDocumentResources::resolve(&doc, Some(base_url), fetcher)
+                },
+                None => ResolvedDocumentResources::discover(&doc, None),
+            };
+            sheets.extend(resources.stylesheet_text().into_iter().map(str::to_owned));
             sheets
         };
         #[cfg(not(feature = "render"))]

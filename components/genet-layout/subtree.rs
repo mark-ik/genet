@@ -242,11 +242,23 @@ mod tests {
 
         // Each session lays out ITS subtree and nothing of the other's — the
         // fragment plane is the membership oracle (rect_of is None off-subtree).
-        assert!(la.absolute_rect(&va, a1).is_some(), "A lays out its own node");
+        assert!(
+            la.absolute_rect(&va, a1).is_some(),
+            "A lays out its own node"
+        );
         assert!(la.absolute_rect(&va, a2).is_some());
-        assert!(la.absolute_rect(&va, b1).is_none(), "A must NOT lay out B's node");
-        assert!(lb.absolute_rect(&vb, b1).is_some(), "B lays out its own node");
-        assert!(lb.absolute_rect(&vb, a1).is_none(), "B must NOT lay out A's node");
+        assert!(
+            la.absolute_rect(&va, b1).is_none(),
+            "A must NOT lay out B's node"
+        );
+        assert!(
+            lb.absolute_rect(&vb, b1).is_some(),
+            "B lays out its own node"
+        );
+        assert!(
+            lb.absolute_rect(&vb, a1).is_none(),
+            "B must NOT lay out A's node"
+        );
         // Stacked blocks: alpha-2 sits below alpha-1 in A's own coordinate space.
         let (_, y1, _, _) = la.absolute_rect(&va, a1).unwrap();
         let (_, y2, _, _) = la.absolute_rect(&va, a2).unwrap();
@@ -286,6 +298,9 @@ mod tests {
         // below B's own beta-1 (proving it re-parented, not duplicated).
         let (_, moved_y, _, _) = lb3.absolute_rect(&vb3, a2).unwrap();
         let (_, beta_y, _, _) = lb3.absolute_rect(&vb3, b1).unwrap();
-        assert!(moved_y > beta_y, "the moved node stacks under B's existing content");
+        assert!(
+            moved_y > beta_y,
+            "the moved node stacks under B's existing content"
+        );
     }
 }

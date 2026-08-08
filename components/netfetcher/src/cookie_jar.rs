@@ -162,7 +162,12 @@ impl InMemoryCookieJar {
             .collect();
 
         // Longer paths first; ties broken by creation order (oldest first).
-        hits.sort_by(|a, b| b.path.len().cmp(&a.path.len()).then(a.created.cmp(&b.created)));
+        hits.sort_by(|a, b| {
+            b.path
+                .len()
+                .cmp(&a.path.len())
+                .then(a.created.cmp(&b.created))
+        });
         hits
     }
 }
@@ -206,7 +211,7 @@ impl CookieStore for InMemoryCookieJar {
                     return;
                 }
                 (d, false)
-            }
+            },
             None => (host, true),
         };
         let path = parsed
@@ -310,32 +315,53 @@ mod tests {
     fn stores_and_returns_a_host_only_cookie() {
         let jar = InMemoryCookieJar::new();
         jar.set_cookie(&url("https://example.org/"), "id=abc");
-        assert_eq!(jar.cookies_for(&url("https://example.org/"), ss()), vec!["id=abc"]);
+        assert_eq!(
+            jar.cookies_for(&url("https://example.org/"), ss()),
+            vec!["id=abc"]
+        );
         // Host-only must not leak to a sub-domain.
-        assert!(jar.cookies_for(&url("https://sub.example.org/"), ss()).is_empty());
+        assert!(
+            jar.cookies_for(&url("https://sub.example.org/"), ss())
+                .is_empty()
+        );
     }
 
     #[test]
     fn domain_cookie_reaches_subdomains() {
         let jar = InMemoryCookieJar::new();
         jar.set_cookie(&url("https://example.org/"), "id=abc; Domain=example.org");
-        assert_eq!(jar.cookies_for(&url("https://api.example.org/"), ss()), vec!["id=abc"]);
+        assert_eq!(
+            jar.cookies_for(&url("https://api.example.org/"), ss()),
+            vec!["id=abc"]
+        );
     }
 
     #[test]
     fn secure_cookie_not_sent_over_http() {
         let jar = InMemoryCookieJar::new();
         jar.set_cookie(&url("https://example.org/"), "id=abc; Secure");
-        assert!(jar.cookies_for(&url("http://example.org/"), ss()).is_empty());
-        assert_eq!(jar.cookies_for(&url("https://example.org/"), ss()), vec!["id=abc"]);
+        assert!(
+            jar.cookies_for(&url("http://example.org/"), ss())
+                .is_empty()
+        );
+        assert_eq!(
+            jar.cookies_for(&url("https://example.org/"), ss()),
+            vec!["id=abc"]
+        );
     }
 
     #[test]
     fn path_scopes_the_cookie() {
         let jar = InMemoryCookieJar::new();
         jar.set_cookie(&url("https://example.org/app/"), "id=abc; Path=/app");
-        assert_eq!(jar.cookies_for(&url("https://example.org/app/x"), ss()), vec!["id=abc"]);
-        assert!(jar.cookies_for(&url("https://example.org/other"), ss()).is_empty());
+        assert_eq!(
+            jar.cookies_for(&url("https://example.org/app/x"), ss()),
+            vec!["id=abc"]
+        );
+        assert!(
+            jar.cookies_for(&url("https://example.org/other"), ss())
+                .is_empty()
+        );
     }
 
     #[test]
@@ -344,7 +370,10 @@ mod tests {
         jar.set_cookie(&url("https://example.org/"), "id=abc");
         assert_eq!(jar.len(), 1);
         jar.set_cookie(&url("https://example.org/"), "id=abc; Max-Age=0");
-        assert!(jar.cookies_for(&url("https://example.org/"), ss()).is_empty());
+        assert!(
+            jar.cookies_for(&url("https://example.org/"), ss())
+                .is_empty()
+        );
         assert_eq!(jar.len(), 0);
     }
 
@@ -362,8 +391,14 @@ mod tests {
     #[test]
     fn all_records_then_load_records_round_trips() {
         let jar = InMemoryCookieJar::new();
-        jar.set_cookie(&url("https://example.org/app/"), "sid=abc; Path=/app; Secure; HttpOnly");
-        jar.set_cookie(&url("https://example.org/"), "pref=dark; Domain=example.org");
+        jar.set_cookie(
+            &url("https://example.org/app/"),
+            "sid=abc; Path=/app; Secure; HttpOnly",
+        );
+        jar.set_cookie(
+            &url("https://example.org/"),
+            "pref=dark; Domain=example.org",
+        );
         let saved = jar.all_records();
         assert_eq!(saved.len(), 2);
 
@@ -419,13 +454,22 @@ mod tests {
 
     #[test]
     fn samesite_gates_cross_site_requests() {
-        let cross = SameSiteContext { same_site: false, top_level_navigation: false };
-        let cross_nav = SameSiteContext { same_site: false, top_level_navigation: true };
+        let cross = SameSiteContext {
+            same_site: false,
+            top_level_navigation: false,
+        };
+        let cross_nav = SameSiteContext {
+            same_site: false,
+            top_level_navigation: true,
+        };
 
         let jar = InMemoryCookieJar::new();
         jar.set_cookie(&url("https://example.org/"), "strict=1; SameSite=Strict");
         jar.set_cookie(&url("https://example.org/"), "lax=1; SameSite=Lax");
-        jar.set_cookie(&url("https://example.org/"), "none=1; SameSite=None; Secure");
+        jar.set_cookie(
+            &url("https://example.org/"),
+            "none=1; SameSite=None; Secure",
+        );
 
         let u = url("https://example.org/");
         // Same-site: all three.

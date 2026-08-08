@@ -1,9 +1,13 @@
 # Livery contextual color computation plan
 
 **Date:** 2026-07-28
-**Status:** corrective F0 subplan. C0 is complete; C1 is next.
+**Status:** corrective F0 subplan. C0 and C1 are complete; C2 is next.
 
 **Parent:** `2026-07-24_livery_fullweb_cutover_and_servo_retirement_plan.md`
+
+**K4 consumer lane:** [Buckram K4 completion
+lane](2026-08-08_buckram_k4_completion_lane.md). C1 is its B0 gate; C2 and C3
+land separately before collapsed-border headed paint.
 
 This seam is now an explicit K4g dependency. K4g1 landed first because its
 candidate topology is generic over color and has no Livery adapter. C1 must
@@ -155,6 +159,53 @@ Work:
 
 Done when direct declarations, `var()`, `inherit`, `unset`, generated copies,
 and nested color owners all preserve contextual expressions through cascade.
+
+### C1 receipt - 2026-08-08
+
+**Entry:** `main` at `4c3c304206900e42ea877936a7f901e1f447ed96`.
+
+`ComputedColor` is now the one non-`Copy` value carried by every generated
+`<color>` longhand. It owns either an absolute color, `currentcolor`, a system
+keyword, or the retained contextual expression. Generated child copies,
+tagged get/set, CSS-wide keywords, border shorthands, and deferred `var()`
+substitution all clone that one value. `BackgroundImage` gradients and
+`BoxShadow` use the same type; text-decoration aliases use the generated
+longhand family.
+
+`Color` remains the numeric leaf only. `SystemColor::used_srgb()` is gone;
+system lookup is an explicit used-value context supplied at lowering. The
+temporary legacy palette preserves the existing consumer output, but is not
+part of parsing or computed-value construction and will be replaced by C2's
+scheme-aware host palette.
+
+**Scope knockout:** the bounded Livery model has no other implemented nested
+CSS color owner. `text-shadow` remains a known-unimplemented property, so it
+does not receive an eager-color side path in this gate.
+
+**Focused receipt:** `contextual_color` now proves direct declarations,
+`var()`, `inherit`, `unset`, generated copies, two-stop gradients, box
+shadows, and text-decoration preserve an expression. The five C2/C3 resolution and observability
+fixtures remain ignored: this gate neither selects an element scheme nor
+claims CSSOM, animation, or headed-paint semantics.
+
+**Verification:**
+
+- `cargo test -p livery --test contextual_color --offline`: 2 passed, 5
+  intentionally ignored;
+- `cargo test -p livery --offline`: 170 passed, 5 intentionally ignored;
+- `cargo test -p buckram --lib --offline`: 172 passed;
+- `cargo test -p genet-livery --all-targets --offline`: 195 passed;
+- the combined strict Clippy command is blocked by 146 pre-existing Livery
+  selector and color-space warnings; after boxing the retained expression,
+  it reports no C1 warning;
+- `rustfmt --edition 2024 --check` on all touched Rust paths; and
+- `git diff --check`.
+
+**Commit:** `Add Livery contextual computed color` (this commit).
+
+**Next:** C2 supplies `color-scheme`, element-context computation, and the
+host-owned system palette. C3 owns the full CSSOM, animation, and paint
+consumer migration; this receipt does not credit that work.
 
 ## C2: explicit computed-value context
 

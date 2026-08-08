@@ -469,7 +469,7 @@ fn grid(state: &CatalogState) -> GridView<CatalogState, ()> {
                     } else {
                         "syncing".to_string()
                     }
-                }
+                },
             };
             Box::new(el::<_, CatalogState, ()>("span", value)) as GridView<CatalogState, ()>
         },

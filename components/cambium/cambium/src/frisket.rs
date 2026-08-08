@@ -171,7 +171,7 @@ where
                     .attr("class", "frisket-split")
                     .attr("style", format!("display: flex; flex-direction: {dir};")),
             )
-        }
+        },
         TileTree::Stack(stack) => render_stack(stack, path, on_event),
     }
 }
@@ -193,8 +193,8 @@ where
         .map(|(index, tile)| {
             let id = tile.id;
             let active = index == stack.active;
-            let label =
-                el::<_, State, AppAction>("span", tile.title.clone()).attr("class", "frisket-label");
+            let label = el::<_, State, AppAction>("span", tile.title.clone())
+                .attr("class", "frisket-label");
             // The × is its own control, announced as "Close <title>", and it
             // stops propagation so closing does not also activate.
             let close_event = on_event.clone();
@@ -240,9 +240,7 @@ where
                     .attr("aria-label", tile.title.clone())
                     .attr("aria-selected", if active { "true" } else { "false" })
                     .attr("style", style),
-                move |state: &mut State, _: PointerClick| {
-                    activate(state, TileEvent::Activated(id))
-                },
+                move |state: &mut State, _: PointerClick| activate(state, TileEvent::Activated(id)),
             )) as PaneView<State, AppAction>
         })
         .collect();

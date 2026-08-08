@@ -125,21 +125,36 @@ mod tests {
     fn records_and_upgrades_known_host() {
         let hsts = InMemoryHsts::new();
         hsts.record("example.org", 3600, false);
-        assert!(should_upgrade(&"http://example.org/x".parse().unwrap(), &hsts));
+        assert!(should_upgrade(
+            &"http://example.org/x".parse().unwrap(),
+            &hsts
+        ));
         // Different host, and an already-https URL, are untouched.
-        assert!(!should_upgrade(&"http://other.example/".parse().unwrap(), &hsts));
-        assert!(!should_upgrade(&"https://example.org/".parse().unwrap(), &hsts));
+        assert!(!should_upgrade(
+            &"http://other.example/".parse().unwrap(),
+            &hsts
+        ));
+        assert!(!should_upgrade(
+            &"https://example.org/".parse().unwrap(),
+            &hsts
+        ));
     }
 
     #[test]
     fn include_subdomains_reaches_children_only_when_set() {
         let hsts = InMemoryHsts::new();
         hsts.record("example.org", 3600, true);
-        assert!(should_upgrade(&"http://api.example.org/".parse().unwrap(), &hsts));
+        assert!(should_upgrade(
+            &"http://api.example.org/".parse().unwrap(),
+            &hsts
+        ));
 
         let narrow = InMemoryHsts::new();
         narrow.record("example.org", 3600, false);
-        assert!(!should_upgrade(&"http://api.example.org/".parse().unwrap(), &narrow));
+        assert!(!should_upgrade(
+            &"http://api.example.org/".parse().unwrap(),
+            &narrow
+        ));
     }
 
     #[test]
@@ -147,6 +162,9 @@ mod tests {
         let hsts = InMemoryHsts::new();
         hsts.record("example.org", 3600, false);
         hsts.record("example.org", 0, false);
-        assert!(!should_upgrade(&"http://example.org/".parse().unwrap(), &hsts));
+        assert!(!should_upgrade(
+            &"http://example.org/".parse().unwrap(),
+            &hsts
+        ));
     }
 }

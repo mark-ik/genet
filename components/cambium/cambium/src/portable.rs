@@ -190,7 +190,7 @@ where
                                     removed.inner_state,
                                     element,
                                 );
-                            }
+                            },
                             None => {
                                 ctx.with_id(
                                     create_generational_view_id(removed.slot, generation),
@@ -202,12 +202,12 @@ where
                                         );
                                     },
                                 );
-                            }
+                            },
                         }
                         bump_generation(&mut seq_state.generations, removed.slot);
                         seq_state.free_slots.push(removed.slot);
                         old_cursor += 1;
-                    }
+                    },
                     _ => break,
                 }
             }
@@ -331,7 +331,7 @@ where
                             inner_state,
                         });
                         continue;
-                    }
+                    },
                     Err(mut element) => {
                         // Non-adopting splice: the parked child cannot cross;
                         // tear it down for real (its node is still attached
@@ -347,7 +347,7 @@ where
                         };
                         parked_view.teardown(&mut state, ctx, el);
                         dom.borrow_mut().remove(node);
-                    }
+                    },
                 }
             }
 
@@ -389,7 +389,7 @@ where
                         removed.inner_state,
                         element,
                     );
-                }
+                },
                 None => {
                     ctx.with_id(
                         create_generational_view_id(removed.slot, generation),
@@ -401,7 +401,7 @@ where
                             );
                         },
                     );
-                }
+                },
             }
             bump_generation(&mut seq_state.generations, removed.slot);
             seq_state.free_slots.push(removed.slot);

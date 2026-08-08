@@ -9,19 +9,18 @@
 //! [`LoadedDocument`] that renders to a [`netrender::Scene`] through `genet-render`.
 //! GPU-free and testable; the windowed present loop (`static_viewer`) drives it.
 
-use genet_host_api::ResourceFetcher;
 use std::collections::HashMap;
 
+use genet_document_resources::{ResolvedDocumentResources, ResolvedStylesheet, ResourceKind};
+use genet_host_api::ResourceFetcher;
 use genet_layout::{
     ImageLoader, IncrementalLayout, ScrollKey, ScrollOffsets, TextRange, TextSelection,
-    author_stylesheets_with_loader,
 };
 use genet_render::{
     ContentReport, content_report, scene_from_session_dom, scene_from_session_dom_with_scrollbars,
 };
 use genet_static_dom::{StaticDocument, StaticNodeId};
 use inker::SessionTextTarget;
-use layout_dom_api::{LayoutDom, LocalName, Namespace};
 use netrender::Scene;
 
 /// A local-scheme [`ResourceFetcher`]: `data:` decodes the inline payload,
@@ -100,6 +99,9 @@ pub struct LoadedDocument {
     /// The fetched document URL, retained so relative CSS `url()` values resolve
     /// in Stylo and raw `<img src>` values resolve in the resource cache.
     base_url: Option<String>,
+    /// The host-owned, source-attributed resource set. The incumbent Stylo
+    /// adapter below retains its string-sheet compatibility only at this edge.
+    resource_set: ResolvedDocumentResources,
     /// Bytes for the document's initial image resources. Keeping the cache owned by
     /// the session means resize rebuilds do not re-fetch the page's assets.
     resources: ResourceCache,
@@ -121,17 +123,6 @@ pub struct LoadedDocument {
     selection_range: Option<TextRange<StaticNodeId>>,
 }
 
-struct FetchingResourceLoader<'a> {
-    fetcher: &'a dyn ResourceFetcher,
-    base_url: &'a str,
-}
-
-impl ImageLoader for FetchingResourceLoader<'_> {
-    fn load(&self, url: &str) -> Option<Vec<u8>> {
-        self.fetcher.fetch(&crate::resolve_href(self.base_url, url))
-    }
-}
-
 #[derive(Default)]
 struct ResourceCache {
     base_url: Option<String>,
@@ -139,42 +130,19 @@ struct ResourceCache {
 }
 
 impl ResourceCache {
-    fn with_base(base_url: Option<String>) -> Self {
-        Self {
-            base_url,
-            bytes: HashMap::new(),
-        }
-    }
-
-    fn prefetch_document_resources(
-        &mut self,
-        fetcher: &dyn ResourceFetcher,
-        doc: &StaticDocument,
-        sheets: &[String],
-    ) {
-        for url in document_image_urls(doc)
-            .into_iter()
-            .chain(sheets.iter().flat_map(|sheet| stylesheet_image_urls(sheet)))
+    fn from_resolved(base_url: Option<String>, resources: &ResolvedDocumentResources) -> Self {
+        let mut bytes = HashMap::new();
+        for resource in resources
+            .resources
+            .iter()
+            .filter(|resource| resource.kind == ResourceKind::Image)
         {
-            self.prefetch(fetcher, &url);
+            // Keep both keys: the Livery-style authored spelling and the
+            // incumbent cascade's document-resolved spelling reach one cache.
+            bytes.insert(resource.authored_url.clone(), resource.bytes.clone());
+            bytes.insert(resource.resolved_url.clone(), resource.bytes.clone());
         }
-    }
-
-    fn prefetch(&mut self, fetcher: &dyn ResourceFetcher, url: &str) {
-        if url.starts_with("data:") {
-            return;
-        }
-        let resolved = self
-            .base_url
-            .as_deref()
-            .map(|base| crate::resolve_href(base, url))
-            .unwrap_or_else(|| url.to_string());
-        if self.bytes.contains_key(&resolved) {
-            return;
-        }
-        if let Some(bytes) = fetcher.fetch(&resolved) {
-            self.bytes.insert(resolved, bytes);
-        }
+        Self { base_url, bytes }
     }
 }
 
@@ -185,69 +153,21 @@ impl ImageLoader for ResourceCache {
             .as_deref()
             .map(|base| crate::resolve_href(base, url))
             .unwrap_or_else(|| url.to_string());
-        self.bytes.get(&resolved).cloned()
+        self.bytes
+            .get(&resolved)
+            .or_else(|| self.bytes.get(url))
+            .cloned()
     }
 }
 
-fn document_image_urls(doc: &StaticDocument) -> Vec<String> {
-    let no_ns = Namespace::default();
-    let src = LocalName::from("src");
-    let data = LocalName::from("data");
-    let poster = LocalName::from("poster");
-    let loading = LocalName::from("loading");
-    let mut urls = Vec::new();
-    let mut stack = vec![doc.document()];
-    while let Some(id) = stack.pop() {
-        if let Some(name) = doc.element_name(id) {
-            let attr = match name.local.as_ref() {
-                "img" | "embed" => Some(&src),
-                "object" => Some(&data),
-                "video" => Some(&poster),
-                _ => None,
-            };
-            let is_lazy = name.local.as_ref() == "img"
-                && doc
-                    .attribute(id, &no_ns, &loading)
-                    .is_some_and(|value| value.trim().eq_ignore_ascii_case("lazy"));
-            if !is_lazy && let Some(url) = attr.and_then(|attr| doc.attribute(id, &no_ns, attr)) {
-                urls.push(url.to_string());
-            }
-        }
-        stack.extend(doc.dom_children(id));
+/// Stylo's incumbent string-sheet entrypoint cannot yet accept link media as
+/// metadata. Keep the compatibility wrapper at this adapter only; the shared
+/// resource set and Livery path retain the original text plus media identity.
+fn stylo_sheet_text(sheet: &ResolvedStylesheet) -> String {
+    match sheet.media.as_deref() {
+        Some(media) => format!("@media {media} {{\n{}\n}}", sheet.text),
+        None => sheet.text.clone(),
     }
-    urls
-}
-
-/// Find stylesheet `url()`s which can feed the image plane. `@font-face` URLs
-/// are deliberately excluded: webfont registration is not implemented, so
-/// fetching those bytes only serializes a synchronous initial load without
-/// changing the rendered page.
-fn stylesheet_image_urls(css: &str) -> Vec<String> {
-    let mut urls = Vec::new();
-    let mut offset = 0;
-    while let Some(found) = css[offset..].to_ascii_lowercase().find("url(") {
-        let start = offset + found + 4;
-        let Some(end) = css[start..].find(')') else {
-            break;
-        };
-        let raw = css[start..start + end].trim();
-        let raw = raw.trim_matches(['\'', '"']);
-        if !raw.is_empty() && !is_font_url(raw) {
-            urls.push(raw.to_string());
-        }
-        offset = start + end + 1;
-    }
-    urls
-}
-
-fn is_font_url(url: &str) -> bool {
-    let path = url
-        .split_once(['?', '#'])
-        .map_or(url, |(path, _)| path)
-        .to_ascii_lowercase();
-    [".woff", ".woff2", ".ttf", ".otf", ".eot"]
-        .iter()
-        .any(|extension| path.ends_with(extension))
 }
 
 /// What a content click ([`LoadedDocument::click_at`]) resolved to.
@@ -299,25 +219,17 @@ impl LoadedDocument {
             .map(|s| s.to_string())
             .collect();
         let base_url = base_url.map(str::to_string);
-        if let (Some(fetcher), Some(base)) = (fetcher, base_url.as_deref()) {
-            let loader = FetchingResourceLoader {
-                fetcher,
-                base_url: base,
-            };
-            sheets.extend(author_stylesheets_with_loader(&doc, &loader));
-        } else {
-            // Fetch-free parses deliberately retain only inline sheets: there is
-            // no base or byte authority with which to resolve a linked resource.
-            sheets.extend(genet_layout::inline_stylesheets(&doc));
-        }
-        let mut resources = ResourceCache::with_base(base_url.clone());
-        if let Some(fetcher) = fetcher {
-            resources.prefetch_document_resources(fetcher, &doc, &sheets);
-        }
+        let resource_set = match fetcher {
+            Some(fetcher) => ResolvedDocumentResources::resolve(&doc, base_url.as_deref(), fetcher),
+            None => ResolvedDocumentResources::discover(&doc, base_url.as_deref()),
+        };
+        sheets.extend(resource_set.stylesheets.iter().map(stylo_sheet_text));
+        let resources = ResourceCache::from_resolved(base_url.clone(), &resource_set);
         Self {
             doc,
             sheets,
             base_url,
+            resource_set,
             resources,
             session: None,
             size: (0, 0),
@@ -325,6 +237,11 @@ impl LoadedDocument {
             selection_anchor: None,
             selection_range: None,
         }
+    }
+
+    /// The engine-neutral resource record backing this incumbent session.
+    pub fn resource_set(&self) -> &ResolvedDocumentResources {
+        &self.resource_set
     }
 
     /// Build (or rebuild, on a size change) the layout session for `width`×`height`.
@@ -615,23 +532,50 @@ mod tests {
     }
 
     #[test]
-    fn stylesheet_image_urls_skip_unimplemented_webfonts() {
-        assert_eq!(
-            stylesheet_image_urls(
-                "@font-face { src: url(https://fonts.example/a.woff2); } \
-                 .hero { background-image: url('images/banner.png?v=2'); }"
-            ),
-            vec!["images/banner.png?v=2"],
-            "only image resources are preloaded while webfont support is deferred"
+    fn shared_resources_classify_stylesheet_images_and_fonts() {
+        struct Fetcher;
+        impl ResourceFetcher for Fetcher {
+            fn fetch(&self, _url: &str) -> Option<Vec<u8>> {
+                Some(vec![1, 2, 3])
+            }
+        }
+        let document = StaticDocument::parse(
+            "<style>@font-face { src: url(fonts/text.woff2); } \
+             .hero { background-image: url('images/banner.png?v=2'); }</style>",
+        );
+        let resources = ResolvedDocumentResources::resolve(
+            &document,
+            Some("https://example.test/docs/index.html"),
+            &Fetcher,
+        );
+        assert!(
+            resources
+                .resources
+                .iter()
+                .any(|resource| resource.kind == ResourceKind::Font)
+        );
+        assert!(
+            resources
+                .resources
+                .iter()
+                .any(|resource| resource.kind == ResourceKind::Image)
         );
     }
 
     #[test]
     fn initial_resource_cache_skips_lazy_images() {
+        struct Fetcher;
+        impl ResourceFetcher for Fetcher {
+            fn fetch(&self, _url: &str) -> Option<Vec<u8>> {
+                Some(vec![1])
+            }
+        }
         let doc = StaticDocument::parse(
             "<img src=\"eager.png\"><img src=\"later.png\" loading=\"lazy\">",
         );
-        assert_eq!(document_image_urls(&doc), vec!["eager.png"]);
+        let resources = ResolvedDocumentResources::resolve(&doc, None, &Fetcher);
+        assert_eq!(resources.resources.len(), 1);
+        assert_eq!(resources.resources[0].authored_url, "eager.png");
     }
 
     /// A `data:` document loads, parses, and paints text (glyph runs in the

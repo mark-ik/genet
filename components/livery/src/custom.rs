@@ -301,7 +301,11 @@ fn resolve_name(name: &str, state: &mut ResolutionState) -> Option<String> {
     }
     state.visiting.push(name.to_owned());
     let mut budget = SUBSTITUTION_BUDGET;
-    let outcome = substitute_with(&raw, &mut |reference| resolve_name(reference, state), &mut budget);
+    let outcome = substitute_with(
+        &raw,
+        &mut |reference| resolve_name(reference, state),
+        &mut budget,
+    );
     state.visiting.pop();
     if state.invalid.contains(name) {
         return None;

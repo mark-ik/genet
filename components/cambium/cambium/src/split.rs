@@ -90,18 +90,12 @@ impl Split {
         match self.axis {
             SplitAxis::Horizontal => {
                 let a = ((w - t) * self.clamped()).round().max(0.0);
-                (
-                    [0.0, 0.0, a, h],
-                    [a + t, 0.0, (w - a - t).max(0.0), h],
-                )
-            }
+                ([0.0, 0.0, a, h], [a + t, 0.0, (w - a - t).max(0.0), h])
+            },
             SplitAxis::Vertical => {
                 let a = ((h - t) * self.clamped()).round().max(0.0);
-                (
-                    [0.0, 0.0, w, a],
-                    [0.0, a + t, w, (h - a - t).max(0.0)],
-                )
-            }
+                ([0.0, 0.0, w, a], [0.0, a + t, w, (h - a - t).max(0.0)])
+            },
         }
     }
 
@@ -164,7 +158,8 @@ pub fn split<State, Action, OnRatio, First, Second>(
     on_ratio: OnRatio,
     first: First,
     second: Second,
-) -> impl View<State, Action, GenetCtx, Element = GenetElement> + use<State, Action, OnRatio, First, Second>
+) -> impl View<State, Action, GenetCtx, Element = GenetElement>
++ use<State, Action, OnRatio, First, Second>
 where
     State: 'static,
     Action: 'static,

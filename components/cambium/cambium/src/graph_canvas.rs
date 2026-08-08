@@ -1001,11 +1001,15 @@ mod tests {
         assert_eq!(found.len(), 2, "one label per node: {found:?}");
         // `model` selects node 1; the test state hovers node 2.
         assert!(
-            found.iter().any(|c| c == "graph-canvas-swatch-label selected"),
+            found
+                .iter()
+                .any(|c| c == "graph-canvas-swatch-label selected"),
             "the selected node's label must say so: {found:?}"
         );
         assert!(
-            found.iter().any(|c| c == "graph-canvas-swatch-label hovered"),
+            found
+                .iter()
+                .any(|c| c == "graph-canvas-swatch-label hovered"),
             "the hovered node's label must say so: {found:?}"
         );
     }

@@ -822,14 +822,8 @@ impl MathOperand {
     fn resolve_relative(self, environment: RelativeLengthEnvironment) -> Self {
         match self {
             Self::Length(length) => Self::Length(length.resolve_relative(environment)),
-            Self::SiblingIndex => environment
-                .tree_counts
-                .index()
-                .map_or(self, Self::Number),
-            Self::SiblingCount => environment
-                .tree_counts
-                .count()
-                .map_or(self, Self::Number),
+            Self::SiblingIndex => environment.tree_counts.index().map_or(self, Self::Number),
+            Self::SiblingCount => environment.tree_counts.count().map_or(self, Self::Number),
             _ => self,
         }
     }

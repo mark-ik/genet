@@ -2410,7 +2410,7 @@ fn spacing_px(spacing: Spacing) -> Option<f32> {
 }
 
 fn brush(style: &ComputedValues, source_index: usize) -> Brush {
-    let color = resolve_color(style.color, ColorF::BLACK);
+    let color = resolve_color(&style.color, ColorF::BLACK);
     Brush {
         color: [color.r, color.g, color.b, color.a],
         source_index,

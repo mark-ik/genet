@@ -56,7 +56,8 @@ it does not use it as a reason to reinterpret the mapping.
 
 ## Live defects
 
-1. `Origin` contains only `UserAgent`, `User`, and `Author`.
+1. `Origin` in `components/livery/src/cascade.rs` contains only `UserAgent`,
+   `User`, and `Author`.
 2. `genet-livery/src/style.rs` matches stylesheet rules and inline style, but
    exposes no document-language declaration provider.
 3. table attributes used by the HTML model (`rowspan`, `colspan`, `span`) are
@@ -92,10 +93,15 @@ pub struct PresentationalDeclarations {
 }
 ```
 
+Ownership: the `Origin` variant lands in `livery`'s cascade; the provider
+trait and the HTML mapping implementation land in `genet-livery`; Buckram
+sees neither.
+
 Required invariants:
 
 1. Hints cannot be `!important`, cannot define custom properties, and cannot
-   enter a cascade layer.
+   enter a cascade layer. The seam asserts this on provider output rather
+   than trusting adapters; `Declaration` carries an `important` flag today.
 2. Normal author declarations and style attributes override hints.
 3. Hints override normal user and UA declarations as CSS Cascade requires.
 4. `revert` treats the hint origin as part of author rollback;
@@ -160,10 +166,14 @@ The WPT family is credited here, not to K4.
 Implement the HTML table mappings for:
 
 - `table[width]` and `table[height]`;
-- `col[width]`;
+- `col[width]` (the mapping table names `col` only, not `colgroup`);
 - row-group and row `height`;
 - cell `width` and `height`; and
 - applicable table-part `align` values.
+
+`table[align]` itself maps to `float` (left/right) or centering margins, not
+to text alignment. Implement it as those declarations or defer it by name;
+do not fold it into the text-align family.
 
 Use HTML's non-negative-integer, dimension, and nonzero-dimension parsing
 rules rather than CSS declaration parsing. Preserve percentage dimensions as

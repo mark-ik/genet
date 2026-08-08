@@ -57,13 +57,3 @@ pub(crate) const STRUCTURAL_SHEET: &[&str] = &[
     "head, style, script, title, meta, link, base { display: none; }",
     "body { padding: 8px; }",
 ];
-
-// The scripted document's external-script fetch seam, implemented for the
-// shell-level fetcher here (LocalFetcher's owner) so the impl satisfies the
-// orphan rule after the move out of pelt.
-#[cfg(feature = "scripted")]
-impl genet_scripted::ResourceFetcher for document::LocalFetcher {
-    fn fetch(&self, url: &str) -> Option<Vec<u8>> {
-        genet_host_api::ResourceFetcher::fetch(self, url)
-    }
-}

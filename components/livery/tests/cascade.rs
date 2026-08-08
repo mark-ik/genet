@@ -514,9 +514,8 @@ fn grid_placement_shorthands_expand_to_their_longhands() {
             .declarations
             .iter()
             .map(|declaration| {
-                let livery::cascade::DeclaredValue::Value(PropertyValue::GridPlacement(
-                    placement,
-                )) = &declaration.value
+                let livery::cascade::DeclaredValue::Value(PropertyValue::GridPlacement(placement)) =
+                    &declaration.value
                 else {
                     panic!("{css}: not a grid placement");
                 };
@@ -559,7 +558,11 @@ fn grid_placement_shorthands_expand_to_their_longhands() {
         ]
     );
     // Malformed forms are declaration errors, not silent drops.
-    for css in ["grid-column: 1 / 2 / 3", "grid-row: florp", "grid-area: 1 / 2 / 3 / 4 / 5"] {
+    for css in [
+        "grid-column: 1 / 2 / 3",
+        "grid-row: florp",
+        "grid-area: 1 / 2 / 3 / 4 / 5",
+    ] {
         let block = parse_declaration_block(css);
         assert_eq!(block.errors.len(), 1, "{css}");
         assert!(block.declarations.is_empty(), "{css}");

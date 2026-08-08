@@ -1,0 +1,20 @@
+[package]
+name = "genet-document-resources"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Engine-neutral HTML document resource discovery and attribution for Genet."
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+genet-host-api = { workspace = true }
+layout_dom_api = { workspace = true }
+
+[dev-dependencies]
+genet-static-dom = { path = "../genet-static-dom" }

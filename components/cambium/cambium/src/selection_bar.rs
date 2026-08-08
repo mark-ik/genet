@@ -245,15 +245,15 @@ pub fn selection_bar(
                     if let Some(panel_id) = &item.panel_id {
                         item_view = item_view.attr("aria-controls", panel_id.clone());
                     }
-                }
+                },
                 SelectionBarKind::Segmented => {
                     item_view =
                         item_view.attr("aria-checked", if selected { "true" } else { "false" });
-                }
+                },
                 SelectionBarKind::FilterChips => {
                     item_view =
                         item_view.attr("aria-pressed", if selected { "true" } else { "false" });
-                }
+                },
             }
             if let Some(reason) = &item.disabled_reason {
                 item_view = item_view.attr("aria-description", reason.clone());
@@ -299,7 +299,7 @@ pub fn selection_bar(
                 }
                 event.prevent_default();
                 return;
-            }
+            },
             _ => return,
         };
         if let Some(next) = next {
@@ -382,7 +382,7 @@ fn moves_previous(key: &Key, config: SelectionBarConfig) -> bool {
     match config.kind {
         SelectionBarKind::Segmented => {
             matches!(key, Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowUp))
-        }
+        },
         SelectionBarKind::Tabs { .. } | SelectionBarKind::FilterChips => match config.orientation {
             Orientation::Horizontal => matches!(key, Key::Named(NamedKey::ArrowLeft)),
             Orientation::Vertical => matches!(key, Key::Named(NamedKey::ArrowUp)),
@@ -394,7 +394,7 @@ fn moves_next(key: &Key, config: SelectionBarConfig) -> bool {
     match config.kind {
         SelectionBarKind::Segmented => {
             matches!(key, Key::Named(NamedKey::ArrowRight | NamedKey::ArrowDown))
-        }
+        },
         SelectionBarKind::Tabs { .. } | SelectionBarKind::FilterChips => match config.orientation {
             Orientation::Horizontal => matches!(key, Key::Named(NamedKey::ArrowRight)),
             Orientation::Vertical => matches!(key, Key::Named(NamedKey::ArrowDown)),

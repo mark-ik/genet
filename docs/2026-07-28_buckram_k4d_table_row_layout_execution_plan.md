@@ -11,6 +11,11 @@ cannot yet be deleted. K4g closes the dominant collapsed-border deferral and
 K4h owns the final positioned-table audit and bridge deletion. There is no
 further standalone K4d implementation handoff.
 
+**Closure lane:** [Buckram K4 completion
+lane](2026-08-08_buckram_k4_completion_lane.md). Its B3 gate owns the stranded
+row-group and baseline inputs; B10 owns the bridge deletion that the accepted
+K4d live slice could not perform while later-K4 deferrals remained.
+
 **Parent plan:** [Buckram K4 CSS tables execution plan](2026-07-28_buckram_k4_css_tables_execution_plan.md)
 
 **Predecessor plan:** [Buckram K4c table inline sizing execution plan](2026-07-28_buckram_k4c_table_inline_sizing_execution_plan.md)
@@ -1125,7 +1130,7 @@ has run, so the dispatch cannot be chosen when the node is built: deciding
 there would mean guessing or giving up the fallback entirely. A table that
 defers keeps the Grid bridge it was built with.
 
-**WPT:** `css/css-tables` **56 to 58**; `css/CSS2/tables` 68 to 65. Six
+**WPT:** `css/css-tables` **56 to 58**; `css/CSS2/tables` 68 to 65. Seven
 tests moved and every one has a mechanism. Proof directory
 `testing/genet/wpt-ledger/2026-08-03_buckram_k4d6b_v3`, against the
 `_shadow` maps.
@@ -1345,9 +1350,9 @@ dispatch, and remove the Grid/Flex bridge.
 - Stop if K4d claims fragmentation, repeated headers, absolute positioning,
   captions, or collapsed-border completion.
 
-### Removal receipt
+### Removal receipt, reassigned to K4 completion B10
 
-The accepted K4d6 tree contains:
+The planned K4d6 tree would have contained:
 
 - one Buckram table dispatcher;
 - zero table Grid dispatches;
@@ -1357,9 +1362,12 @@ The accepted K4d6 tree contains:
 - no table-specific Taffy placement mutation; and
 - complete unfragmented table-internal fragment identity.
 
-K4h audits that this bridge remains absent. It does not postpone the deletion.
-K4f still supplies visibility-collapse masks through the accepted K4c and K4d
-inputs.
+**Reassigned 2026-08-08:** this receipt did not close inside K4d. Tables with
+named deferrals still ride the bridge, so `place_table_cell`,
+`table_is_flattenable`, and the table/row backend mappings survive. K4g closes
+the dominant collapsed-border deferral; B10/K4h owns the deletion and its
+audit. K4f still supplies visibility-collapse masks through the accepted K4c
+and K4d inputs. The status block at the top records the same correction.
 
 ## Cross-gate dependency map
 
@@ -1390,6 +1398,10 @@ K4d is complete when all of these are true:
 8. Every table-internal role has a stable fragment and structural parent.
 9. Positioned table parts remain on the table path.
 10. Table Grid and row Flex dispatch counts are zero.
+
+Correction 2026-08-08: invariants 1 and 10 did not close inside K4d. Tables
+with named deferrals keep the bridge until K4g closes collapsed borders and
+K4h deletes and audits it. The remaining invariants are accepted.
 
 ## Verification ladder for every sub-gate
 

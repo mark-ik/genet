@@ -84,7 +84,7 @@ impl
                 elem_mut.operations.push(Operation::Replace(*new_id));
                 elem_mut.view_path = new_elem.view_path;
                 elem_mut.children = new_elem.children;
-            }
+            },
             _ => unreachable!(),
         }
     }

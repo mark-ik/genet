@@ -120,7 +120,11 @@ async fn listing(path: &Path, request_path: &str) -> Option<Listing> {
         let is_dir = item.file_type().await.map(|t| t.is_dir()).unwrap_or(false);
         let target = join_request_path(request_path, &name, is_dir);
         entries.push(Entry::new(
-            if is_dir { format!("{name}/") } else { name.clone() },
+            if is_dir {
+                format!("{name}/")
+            } else {
+                name.clone()
+            },
             target,
             if is_dir {
                 EntryKind::Directory
@@ -209,7 +213,11 @@ mod tests {
     fn an_ordinary_path_resolves_under_the_root() {
         assert_eq!(
             dir().resolve("/notes/hello.gmi"),
-            Some(PathBuf::from("/srv/capsule").join("notes").join("hello.gmi"))
+            Some(
+                PathBuf::from("/srv/capsule")
+                    .join("notes")
+                    .join("hello.gmi")
+            )
         );
     }
 
@@ -239,7 +247,11 @@ mod tests {
     fn current_directory_segments_are_ignored() {
         assert_eq!(
             dir().resolve("/./notes/./hello.gmi"),
-            Some(PathBuf::from("/srv/capsule").join("notes").join("hello.gmi"))
+            Some(
+                PathBuf::from("/srv/capsule")
+                    .join("notes")
+                    .join("hello.gmi")
+            )
         );
     }
 
@@ -251,7 +263,11 @@ mod tests {
     #[test]
     fn mime_types_cover_what_the_small_web_carries() {
         assert_eq!(mime_for(Path::new("a.gmi")), "text/gemini");
-        assert_eq!(mime_for(Path::new("a.GMI")), "text/gemini", "case-insensitive");
+        assert_eq!(
+            mime_for(Path::new("a.GMI")),
+            "text/gemini",
+            "case-insensitive"
+        );
         assert_eq!(mime_for(Path::new("a.txt")), "text/plain");
         assert_eq!(mime_for(Path::new("a.png")), "image/png");
         assert_eq!(mime_for(Path::new("a.ivg")), "image/x-iconvg");

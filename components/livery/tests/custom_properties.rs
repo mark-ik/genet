@@ -9,7 +9,10 @@ use livery::cascade::{
 use livery::custom::{CustomProperties, contains_var, substitute};
 use livery::values::{Color, Length, LengthPercentage, Margin, Size};
 
-fn matched_block(css: &str, specificity: u32) -> (Vec<MatchedDeclaration>, Vec<MatchedCustomDeclaration>) {
+fn matched_block(
+    css: &str,
+    specificity: u32,
+) -> (Vec<MatchedDeclaration>, Vec<MatchedCustomDeclaration>) {
     let block = parse_declaration_block(css);
     assert!(block.errors.is_empty(), "{css}: {:?}", block.errors);
     let declarations = block
@@ -93,7 +96,10 @@ fn cycles_invalidate_only_their_members() {
     assert!(!custom.contains_key("--b"));
     assert_eq!(custom.get("--c").map(String::as_str), Some("#00ff00"));
     assert_eq!(computed.color, "#00ff00".parse::<Color>().unwrap());
-    assert_eq!(computed.background_color, "#0000ff".parse::<Color>().unwrap());
+    assert_eq!(
+        computed.background_color,
+        "#0000ff".parse::<Color>().unwrap()
+    );
 }
 
 #[test]
@@ -180,7 +186,10 @@ fn substitute_reports_unresolvable_and_malformed_references() {
     assert!(substitute("var(--x", &map).is_err());
     let mut map = CustomProperties::new();
     map.insert("--x".to_owned(), "7px".to_owned());
-    assert_eq!(substitute("calc(var(--x) * 2)", &map).unwrap(), "calc(7px * 2)");
+    assert_eq!(
+        substitute("calc(var(--x) * 2)", &map).unwrap(),
+        "calc(7px * 2)"
+    );
 }
 
 #[test]
@@ -204,5 +213,8 @@ fn pending_values_do_not_error_at_parse_time() {
 
     let bad = parse_declaration_block("--: nope");
     assert_eq!(bad.errors.len(), 1);
-    assert_eq!(bad.errors[0].kind, DeclarationErrorKind::MalformedDeclaration);
+    assert_eq!(
+        bad.errors[0].kind,
+        DeclarationErrorKind::MalformedDeclaration
+    );
 }

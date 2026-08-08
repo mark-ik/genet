@@ -14,9 +14,9 @@ use crate::referrer;
 use crate::request::{CacheMode, Method, ReferrerPolicy, RequestMode};
 use crate::{FetchContext, Request, SameSiteContext};
 
+use super::USER_AGENT;
 use super::mixed_content::is_same_site;
 use super::util::header_val;
-use super::USER_AGENT;
 
 /// Build the header list for one hop. `base_headers` is the loop's current base
 /// (a method-changing redirect drops the body headers from it); `first_hop` gates
@@ -65,7 +65,7 @@ pub(super) fn assemble_request_headers(
                 if header_val(&req_headers, "cache-control").is_none() {
                     req_headers.push(("cache-control".to_owned(), "max-age=0".to_owned()));
                 }
-            }
+            },
             CacheMode::NoStore | CacheMode::Reload => {
                 if header_val(&req_headers, "pragma").is_none() {
                     req_headers.push(("pragma".to_owned(), "no-cache".to_owned()));
@@ -73,8 +73,8 @@ pub(super) fn assemble_request_headers(
                 if header_val(&req_headers, "cache-control").is_none() {
                     req_headers.push(("cache-control".to_owned(), "no-cache".to_owned()));
                 }
-            }
-            _ => {}
+            },
+            _ => {},
         }
     }
 

@@ -139,7 +139,11 @@ pub(crate) fn refresh(
     now: SystemTime,
 ) -> StoredResponse {
     for (k, v) in new_headers {
-        if let Some(slot) = entry.headers.iter_mut().find(|(ek, _)| ek.eq_ignore_ascii_case(k)) {
+        if let Some(slot) = entry
+            .headers
+            .iter_mut()
+            .find(|(ek, _)| ek.eq_ignore_ascii_case(k))
+        {
             slot.1 = v.clone();
         } else {
             entry.headers.push((k.clone(), v.clone()));
@@ -181,14 +185,18 @@ fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
 
 fn cache_control_has(headers: &[(String, String)], directive: &str) -> bool {
     header(headers, "cache-control").is_some_and(|cc| {
-        cc.split(',').any(|d| d.trim().eq_ignore_ascii_case(directive))
+        cc.split(',')
+            .any(|d| d.trim().eq_ignore_ascii_case(directive))
     })
 }
 
 fn parse_max_age(headers: &[(String, String)]) -> Option<u64> {
     let cc = header(headers, "cache-control")?.to_ascii_lowercase();
-    cc.split(',')
-        .find_map(|d| d.trim().strip_prefix("max-age=").and_then(|v| v.trim().parse().ok()))
+    cc.split(',').find_map(|d| {
+        d.trim()
+            .strip_prefix("max-age=")
+            .and_then(|v| v.trim().parse().ok())
+    })
 }
 
 #[cfg(test)]
@@ -227,15 +235,30 @@ mod tests {
 
     #[test]
     fn no_store_is_uncacheable_and_vary_is_skipped() {
-        assert!(is_cacheable(200, &[("cache-control".into(), "max-age=60".into())]));
-        assert!(!is_cacheable(200, &[("cache-control".into(), "no-store".into())]));
-        assert!(!is_cacheable(200, &[("vary".into(), "accept-encoding".into())]));
+        assert!(is_cacheable(
+            200,
+            &[("cache-control".into(), "max-age=60".into())]
+        ));
+        assert!(!is_cacheable(
+            200,
+            &[("cache-control".into(), "no-store".into())]
+        ));
+        assert!(!is_cacheable(
+            200,
+            &[("vary".into(), "accept-encoding".into())]
+        ));
         assert!(!is_cacheable(404, &[]));
     }
 
     #[test]
     fn conditional_headers_from_validators() {
-        let e = entry(vec![("etag", "\"v1\""), ("last-modified", "Wed, 21 Oct 2026 07:28:00 GMT")], 0);
+        let e = entry(
+            vec![
+                ("etag", "\"v1\""),
+                ("last-modified", "Wed, 21 Oct 2026 07:28:00 GMT"),
+            ],
+            0,
+        );
         let cond = conditional_headers(&e);
         assert!(cond.contains(&("if-none-match".to_owned(), "\"v1\"".to_owned())));
         assert!(cond.iter().any(|(k, _)| k == "if-modified-since"));

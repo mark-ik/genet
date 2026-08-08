@@ -8,9 +8,9 @@
 //! per-[`crate::FetchContext`] TLS config (a later refinement); a global pool is
 //! the right default for a v1 fetcher.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::Bytes;
 use http_body_util::Full;

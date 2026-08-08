@@ -61,8 +61,8 @@ pub use context::{
 // Re-exported so consumers can name a `CookieRecord`'s `same_site` without taking a
 // direct `cookie` crate dep.
 pub use cookie::SameSite;
-pub use cors::{InMemoryPreflightCache, PreflightCache};
 pub use cookie_jar::InMemoryCookieJar;
+pub use cors::{InMemoryPreflightCache, PreflightCache};
 pub use fetch::fetch;
 pub use hsts::{HstsStore, InMemoryHsts};
 pub use request::{

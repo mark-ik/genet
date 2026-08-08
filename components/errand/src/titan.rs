@@ -13,7 +13,9 @@ use crate::{Error, Response};
 
 /// Navigate to a `titan://` URL by sending a zero-byte upload.
 pub(crate) async fn fetch(url: &Url) -> Result<Response, Error> {
-    let response = gemini_protocol::titan::fetch(url).await.map_err(map_error)?;
+    let response = gemini_protocol::titan::fetch(url)
+        .await
+        .map_err(map_error)?;
     Ok(crate::gemini::into_errand_response(url, response))
 }
 

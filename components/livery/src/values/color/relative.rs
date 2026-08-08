@@ -13,8 +13,8 @@
 //! handling in `style/color/parsing.rs` at
 //! `b157d925267fdd37b03f43e3387ab2f0909e57b0`.
 
-use super::space::{ColorSpace, Components};
 use super::Color;
+use super::space::{ColorSpace, Components};
 
 /// A channel keyword bound to the origin color's value for that channel.
 #[derive(Clone, Copy)]
@@ -123,8 +123,8 @@ pub fn substitute(source: &str, bindings: &Bindings) -> String {
         let word = &source[start..index];
         // A word directly preceded by a digit or dot is a unit, not an
         // identifier: the `s` of `2s` must survive.
-        let preceded_by_number = start > 0
-            && (bytes[start - 1].is_ascii_digit() || bytes[start - 1] == b'.');
+        let preceded_by_number =
+            start > 0 && (bytes[start - 1].is_ascii_digit() || bytes[start - 1] == b'.');
         match lookup(bindings, word) {
             Some(value) if !preceded_by_number => {
                 out.push_str(&crate::values::format_number(value));

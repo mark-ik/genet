@@ -14,6 +14,7 @@
 //! name what came from where.
 
 mod alpha;
+mod computed;
 mod contrast;
 mod layers;
 mod mix;
@@ -24,6 +25,7 @@ mod specified;
 
 use std::{fmt, str::FromStr};
 
+pub use computed::{ComputedColor, UsedColorContext};
 pub use mix::HueInterpolation;
 pub use space::ColorSpace;
 pub use specified::SpecifiedColor;
@@ -79,7 +81,7 @@ impl SystemColor {
         ("selecteditemtext", Self::SelectedItemText),
     ];
 
-    fn from_css_name(name: &str) -> Option<Self> {
+    pub(crate) fn from_css_name(name: &str) -> Option<Self> {
         Self::TABLE
             .iter()
             .find(|(key, _)| name.eq_ignore_ascii_case(key))
@@ -111,24 +113,8 @@ impl SystemColor {
         }
     }
 
-    /// The palette value Livery paints with today. Kept deliberately small:
-    /// a real device palette arrives with the theming lane.
-    fn used_srgb(self) -> (f32, f32, f32) {
-        match self {
-            Self::Canvas | Self::ButtonFace | Self::Field => (1.0, 1.0, 1.0),
-            Self::LinkText => (0.0, 0.0, 0.933_333_3),
-            Self::VisitedText => (0.333_333_3, 0.101_960_78, 0.545_098),
-            Self::ActiveText => (1.0, 0.0, 0.0),
-            Self::GrayText => (0.4, 0.4, 0.4),
-            Self::Highlight | Self::SelectedItem | Self::AccentColor => {
-                (0.129_411_77, 0.376_470_6, 0.803_921_6)
-            },
-            Self::HighlightText | Self::SelectedItemText | Self::AccentColorText => {
-                (1.0, 1.0, 1.0)
-            },
-            Self::Mark => (1.0, 1.0, 0.0),
-            _ => (0.0, 0.0, 0.0),
-        }
+    pub(crate) fn all() -> impl Iterator<Item = Self> {
+        Self::TABLE.iter().map(|(_, value)| *value)
     }
 }
 
@@ -208,13 +194,7 @@ impl Color {
     fn to_space(self, space: ColorSpace) -> Option<(Components, f32)> {
         match self {
             Self::CurrentColor => None,
-            Self::System(system) => {
-                let (red, green, blue) = system.used_srgb();
-                Some((
-                    ColorSpace::Srgb.convert(space, Components(red, green, blue)),
-                    1.0,
-                ))
-            },
+            Self::System(_) => None,
             Self::Absolute {
                 space: from,
                 components,
@@ -272,12 +252,7 @@ impl Color {
     pub fn to_srgb8(self) -> Option<(u8, u8, u8, u8)> {
         let (red, green, blue, alpha) = self.to_srgb()?;
         let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
-        Some((
-            channel(red),
-            channel(green),
-            channel(blue),
-            channel(alpha),
-        ))
+        Some((channel(red), channel(green), channel(blue), channel(alpha)))
     }
 
     /// Interpolate two colors for the animation clock.
@@ -395,7 +370,11 @@ fn alpha_suffix(alpha: f32) -> String {
 fn legacy_alpha(alpha: f32) -> String {
     let text = format!("{:.3}", alpha);
     let trimmed = text.trim_end_matches('0').trim_end_matches('.');
-    if trimmed.is_empty() { "0".to_owned() } else { trimmed.to_owned() }
+    if trimmed.is_empty() {
+        "0".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
 }
 
 impl fmt::Display for Color {
@@ -432,7 +411,13 @@ fn serialize_absolute(
         let to8 = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
         let alpha = if alpha.is_nan() { 0.0 } else { alpha };
         return if alpha >= 1.0 {
-            write!(formatter, "rgb({}, {}, {})", to8(red), to8(green), to8(blue))
+            write!(
+                formatter,
+                "rgb({}, {}, {})",
+                to8(red),
+                to8(green),
+                to8(blue)
+            )
         } else {
             write!(
                 formatter,

@@ -18,9 +18,9 @@
 use cssparser::color::{parse_hash_color, parse_named_color};
 use cssparser::{BasicParseErrorKind, ParseError as CssParseError, Parser, ParserInput, Token};
 
+use super::Color;
 use super::relative::{self, Bindings};
 use super::space::{ColorSpace, Components, normalize_hue};
-use super::Color;
 use crate::values::ParseError;
 
 type Failure<'i> = CssParseError<'i, ()>;
@@ -102,10 +102,9 @@ fn parse_channel<'i>(
     let location = input.current_source_location();
     let (value, written) = match input.next()?.clone() {
         Token::Number { value, .. } => (value, Written::Number),
-        Token::Percentage { unit_value, .. } => (
-            unit_value * channel.percentage_basis(),
-            Written::Percentage,
-        ),
+        Token::Percentage { unit_value, .. } => {
+            (unit_value * channel.percentage_basis(), Written::Percentage)
+        },
         Token::Function(name) => {
             input.reset(&start);
             (
@@ -325,10 +324,7 @@ fn parse_components<'i>(
 }
 
 /// Parse the body of one color function, given its lowercased name.
-fn parse_color_function<'i>(
-    input: &mut Parser<'i, '_>,
-    name: &str,
-) -> Result<Color, Failure<'i>> {
+fn parse_color_function<'i>(input: &mut Parser<'i, '_>, name: &str) -> Result<Color, Failure<'i>> {
     if name.eq_ignore_ascii_case("color-mix") {
         return super::mix::parse_color_mix(input);
     }
@@ -367,7 +363,11 @@ fn parse_color_function<'i>(
         ),
         _ if name.eq_ignore_ascii_case("oklab") => (
             ColorSpace::Oklab,
-            [Channel::OklabLightness, Channel::OklabAxis, Channel::OklabAxis],
+            [
+                Channel::OklabLightness,
+                Channel::OklabAxis,
+                Channel::OklabAxis,
+            ],
         ),
         _ if name.eq_ignore_ascii_case("oklch") => (
             ColorSpace::Oklch,
@@ -392,9 +392,7 @@ fn parse_origin<'i>(
     space: ColorSpace,
     predefined: bool,
 ) -> Result<Option<Bindings>, Failure<'i>> {
-    let found = input
-        .try_parse(|i| i.expect_ident_matching("from"))
-        .is_ok();
+    let found = input.try_parse(|i| i.expect_ident_matching("from")).is_ok();
     if !found {
         return Ok(None);
     }
@@ -409,10 +407,7 @@ fn parse_origin<'i>(
 /// The space follows the origin here, unlike every other function, so the
 /// origin cannot be bound until it has been read.
 fn parse_predefined<'i>(input: &mut Parser<'i, '_>) -> Result<Color, Failure<'i>> {
-    let relative_origin = if input
-        .try_parse(|i| i.expect_ident_matching("from"))
-        .is_ok()
-    {
+    let relative_origin = if input.try_parse(|i| i.expect_ident_matching("from")).is_ok() {
         Some(parse_from(input)?)
     } else {
         None
@@ -420,8 +415,8 @@ fn parse_predefined<'i>(input: &mut Parser<'i, '_>) -> Result<Color, Failure<'i>
 
     let location = input.current_source_location();
     let ident = input.expect_ident_cloned()?;
-    let space = ColorSpace::from_predefined_name(&ident)
-        .ok_or_else(|| location.new_custom_error(()))?;
+    let space =
+        ColorSpace::from_predefined_name(&ident).ok_or_else(|| location.new_custom_error(()))?;
 
     let bindings = match relative_origin {
         Some(origin) => Some(relative::bind(origin, space, true).ok_or_else(|| fail(input))?),
@@ -519,15 +514,27 @@ fn finish(mut space: ColorSpace, parsed: Parsed, relative: bool) -> Color {
 }
 
 fn clamp_range(value: f32, min: f32, max: f32) -> f32 {
-    if value.is_nan() { value } else { value.clamp(min, max) }
+    if value.is_nan() {
+        value
+    } else {
+        value.clamp(min, max)
+    }
 }
 
 fn clamp_non_negative(value: f32) -> f32 {
-    if value.is_nan() { value } else { value.clamp(0.0, 100.0) }
+    if value.is_nan() {
+        value
+    } else {
+        value.clamp(0.0, 100.0)
+    }
 }
 
 fn clamp_non_negative_unbounded(value: f32) -> f32 {
-    if value.is_nan() { value } else { value.max(0.0) }
+    if value.is_nan() {
+        value
+    } else {
+        value.max(0.0)
+    }
 }
 
 /// Parse a whole color value from a string.
@@ -546,20 +553,18 @@ pub fn parse(source: &str) -> Result<Color, ParseError> {
 pub fn parse_from<'i>(input: &mut Parser<'i, '_>) -> Result<Color, Failure<'i>> {
     let location = input.current_source_location();
     match input.next()?.clone() {
-        Token::Hash(value) | Token::IDHash(value) => parse_hash(&value)
-            .ok_or_else(|| location.new_custom_error(())),
-        Token::Ident(name) => parse_keyword(&name)
-            .ok_or_else(|| location.new_custom_error(())),
-        Token::Function(name) => {
-            input.parse_nested_block(|inner| {
-                let color = parse_color_function(inner, &name)?;
-                inner.expect_exhausted().map_err(|error| match error.kind {
-                    BasicParseErrorKind::UnexpectedToken(_) => fail(inner),
-                    _ => fail(inner),
-                })?;
-                Ok(color)
-            })
+        Token::Hash(value) | Token::IDHash(value) => {
+            parse_hash(&value).ok_or_else(|| location.new_custom_error(()))
         },
+        Token::Ident(name) => parse_keyword(&name).ok_or_else(|| location.new_custom_error(())),
+        Token::Function(name) => input.parse_nested_block(|inner| {
+            let color = parse_color_function(inner, &name)?;
+            inner.expect_exhausted().map_err(|error| match error.kind {
+                BasicParseErrorKind::UnexpectedToken(_) => fail(inner),
+                _ => fail(inner),
+            })?;
+            Ok(color)
+        }),
         _ => Err(location.new_custom_error(())),
     }
 }

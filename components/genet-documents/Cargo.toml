@@ -33,6 +33,7 @@ scripted-nova = ["scripted", "dep:script-engine-nova"]
 inker = { workspace = true }
 # The product-neutral host fetch seam.
 genet-host-api = { workspace = true }
+genet-document-resources = { workspace = true }
 netrender = { workspace = true }
 genet-layout = { path = "../genet-layout" }
 genet-render = { path = "../genet-render" }

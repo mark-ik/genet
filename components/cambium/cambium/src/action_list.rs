@@ -33,7 +33,7 @@ pub fn action_list(
     map_action(command_palette(state, items), |_state, event| match event {
         CommandEvent::Activate(path) => {
             ActionListEvent::Activate(path.first().copied().unwrap_or(0))
-        }
+        },
         CommandEvent::Dismiss => ActionListEvent::Dismiss,
     })
 }

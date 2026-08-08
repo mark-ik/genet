@@ -291,7 +291,10 @@ mod tests {
         assert_eq!(read.text(), Some("a loop"));
         assert_eq!(read.html(), Some("<b>a loop</b>"));
         assert_eq!(read.image().unwrap().rgba, vec![10, 20, 30, 255]);
-        assert_eq!(read.uris(), Some(["file:///song.wav".to_string()].as_slice()));
+        assert_eq!(
+            read.uris(),
+            Some(["file:///song.wav".to_string()].as_slice())
+        );
         assert_eq!(read.custom("audio/wav"), Some([1, 2, 3].as_slice()));
         assert_eq!(clipboard.read_format("audio/wav").unwrap(), vec![1, 2, 3]);
 
@@ -312,7 +315,12 @@ mod tests {
             .with_uris(vec!["u".to_string()]);
         assert_eq!(
             item.formats(),
-            vec![Mime::TextHtml, Mime::ImagePng, Mime::UriList, Mime::TextPlain]
+            vec![
+                Mime::TextHtml,
+                Mime::ImagePng,
+                Mime::UriList,
+                Mime::TextPlain
+            ]
         );
     }
 

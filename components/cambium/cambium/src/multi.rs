@@ -433,12 +433,22 @@ mod tests {
         // Both window-roots are children of the ONE document (the forest).
         let children: Vec<_> = d.dom_children(doc).collect();
         assert!(children.contains(&root_a) && children.contains(&root_b));
-        assert_eq!(children.len(), 2, "exactly the two window-roots under the doc");
+        assert_eq!(
+            children.len(),
+            2,
+            "exactly the two window-roots under the doc"
+        );
         // Each are class window-root, and each projection's content is under
         // its OWN window-root, isolated from the other's.
         assert!(d.all_with_class(doc, WINDOW_ROOT_CLASS).len() == 2);
-        assert!(d.dom_children(root_a).next().is_some(), "A built content under A's root");
-        assert!(d.dom_children(root_b).next().is_some(), "B built content under B's root");
+        assert!(
+            d.dom_children(root_a).next().is_some(),
+            "A built content under A's root"
+        );
+        assert!(
+            d.dom_children(root_b).next().is_some(),
+            "B built content under B's root"
+        );
     }
 
     /// The N-doms path still gives each projection its own document (the

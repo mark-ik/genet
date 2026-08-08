@@ -1,5 +1,10 @@
-use std::{collections::HashMap, hash::Hash};
+use std::{
+    collections::HashMap,
+    hash::Hash,
+    ops::{Deref, DerefMut},
+};
 
+use genet_document_resources::{ResolvedStylesheet, StylesheetOwner};
 use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
 use livery::{
     ComputedValues, PropertyId,
@@ -32,10 +37,59 @@ pub struct UsedValueContext {
 /// Parsed UA and author rules for one document class. The sheets are
 /// retained as CSSOM-shaped objects (harvest H3); the flattened rule and
 /// keyframes views are rebuilt after every mutation.
+/// One retained author sheet plus the HTML ownership that introduced it.
+/// CSSOM consumers can keep a stable sheet identity while the cascade only
+/// needs the enclosed parsed stylesheet.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AuthorStylesheet {
+    owner: StylesheetOwner,
+    source_url: Option<String>,
+    media: Option<String>,
+    stylesheet: Stylesheet,
+}
+
+impl AuthorStylesheet {
+    fn from_resolved(sheet: &ResolvedStylesheet) -> Self {
+        Self {
+            owner: sheet.owner,
+            source_url: sheet.source_url.clone(),
+            media: sheet.media.clone(),
+            stylesheet: Stylesheet::parse(&sheet.text, Origin::Author)
+                .with_document_media(sheet.media.as_deref()),
+        }
+    }
+
+    pub fn owner(&self) -> StylesheetOwner {
+        self.owner
+    }
+
+    pub fn source_url(&self) -> Option<&str> {
+        self.source_url.as_deref()
+    }
+
+    pub fn media(&self) -> Option<&str> {
+        self.media.as_deref()
+    }
+}
+
+impl Deref for AuthorStylesheet {
+    type Target = Stylesheet;
+
+    fn deref(&self) -> &Self::Target {
+        &self.stylesheet
+    }
+}
+
+impl DerefMut for AuthorStylesheet {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.stylesheet
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StyleSet {
     ua: Stylesheet,
-    authors: Vec<Stylesheet>,
+    authors: Vec<AuthorStylesheet>,
     rules: Vec<StyleRule>,
     keyframes: Vec<Keyframes>,
     diagnostics: Vec<StylesheetDiagnostic>,
@@ -47,14 +101,33 @@ impl StyleSet {
     }
 
     pub fn parse(ua_sheet: &str, author_sheets: &[&str]) -> Self {
+        let author_sheets = author_sheets
+            .iter()
+            .enumerate()
+            .map(|(document_order, text)| ResolvedStylesheet {
+                owner: StylesheetOwner::Inline,
+                source_url: None,
+                media: None,
+                text: (*text).to_owned(),
+                document_order: document_order as u64,
+            })
+            .collect::<Vec<_>>();
+        Self::parse_resolved(ua_sheet, &author_sheets)
+    }
+
+    /// Build an author cascade from the host's ordered document resource set.
+    /// Link `media` remains separate metadata until Livery evaluates it.
+    pub fn cambium_resources(author_sheets: &[ResolvedStylesheet]) -> Self {
+        Self::parse_resolved(CAMBIUM_UA_DEFAULTS, author_sheets)
+    }
+
+    pub fn parse_resolved(ua_sheet: &str, author_sheets: &[ResolvedStylesheet]) -> Self {
         let mut result = Self {
             ua: Stylesheet::parse(ua_sheet, Origin::UserAgent),
             ..Self::default()
         };
         for source in author_sheets {
-            result
-                .authors
-                .push(Stylesheet::parse(source, Origin::Author));
+            result.authors.push(AuthorStylesheet::from_resolved(source));
         }
         result.rebuild();
         result
@@ -79,7 +152,7 @@ impl StyleSet {
     }
 
     /// The retained author sheets, in document order.
-    pub fn author_sheets(&self) -> &[Stylesheet] {
+    pub fn author_sheets(&self) -> &[AuthorStylesheet] {
         &self.authors
     }
 
@@ -116,6 +189,10 @@ impl StyleSet {
             .get_mut(sheet)
             .ok_or(RuleMutationError::IndexSize)?;
         let inserted = target.insert_rule(rule, index)?;
+        if target.media.is_some() {
+            target.stylesheet = std::mem::take(&mut target.stylesheet)
+                .with_document_media(target.media.as_deref());
+        }
         self.rebuild();
         Ok(inserted)
     }

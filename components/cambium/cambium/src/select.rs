@@ -131,30 +131,30 @@ pub fn select(
                     s.selected = (s.selected + 1).min(len - 1);
                     s.open = true;
                     true
-                }
+                },
                 Key::Named(NamedKey::ArrowUp) if len > 0 => {
                     s.selected = s.selected.saturating_sub(1).min(len - 1);
                     s.open = true;
                     true
-                }
+                },
                 Key::Named(NamedKey::Home) if len > 0 => {
                     s.selected = 0;
                     s.open = true;
                     true
-                }
+                },
                 Key::Named(NamedKey::End) if len > 0 => {
                     s.selected = len - 1;
                     s.open = true;
                     true
-                }
+                },
                 Key::Named(NamedKey::Enter | NamedKey::Space) => {
                     s.open = !s.open;
                     true
-                }
+                },
                 Key::Named(NamedKey::Escape) if s.open => {
                     s.open = false;
                     true
-                }
+                },
                 _ => false,
             };
             if handled {

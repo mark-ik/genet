@@ -35,6 +35,8 @@ livery = ["dep:genet-livery"]
 
 [dependencies]
 genet-scripted-dom = { path = "../genet-scripted-dom" }
+genet-document-resources = { workspace = true }
+genet-host-api = { workspace = true }
 layout-dom-api = { path = "../shared/layout-dom", features = ["capture"] }
 genet-layout = { path = "../genet-layout", optional = true }
 genet-render = { path = "../genet-render", optional = true }

@@ -95,27 +95,27 @@ pub fn slider(state: &Slider) -> impl View<Slider, (), GenetCtx, Element = Genet
             Key::Named(NamedKey::ArrowLeft | NamedKey::ArrowDown) => {
                 s.value = (s.value - s.step).clamp(0.0, 1.0);
                 true
-            }
+            },
             Key::Named(NamedKey::ArrowRight | NamedKey::ArrowUp) => {
                 s.value = (s.value + s.step).clamp(0.0, 1.0);
                 true
-            }
+            },
             Key::Named(NamedKey::PageDown) => {
                 s.value = (s.value - s.page_step).clamp(0.0, 1.0);
                 true
-            }
+            },
             Key::Named(NamedKey::PageUp) => {
                 s.value = (s.value + s.page_step).clamp(0.0, 1.0);
                 true
-            }
+            },
             Key::Named(NamedKey::Home) => {
                 s.value = 0.0;
                 true
-            }
+            },
             Key::Named(NamedKey::End) => {
                 s.value = 1.0;
                 true
-            }
+            },
             _ => false,
         };
         if handled {

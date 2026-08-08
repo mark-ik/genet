@@ -428,28 +428,28 @@ fn handle_key(
             } else {
                 state.selected = next_enabled(selected, &root_positions, true);
             }
-        }
+        },
         Key::Named(NamedKey::ArrowUp) => {
             if in_submenu {
                 state.submenu_selected = next_enabled(child_selected, &child_positions, false);
             } else {
                 state.selected = next_enabled(selected, &root_positions, false);
             }
-        }
+        },
         Key::Named(NamedKey::Home) => {
             if in_submenu {
                 state.submenu_selected = child_positions.first().copied().unwrap_or(0);
             } else {
                 state.selected = root_positions.first().copied().unwrap_or(0);
             }
-        }
+        },
         Key::Named(NamedKey::End) => {
             if in_submenu {
                 state.submenu_selected = child_positions.last().copied().unwrap_or(0);
             } else {
                 state.selected = root_positions.last().copied().unwrap_or(0);
             }
-        }
+        },
         Key::Named(NamedKey::ArrowRight)
             if matches!(kind, CommandSurfaceKind::ContextMenu { .. }) && !in_submenu =>
         {
@@ -472,12 +472,12 @@ fn handle_key(
                 .copied()
                 .unwrap_or(0);
             }
-        }
+        },
         Key::Named(NamedKey::ArrowLeft)
             if matches!(kind, CommandSurfaceKind::ContextMenu { .. }) && in_submenu =>
         {
             state.submenu = None;
-        }
+        },
         Key::Named(NamedKey::Enter) => {
             if in_submenu {
                 if let (Some(parent), Some(position)) = (state.submenu, child_selected)
@@ -499,12 +499,12 @@ fn handle_key(
                     output.event = Some(CommandEvent::Activate(vec![*index]));
                 }
             }
-        }
+        },
         Key::Named(NamedKey::Space) if kind == CommandSurfaceKind::Palette => {
             state.query.push(' ');
             state.selected = 0;
             state.submenu = None;
-        }
+        },
         Key::Named(NamedKey::Space) => {
             if in_submenu {
                 if let (Some(parent), Some(position)) = (state.submenu, child_selected)
@@ -526,19 +526,19 @@ fn handle_key(
                     output.event = Some(CommandEvent::Activate(vec![*index]));
                 }
             }
-        }
+        },
         Key::Named(NamedKey::Escape) => {
             if in_submenu {
                 state.submenu = None;
             } else {
                 output.event = Some(CommandEvent::Dismiss);
             }
-        }
+        },
         Key::Named(NamedKey::Backspace) if kind == CommandSurfaceKind::Palette => {
             state.query.pop();
             state.selected = 0;
             state.submenu = None;
-        }
+        },
         Key::Character(text) if kind == CommandSurfaceKind::Palette => {
             if !key_event.mods.ctrl && !key_event.mods.alt && !key_event.mods.meta {
                 state.query.push_str(text);
@@ -547,14 +547,14 @@ fn handle_key(
             } else {
                 output.prevent_default = false;
             }
-        }
+        },
         Key::Named(NamedKey::Tab) if matches!(kind, CommandSurfaceKind::ContextMenu { .. }) => {
             output.event = Some(CommandEvent::Dismiss);
             output.prevent_default = false;
-        }
+        },
         _ => {
             output.prevent_default = false;
-        }
+        },
     }
     output
 }

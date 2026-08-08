@@ -33,6 +33,9 @@ default = ["viewer-netrender", "netfetch"]
 # 2026-05-20 before it.)
 viewer-engine = ["dep:pelt-desktop"]
 viewer-netrender = ["viewer-engine", "pelt-desktop/netrender"]
+# Explicit clean-room CSS/layout route. It remains opt-in at runtime through
+# `pelt --engine livery`; the default static path stays incumbent Stylo.
+livery = ["viewer-engine", "pelt-desktop/livery"]
 # The scripted profile (V4): `pelt --engine scripted <file>` runs a page's inline
 # <script> on a JS engine and renders the mutated DOM. Pulls pelt-desktop's scripted
 # runtime on top of the present stack. Boa-only by default (a single engine links

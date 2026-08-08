@@ -7,9 +7,10 @@
 
 use livery::ComputedValues;
 use livery::cascade::{
-    CascadeLayer, MatchedDeclaration, Origin, Specificity, cascade, parse_declaration_block,
+    CascadeLayer, MatchedCustomDeclaration, MatchedDeclaration, Origin, Specificity, cascade,
+    cascade_with_custom, parse_declaration_block,
 };
-use livery::values::Color;
+use livery::values::{BackgroundImage, BoxShadow, Color, ComputedColor};
 
 /// Every contextual family named by the plan, written so its correct result is
 /// exactly the element's used foreground.
@@ -55,7 +56,6 @@ fn computed(parent: Option<&ComputedValues>, css: &[&str]) -> ComputedValues {
 /// The same expressions round trip correctly through `SpecifiedColor` in
 /// `tests/color.rs`. That is the false receipt this file exists to rule out.
 #[test]
-#[ignore = "C1: the declaration parser rejects contextual functions as InvalidValue"]
 fn contextual_declarations_are_not_discarded_at_parse_time() {
     for (family, value) in FOREGROUND_EQUIVALENT {
         let css = format!("background-color: {value}");
@@ -75,6 +75,84 @@ fn contextual_declarations_are_not_discarded_at_parse_time() {
         block.errors
     );
     assert_eq!(block.declarations.len(), 1);
+}
+
+#[test]
+fn c1_keeps_one_contextual_value_through_cascade_paths_and_nested_owners() {
+    let expression = "color-mix(in srgb, currentcolor 100%, white)";
+    let parent = computed(None, &[&format!("background-color: {expression}")]);
+    assert!(matches!(
+        &parent.background_color,
+        ComputedColor::Expression(_)
+    ));
+
+    let inherited = computed(
+        Some(&parent),
+        &["color: #b83535", "background-color: inherit"],
+    );
+    assert_eq!(inherited.background_color, parent.background_color);
+
+    let foreground_parent = computed(None, &[&format!("color: {expression}")]);
+    let inherited_foreground = computed(Some(&foreground_parent), &["color: inherit"]);
+    let unset_foreground = computed(Some(&foreground_parent), &["color: unset"]);
+    assert_eq!(inherited_foreground.color, foreground_parent.color);
+    assert_eq!(unset_foreground.color, foreground_parent.color);
+
+    let mut block = parse_declaration_block(&format!(
+        "--accent: {expression}; background-color: var(--accent)"
+    ));
+    assert!(block.errors.is_empty(), "{:#?}", block.errors);
+    let declarations = block
+        .declarations
+        .drain(..)
+        .enumerate()
+        .map(|(index, declaration)| MatchedDeclaration {
+            declaration,
+            origin: Origin::Author,
+            layer: CascadeLayer::Unlayered,
+            specificity: Specificity(1),
+            source_order: index as u64,
+        });
+    let custom = block
+        .custom
+        .drain(..)
+        .enumerate()
+        .map(|(index, declaration)| MatchedCustomDeclaration {
+            declaration,
+            origin: Origin::Author,
+            layer: CascadeLayer::Unlayered,
+            specificity: Specificity(1),
+            source_order: index as u64,
+        });
+    let (substituted, _) = cascade_with_custom(None, None, declarations, custom);
+    assert!(matches!(
+        substituted.background_color,
+        ComputedColor::Expression(_)
+    ));
+
+    let gradient = "linear-gradient(color-mix(in srgb, currentcolor 100%, white), red)"
+        .parse::<BackgroundImage>()
+        .unwrap();
+    assert!(matches!(
+        gradient,
+        BackgroundImage::LinearGradient {
+            from: ComputedColor::Expression(_),
+            ..
+        }
+    ));
+    let shadow = "0 0 alpha(from currentcolor / 0.5)"
+        .parse::<BoxShadow>()
+        .unwrap();
+    assert!(matches!(
+        shadow,
+        BoxShadow::Value(ref value) if matches!(value.color, ComputedColor::Expression(_))
+    ));
+
+    let decoration = computed(None, &["text-decoration-color: color-layers(currentcolor)"]);
+    assert!(matches!(
+        decoration.text_decoration_color,
+        ComputedColor::Expression(_)
+    ));
 }
 
 #[test]

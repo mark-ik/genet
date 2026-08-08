@@ -90,7 +90,11 @@ pub(crate) fn parse_alt_svc(value: &str) -> AltSvc {
             continue; // v1: only "h3" (not h3-29 and other drafts)
         }
         let authority = authority.trim().trim_matches('"');
-        let Some(port) = authority.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()) else {
+        let Some(port) = authority
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse::<u16>().ok())
+        else {
             continue;
         };
         let mut max_age = 86400; // RFC 7838 default
@@ -114,17 +118,26 @@ mod tests {
     fn parses_h3_advertisement() {
         assert_eq!(
             parse_alt_svc("h3=\":443\"; ma=3600"),
-            AltSvc::H3 { port: 443, max_age: 3600 }
+            AltSvc::H3 {
+                port: 443,
+                max_age: 3600
+            }
         );
         // No ma → default 86400; alt-host authority → port only.
         assert_eq!(
             parse_alt_svc("h3=\"alt.example:8443\""),
-            AltSvc::H3 { port: 8443, max_age: 86400 }
+            AltSvc::H3 {
+                port: 8443,
+                max_age: 86400
+            }
         );
         // First alternative wins; h2 ignored.
         assert_eq!(
             parse_alt_svc("h2=\":443\", h3=\":443\"; ma=60"),
-            AltSvc::H3 { port: 443, max_age: 60 }
+            AltSvc::H3 {
+                port: 443,
+                max_age: 60
+            }
         );
         assert_eq!(parse_alt_svc("clear"), AltSvc::Clear);
         assert_eq!(parse_alt_svc("h2=\":443\""), AltSvc::None);

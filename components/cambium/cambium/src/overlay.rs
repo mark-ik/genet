@@ -145,16 +145,16 @@ pub fn anchor_point_clamped(
     let placement = match placement {
         Placement::RightOf if anchor_point(trigger, popup, Placement::RightOf).0 + pw > bx1 => {
             Placement::LeftOf
-        }
+        },
         Placement::LeftOf if anchor_point(trigger, popup, Placement::LeftOf).0 < bx0 => {
             Placement::RightOf
-        }
+        },
         Placement::Below if anchor_point(trigger, popup, Placement::Below).1 + ph > by1 => {
             Placement::Above
-        }
+        },
         Placement::Above if anchor_point(trigger, popup, Placement::Above).1 < by0 => {
             Placement::Below
-        }
+        },
         p => p,
     };
     let (x, y) = anchor_point(trigger, popup, placement);

@@ -22,6 +22,9 @@ pub enum EngineProfile {
     Viewer,
     /// Alias for the script-free validation profile.
     Static,
+    /// The opt-in clean-room Livery static engine. Its inker identity is
+    /// `genet.livery`; selecting it never changes the incumbent static default.
+    Livery,
     /// The scripted profile (V4): a live document whose inline `<script>` runs
     /// through `script-runtime-api` on a JS engine, mutating the DOM, rendered each
     /// frame. The content tier's proving ground (and the gc-arena soak's host).
@@ -49,6 +52,7 @@ impl fmt::Display for EngineProfile {
             Self::Browser => "browser",
             Self::Viewer => "viewer",
             Self::Static => "static",
+            Self::Livery => "livery",
             Self::Scripted => "scripted",
             Self::Headless => "headless",
         };
@@ -64,10 +68,11 @@ impl FromStr for EngineProfile {
             "browser" => Ok(Self::Browser),
             "viewer" => Ok(Self::Viewer),
             "static" => Ok(Self::Static),
+            "livery" => Ok(Self::Livery),
             "scripted" => Ok(Self::Scripted),
             "headless" => Ok(Self::Headless),
             other => Err(format!(
-                "unknown engine profile '{other}'; expected browser, viewer, static, scripted, or headless"
+                "unknown engine profile '{other}'; expected browser, viewer, static, livery, scripted, or headless"
             )),
         }
     }

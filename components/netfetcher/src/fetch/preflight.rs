@@ -13,8 +13,8 @@ use crate::cors;
 use crate::referrer;
 use crate::request::{Credentials, Method, ReferrerPolicy};
 
-use super::transport::{collect_headers, http_method};
 use super::USER_AGENT;
+use super::transport::{collect_headers, http_method};
 
 /// Send a CORS preflight `OPTIONS` and verify it. `Some(max_age)` if the actual
 /// request is permitted, `None` if denied (or the preflight itself failed).
@@ -33,7 +33,10 @@ pub(super) async fn run_preflight(
         .uri(uri)
         .header("accept", "*/*")
         .header("user-agent", USER_AGENT)
-        .header("access-control-request-method", http_method(method).as_str());
+        .header(
+            "access-control-request-method",
+            http_method(method).as_str(),
+        );
     if let Some(o) = origin {
         builder = builder.header(http::header::ORIGIN, o.ascii_serialization());
     }
@@ -45,7 +48,10 @@ pub(super) async fn run_preflight(
         }
     }
     if !requested_headers.is_empty() {
-        builder = builder.header("access-control-request-headers", requested_headers.join(","));
+        builder = builder.header(
+            "access-control-request-headers",
+            requested_headers.join(","),
+        );
     }
     let req = builder.body(Full::new(Bytes::new())).ok()?;
     let resp = shared_client().request(req).await.ok()?;

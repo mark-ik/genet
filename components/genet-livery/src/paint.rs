@@ -10,8 +10,9 @@ use livery::{
     ComputedValues,
     values::{
         BackgroundImage, BackgroundRepeat, BorderStyle as CssBorderStyle,
-        BoxShadow as CssBoxShadow, Color, Display, FontSize, Length, LengthPercentage, LengthUnit,
-        Matrix2D, Overflow as CssOverflow, Position, Radius, Visibility, ZIndex,
+        BoxShadow as CssBoxShadow, Color, ComputedColor, Display, FontSize, Length,
+        LengthPercentage, LengthUnit, Matrix2D, Overflow as CssOverflow, Position, Radius,
+        Visibility, ZIndex,
     },
 };
 use paint_list_api::{
@@ -1224,7 +1225,10 @@ where
         .get(root)
         .map(|fragment| fragment.physical_rect())
         .unwrap_or(canvas);
-    let color = resolve_color(source_style.background_color, used_text_color(source_style));
+    let color = resolve_color(
+        &source_style.background_color,
+        used_text_color(source_style),
+    );
     if color.a > 0.0 {
         list.commands.push(PaintCmd::DrawRect(RectItem {
             placement: CommonPlacement::new(bounds(&canvas)),
@@ -1242,11 +1246,11 @@ fn generates_visible_box(style: &ComputedValues) -> bool {
 
 fn has_background(style: &ComputedValues) -> bool {
     !matches!(style.background_image, BackgroundImage::None)
-        || resolve_color(style.background_color, used_text_color(style)).a > 0.0
+        || resolve_color(&style.background_color, used_text_color(style)).a > 0.0
 }
 
 fn emit_background(list: &mut LiveryPaintList, style: &ComputedValues, fragment: &Fragment) {
-    let color = resolve_color(style.background_color, used_text_color(style));
+    let color = resolve_color(&style.background_color, used_text_color(style));
     let radius = border_radius(style, fragment);
     let has_image = !matches!(&style.background_image, BackgroundImage::None);
     if color.a <= 0.0 && !has_image {
@@ -1305,11 +1309,11 @@ fn emit_background_image_in(
                         stops: vec![
                             GradientStop {
                                 offset: 0.0,
-                                color: resolve_color(*from, used_text_color(style)),
+                                color: resolve_color(from, used_text_color(style)),
                             },
                             GradientStop {
                                 offset: 1.0,
-                                color: resolve_color(*to, used_text_color(style)),
+                                color: resolve_color(to, used_text_color(style)),
                             },
                         ],
                     },
@@ -1423,7 +1427,7 @@ fn emit_shadow(list: &mut LiveryPaintList, style: &ComputedValues, fragment: &Fr
         placement: CommonPlacement::new(bounds(fragment)),
         box_bounds: bounds(fragment),
         offset: LayoutVector2D::new(length(shadow.offset_x), length(shadow.offset_y)),
-        color: resolve_color(shadow.color, used_text_color(style)),
+        color: resolve_color(&shadow.color, used_text_color(style)),
         blur_radius: length(shadow.blur_radius).max(0.0),
         spread_radius: length(shadow.spread_radius),
         border_radius: border_radius(style, fragment),
@@ -1469,12 +1473,12 @@ fn emit_inline_border(
         placement: CommonPlacement::new(bounds(fragment)),
         widths,
         details: BorderDetails::Normal(NormalBorder {
-            left: border_side(style.border_left_style, style.border_left_color, current),
-            right: border_side(style.border_right_style, style.border_right_color, current),
-            top: border_side(style.border_top_style, style.border_top_color, current),
+            left: border_side(style.border_left_style, &style.border_left_color, current),
+            right: border_side(style.border_right_style, &style.border_right_color, current),
+            top: border_side(style.border_top_style, &style.border_top_color, current),
             bottom: border_side(
                 style.border_bottom_style,
-                style.border_bottom_color,
+                &style.border_bottom_color,
                 current,
             ),
             radius: border_radius(style, fragment),
@@ -1505,7 +1509,7 @@ fn border_radius(style: &ComputedValues, fragment: &Fragment) -> BorderRadius {
     }
 }
 
-fn border_side(style: CssBorderStyle, color: Color, current: ColorF) -> BorderSide {
+fn border_side(style: CssBorderStyle, color: &ComputedColor, current: ColorF) -> BorderSide {
     BorderSide {
         color: resolve_color(color, current),
         style: match style {
@@ -1524,28 +1528,21 @@ fn border_side(style: CssBorderStyle, color: Color, current: ColorF) -> BorderSi
 }
 
 fn used_text_color(style: &ComputedValues) -> ColorF {
-    resolve_color(style.color, ColorF::BLACK)
+    resolve_color(&style.color, ColorF::BLACK)
 }
 
-pub(crate) fn resolve_color(color: Color, current: ColorF) -> ColorF {
-    // `to_srgb` resolves missing components and converts out of whatever space
-    // the color was authored in, and returns None only for the two unresolved
-    // forms (`currentcolor` and system colors). Channels can land outside
-    // 0..=1 for a wide-gamut source; clamping here is a gamut clip, which is
-    // the same approximation `Color::to_srgb8` documents.
-    match color.to_srgb() {
-        Some((red, green, blue, alpha)) => ColorF::new(
-            red.clamp(0.0, 1.0),
-            green.clamp(0.0, 1.0),
-            blue.clamp(0.0, 1.0),
-            alpha.clamp(0.0, 1.0),
-        ),
-        None if color == Color::CurrentColor => current,
-        // System colors other than the inherited one paint from Livery's
-        // bounded palette; `to_srgb` already resolves those, so this arm is
-        // only reached for `currentcolor`-shaped values it cannot.
-        None => ColorF::BLACK,
-    }
+pub(crate) fn resolve_color(color: &ComputedColor, current: ColorF) -> ColorF {
+    let current = Color::srgb(current.r, current.g, current.b, current.a);
+    let (red, green, blue, alpha) = color
+        .resolve_used(livery::values::UsedColorContext::legacy(current))
+        .to_srgb()
+        .expect("a used computed color is numeric");
+    ColorF::new(
+        red.clamp(0.0, 1.0),
+        green.clamp(0.0, 1.0),
+        blue.clamp(0.0, 1.0),
+        alpha.clamp(0.0, 1.0),
+    )
 }
 
 pub(crate) fn used_font_size(style: &ComputedValues) -> f32 {

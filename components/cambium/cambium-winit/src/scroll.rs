@@ -103,12 +103,12 @@ mod tests {
             "still opaque at the end of the hold"
         );
         let mid = fade.alpha(1, t0 + SCROLLBAR_HOLD + SCROLLBAR_FADE / 2);
-        assert!(
-            (mid - 0.5).abs() < 0.05,
-            "half-faded mid-fade, got {mid}"
-        );
+        assert!((mid - 0.5).abs() < 0.05, "half-faded mid-fade, got {mid}");
         assert_eq!(
-            fade.alpha(1, t0 + SCROLLBAR_HOLD + SCROLLBAR_FADE + Duration::from_millis(1)),
+            fade.alpha(
+                1,
+                t0 + SCROLLBAR_HOLD + SCROLLBAR_FADE + Duration::from_millis(1)
+            ),
             0.0,
             "gone after the fade"
         );

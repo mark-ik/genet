@@ -61,7 +61,9 @@ pub(crate) fn main() {
             },
             "--engine" => {
                 let Some(value) = args.next() else {
-                    eprintln!("--engine requires browser, viewer, static, or headless");
+                    eprintln!(
+                        "--engine requires browser, viewer, static, livery, scripted, or headless"
+                    );
                     std::process::exit(2);
                 };
                 engine_profile = parse_engine_profile(&value);
@@ -244,6 +246,21 @@ pub(crate) fn main() {
     if wayland_present_surfaces_smoke {
         run_optional_wayland_present_surfaces_smoke();
         return;
+    }
+
+    if matches!(engine_profile, EngineProfile::Livery) {
+        #[cfg(feature = "livery")]
+        {
+            run_livery_profile(url, size, frames);
+            return;
+        }
+        #[cfg(not(feature = "livery"))]
+        {
+            eprintln!(
+                "pelt has no registered engine 'genet.livery'; rebuild with `--features livery`"
+            );
+            std::process::exit(2);
+        }
     }
 
     // `pelt --engine static|viewer <url>`: the genet-native on-screen document
@@ -448,6 +465,33 @@ fn run_scripted_profile(url: String, js: String, size: Option<(u32, u32)>, frame
             outcome.redraws,
             outcome.size.0,
             outcome.size.1,
+        ),
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        },
+    }
+}
+
+/// Dispatch the explicit Livery pin. This is intentionally a distinct call
+/// from the incumbent static route, whose frozen scene receipts remain valid.
+#[cfg(feature = "livery")]
+fn run_livery_profile(url: String, size: Option<(u32, u32)>, frames: Option<u32>) {
+    let mut config = pelt_desktop::StaticViewerConfig::new(
+        EngineProfile::Livery,
+        pelt_desktop::WindowingMode::Headed,
+        url,
+    );
+    if let Some((width, height)) = size {
+        config = config.with_size(width, height);
+    }
+    if let Some(limit) = frames {
+        config = config.with_frame_limit(limit);
+    }
+    match pelt_desktop::run_livery_viewer(config) {
+        Ok(outcome) => println!(
+            "pelt livery viewer engine=genet.livery url={} window={} redraws={} size={}x{}",
+            outcome.url, outcome.created_window, outcome.redraws, outcome.size.0, outcome.size.1
         ),
         Err(error) => {
             eprintln!("{error}");
@@ -902,7 +946,7 @@ scripted), `--engine headless` is the GPU-free scene-snapshot / reftest harness.
 Smoke runners validate the present backends (--help lists them).
 
 Options:
-    --engine <browser|viewer|static|scripted|headless>
+    --engine <browser|viewer|static|livery|scripted|headless>
     --chrome                           (wrap the content viewer in an omnibar + back/forward strip; needs --features chrome)
     --strip <top|bottom|left|right>    (chrome strip side; default top)
     --tiles <url>...                   (one or two tile side by side; three or more stack the first two beside the third, and ignore the rest; needs --features tiles)

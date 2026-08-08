@@ -2,14 +2,15 @@
 
 **Date:** 2026-07-28
 
-**Status:** in execution, corrected 2026-08-08. K4a through K4f capabilities
-have landed: supported live tables use Buckram's inline and block sizing,
-table dispatch, structural fragments, wrapper/caption behavior, and collapsed
-track state. Named deferrals still retain the Grid/Flex compatibility bridge.
-K4g1 is accepted; K4g2 is next. K4g3's interoperability matrix is research
-recorded ahead of its gate, not implementation authority. K4 closure still
-requires K4g2 through K4g6 and K4h's positioned-table audit and bridge
-deletion.
+**Status:** in execution, corrected 2026-08-08. K4a through K4e have accepted
+capability receipts. K4f's collapsed-track slice has landed, while its
+separated-paint outcome remains open. Supported live tables use Buckram's
+inline and block sizing, table dispatch, structural fragments, and
+wrapper/caption behavior; named deferrals still retain the Grid/Flex
+compatibility bridge. K4g1 is accepted. The [K4 completion
+lane](2026-08-08_buckram_k4_completion_lane.md) starts at contextual-color C1,
+then executes K4g2 and schedules the stranded K4d-K4f work before K4h deletes
+the bridge.
 
 **Architectural authority:** [Buckram CSS layout engine plan](2026-07-26_buckram_css_layout_engine_plan.md)
 
@@ -155,9 +156,9 @@ The exact storage can change. These invariants may not:
 | Seam | K4 responsibility |
 |---|---|
 | `components/buckram/src/box_tree.rs` | exact table fixup, wrapper/grid identity, table roles |
-| `components/buckram/src/table/mod.rs` | table dispatcher, input and output contracts |
-| `components/buckram/src/table/grid.rs` | row/column topology, groups, spans, missing slots |
-| `components/buckram/src/table/sizing.rs` | fixed and automatic inline sizing, intrinsic table sizes |
+| `components/buckram/src/table.rs` | table contracts, `TableGrid` topology, groups, spans, missing slots |
+| `components/buckram/src/table/{pipeline,fragments}.rs` | table dispatch pipeline and fragment emission |
+| `components/buckram/src/table/{sizing,fixed,automatic,automatic_used}.rs` | fixed, automatic, and intrinsic inline sizing |
 | `components/buckram/src/table/rows.rs` | row height, rowspan distribution, cell alignment and baselines |
 | `components/buckram/src/table/borders.rs` | spacing, collapsed-border winners, border geometry |
 | `components/buckram/src/taffy_adapter.rs` | cell-subtree flex/grid calls only; table dispatch remains Buckram-owned |
@@ -167,9 +168,11 @@ The exact storage can change. These invariants may not:
 | `components/genet-livery/src/lib.rs` | HTML UA table defaults |
 | `components/livery/{properties.toml,build.rs}` | table property grammar and computed values |
 
-Start with `table.rs` if one file stays reviewable. Split it into the named
-modules before unrelated topology, sizing, and border rules become one review
-unit.
+The rows above record the landed layout (corrected 2026-08-08): `table.rs`
+kept contracts and topology instead of the originally planned `mod.rs` and
+`grid.rs` spelling, and sizing split further as it grew. The Livery adapter
+side likewise grew `table_wrapper.rs`, `table_sizing.rs`, `table_block.rs`,
+and `table_shadow.rs` beside the rows listed.
 
 ## Compatibility bridge
 
@@ -1025,7 +1028,7 @@ table paint order overrides them.
 ### K4f receipt (collapsed tracks) - 2026-08-06
 
 Base commit: `ad8688ab3b6`. Scoped to the `visibility: collapse` item; the
-separated-border paint items below remain open.
+separated-border paint items in this gate's Work list remain open.
 
 **The guard was dead code, and that is the finding.** Buckram has carried a
 `TrackVisibilityPendingK4f` deferral in all three sizing paths since K4c, and
@@ -1081,7 +1084,9 @@ the tables that keep every track visible today. `empty-cells`, the per-layer
 table backgrounds, DOM-order cell paint, and the border-spacing paint items in
 this gate's Work list are untouched - the census puts nearly all of their WPT
 files in the skip set (manual tests with no reference), so their value is in
-the model rather than in the ratchet.
+the model rather than in the ratchet. These items are now the B5 gate of the
+[K4 completion lane](2026-08-08_buckram_k4_completion_lane.md), before K4g5
+relies on the table paint phase.
 
 ## K4g. Collapsed-border conflict resolution and paint
 
@@ -1148,7 +1153,8 @@ surviving gap is owned, and close K4.
   remaining Taffy dispatch.
 - Route absolute/fixed/sticky positioning to K5 and table fragmentation,
   repeated headers, and split rowspans to K6.
-- Prove the Grid/Flex bridge deleted by K4d has not been reintroduced.
+- Delete the Grid/Flex bridge that K4d's accepted live slice retained for
+  later-K4 deferrals, then prove it cannot be selected by any table.
 - Delete positioned-table compatibility counters, diagnostic switches, and
   every obsolete deferral.
 - Append the final K4 receipt to the architecture plan and replace its K4
@@ -1316,12 +1322,14 @@ Generated WPT expectations, screenshots, and logs remain outside Git.
 
 ## Current executable task
 
-K4g1 is accepted at `19b91b6ebef`. The next K4 gate is K4g2 from the
-[collapsed-border execution plan](2026-07-28_buckram_k4g_collapsed_border_execution_plan.md),
-after that plan's contextual-color entry dependency is accepted:
+The executable authority is the [K4 completion
+lane](2026-08-08_buckram_k4_completion_lane.md). Its first gate is
+contextual-color C1. K4g1 is accepted at `19b91b6ebef`; after C1, the next
+table gate is K4g2 from the [collapsed-border execution
+plan](2026-07-28_buckram_k4g_collapsed_border_execution_plan.md):
 
-> Complete contextual-color C1 before the K4g2 Livery adapter freezes a
-> border-color representation. Then execute K4g2 only: resolve one CSS 2.1
+> Execute contextual-color C1 only and record its receipt. In a fresh task,
+> execute K4g2 only: resolve one CSS 2.1
 > winner for each atomic table-grid segment without reading layout geometry
 > or paint order. Preserve hidden suppression, all-none omission, original
 > winner diagnostics, direction-aware ties, and the carried color value. Run

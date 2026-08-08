@@ -40,10 +40,12 @@ and the default flip together. That allowed all Livery evidence to come from
 The live product seam is narrower and more revealing:
 
 - `components/genet-documents/src/engines.rs` already contains
-  `LiverySessionEngine<Fetch>` under the `livery` feature.
+  `LiverySessionEngine<Fetch>` under the `livery` feature;
 - `inker::SessionRegistry` and `ENGINE_GENET_LIVERY` already provide runtime
-  identity and an explicit pin.
-- no port enables `genet-documents/livery`;
+  identity and an explicit pin;
+- no port enables `genet-documents/livery` (`genet-wpt` reaches Livery
+  directly through `genet-livery` and `genet-scripted/livery`, bypassing the
+  session engine);
 - Pelt's static surface still calls the incumbent convenience path directly;
   and
 - the Livery session currently combines host CSS with
@@ -82,11 +84,16 @@ or retains each as a named cutover blocker.
    for `<img>`, but discovers only inline stylesheets.
 4. `ports/genet-wpt/src/render.rs` has a separate Livery resource path,
    including fonts. Its success is harness evidence, not product evidence.
-5. `genet-scripted` also consumes the generic stylesheet helpers, so moving
-   them into `genet-documents` would create the wrong dependency direction.
+5. `genet-scripted` also consumes the generic stylesheet helpers
+   (`author_stylesheets_with_loader`, `inline_stylesheets`), so moving them
+   into `genet-documents` would create the wrong dependency direction.
+6. `genet-scripted`'s livery lane keeps a further private inline-stylesheet
+   walk (`components/genet-scripted/livery.rs`), a fifth discovery copy the
+   shared component must absorb or explicitly excuse.
 
-These are three real consumers. The common resource component is justified;
-another copy is not.
+The product consumers are the incumbent static session, the Livery session,
+and the scripted profile; `genet-wpt` is a fourth call site at harness tier.
+The common resource component is justified; another copy is not.
 
 ## Target contracts
 
@@ -144,7 +151,9 @@ Required invariants:
 ### R0. Model and baseline
 
 Create `components/genet-document-resources` as the engine-neutral owner of
-the contracts above. It may depend on `layout-dom-api` and the
+the contracts above. It is a full component rather than a
+`components/shared` contract crate because it owns discovery behavior, not
+just types. It may depend on `layout-dom-api` and the
 `genet-host-api::ResourceFetcher` contract. It must not depend on
 `genet-layout`, `genet-livery`, `genet-scripted`, a port, or a concrete
 network engine.
@@ -161,15 +170,22 @@ Before moving behavior, freeze fixtures for:
 scene and the Merely headed smoke are byte- or pixel-equivalent to their
 accepted G7 receipts.
 
-**Stop:** do not add a second fetch trait. Adapt the existing host byte
-contract until R5 proves response metadata is required.
+**Stop:** do not mint a third fetch trait. Two byte-only traits already
+exist: `genet_host_api::ResourceFetcher` and the duplicate
+`genet_scripted::ResourceFetcher`, and `engines.rs` bridges both today. The
+neutral crate binds the `genet-host-api` contract only; R1 folds the
+`genet-scripted` duplicate onto it when the helpers move, or records the
+hold as a named leftover. Adapt the host byte contract until R5 proves
+response metadata is required.
 
 ### R1. Shared discovery
 
 Move the DOM walk, `rel` token handling, media capture, and URL attribution
 out of `genet-layout/host_loader.rs`. Migrate `LoadedDocument` first. Keep a
 temporary `genet-layout` re-export only for consumers that have not moved in
-this gate.
+this gate. The private inline walk in `genet-scripted/livery.rs` either
+adopts the shared discovery here or records why a scoped-subtree variant
+stays.
 
 The accepted path must preserve document order across inline and linked
 sheets and retain each linked sheet's base identity. Fetch-free parses retain
@@ -193,9 +209,15 @@ rule to the correct sheet.
 `ImportRulePendingR5` when a leading import is encountered. It does not strip
 the rule and present the remaining sheet as complete support.
 
-**Receipt:** the same local document produces the expected authored color,
-linked image, linked font, and screen-media result through both static engine
-pins. The Livery ledger names every unsupported dependency.
+**Receipt:** both static engine pins consume one resolved resource set from
+the same local document, and the authored color, linked image, and
+screen-media results match through both. The linked font presents through
+the Livery pin only: the incumbent's webfont deferral is a recorded
+diagnostic, not a failure (its own receipt states image resources preload
+while webfont support stays deferred). This gate is also where the product
+Livery session first receives font bytes; today only the `genet-wpt`
+harness feeds `set_font_resource`. The Livery ledger names every
+unsupported dependency.
 
 ### R3. Pelt engine pin
 
@@ -204,6 +226,11 @@ removing the incumbent. Register `StaticSessionEngine` and
 `LiverySessionEngine` in the product session registry. Extend Pelt's engine
 selection with the existing `genet.livery` identity; do not create a second
 Livery engine name.
+
+Pelt does not use the session registry today; its static surface calls
+`LoadedDocument` directly. The Livery pin is registry-routed from the start.
+Rerouting the static path through the registry is optional in this gate and
+requires re-blessing the frozen G7 receipts.
 
 The choice must remain user-configurable at runtime when both engines are in
 the binary. File type, URL scheme, or compile-time feature order must not
@@ -219,8 +246,9 @@ Run the explicit Livery route against:
 
 1. a local interleaved inline/linked stylesheet fixture;
 2. `https://merelyllc.com` with its accepted parchment and oxblood colors;
-3. a table fixture covering separate borders, captions, and one named K4g
-   collapsed-border deferral;
+3. a table fixture covering separate borders, captions, and one
+   collapsed-border case recorded as a pass or a named deferral against the
+   in-execution K4g plan;
 4. a page with a linked image and local webfont; and
 5. a viewport resize followed by link hit testing and scroll.
 
@@ -252,13 +280,20 @@ Every behavior-changing gate runs:
 
 ```powershell
 cargo test -p genet-document-resources --offline
+cargo test -p genet-layout --offline
+cargo test -p genet-scripted --features livery --offline
 cargo test -p genet-documents --all-features --offline
-cargo test -p genet-livery --all-targets --offline
-cargo test -p pelt-desktop --all-targets --features livery --offline
+cargo test -p livery -p genet-livery --all-targets --offline
+cargo test -p pelt-desktop --all-targets --offline
 cargo clippy -p genet-document-resources -p genet-documents -p genet-livery --no-deps --offline -- -D warnings
 cargo fmt --check
 git diff --check
 ```
+
+`genet-layout` and `genet-scripted` run because R1 moves code out of one and
+both consume the moved helpers. `livery` runs because R2's import diagnostic
+sits at its rule model. The `pelt-desktop` run adds `--features livery` from
+R3 onward; the feature does not exist before R3.
 
 Headed evidence uses the fixed viewport and bounded frame controls from the
 Pelt presentability plan. A Stylo route result is regression evidence only; a

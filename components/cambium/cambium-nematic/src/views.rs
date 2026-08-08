@@ -107,28 +107,28 @@ where
                     _ => h3(text(t.clone())),
                 };
                 self.children.push(boxed(heading.attr("class", class)));
-            }
+            },
             GemLine::Text(t) => {
                 self.flush_list();
                 self.flush_quote();
                 self.para.push(t.clone());
-            }
+            },
             GemLine::Link { url, label } => {
                 self.flush_all();
                 let link = self.link(url, label);
                 self.children.push(link);
-            }
+            },
             GemLine::Item(t) => {
                 self.flush_para();
                 self.flush_quote();
                 self.list
                     .push(boxed(li(text(t.clone())).attr("class", "gemtext-item")));
-            }
+            },
             GemLine::Quote(t) => {
                 self.flush_para();
                 self.flush_list();
                 self.quote.push(t.clone());
-            }
+            },
             GemLine::Pre { alt, text: t } => {
                 self.flush_all();
                 let mut pre = el("pre", text(t.clone())).attr("class", "gemtext-pre");
@@ -136,7 +136,7 @@ where
                     pre = pre.attr("data-alt", alt.clone());
                 }
                 self.children.push(boxed(pre));
-            }
+            },
             GemLine::Blank => self.flush_para(),
         }
     }
@@ -222,14 +222,14 @@ where
                 flush_info(&mut info, &mut children);
                 let line = format!("[error] {}", item.display);
                 children.push(boxed(p(text(line)).attr("class", "gopher-error")));
-            }
+            },
             _ => {
                 flush_info(&mut info, &mut children);
                 // Every non-info/error item carries a URL.
                 if let Some(url) = &item.url {
                     children.push(gopher_link(&item.kind, &item.display, url, &on_navigate));
                 }
-            }
+            },
         }
     }
     flush_info(&mut info, &mut children);
@@ -370,7 +370,7 @@ where
                 navigate(&target)
             });
             parts.push(boxed(h2(link).attr("class", "feed-entry-title")));
-        }
+        },
         None => parts.push(boxed(h2(text(title)).attr("class", "feed-entry-title"))),
     }
     if let Some(date) = &entry.date {

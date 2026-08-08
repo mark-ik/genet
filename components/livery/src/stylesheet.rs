@@ -266,6 +266,24 @@ impl Stylesheet {
         Self::parse_with_offset(input, origin, 0)
     }
 
+    /// Apply the `media` attribute carried by an HTML stylesheet link without
+    /// rewriting the stylesheet text into a synthetic `@media` block. Nested
+    /// CSS media conditions remain independent and both gates must match.
+    pub fn with_document_media(mut self, media: Option<&str>) -> Self {
+        let Some(media) = media.filter(|media| !media.trim().is_empty()) else {
+            return self;
+        };
+        match media.parse::<MediaQueryList>() {
+            Ok(media) => apply_document_media(&mut self.items, &media),
+            Err(error) => self.diagnostics.push(StylesheetDiagnostic {
+                prelude: media.to_owned(),
+                message: format!("invalid stylesheet link media: {error}"),
+            }),
+        }
+        self.reindex();
+        self
+    }
+
     /// Parse a sheet whose first rule follows `source_order` rules already
     /// loaded at the same origin.
     pub fn parse_with_offset(input: &str, origin: Origin, source_order: u64) -> Self {
@@ -400,6 +418,25 @@ impl Stylesheet {
     }
 }
 
+fn apply_document_media(items: &mut [CssRule], media: &MediaQueryList) {
+    for item in items {
+        match item {
+            CssRule::Style(rule) => rule.document_media = Some(media.clone()),
+            CssRule::Media(group) => {
+                for rule in &mut group.rules {
+                    rule.document_media = Some(media.clone());
+                }
+            },
+            CssRule::Container(group) => {
+                for rule in &mut group.rules {
+                    rule.document_media = Some(media.clone());
+                }
+            },
+            CssRule::Keyframes(_) => {},
+        }
+    }
+}
+
 /// One named keyframe block. The retained animation clock samples direct
 /// longhand values from these frames through generated property dispatch.
 #[derive(Clone, Debug, PartialEq)]
@@ -459,6 +496,9 @@ pub struct StyleRule {
     selectors: SelectorList,
     declarations: DeclarationBlock,
     media: Option<MediaQueryList>,
+    /// A media condition carried by the owning HTML stylesheet link rather
+    /// than synthesized into that sheet's source text.
+    document_media: Option<MediaQueryList>,
     container: Option<ContainerQuery>,
     origin: Origin,
     layer: CascadeLayer,
@@ -491,6 +531,7 @@ impl StyleRule {
                 .map(str::parse)
                 .transpose()
                 .map_err(StyleRuleError::Media)?,
+            document_media: None,
             container: None,
             origin,
             layer,
@@ -546,6 +587,10 @@ impl StyleRule {
             .as_ref()
             .is_some_and(|condition| !condition.matches(device))
             || self
+                .document_media
+                .as_ref()
+                .is_some_and(|condition| !condition.matches(device))
+            || self
                 .container
                 .as_ref()
                 .is_some_and(|query| !query.matches(containers, device))
@@ -598,6 +643,10 @@ impl StyleRule {
             .media
             .as_ref()
             .is_some_and(|condition| !condition.matches(device))
+            || self
+                .document_media
+                .as_ref()
+                .is_some_and(|condition| !condition.matches(device))
             || self
                 .container
                 .as_ref()

@@ -276,9 +276,7 @@ impl TextInput {
         } else {
             self.history.break_coalesce();
         }
-        committed_changed
-            || self.composition != composition_before
-            || self.ghost != ghost_before
+        committed_changed || self.composition != composition_before || self.ghost != ghost_before
     }
 }
 

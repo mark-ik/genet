@@ -6,8 +6,9 @@ use crate::custom::{
     CustomDeclaration, CustomDeclaredValue, CustomProperties, contains_var, substitute,
 };
 use crate::values::{
-    AnimationDelay, AnimationName, BorderStyle, BorderWidth, Color, Duration, FontFamily, FontSize,
-    FontStyle, FontWeight, LineHeight, Margin, Padding, Radius, TimingFunction, TransitionProperty,
+    AnimationDelay, AnimationName, BorderStyle, BorderWidth, ComputedColor, Duration, FontFamily,
+    FontSize, FontStyle, FontWeight, LineHeight, Margin, Padding, Radius, TimingFunction,
+    TransitionProperty,
 };
 use crate::{ComputedValues, PropertyId, PropertyValue, ShorthandId};
 
@@ -278,7 +279,7 @@ fn expand_box_shorthand(
             .map(|values| values.map(|value| DeclaredValue::Value(PropertyValue::Gap(value)))),
         ShorthandId::BorderColor => split_components(value)
             .into_iter()
-            .map(str::parse::<Color>)
+            .map(str::parse::<ComputedColor>)
             .collect::<Result<Vec<_>, _>>()
             .ok()
             .and_then(|values| box_sides(&values))
@@ -619,7 +620,7 @@ fn expand_border(
             }
         }
         if color.is_none() {
-            color = component.parse::<Color>().ok();
+            color = component.parse::<ComputedColor>().ok();
             if color.is_some() {
                 continue;
             }
@@ -633,12 +634,12 @@ fn expand_border(
     }
     let width = width.unwrap_or(BorderWidth::Medium);
     let style = style.unwrap_or(BorderStyle::None);
-    let color = color.unwrap_or(Color::CurrentColor);
+    let color = color.unwrap_or(ComputedColor::CURRENT_COLOR);
     for &property in shorthand.metadata().longhands {
         let value = match property.metadata().value_type {
             crate::ValueType::BorderWidth => PropertyValue::BorderWidth(width),
             crate::ValueType::BorderStyle => PropertyValue::BorderStyle(style),
-            crate::ValueType::Color => PropertyValue::Color(color),
+            crate::ValueType::Color => PropertyValue::Color(color.clone()),
             _ => unreachable!("validated border longhand family"),
         };
         block.declarations.push(Declaration {
@@ -650,7 +651,7 @@ fn expand_border(
 }
 
 fn expand_background(block: &mut DeclarationBlock, value: &str, important: bool) {
-    let Ok(color) = value.trim().parse::<Color>() else {
+    let Ok(color) = value.trim().parse::<ComputedColor>() else {
         block.errors.push(DeclarationError {
             name: "background".to_owned(),
             value: value.to_owned(),

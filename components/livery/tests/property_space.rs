@@ -19,17 +19,36 @@ fn unimplemented_space_is_disjoint_and_resolvable() {
             "{} is implemented and still listed as unimplemented",
             entry.name
         );
-        assert_eq!(ShorthandId::from_css_name(entry.name), None, "{}", entry.name);
+        assert_eq!(
+            ShorthandId::from_css_name(entry.name),
+            None,
+            "{}",
+            entry.name
+        );
         assert_eq!(
             unimplemented_longhand(entry.name).map(|found| found.name),
             Some(entry.name)
         );
         assert_eq!(entry.name, entry.name.to_ascii_lowercase());
-        assert!(!entry.group.is_empty() && !entry.spec_url.is_empty(), "{}", entry.name);
+        assert!(
+            !entry.group.is_empty() && !entry.spec_url.is_empty(),
+            "{}",
+            entry.name
+        );
     }
     for entry in UNIMPLEMENTED_SHORTHANDS {
-        assert_eq!(PropertyId::from_css_name(entry.name), None, "{}", entry.name);
-        assert_eq!(ShorthandId::from_css_name(entry.name), None, "{}", entry.name);
+        assert_eq!(
+            PropertyId::from_css_name(entry.name),
+            None,
+            "{}",
+            entry.name
+        );
+        assert_eq!(
+            ShorthandId::from_css_name(entry.name),
+            None,
+            "{}",
+            entry.name
+        );
         assert_eq!(
             unimplemented_shorthand(entry.name).map(|found| found.name),
             Some(entry.name)
@@ -90,20 +109,33 @@ fn aliases_resolve_to_their_canonical_entry() {
 
 #[test]
 fn generated_interpolation_dispatches_by_family() {
-    use livery::values::{Color, Display, Opacity};
+    use livery::values::{Color, ComputedColor, Display, Opacity};
     use livery::{ComputedValues, PropertyValue};
 
     // A family with defined interpolation blends.
-    let from = PropertyValue::Color("#000000".parse::<Color>().unwrap());
-    let to = PropertyValue::Color("#0000ff".parse::<Color>().unwrap());
+    let from = PropertyValue::Color(ComputedColor::from("#000000".parse::<Color>().unwrap()));
+    let to = PropertyValue::Color(ComputedColor::from("#0000ff".parse::<Color>().unwrap()));
     let mid = from.interpolate(&to, 0.5);
-    assert_eq!(mid, PropertyValue::Color(Color::interpolate("#000000".parse().unwrap(), "#0000ff".parse().unwrap(), 0.5)));
+    assert_eq!(
+        mid,
+        PropertyValue::Color(ComputedColor::from(Color::interpolate(
+            "#000000".parse().unwrap(),
+            "#0000ff".parse().unwrap(),
+            0.5
+        )))
+    );
 
     // A discrete family flips at the midpoint.
     let from = PropertyValue::Display(Display::Block);
     let to = PropertyValue::Display(Display::Flex);
-    assert_eq!(from.interpolate(&to, 0.49), PropertyValue::Display(Display::Block));
-    assert_eq!(from.interpolate(&to, 0.5), PropertyValue::Display(Display::Flex));
+    assert_eq!(
+        from.interpolate(&to, 0.49),
+        PropertyValue::Display(Display::Block)
+    );
+    assert_eq!(
+        from.interpolate(&to, 0.5),
+        PropertyValue::Display(Display::Flex)
+    );
 
     // Tagged reads round-trip through set().
     let mut style = ComputedValues::default();

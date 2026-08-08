@@ -1,14 +1,17 @@
 use std::{fmt, str::FromStr};
 
 use super::{
-    Color, Length, LengthPercentage, MathLengthPercentage, Matrix2D, ParseError,
+    ComputedColor, Length, LengthPercentage, MathLengthPercentage, Matrix2D, ParseError,
     RelativeLengthEnvironment, format_number, keyword_value,
 };
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum BackgroundImage {
     None,
-    LinearGradient { from: Color, to: Color },
+    LinearGradient {
+        from: ComputedColor,
+        to: ComputedColor,
+    },
     Url(Box<str>),
 }
 
@@ -26,8 +29,8 @@ impl BackgroundImage {
                     to: other_to,
                 },
             ) => Some(Self::LinearGradient {
-                from: from.interpolate(*other_from, progress),
-                to: to.interpolate(*other_to, progress),
+                from: from.interpolate(other_from, progress),
+                to: to.interpolate(other_to, progress),
             }),
             _ => None,
         };
@@ -190,11 +193,11 @@ impl FromStr for BackgroundImage {
         let from = colors
             .next()
             .ok_or_else(|| ParseError::expected("two gradient colors"))?
-            .parse::<Color>()?;
+            .parse::<ComputedColor>()?;
         let to = colors
             .next()
             .ok_or_else(|| ParseError::expected("two gradient colors"))?
-            .parse::<Color>()?;
+            .parse::<ComputedColor>()?;
         if colors.next().is_some() {
             return Err(ParseError::expected("two gradient colors"));
         }
@@ -2290,14 +2293,14 @@ pub enum BoxShadow {
     Value(BoxShadowValue),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BoxShadowValue {
     pub inset: bool,
     pub offset_x: Length,
     pub offset_y: Length,
     pub blur_radius: Length,
     pub spread_radius: Length,
-    pub color: Color,
+    pub color: ComputedColor,
 }
 
 impl BoxShadow {
@@ -2308,7 +2311,7 @@ impl BoxShadow {
         let progress = progress.clamp(0.0, 1.0);
         let value = match (self, other) {
             (Self::Value(from), Self::Value(to)) if from.inset == to.inset => {
-                interpolate_box_shadow_value(*from, *to, progress).map(Self::Value)
+                interpolate_box_shadow_value(from, to, progress).map(Self::Value)
             },
             _ => None,
         };
@@ -2323,8 +2326,8 @@ impl BoxShadow {
 }
 
 fn interpolate_box_shadow_value(
-    from: BoxShadowValue,
-    to: BoxShadowValue,
+    from: &BoxShadowValue,
+    to: &BoxShadowValue,
     progress: f32,
 ) -> Option<BoxShadowValue> {
     Some(BoxShadowValue {
@@ -2333,7 +2336,7 @@ fn interpolate_box_shadow_value(
         offset_y: interpolate_length(from.offset_y, to.offset_y, progress)?,
         blur_radius: interpolate_length(from.blur_radius, to.blur_radius, progress)?,
         spread_radius: interpolate_length(from.spread_radius, to.spread_radius, progress)?,
-        color: from.color.interpolate(to.color, progress),
+        color: from.color.interpolate(&to.color, progress),
     })
 }
 
@@ -2354,7 +2357,7 @@ impl FromStr for BoxShadow {
                     return Err(ParseError::expected("one inset box-shadow keyword"));
                 }
                 inset = true;
-            } else if let Ok(value) = component.parse::<Color>() {
+            } else if let Ok(value) = component.parse::<ComputedColor>() {
                 if color.replace(value).is_some() {
                     return Err(ParseError::expected("one box-shadow color"));
                 }
@@ -2373,7 +2376,7 @@ impl FromStr for BoxShadow {
             offset_y: lengths[1],
             blur_radius: lengths.get(2).copied().unwrap_or(Length::ZERO),
             spread_radius: lengths.get(3).copied().unwrap_or(Length::ZERO),
-            color: color.unwrap_or(Color::CurrentColor),
+            color: color.unwrap_or(ComputedColor::CURRENT_COLOR),
         }))
     }
 }

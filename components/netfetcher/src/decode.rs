@@ -37,19 +37,19 @@ pub(crate) fn decode_stream(encoding: Option<&str>, stream: BodyStream) -> BodyS
 
 fn wrap(codec: &str, stream: BodyStream) -> BodyStream {
     match codec {
-        "gzip" | "x-gzip" => {
-            Box::pin(ReaderStream::new(GzipDecoder::new(BufReader::new(StreamReader::new(stream)))))
-        }
+        "gzip" | "x-gzip" => Box::pin(ReaderStream::new(GzipDecoder::new(BufReader::new(
+            StreamReader::new(stream),
+        )))),
         // HTTP "deflate" is nominally zlib-wrapped.
-        "deflate" => {
-            Box::pin(ReaderStream::new(ZlibDecoder::new(BufReader::new(StreamReader::new(stream)))))
-        }
-        "br" => {
-            Box::pin(ReaderStream::new(BrotliDecoder::new(BufReader::new(StreamReader::new(stream)))))
-        }
-        "zstd" => {
-            Box::pin(ReaderStream::new(ZstdDecoder::new(BufReader::new(StreamReader::new(stream)))))
-        }
+        "deflate" => Box::pin(ReaderStream::new(ZlibDecoder::new(BufReader::new(
+            StreamReader::new(stream),
+        )))),
+        "br" => Box::pin(ReaderStream::new(BrotliDecoder::new(BufReader::new(
+            StreamReader::new(stream),
+        )))),
+        "zstd" => Box::pin(ReaderStream::new(ZstdDecoder::new(BufReader::new(
+            StreamReader::new(stream),
+        )))),
         // identity / unknown: leave the stream untouched.
         _ => stream,
     }
@@ -79,8 +79,7 @@ mod tests {
     #[tokio::test]
     async fn gzip_stream_round_trips() {
         use std::io::Write;
-        let mut enc =
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         enc.write_all(b"hello stream").unwrap();
         let gz = enc.finish().unwrap();
 

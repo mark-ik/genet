@@ -33,10 +33,10 @@ use crate::cors;
 use crate::request::{CacheMode, Credentials, Method, RequestMode};
 use crate::{FetchContext, Request, Response};
 
-use cache_phase::{probe_cache, CacheProbe};
+use cache_phase::{CacheProbe, probe_cache};
 use finalize::{finalize_response, record_response_metadata};
 use mixed_content::resolve_mixed_content;
-use redirect::{process_redirect, RedirectStep};
+use redirect::{RedirectStep, process_redirect};
 use request_headers::assemble_request_headers;
 use transport::send_request;
 
@@ -200,7 +200,10 @@ async fn fetch_inner(request: Request, cx: &FetchContext) -> Response {
 
         // Transport: prefer h3 when this https origin advertised it (Alt-Svc).
         let try_h3 = current_url.scheme() == "https"
-            && current_url.host_str().and_then(|h| cx.alt_svc.h3_port(h)).is_some();
+            && current_url
+                .host_str()
+                .and_then(|h| cx.alt_svc.h3_port(h))
+                .is_some();
         let raw =
             match send_request(&current_url, &method, &req_headers, body.as_ref(), try_h3).await {
                 Some(raw) => raw,
@@ -229,7 +232,7 @@ async fn fetch_inner(request: Request, cx: &FetchContext) -> Response {
         ) {
             RedirectStep::Done(response) => return response,
             RedirectStep::Follow => continue,
-            RedirectStep::Fallthrough => {}
+            RedirectStep::Fallthrough => {},
         }
 
         // 304 Not Modified → serve (and refresh) the stored entry.

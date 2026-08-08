@@ -37,10 +37,9 @@ pub use document::{ScriptedDocument, ScriptedEngine};
 pub use livery::LiveryCssom;
 
 /// Byte-loading seam supplied by a shell or worker host. Networking and filesystem
-/// policy stay above the scripted document owner.
-pub trait ResourceFetcher {
-    fn fetch(&self, url: &str) -> Option<Vec<u8>>;
-}
+/// policy stay above the scripted document owner. This is the shared host contract;
+/// the scripted lane no longer carries its own duplicate fetch trait.
+pub use genet_host_api::ResourceFetcher;
 
 /// Structural defaults shared by every host of [`ScriptedDocument`].
 pub const STRUCTURAL_SHEET: &[&str] = &[

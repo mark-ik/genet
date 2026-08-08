@@ -138,7 +138,7 @@ fn value_type_path(value_type: &str) -> &'static str {
         "clear" => "crate::values::Clear",
         "container-name" => "crate::values::ContainerName",
         "container-type" => "crate::values::ContainerType",
-        "color" => "crate::values::Color",
+        "color" => "crate::values::ComputedColor",
         "contain" => "crate::values::Contain",
         "direction" => "crate::values::Direction",
         "display" => "crate::values::Display",
@@ -192,6 +192,7 @@ fn value_type_is_copy(value_type: &str) -> bool {
         "animation-name"
             | "background-image"
             | "box-shadow"
+            | "color"
             | "container-name"
             | "font-family"
             | "grid-template"
@@ -222,9 +223,9 @@ fn initial_expression(property: &Property) -> &'static str {
         ("clear", "none") => "crate::values::Clear::None",
         ("container-name", "none") => "crate::values::ContainerName::None",
         ("container-type", "normal") => "crate::values::ContainerType::Normal",
-        ("color", "transparent") => "crate::values::Color::TRANSPARENT",
-        ("color", "currentcolor") => "crate::values::Color::CurrentColor",
-        ("color", "CanvasText") => "crate::values::Color::CANVAS_TEXT",
+        ("color", "transparent") => "crate::values::ComputedColor::TRANSPARENT",
+        ("color", "currentcolor") => "crate::values::ComputedColor::CURRENT_COLOR",
+        ("color", "CanvasText") => "crate::values::ComputedColor::CANVAS_TEXT",
         ("contain", "none") => "crate::values::Contain::NONE",
         ("direction", "ltr") => "crate::values::Direction::Ltr",
         ("display", "inline") => "crate::values::Display::Inline",
@@ -260,7 +261,7 @@ fn initial_expression(property: &Property) -> &'static str {
         ("size", "none") => "crate::values::Size::None",
         ("spacing", "normal") => "crate::values::Spacing::Normal",
         ("text-align", "start") => "crate::values::TextAlign::Start",
-        ("text-decoration-color", "currentcolor") => "crate::values::Color::CurrentColor",
+        ("text-decoration-color", "currentcolor") => "crate::values::ComputedColor::CURRENT_COLOR",
         ("text-decoration-line", "none") => "crate::values::TextDecorationLine::NONE",
         ("text-wrap-mode", "wrap") => "crate::values::TextWrapMode::Wrap",
         ("transform", "none") => "crate::values::Transform::None",

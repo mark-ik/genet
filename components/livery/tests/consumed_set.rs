@@ -158,14 +158,20 @@ fn f0_receipt_consumed_longhands_are_implemented() {
     // as a conformance claim the catalog cannot support.
     let partial = partial_properties();
     if !partial.is_empty() {
-        report.push_str("  PARTIAL (parsed, semantics only partly built):
-");
+        report.push_str(
+            "  PARTIAL (parsed, semantics only partly built):
+",
+        );
         for (name, note) in &partial {
             let consumed_here = consumed.iter().any(|entry| entry.name == *name);
             report.push_str(&format!(
                 "    {name}{} - {note}
 ",
-                if consumed_here { " [in the consumed set]" } else { "" },
+                if consumed_here {
+                    " [in the consumed set]"
+                } else {
+                    ""
+                },
             ));
         }
     }

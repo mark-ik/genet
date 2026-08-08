@@ -58,13 +58,13 @@ pub(super) fn probe_cache(
                     // Use the stored response as-is, even if stale.
                     CacheMode::ForceCache | CacheMode::OnlyIfCached => {
                         return CacheProbe::Serve(cache::to_response(entry, url_list.to_vec()));
-                    }
+                    },
                     // Always revalidate.
                     CacheMode::NoCache => {
                         if cache::has_validators(&entry) {
                             revalidate = Some(entry);
                         }
-                    }
+                    },
                     // Default: serve fresh, revalidate stale / no-cache.
                     _ => {
                         if cache::is_fresh(&entry, now) && !cache::must_revalidate(&entry) {
@@ -73,13 +73,13 @@ pub(super) fn probe_cache(
                         if cache::has_validators(&entry) {
                             revalidate = Some(entry);
                         }
-                    }
+                    },
                 },
                 // `only-if-cached` with no stored response is a network error.
                 None if mode == CacheMode::OnlyIfCached => {
                     return CacheProbe::Serve(Response::network_error());
-                }
-                None => {}
+                },
+                None => {},
             }
         }
     }
@@ -124,12 +124,12 @@ impl Stream for CachingBody {
             Poll::Ready(Some(Ok(bytes))) => {
                 this.acc.extend_from_slice(&bytes);
                 Poll::Ready(Some(Ok(bytes)))
-            }
+            },
             Poll::Ready(Some(Err(e))) => {
                 this.poisoned = true; // a decode/transport error: do not cache
                 this.done = true;
                 Poll::Ready(Some(Err(e)))
-            }
+            },
             Poll::Ready(None) => {
                 this.done = true;
                 if !this.poisoned {
@@ -144,7 +144,7 @@ impl Stream for CachingBody {
                     );
                 }
                 Poll::Ready(None)
-            }
+            },
         }
     }
 }

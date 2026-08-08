@@ -11,7 +11,7 @@
 //! base64 may be standard or URL-safe, padded or not.
 
 use base64::Engine;
-use ring::digest::{digest, SHA256, SHA384, SHA512, Algorithm};
+use ring::digest::{Algorithm, SHA256, SHA384, SHA512, digest};
 
 /// Verify `body` against SRI `metadata`. Returns `true` when the metadata has no
 /// valid `alg-hash` entry (no integrity requested, so no check) or the body's
@@ -60,9 +60,9 @@ pub(crate) fn verify(metadata: &str, body: &[u8]) -> bool {
 /// body cannot be verified.
 pub(crate) fn is_enforced(metadata: &str) -> bool {
     metadata.split_whitespace().any(|token| {
-        token
-            .split_once('-')
-            .is_some_and(|(alg, b64)| matches!(alg, "sha256" | "sha384" | "sha512") && decode(b64).is_some())
+        token.split_once('-').is_some_and(|(alg, b64)| {
+            matches!(alg, "sha256" | "sha384" | "sha512") && decode(b64).is_some()
+        })
     })
 }
 
@@ -115,7 +115,10 @@ mod tests {
     #[test]
     fn url_safe_and_unpadded_accepted() {
         // Same hash, '+'/'/' swapped to '-'/'_' and padding stripped.
-        let url = ABC_SHA256.replace('+', "-").replace('/', "_").replace('=', "");
+        let url = ABC_SHA256
+            .replace('+', "-")
+            .replace('/', "_")
+            .replace('=', "");
         assert!(verify(&url, b"abc"));
     }
 }

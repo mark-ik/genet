@@ -45,8 +45,9 @@ pub(crate) async fn fetch_h3(
     endpoint.set_default_client_config(client_config);
 
     let conn = endpoint.connect(addr, host).ok()?.await.ok()?;
-    let (mut driver, mut send_request) =
-        h3::client::new(h3_quinn::Connection::new(conn)).await.ok()?;
+    let (mut driver, mut send_request) = h3::client::new(h3_quinn::Connection::new(conn))
+        .await
+        .ok()?;
 
     let uri: http::Uri = url.as_str().parse().ok()?;
     let mut builder = http::Request::builder().method(method).uri(uri);
@@ -68,12 +69,18 @@ pub(crate) async fn fetch_h3(
         let headers = resp
             .headers()
             .iter()
-            .filter_map(|(k, v)| v.to_str().ok().map(|s| (k.as_str().to_owned(), s.to_owned())))
+            .filter_map(|(k, v)| {
+                v.to_str()
+                    .ok()
+                    .map(|s| (k.as_str().to_owned(), s.to_owned()))
+            })
             .collect();
         let mut body = BytesMut::new();
         loop {
             match stream.recv_data().await {
-                Ok(Some(mut chunk)) => body.extend_from_slice(&chunk.copy_to_bytes(chunk.remaining())),
+                Ok(Some(mut chunk)) => {
+                    body.extend_from_slice(&chunk.copy_to_bytes(chunk.remaining()))
+                },
                 Ok(None) => break,
                 Err(_) => return None,
             }
@@ -236,9 +243,15 @@ mod tests {
         let port = start_server(b"hello over h3").await;
         let url: Url = format!("https://127.0.0.1:{port}/").parse().unwrap();
 
-        let resp = fetch_h3(no_verify_client_config(), &url, http::Method::GET, &[], None)
-            .await
-            .expect("h3 round-trip succeeds");
+        let resp = fetch_h3(
+            no_verify_client_config(),
+            &url,
+            http::Method::GET,
+            &[],
+            None,
+        )
+        .await
+        .expect("h3 round-trip succeeds");
 
         assert_eq!(resp.status, 200);
         assert_eq!(resp.body.as_ref(), b"hello over h3");
@@ -261,6 +274,10 @@ mod tests {
         .expect("h3 POST round-trip succeeds");
 
         assert_eq!(resp.status, 200);
-        assert_eq!(resp.body.as_ref(), b"posted over h3", "server echoed the request body");
+        assert_eq!(
+            resp.body.as_ref(),
+            b"posted over h3",
+            "server echoed the request body"
+        );
     }
 }

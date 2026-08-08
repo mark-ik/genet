@@ -60,7 +60,7 @@ pub(crate) fn evaluate(
             } else {
                 Taint::Blocked
             }
-        }
+        },
     }
 }
 
@@ -113,9 +113,14 @@ fn is_safelisted_request_header(name_lc: &str, value: &str) -> bool {
     match name_lc {
         "accept" | "accept-language" | "content-language" => true,
         "content-type" => {
-            let essence = value.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+            let essence = value
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase();
             SAFELISTED_CONTENT_TYPES.contains(&essence.as_str())
-        }
+        },
         // A `Range` whose value is a "simple range header value" is safelisted, so a
         // cross-origin ranged GET (media, resumed downloads) needs no preflight.
         "range" => is_simple_range_header_value(value),
@@ -259,7 +264,11 @@ pub(crate) fn filter_cors_response_headers(
         "pragma",
     ];
     let expose: Vec<String> = header(&headers, "access-control-expose-headers")
-        .map(|v| v.split(',').map(|s| s.trim().to_ascii_lowercase()).collect())
+        .map(|v| {
+            v.split(',')
+                .map(|s| s.trim().to_ascii_lowercase())
+                .collect()
+        })
         .unwrap_or_default();
     let expose_all = expose.iter().any(|e| e == "*");
     headers
@@ -325,7 +334,10 @@ impl PreflightCache for InMemoryPreflightCache {
             return;
         }
         if let Ok(mut m) = self.entries.lock() {
-            m.insert(key.to_owned(), SystemTime::now() + Duration::from_secs(max_age_secs));
+            m.insert(
+                key.to_owned(),
+                SystemTime::now() + Duration::from_secs(max_age_secs),
+            );
         }
     }
 }
@@ -339,7 +351,10 @@ mod tests {
     }
 
     fn hdr(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     fn is(t: Taint, want: &str) -> bool {
@@ -357,7 +372,13 @@ mod tests {
         let target: Url = "https://example.org/x".parse().unwrap();
         let o = origin_of("https://example.org/");
         assert!(is(
-            evaluate(Some(&o), &target, RequestMode::Cors, Credentials::SameOrigin, &[]),
+            evaluate(
+                Some(&o),
+                &target,
+                RequestMode::Cors,
+                Credentials::SameOrigin,
+                &[]
+            ),
             "basic"
         ));
     }
@@ -366,7 +387,13 @@ mod tests {
     fn no_initiator_is_basic() {
         let target: Url = "https://example.org/x".parse().unwrap();
         assert!(is(
-            evaluate(None, &target, RequestMode::Cors, Credentials::SameOrigin, &[]),
+            evaluate(
+                None,
+                &target,
+                RequestMode::Cors,
+                Credentials::SameOrigin,
+                &[]
+            ),
             "basic"
         ));
     }
@@ -376,7 +403,13 @@ mod tests {
         let target: Url = "https://other.example/x".parse().unwrap();
         let o = origin_of("https://example.org/");
         assert!(is(
-            evaluate(Some(&o), &target, RequestMode::NoCors, Credentials::SameOrigin, &[]),
+            evaluate(
+                Some(&o),
+                &target,
+                RequestMode::NoCors,
+                Credentials::SameOrigin,
+                &[]
+            ),
             "opaque"
         ));
     }
@@ -386,7 +419,13 @@ mod tests {
         let target: Url = "https://other.example/x".parse().unwrap();
         let o = origin_of("https://example.org/");
         assert!(is(
-            evaluate(Some(&o), &target, RequestMode::SameOrigin, Credentials::SameOrigin, &[]),
+            evaluate(
+                Some(&o),
+                &target,
+                RequestMode::SameOrigin,
+                Credentials::SameOrigin,
+                &[]
+            ),
             "blocked"
         ));
     }
@@ -397,7 +436,13 @@ mod tests {
         let o = origin_of("https://example.org/");
         let h = hdr(&[("access-control-allow-origin", "*")]);
         assert!(is(
-            evaluate(Some(&o), &target, RequestMode::Cors, Credentials::SameOrigin, &h),
+            evaluate(
+                Some(&o),
+                &target,
+                RequestMode::Cors,
+                Credentials::SameOrigin,
+                &h
+            ),
             "cors"
         ));
     }
@@ -408,7 +453,13 @@ mod tests {
         let o = origin_of("https://example.org/");
         let h = hdr(&[("access-control-allow-origin", "https://example.org")]);
         assert!(is(
-            evaluate(Some(&o), &target, RequestMode::Cors, Credentials::SameOrigin, &h),
+            evaluate(
+                Some(&o),
+                &target,
+                RequestMode::Cors,
+                Credentials::SameOrigin,
+                &h
+            ),
             "cors"
         ));
     }
@@ -418,7 +469,13 @@ mod tests {
         let target: Url = "https://other.example/x".parse().unwrap();
         let o = origin_of("https://example.org/");
         assert!(is(
-            evaluate(Some(&o), &target, RequestMode::Cors, Credentials::SameOrigin, &[]),
+            evaluate(
+                Some(&o),
+                &target,
+                RequestMode::Cors,
+                Credentials::SameOrigin,
+                &[]
+            ),
             "blocked"
         ));
     }
@@ -429,7 +486,13 @@ mod tests {
         let o = origin_of("https://example.org/");
         let h = hdr(&[("access-control-allow-origin", "*")]);
         assert!(is(
-            evaluate(Some(&o), &target, RequestMode::Cors, Credentials::Include, &h),
+            evaluate(
+                Some(&o),
+                &target,
+                RequestMode::Cors,
+                Credentials::Include,
+                &h
+            ),
             "blocked"
         ));
     }
@@ -443,7 +506,13 @@ mod tests {
             ("access-control-allow-credentials", "true"),
         ]);
         assert!(is(
-            evaluate(Some(&o), &target, RequestMode::Cors, Credentials::Include, &h),
+            evaluate(
+                Some(&o),
+                &target,
+                RequestMode::Cors,
+                Credentials::Include,
+                &h
+            ),
             "cors"
         ));
     }
@@ -451,7 +520,10 @@ mod tests {
     #[test]
     fn preflight_triggers_on_nonsimple() {
         assert!(!needs_preflight(&Method::Get, &[]));
-        assert!(!needs_preflight(&Method::Post, &hdr(&[("content-type", "text/plain")])));
+        assert!(!needs_preflight(
+            &Method::Post,
+            &hdr(&[("content-type", "text/plain")])
+        ));
         assert!(needs_preflight(&Method::Put, &[]));
         assert!(needs_preflight(&Method::Post, &hdr(&[("x-custom", "1")])));
         assert!(needs_preflight(
@@ -478,8 +550,14 @@ mod tests {
         assert!(!is_simple_range_header_value("bytes=0")); // no '-'
         assert!(!is_simple_range_header_value("bytes=a-b")); // non-digit
         // Routed through the safelist check (so a safe range skips preflight).
-        assert!(!needs_preflight(&Method::Get, &hdr(&[("range", "bytes=0-10")])));
-        assert!(needs_preflight(&Method::Get, &hdr(&[("range", "bytes=-0")])));
+        assert!(!needs_preflight(
+            &Method::Get,
+            &hdr(&[("range", "bytes=0-10")])
+        ));
+        assert!(needs_preflight(
+            &Method::Get,
+            &hdr(&[("range", "bytes=-0")])
+        ));
     }
 
     #[test]

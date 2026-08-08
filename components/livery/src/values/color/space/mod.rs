@@ -23,13 +23,16 @@ use crate::values::ParseError;
 mod perceptual;
 mod rgb;
 
-use perceptual::{lab_from_xyz, lab_to_xyz, oklab_from_xyz, oklab_to_xyz,
-    orthogonal_to_polar, polar_to_orthogonal};
-use rgb::{A98_TO_XYZ, P3_TO_XYZ, PROPHOTO_TO_XYZ, REC2020_TO_XYZ, SRGB_TO_XYZ,
-    XYZ_TO_A98, XYZ_TO_P3, XYZ_TO_PROPHOTO, XYZ_TO_REC2020, XYZ_TO_SRGB,
-    a98_to_linear, hsl_to_rgb, hwb_to_rgb, linear_to_a98, linear_to_prophoto,
-    linear_to_rec2020, linear_to_srgb, prophoto_to_linear, rec2020_to_linear,
-    rgb_from_xyz, rgb_to_hsl, rgb_to_hwb, rgb_to_xyz, srgb_to_linear};
+use perceptual::{
+    lab_from_xyz, lab_to_xyz, oklab_from_xyz, oklab_to_xyz, orthogonal_to_polar,
+    polar_to_orthogonal,
+};
+use rgb::{
+    A98_TO_XYZ, P3_TO_XYZ, PROPHOTO_TO_XYZ, REC2020_TO_XYZ, SRGB_TO_XYZ, XYZ_TO_A98, XYZ_TO_P3,
+    XYZ_TO_PROPHOTO, XYZ_TO_REC2020, XYZ_TO_SRGB, a98_to_linear, hsl_to_rgb, hwb_to_rgb,
+    linear_to_a98, linear_to_prophoto, linear_to_rec2020, linear_to_srgb, prophoto_to_linear,
+    rec2020_to_linear, rgb_from_xyz, rgb_to_hsl, rgb_to_hwb, rgb_to_xyz, srgb_to_linear,
+};
 
 /// Three color channels. Missing components (CSS `none`) are NaN.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -94,15 +97,39 @@ impl WhitePoint {
 }
 
 const D65_TO_D50: Matrix = [
-    [1.0479298208405488, 0.022946793341019088, -0.05019222954313557],
-    [0.029627815688159344, 0.990434484573249, -0.01707382502938514],
-    [-0.009243058152591178, 0.015055144896577895, 0.7518742899580008],
+    [
+        1.0479298208405488,
+        0.022946793341019088,
+        -0.05019222954313557,
+    ],
+    [
+        0.029627815688159344,
+        0.990434484573249,
+        -0.01707382502938514,
+    ],
+    [
+        -0.009243058152591178,
+        0.015055144896577895,
+        0.7518742899580008,
+    ],
 ];
 
 const D50_TO_D65: Matrix = [
-    [0.9554734527042182, -0.023098536874261423, 0.0632593086610217],
-    [-0.028369706963208136, 1.0099954580058226, 0.021041398966943008],
-    [0.012314001688319899, -0.020507696433477912, 1.3303659366080753],
+    [
+        0.9554734527042182,
+        -0.023098536874261423,
+        0.0632593086610217,
+    ],
+    [
+        -0.028369706963208136,
+        1.0099954580058226,
+        0.021041398966943008,
+    ],
+    [
+        0.012314001688319899,
+        -0.020507696433477912,
+        1.3303659366080753,
+    ],
 ];
 
 fn adapt_white_point(from: WhitePoint, to: WhitePoint, xyz: Components) -> Components {
@@ -139,38 +166,44 @@ impl ColorSpace {
     /// The `color()` function's predefined spaces. Other spaces have their own
     /// function syntax and are not valid inside `color()`.
     pub fn from_predefined_name(name: &str) -> Option<Self> {
-        Some(match_ignore_ascii_case(name, &[
-            ("srgb", Self::Srgb),
-            ("srgb-linear", Self::SrgbLinear),
-            ("display-p3", Self::DisplayP3),
-            ("a98-rgb", Self::A98Rgb),
-            ("prophoto-rgb", Self::ProphotoRgb),
-            ("rec2020", Self::Rec2020),
-            ("xyz", Self::XyzD65),
-            ("xyz-d50", Self::XyzD50),
-            ("xyz-d65", Self::XyzD65),
-        ])?)
+        Some(match_ignore_ascii_case(
+            name,
+            &[
+                ("srgb", Self::Srgb),
+                ("srgb-linear", Self::SrgbLinear),
+                ("display-p3", Self::DisplayP3),
+                ("a98-rgb", Self::A98Rgb),
+                ("prophoto-rgb", Self::ProphotoRgb),
+                ("rec2020", Self::Rec2020),
+                ("xyz", Self::XyzD65),
+                ("xyz-d50", Self::XyzD50),
+                ("xyz-d65", Self::XyzD65),
+            ],
+        )?)
     }
 
     /// Every space nameable as a `color-mix()` interpolation space.
     pub fn from_interpolation_name(name: &str) -> Option<Self> {
-        match_ignore_ascii_case(name, &[
-            ("srgb", Self::Srgb),
-            ("srgb-linear", Self::SrgbLinear),
-            ("hsl", Self::Hsl),
-            ("hwb", Self::Hwb),
-            ("lab", Self::Lab),
-            ("lch", Self::Lch),
-            ("oklab", Self::Oklab),
-            ("oklch", Self::Oklch),
-            ("display-p3", Self::DisplayP3),
-            ("a98-rgb", Self::A98Rgb),
-            ("prophoto-rgb", Self::ProphotoRgb),
-            ("rec2020", Self::Rec2020),
-            ("xyz", Self::XyzD65),
-            ("xyz-d50", Self::XyzD50),
-            ("xyz-d65", Self::XyzD65),
-        ])
+        match_ignore_ascii_case(
+            name,
+            &[
+                ("srgb", Self::Srgb),
+                ("srgb-linear", Self::SrgbLinear),
+                ("hsl", Self::Hsl),
+                ("hwb", Self::Hwb),
+                ("lab", Self::Lab),
+                ("lch", Self::Lch),
+                ("oklab", Self::Oklab),
+                ("oklch", Self::Oklch),
+                ("display-p3", Self::DisplayP3),
+                ("a98-rgb", Self::A98Rgb),
+                ("prophoto-rgb", Self::ProphotoRgb),
+                ("rec2020", Self::Rec2020),
+                ("xyz", Self::XyzD65),
+                ("xyz-d50", Self::XyzD50),
+                ("xyz-d65", Self::XyzD65),
+            ],
+        )
     }
 
     /// The CSS name used when serializing a `color()` value.
@@ -296,7 +329,6 @@ impl std::str::FromStr for ColorSpace {
     type Err = ParseError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        Self::from_interpolation_name(input)
-            .ok_or_else(|| ParseError::expected("a color space"))
+        Self::from_interpolation_name(input).ok_or_else(|| ParseError::expected("a color space"))
     }
 }

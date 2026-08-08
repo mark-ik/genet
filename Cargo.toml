@@ -8,6 +8,7 @@ members = [
     "components/webgl-wgpu",
     "components/webgl-essl",
     "components/genet-layout",
+    "components/genet-document-resources",
     "components/genet-probe",
     "components/genet-clipboard",
     "components/livery",
@@ -252,6 +253,7 @@ finger-protocol = { version = "=0.1.1", default-features = false, features = [
 ] }
 inker = { version = "=0.1.0", path = "components/inker" }
 genet-documents = { version = "=0.1.0", path = "components/genet-documents" }
+genet-document-resources = { version = "=0.2.0", path = "components/genet-document-resources" }
 nematic = { version = "=0.1.0", path = "components/nematic" }
 document-canvas = { version = "=0.1.0", path = "components/inker/document-canvas" }
 knot-editor-host = { version = "=0.1.0", path = "components/inker/knot-editor-host" }

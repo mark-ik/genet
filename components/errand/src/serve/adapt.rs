@@ -121,9 +121,7 @@ pub fn finger<S: Source>(source: Arc<S>) -> impl finger_protocol::server::Handle
             match found {
                 Some(Item::Document { body, .. }) => body,
                 Some(Item::Listing(listing)) => to_plain_text(&listing).into_bytes(),
-                Some(Item::NeedsInput { prompt }) => {
-                    format!("{prompt}\n").into_bytes()
-                },
+                Some(Item::NeedsInput { prompt }) => format!("{prompt}\n").into_bytes(),
                 Some(Item::Redirect { target }) => {
                     format!("This has moved to {target}\n").into_bytes()
                 },

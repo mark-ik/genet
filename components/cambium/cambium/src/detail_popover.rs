@@ -44,12 +44,12 @@ impl DetailPopoverState {
                 if self.mode == DetailPopoverMode::Hidden {
                     self.mode = DetailPopoverMode::Peek;
                 }
-            }
+            },
             DetailPopoverEvent::Hover(false) => {
                 if self.mode == DetailPopoverMode::Peek {
                     self.mode = DetailPopoverMode::Hidden;
                 }
-            }
+            },
             DetailPopoverEvent::TogglePinned => {
                 if self.mode == DetailPopoverMode::Pinned {
                     self.mode = DetailPopoverMode::Hidden;
@@ -58,11 +58,11 @@ impl DetailPopoverState {
                     self.mode = DetailPopoverMode::Pinned;
                     self.return_focus = false;
                 }
-            }
+            },
             DetailPopoverEvent::Dismiss(_) => {
                 self.mode = DetailPopoverMode::Hidden;
                 self.return_focus = true;
-            }
+            },
         }
     }
 }
@@ -111,7 +111,7 @@ where
         match event.phase {
             HoverPhase::Enter => change(app_state, DetailPopoverEvent::Hover(true)),
             HoverPhase::Leave => change(app_state, DetailPopoverEvent::Hover(false)),
-            HoverPhase::Move => {}
+            HoverPhase::Move => {},
         }
     });
     let trigger = request_focus(trigger, state.return_focus);
@@ -129,7 +129,7 @@ where
                 el::<_, State, Action>("div", preview).attr("class", "detail-popover-preview"),
                 |_state: &mut State, _reason| {},
             )))
-        }
+        },
         DetailPopoverMode::Pinned => {
             let pinned_surface = surface
                 .clone()
@@ -144,7 +144,7 @@ where
                     change(app_state, DetailPopoverEvent::Dismiss(reason));
                 },
             )))
-        }
+        },
     };
 
     Box::new(el::<_, State, Action>("div", (trigger, panel)).attr("class", "detail-popover-root"))

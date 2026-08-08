@@ -171,6 +171,10 @@ mod tests {
         t.move_down(false);
         assert_eq!(t.caret(), 4, "short second line clamps at its end");
         t.move_up(false);
-        assert_eq!(t.caret(), 2, "sticky column returns after the combining mark");
+        assert_eq!(
+            t.caret(),
+            2,
+            "sticky column returns after the combining mark"
+        );
     }
 }

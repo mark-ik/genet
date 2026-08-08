@@ -51,15 +51,22 @@ pub(super) async fn send_request(
     }
 
     let uri = http::Uri::try_from(url.as_str()).ok()?;
-    let mut builder = http::Request::builder().method(http_method(method)).uri(uri);
+    let mut builder = http::Request::builder()
+        .method(http_method(method))
+        .uri(uri);
     for (name, value) in headers {
         builder = builder.header(name.as_str(), value.as_str());
     }
-    let req = builder.body(Full::new(body.cloned().unwrap_or_default())).ok()?;
+    let req = builder
+        .body(Full::new(body.cloned().unwrap_or_default()))
+        .ok()?;
     let resp = shared_client().request(req).await.ok()?;
     let status = resp.status().as_u16();
     let headers = collect_headers(resp.headers());
-    let data = resp.into_body().into_data_stream().map_err(|e| io::Error::other(e));
+    let data = resp
+        .into_body()
+        .into_data_stream()
+        .map_err(|e| io::Error::other(e));
     Some(RawResponse {
         status,
         headers,
@@ -70,7 +77,9 @@ pub(super) async fn send_request(
 /// Wrap already-collected bytes as a single-chunk body stream (the h3 path; the
 /// shared decode step then handles its `Content-Encoding` uniformly).
 fn once_body(bytes: Bytes) -> BodyStream {
-    Box::pin(futures_util::stream::once(async move { Ok::<_, io::Error>(bytes) }))
+    Box::pin(futures_util::stream::once(async move {
+        Ok::<_, io::Error>(bytes)
+    }))
 }
 
 pub(super) fn http_method(method: &Method) -> http::Method {
@@ -84,14 +93,16 @@ pub(super) fn http_method(method: &Method) -> http::Method {
         Method::Options => http::Method::OPTIONS,
         // A custom token: build an http::Method, falling back to GET if (somehow)
         // it isn't a valid method token.
-        Method::Other(m) => {
-            http::Method::from_bytes(m.as_bytes()).unwrap_or(http::Method::GET)
-        }
+        Method::Other(m) => http::Method::from_bytes(m.as_bytes()).unwrap_or(http::Method::GET),
     }
 }
 
 pub(super) fn collect_headers(map: &http::HeaderMap) -> Vec<(String, String)> {
     map.iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|s| (k.as_str().to_owned(), s.to_owned())))
+        .filter_map(|(k, v)| {
+            v.to_str()
+                .ok()
+                .map(|s| (k.as_str().to_owned(), s.to_owned()))
+        })
         .collect()
 }

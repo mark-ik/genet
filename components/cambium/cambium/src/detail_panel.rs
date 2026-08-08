@@ -133,10 +133,7 @@ mod tests {
         let d = dom.borrow();
         assert_eq!(texts(&d, "detail-section-title"), vec!["Node", "Content"]);
         assert_eq!(d.all_with_class(d.document(), "detail-row").len(), 3);
-        assert_eq!(
-            texts(&d, "detail-key"),
-            vec!["Title", "URL", "Fetch state"]
-        );
+        assert_eq!(texts(&d, "detail-key"), vec!["Title", "URL", "Fetch state"]);
         assert_eq!(
             texts(&d, "detail-value"),
             vec!["The Page", "https://example.test/", "live"]
@@ -150,14 +147,23 @@ mod tests {
         let mut runner = GenetAppRunner::new(dom.clone(), view as fn(&S) -> V, S::default());
         let targets: Vec<_> = {
             let d = dom.borrow();
-            ["detail-section-title", "detail-row", "detail-key", "detail-value"]
-                .iter()
-                .flat_map(|c| d.all_with_class(d.document(), c))
-                .collect()
+            [
+                "detail-section-title",
+                "detail-row",
+                "detail-key",
+                "detail-value",
+            ]
+            .iter()
+            .flat_map(|c| d.all_with_class(d.document(), c))
+            .collect()
         };
         for node in targets {
             runner.dispatch_click(node, PointerClick::at((1.0, 1.0)));
         }
-        assert_eq!(runner.state().hits, 0, "nothing in a detail panel activates");
+        assert_eq!(
+            runner.state().hits,
+            0,
+            "nothing in a detail panel activates"
+        );
     }
 }

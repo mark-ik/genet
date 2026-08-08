@@ -361,7 +361,10 @@ mod tests {
             .render(&EngineInput::new("scroll://t/", "# Hello\n"))
             .expect("render");
         assert_eq!(doc.title.as_deref(), Some("Hello"));
-        assert_eq!(doc.provenance.source_kind.as_deref(), Some("nematic.scroll"));
+        assert_eq!(
+            doc.provenance.source_kind.as_deref(),
+            Some("nematic.scroll")
+        );
         assert_eq!(
             doc.provenance.source_label.as_deref(),
             Some("nematic.gemtext")
@@ -524,7 +527,10 @@ mod tests {
                 .expect("render");
             for diagnostic in &doc.diagnostics {
                 let text = format!("{diagnostic:?}").to_lowercase();
-                assert!(!text.contains("signature"), "{content_type}: {diagnostic:?}");
+                assert!(
+                    !text.contains("signature"),
+                    "{content_type}: {diagnostic:?}"
+                );
                 assert!(!text.contains("envelope"), "{content_type}: {diagnostic:?}");
             }
         }

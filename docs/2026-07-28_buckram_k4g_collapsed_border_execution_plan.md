@@ -15,6 +15,11 @@ ahead of its gate and does not authorize skipping K4g2.
 
 **Architectural authority:** [Buckram CSS layout engine plan](2026-07-26_buckram_css_layout_engine_plan.md)
 
+**Completion lane:** [Buckram K4 completion
+lane](2026-08-08_buckram_k4_completion_lane.md). It supplies the serial color,
+stranded-table, separated-paint, K4g, and K4h order; this document remains the
+detailed authority for K4g1 through K4g6.
+
 **Color entry dependency:** [Livery contextual color computation
 plan](2026-07-28_livery_contextual_color_computation_plan.md). K4g1 was able
 to land first because its candidate model is generic over color and has no
@@ -50,10 +55,15 @@ The accepted predecessor chain must provide:
 - K4d's table dispatcher, row-layout result, fragments, and explicit
   `CollapsedBlockBorderMetricsPendingK4g` input;
 - K4e's wrapper and grid distinction;
-- K4f's table background phases, separated-border rendering, empty-cell
-  behavior, and visibility-collapse track state; and
+- K4f's visibility-collapse track state; and
 - one standards-owned `FragmentId` for every table role that can own paint or
   overflow.
+
+Correction 2026-08-08: K4f is accepted for collapsed tracks only. Its table
+background phases, separated-border rendering, and empty-cell items remain
+open. K4g1 through K4g4 do not consume them, but K4g5 plans to emit resolved
+borders into the K4f table paint phase: either those K4f items land first, or
+building that phase becomes K4g5's first task.
 
 K4g freezes the accepted K4f commit and produces fresh expectation maps for:
 
@@ -481,7 +491,10 @@ or paint order.
 ### Stop rules
 
 - Stop if the widest border wins before `hidden` is checked.
-- Stop if style rank is delegated to enum declaration order.
+- Stop if style rank is delegated to an enum order that nothing pins to
+  CSS 2.1. K4g1's enums are deliberately declared in the specification's
+  precedence order and a fixture asserts that correspondence, so comparing
+  them directly satisfies this rule.
 - Stop if row wins over cell or column wins over row group.
 - Stop if paint order breaks an otherwise equal conflict.
 - Stop if physical left and top are used without the table's direction and
@@ -841,12 +854,12 @@ Commit:
 
 ## Current executable task
 
-K4g1 is accepted at `19b91b6ebef`. The current handoff is:
+K4g1 is accepted at `19b91b6ebef`. The current lane gate is contextual-color
+C1/B0. After its separate receipt and commit, the K4g2 handoff is:
 
-> Complete contextual-color C1 from the Livery contextual color computation
-> plan. Then read this plan, the accepted K4g1 receipt, CSS 2.1 sections 17.6.2
-> and 17.6.2.1, and the live seams named under K4g2. Execute K4g2 only.
+> Read this plan, the accepted K4g1 receipt, CSS 2.1 sections 17.6.2 and
+> 17.6.2.1, and the live seams named under K4g2. Execute K4g2 only.
 > Preserve unrelated worktree changes. Feed the accepted logical winner grid
 > into the Livery adapter without changing live paint authority. Stop after
 > K4g2 passes its verification ladder, append its receipt here, stage only
-> K4g2 paths, and commit. Do not begin K4g3 or combine the C1 and K4g2 commits.
+> K4g2 paths, and commit. Do not begin K4g3 in the same task.

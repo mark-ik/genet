@@ -554,7 +554,7 @@ where
             Key::Named(NamedKey::ArrowRight) if node.has_children && !node.expanded => {
                 state.toggle(node.id.clone());
                 None
-            }
+            },
             Key::Named(NamedKey::ArrowRight) if node.has_children => visible
                 .get(current + 1)
                 .filter(|child| child.parent.as_ref() == Some(&node.id))
@@ -562,7 +562,7 @@ where
             Key::Named(NamedKey::ArrowLeft) if node.has_children && node.expanded => {
                 state.toggle(node.id.clone());
                 None
-            }
+            },
             Key::Named(NamedKey::ArrowLeft) => node
                 .parent
                 .as_ref()
@@ -571,17 +571,17 @@ where
                 state.activate(node.id.clone());
                 state.toggle(node.id.clone());
                 None
-            }
+            },
             Key::Named(NamedKey::Enter | NamedKey::Space) => {
                 state.activate(node.id.clone());
                 None
-            }
+            },
             Key::Character(text) if !text.is_empty() => {
                 let query = text.to_lowercase();
                 (1..=visible.len())
                     .map(|offset| (current + offset) % visible.len())
                     .find(|index| visible[*index].label.to_lowercase().starts_with(&query))
-            }
+            },
             _ => return,
         };
         if let Some(destination) = destination {

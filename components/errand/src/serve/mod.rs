@@ -205,10 +205,18 @@ mod tests {
         let root = std::env::temp_dir().join(format!("errand-serve-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("notes")).unwrap();
-        std::fs::write(root.join("hello.txt"), b"well met
-").unwrap();
-        std::fs::write(root.join("notes").join("a.gmi"), b"# A
-").unwrap();
+        std::fs::write(
+            root.join("hello.txt"),
+            b"well met
+",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("notes").join("a.gmi"),
+            b"# A
+",
+        )
+        .unwrap();
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -231,8 +239,11 @@ mod tests {
         let page = gopher_protocol::fetch(&format!("gopher://127.0.0.1:{port}/0hello.txt"))
             .await
             .unwrap();
-        assert_eq!(page.body, b"well met
-");
+        assert_eq!(
+            page.body,
+            b"well met
+"
+        );
 
         // The root is a directory, so it comes back as a real gophermap that
         // gopher's own parser accepts.
@@ -256,9 +267,10 @@ mod tests {
         assert_eq!(items[0].kind, gopher_protocol::GopherKind::Error);
 
         // And traversal is refused over the wire, not just in the unit test.
-        let escaped = gopher_protocol::fetch(&format!("gopher://127.0.0.1:{port}/0../../etc/hosts"))
-            .await
-            .unwrap();
+        let escaped =
+            gopher_protocol::fetch(&format!("gopher://127.0.0.1:{port}/0../../etc/hosts"))
+                .await
+                .unwrap();
         let items = gopher_protocol::parse_menu(&String::from_utf8_lossy(&escaped.body));
         assert_eq!(items[0].kind, gopher_protocol::GopherKind::Error);
 

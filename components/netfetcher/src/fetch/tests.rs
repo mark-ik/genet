@@ -4,14 +4,14 @@
 
 //! Fetch integration tests (mockito-backed) for the public `fetch()` entry.
 
-use super::*;
 use super::mixed_content::is_same_site;
-use crate::request::RedirectMode;
-use crate::response::ResponseType;
+use super::*;
 use crate::SameSiteContext;
 use crate::cache::{InMemoryHttpCache, NoHttpCache};
 use crate::context::{AllowAllCsp, CookieStore};
 use crate::cookie_jar::InMemoryCookieJar;
+use crate::request::RedirectMode;
+use crate::response::ResponseType;
 use std::sync::{Arc, Mutex};
 use url::Url;
 
@@ -96,8 +96,7 @@ async fn redirect_error_mode_yields_network_error() {
 #[tokio::test]
 async fn decodes_gzip_content_encoding() {
     use std::io::Write;
-    let mut enc =
-        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     enc.write_all(b"compressed hello").unwrap();
     let gz = enc.finish().unwrap();
 
@@ -232,8 +231,14 @@ async fn no_store_response_is_not_cached() {
 
     let cx = caching_cx();
     let url = format!("{}/ns", server.url());
-    let _ = fetch(Request::get(url.parse().unwrap()), &cx).await.bytes().await;
-    let _ = fetch(Request::get(url.parse().unwrap()), &cx).await.bytes().await;
+    let _ = fetch(Request::get(url.parse().unwrap()), &cx)
+        .await
+        .bytes()
+        .await;
+    let _ = fetch(Request::get(url.parse().unwrap()), &cx)
+        .await
+        .bytes()
+        .await;
 
     m.assert_async().await;
 }
@@ -278,7 +283,10 @@ async fn cross_origin_cors_without_header_is_blocked() {
         .with_origin(origin_of("http://app.example/"));
     let res = fetch(req, &cx).await;
 
-    assert!(res.is_network_error(), "cross-origin CORS with no ACAO is blocked");
+    assert!(
+        res.is_network_error(),
+        "cross-origin CORS with no ACAO is blocked"
+    );
 }
 
 #[tokio::test]
@@ -307,27 +315,53 @@ fn mixed_content_active_passive_split() {
 
     // Optionally-blockable (image) in a secure context → auto-upgraded, allowed.
     let mut img: Url = "http://example.org/x.png".parse().unwrap();
-    assert!(!resolve_mixed_content(&mut img, Destination::Image, true, &cx));
+    assert!(!resolve_mixed_content(
+        &mut img,
+        Destination::Image,
+        true,
+        &cx
+    ));
     assert_eq!(img.scheme(), "https", "passive mixed content is upgraded");
 
     // Blockable (script, and the empty fetch() destination) in a secure
     // context → blocked.
     let mut script: Url = "http://example.org/a.js".parse().unwrap();
-    assert!(resolve_mixed_content(&mut script, Destination::Other, true, &cx));
+    assert!(resolve_mixed_content(
+        &mut script,
+        Destination::Other,
+        true,
+        &cx
+    ));
     let mut xhr: Url = "http://example.org/api".parse().unwrap();
-    assert!(resolve_mixed_content(&mut xhr, Destination::None, true, &cx));
+    assert!(resolve_mixed_content(
+        &mut xhr,
+        Destination::None,
+        true,
+        &cx
+    ));
 
     // No secure context, no HSTS → plain http left as-is, not blocked.
     let mut insecure: Url = "http://example.org/a.js".parse().unwrap();
-    assert!(!resolve_mixed_content(&mut insecure, Destination::Other, false, &cx));
+    assert!(!resolve_mixed_content(
+        &mut insecure,
+        Destination::Other,
+        false,
+        &cx
+    ));
     assert_eq!(insecure.scheme(), "http");
 }
 
 #[test]
 fn same_site_by_public_suffix_list() {
     let target: Url = "https://api.example.org/x".parse().unwrap();
-    assert!(is_same_site(Some(&origin_of("https://www.example.org/")), &target));
-    assert!(!is_same_site(Some(&origin_of("https://other.example/")), &target));
+    assert!(is_same_site(
+        Some(&origin_of("https://www.example.org/")),
+        &target
+    ));
+    assert!(!is_same_site(
+        Some(&origin_of("https://other.example/")),
+        &target
+    ));
     assert!(is_same_site(None, &target), "no initiator is same-site");
 
     // PSL edge the last-two-labels approximation got wrong: github.io is a
@@ -337,7 +371,10 @@ fn same_site_by_public_suffix_list() {
         !is_same_site(Some(&origin_of("https://bob.github.io/")), &pages),
         "distinct github.io subdomains are cross-site"
     );
-    assert!(is_same_site(Some(&origin_of("https://alice.github.io/y")), &pages));
+    assert!(is_same_site(
+        Some(&origin_of("https://alice.github.io/y")),
+        &pages
+    ));
 }
 
 #[tokio::test]
@@ -394,7 +431,10 @@ async fn preflight_denial_blocks_without_sending_actual() {
     let res = fetch(req, &cx).await;
 
     options.assert_async().await;
-    assert!(res.is_network_error(), "preflight denial blocks the actual request");
+    assert!(
+        res.is_network_error(),
+        "preflight denial blocks the actual request"
+    );
 }
 
 #[tokio::test]
@@ -436,7 +476,11 @@ async fn records_alt_svc_h3_advertisement() {
         .bytes()
         .await;
 
-    assert_eq!(*spy.0.lock().unwrap(), Some(443), "h3 advertisement recorded");
+    assert_eq!(
+        *spy.0.lock().unwrap(),
+        Some(443),
+        "h3 advertisement recorded"
+    );
 }
 
 #[tokio::test]

@@ -174,7 +174,10 @@ mod tests {
     fn gopher_item_types_follow_the_entry_kind() {
         let out = to_gophermap(&listing(), "h", 70);
         assert!(out.contains("7Search\t/search"), "search is type 7");
-        assert!(out.starts_with("iDictionary\t\th\t70\r\n"), "title is info text");
+        assert!(
+            out.starts_with("iDictionary\t\th\t70\r\n"),
+            "title is info text"
+        );
     }
 
     #[test]
@@ -216,9 +219,7 @@ mod tests {
         let links: Vec<_> = lines
             .iter()
             .filter_map(|line| match line {
-                gemini_protocol::GemLine::Link { url, label } => {
-                    Some((url.clone(), label.clone()))
-                },
+                gemini_protocol::GemLine::Link { url, label } => Some((url.clone(), label.clone())),
                 _ => None,
             })
             .collect();

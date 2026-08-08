@@ -324,7 +324,7 @@ where
                         Key::Named(NamedKey::ArrowUp) => Some(index.saturating_sub(1)),
                         Key::Named(NamedKey::ArrowDown) => {
                             Some((index + 1).min(len.saturating_sub(1)))
-                        }
+                        },
                         _ => None,
                     }
                 } else {
@@ -358,21 +358,21 @@ where
                         Key::Named(NamedKey::ArrowUp) => {
                             let to = state.destination().unwrap_or(index).saturating_sub(1);
                             state.set_destination(to, len);
-                        }
+                        },
                         Key::Named(NamedKey::ArrowDown) => {
                             let to = (state.destination().unwrap_or(index) + 1)
                                 .min(len.saturating_sub(1));
                             state.set_destination(to, len);
-                        }
+                        },
                         Key::Named(NamedKey::Home) => state.set_destination(0, len),
                         Key::Named(NamedKey::End) => {
                             state.set_destination(len.saturating_sub(1), len)
-                        }
+                        },
                         Key::Named(NamedKey::Escape) => state.cancel(),
                         Key::Named(NamedKey::Enter | NamedKey::Space) => {
                             event.prevent_default();
                             return state.finish();
-                        }
+                        },
                         _ => return None,
                     }
                     event.prevent_default();
@@ -388,7 +388,7 @@ where
                         state.begin(&key_item, index, 0.5, DragInput::Keyboard, &key_order);
                         event.prevent_default();
                         return None;
-                    }
+                    },
                     _ => return None,
                 };
                 if let Some(destination) = destination {
@@ -420,7 +420,7 @@ where
                             );
                             event.prop.prevent_default();
                             None
-                        }
+                        },
                         PointerPhase::Move => {
                             if let Some(drag) = state.drag.as_ref().filter(|drag| {
                                 drag.id == pointer_item.id && drag.input == DragInput::Pointer
@@ -436,7 +436,7 @@ where
                             }
                             event.prop.prevent_default();
                             None
-                        }
+                        },
                         PointerPhase::Up => {
                             if let Some(drag) = state.drag.as_ref().filter(|drag| {
                                 drag.id == pointer_item.id && drag.input == DragInput::Pointer
@@ -454,7 +454,7 @@ where
                             } else {
                                 None
                             }
-                        }
+                        },
                     }
                 },
             );

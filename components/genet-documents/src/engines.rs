@@ -12,6 +12,10 @@
 
 use std::any::Any;
 
+#[cfg(feature = "livery")]
+use genet_document_resources::{
+    ResolvedDocumentResources, ResolvedStylesheet, ResourceKind, StylesheetOwner,
+};
 use genet_host_api::ResourceFetcher;
 use genet_layout::{ScrollKey, TextSelection};
 use inker::session_engine::{
@@ -252,91 +256,50 @@ impl<Fetch: ResourceFetcher + Send + Sync> SessionEngine<Scene> for LiverySessio
             },
         };
         let dom = genet_static_dom::StaticDocument::parse(&source);
-        let mut sheets = self.author_css.clone();
-        sheets.extend(genet_layout::inline_stylesheets(&dom));
-        let sheet_refs = sheets.iter().map(String::as_str).collect::<Vec<_>>();
+        let resources =
+            ResolvedDocumentResources::resolve(&dom, Some(&base_resource), &self.fetcher);
+        let mut sheets = self
+            .author_css
+            .iter()
+            .enumerate()
+            .map(|(document_order, text)| ResolvedStylesheet {
+                owner: StylesheetOwner::Inline,
+                source_url: None,
+                media: None,
+                text: text.clone(),
+                document_order: document_order as u64,
+            })
+            .collect::<Vec<_>>();
+        sheets.extend(resources.stylesheets.iter().cloned());
         let (width, height) = request.viewport;
         let mut doc = genet_livery::LiveryDocument::new(
             dom,
-            genet_livery::StyleSet::cambium(&sheet_refs),
+            genet_livery::StyleSet::cambium_resources(&sheets),
             genet_livery::Device::screen(width as f32, height as f32),
         );
-        for authored_url in livery_resource_urls(doc.dom(), &sheets) {
-            if authored_url.starts_with("data:") || authored_url.starts_with('#') {
-                continue;
-            }
-            let resolved_url = resolve_livery_resource_url(&base_resource, &authored_url);
-            if let Some(bytes) = self.fetcher.fetch(&resolved_url) {
-                doc.set_image_resource(authored_url.clone(), bytes.clone());
-                if resolved_url != authored_url {
-                    doc.set_image_resource(resolved_url, bytes);
-                }
+        for resource in &resources.resources {
+            match resource.kind {
+                ResourceKind::Image => {
+                    doc.set_image_resource(resource.authored_url.clone(), resource.bytes.clone());
+                    if resource.resolved_url != resource.authored_url {
+                        doc.set_image_resource(
+                            resource.resolved_url.clone(),
+                            resource.bytes.clone(),
+                        );
+                    }
+                },
+                ResourceKind::Font => {
+                    doc.set_font_resource(resource.resolved_url.clone(), resource.bytes.clone());
+                },
             }
         }
         Ok(Box::new(LiveryDocumentSession {
             doc,
             address: request.address.clone(),
             last_error: None,
+            resources,
         }))
     }
-}
-
-#[cfg(feature = "livery")]
-fn resolve_livery_resource_url(base: &str, authored: &str) -> String {
-    url::Url::parse(base)
-        .ok()
-        .and_then(|base| base.join(authored).ok())
-        .map_or_else(|| authored.to_owned(), |resolved| resolved.to_string())
-}
-
-#[cfg(feature = "livery")]
-fn livery_resource_urls(dom: &genet_static_dom::StaticDocument, sheets: &[String]) -> Vec<String> {
-    let mut urls = Vec::new();
-    for sheet in sheets {
-        let lower = sheet.to_ascii_lowercase();
-        let mut cursor = 0;
-        while let Some(offset) = lower[cursor..].find("url(") {
-            let start = cursor + offset + 4;
-            let Some(close) = sheet[start..].find(')') else {
-                break;
-            };
-            let raw = sheet[start..start + close].trim();
-            let authored = raw
-                .strip_prefix('"')
-                .and_then(|value| value.strip_suffix('"'))
-                .or_else(|| {
-                    raw.strip_prefix('\'')
-                        .and_then(|value| value.strip_suffix('\''))
-                })
-                .unwrap_or(raw)
-                .trim();
-            if !authored.is_empty() && !urls.iter().any(|seen| seen == authored) {
-                urls.push(authored.to_owned());
-            }
-            cursor = start + close + 1;
-        }
-    }
-
-    let mut stack = vec![dom.document()];
-    while let Some(id) = stack.pop() {
-        if dom
-            .element_name(id)
-            .is_some_and(|name| name.local.as_ref().eq_ignore_ascii_case("img"))
-        {
-            if let Some(src) = dom.attributes(id).find_map(|attribute| {
-                (attribute.name.ns.as_ref().is_empty()
-                    && attribute.name.local.as_ref().eq_ignore_ascii_case("src"))
-                .then_some(attribute.value)
-            }) {
-                if !src.is_empty() && !urls.iter().any(|seen| seen == src) {
-                    urls.push(src.to_owned());
-                }
-            }
-        }
-        let children = dom.dom_children(id).collect::<Vec<_>>();
-        stack.extend(children.into_iter().rev());
-    }
-    urls
 }
 
 /// Retained Livery document session. The document owns the resolved style and
@@ -346,6 +309,7 @@ pub struct LiveryDocumentSession {
     doc: genet_livery::LiveryDocument<genet_static_dom::StaticDocument>,
     address: String,
     last_error: Option<String>,
+    resources: ResolvedDocumentResources,
 }
 
 #[cfg(feature = "livery")]
@@ -356,6 +320,12 @@ impl LiveryDocumentSession {
 
     pub fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
+    }
+
+    /// Missing or deferred dependencies observed while assembling this
+    /// document. This is the Livery ledger for the selected product route.
+    pub fn resource_diagnostics(&self) -> &[genet_document_resources::ResourceDiagnostic] {
+        &self.resources.diagnostics
     }
 }
 
@@ -946,13 +916,6 @@ mod tests {
             None
         }
     }
-    #[cfg(feature = "scripted")]
-    impl genet_scripted::ResourceFetcher for NoFetch {
-        fn fetch(&self, _url: &str) -> Option<Vec<u8>> {
-            None
-        }
-    }
-
     #[cfg(feature = "livery")]
     struct ImageFetch {
         bytes: Vec<u8>,
@@ -964,6 +927,30 @@ mod tests {
         fn fetch(&self, url: &str) -> Option<Vec<u8>> {
             self.requests.lock().unwrap().push(url.to_owned());
             Some(self.bytes.clone())
+        }
+    }
+
+    #[cfg(feature = "livery")]
+    struct LinkedResourceFetch {
+        image: Vec<u8>,
+        font: Vec<u8>,
+        requests: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[cfg(feature = "livery")]
+    impl ResourceFetcher for LinkedResourceFetch {
+        fn fetch(&self, url: &str) -> Option<Vec<u8>> {
+            self.requests.lock().unwrap().push(url.to_owned());
+            match url {
+                "https://example.test/docs/styles/site.css" => Some(
+                    br#".card { display: block; width: 80px; height: 40px; background-image: url(images/hero.png); }
+@font-face { font-family: linked; src: url(../fonts/text.woff2); }"#
+                        .to_vec(),
+                ),
+                "https://example.test/docs/styles/images/hero.png" => Some(self.image.clone()),
+                "https://example.test/docs/fonts/text.woff2" => Some(self.font.clone()),
+                _ => None,
+            }
         }
     }
 
@@ -1357,6 +1344,63 @@ mod tests {
         assert_eq!(
             requests.lock().unwrap().as_slice(),
             ["https://example.test/docs/hero.png"]
+        );
+    }
+
+    #[cfg(feature = "livery")]
+    #[test]
+    fn livery_session_uses_linked_sheet_identity_and_sheet_relative_resources() {
+        let image = image::RgbaImage::from_pixel(2, 3, image::Rgba([0, 0, 255, 255]));
+        let mut image_bytes = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut image_bytes),
+                image::ImageFormat::Png,
+            )
+            .expect("encode test PNG");
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let engine = LiverySessionEngine::new(LinkedResourceFetch {
+            image: image_bytes,
+            // The retained text system accepts host-provided bytes; rendering
+            // the fake fixture font is outside this source-attribution test.
+            font: b"not-a-real-font".to_vec(),
+            requests: requests.clone(),
+        });
+        let request = SessionSpawnRequest::new("https://example.test/docs/index.html")
+            .with_body(
+                r#"<html><head><link rel="stylesheet" href="styles/site.css" media="screen"></head>
+<body><div class="card">linked resource</div></body></html>"#,
+            )
+            .with_viewport(320, 240);
+        let mut session = engine.spawn(&request).expect("linked Livery route spawns");
+        let _ = session.frame(320, 240);
+        let concrete = session
+            .as_any()
+            .downcast_mut::<LiveryDocumentSession>()
+            .expect("session keeps its resource ledger");
+        assert_eq!(concrete.resources.stylesheets.len(), 1);
+        let sheet = &concrete.resources.stylesheets[0];
+        assert_eq!(sheet.media.as_deref(), Some("screen"));
+        assert_eq!(
+            sheet.source_url.as_deref(),
+            Some("https://example.test/docs/styles/site.css")
+        );
+        assert!(concrete.resources.resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Image
+                && resource.resolved_url == "https://example.test/docs/styles/images/hero.png"
+        }));
+        assert!(concrete.resources.resources.iter().any(|resource| {
+            resource.kind == ResourceKind::Font
+                && resource.resolved_url == "https://example.test/docs/fonts/text.woff2"
+        }));
+        assert!(concrete.resource_diagnostics().is_empty());
+        assert_eq!(
+            requests.lock().unwrap().as_slice(),
+            [
+                "https://example.test/docs/styles/site.css",
+                "https://example.test/docs/styles/images/hero.png",
+                "https://example.test/docs/fonts/text.woff2",
+            ]
         );
     }
 }

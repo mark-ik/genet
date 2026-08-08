@@ -172,7 +172,10 @@ impl Destination {
     /// "optionally-blockable" per the Mixed Content spec: `image` / `audio` /
     /// `video`. These are auto-upgraded http→https; everything else is blockable.
     pub(crate) fn is_optionally_blockable(self) -> bool {
-        matches!(self, Destination::Image | Destination::Audio | Destination::Video)
+        matches!(
+            self,
+            Destination::Image | Destination::Audio | Destination::Video
+        )
     }
 }
 

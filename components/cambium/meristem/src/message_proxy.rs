@@ -123,7 +123,7 @@ impl Display for ProxyError {
             Self::DriverFinished(_) => f.write_fmt(format_args!("the driver finished")),
             Self::ViewExpired(_, _) => {
                 f.write_fmt(format_args!("the corresponding view is no longer present"))
-            }
+            },
             Self::Other(inner) => Display::fmt(inner, f),
         }
     }

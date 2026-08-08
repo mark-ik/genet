@@ -51,7 +51,7 @@ pub(crate) fn referrer_header(
             } else {
                 Some(origin())
             }
-        }
+        },
         // Handled above.
         Empty | NoReferrer => None,
     }
@@ -132,7 +132,10 @@ mod tests {
     fn policy_variants() {
         let r = url("http://a.test/p");
         let cross = url("http://b.test/");
-        assert_eq!(referrer_header(&r, &cross, ReferrerPolicy::NoReferrer), None);
+        assert_eq!(
+            referrer_header(&r, &cross, ReferrerPolicy::NoReferrer),
+            None
+        );
         assert_eq!(
             referrer_header(&r, &cross, ReferrerPolicy::UnsafeUrl),
             Some("http://a.test/p".to_owned())
@@ -141,7 +144,10 @@ mod tests {
             referrer_header(&r, &cross, ReferrerPolicy::Origin),
             Some("http://a.test/".to_owned())
         );
-        assert_eq!(referrer_header(&r, &cross, ReferrerPolicy::SameOrigin), None);
+        assert_eq!(
+            referrer_header(&r, &cross, ReferrerPolicy::SameOrigin),
+            None
+        );
         assert_eq!(
             referrer_header(&r, &cross, ReferrerPolicy::OriginWhenCrossOrigin),
             Some("http://a.test/".to_owned())
@@ -156,7 +162,10 @@ mod tests {
             referrer_header(&r, &http, ReferrerPolicy::NoReferrerWhenDowngrade),
             None
         );
-        assert_eq!(referrer_header(&r, &http, ReferrerPolicy::StrictOrigin), None);
+        assert_eq!(
+            referrer_header(&r, &http, ReferrerPolicy::StrictOrigin),
+            None
+        );
     }
 
     #[test]

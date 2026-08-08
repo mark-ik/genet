@@ -205,7 +205,7 @@ where
                             bump_generation(&mut seq_state.generations, removed.slot);
                             seq_state.free_slots.push(removed.slot);
                             old_cursor += 1;
-                        }
+                        },
                         _ => break,
                     }
                 }

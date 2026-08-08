@@ -100,7 +100,8 @@ where
     /// retained layout session at `(width, height)` under `sheets`.
     pub fn add_window(&mut self, sheets: &[&str], width: f32, height: f32) -> WindowRootId {
         let root = self.dom.create_element(qual("div"));
-        self.dom.set_attribute(root, qual("class"), WINDOW_ROOT_CLASS);
+        self.dom
+            .set_attribute(root, qual("class"), WINDOW_ROOT_CLASS);
         let doc = self.dom.document();
         self.dom.append_child(doc, root);
         let id = WindowRootId(self.next);
@@ -261,8 +262,16 @@ mod tests {
         // relayout via routing, and B is byte-identical.
         let b1_before = forest.rect_of(b1).unwrap();
         let a2 = tile(forest.dom_mut(), root_a, "alpha-2");
-        assert_eq!(forest.relayout_for(a2), Some(win_a), "the mutation routed to A");
-        assert_eq!(forest.rect_of(b1).unwrap(), b1_before, "B untouched by A's mutation");
+        assert_eq!(
+            forest.relayout_for(a2),
+            Some(win_a),
+            "the mutation routed to A"
+        );
+        assert_eq!(
+            forest.rect_of(b1).unwrap(),
+            b1_before,
+            "B untouched by A's mutation"
+        );
 
         // Tear-out: move a2 from A to B, identity preserved, both windows see it.
         assert!(forest.move_to_window(a2, win_b));
@@ -271,7 +280,11 @@ mod tests {
         // A no longer lays it out.
         let view_a = SubtreeView::new(forest.dom(), root_a);
         assert!(
-            forest.layout(win_a).unwrap().absolute_rect(&view_a, a2).is_none(),
+            forest
+                .layout(win_a)
+                .unwrap()
+                .absolute_rect(&view_a, a2)
+                .is_none(),
             "A dropped the torn-out tile"
         );
     }

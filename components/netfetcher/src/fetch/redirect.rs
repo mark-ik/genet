@@ -69,7 +69,7 @@ pub(super) fn process_redirect(
     match (request.redirect, &location) {
         (RedirectMode::Error, None) => return RedirectStep::Done(Response::network_error()),
         (RedirectMode::Manual, None) => return RedirectStep::Done(opaque_redirect(url_list)),
-        _ => {}
+        _ => {},
     }
     // A 3xx without a Location is delivered as an ordinary response.
     let Some(location) = location else {
@@ -80,7 +80,10 @@ pub(super) fn process_redirect(
     // fetch runs the CORS check on the actual response, a 3xx included, ahead of
     // redirect processing):
     let req_cross = *origin_tainted
-        || request.origin.as_ref().is_some_and(|o| *o != current_url.origin());
+        || request
+            .origin
+            .as_ref()
+            .is_some_and(|o| *o != current_url.origin());
     // A cors-tainted request whose redirect fails the CORS check is a network
     // error even under manual/error redirect modes.
     if req_cross
@@ -135,7 +138,10 @@ pub(super) fn process_redirect(
             // cross-origin hop): the `Origin` header becomes "null" from here on.
             let crosses = current_url.origin() != next.origin();
             let already_foreign = *origin_tainted
-                || request.origin.as_ref().is_some_and(|o| *o != current_url.origin());
+                || request
+                    .origin
+                    .as_ref()
+                    .is_some_and(|o| *o != current_url.origin());
             if crosses && already_foreign {
                 *origin_tainted = true;
             }
@@ -162,7 +168,7 @@ pub(super) fn process_redirect(
             }
             url_list.push(current_url.clone());
             RedirectStep::Follow
-        }
+        },
     }
 }
 
@@ -174,11 +180,11 @@ fn redirect_method(status: u16, method: Method, body: &mut Option<Bytes>) -> Met
         301 | 302 if method == Method::Post => {
             *body = None;
             Method::Get
-        }
+        },
         303 if !matches!(method, Method::Get | Method::Head) => {
             *body = None;
             Method::Get
-        }
+        },
         _ => method,
     }
 }

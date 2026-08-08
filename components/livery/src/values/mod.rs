@@ -8,7 +8,10 @@ mod length;
 mod property;
 mod transform_matrix;
 
-pub use color::{Color, ColorSpace, HueInterpolation, SpecifiedColor, SystemColor};
+pub use color::{
+    Color, ColorSpace, ComputedColor, HueInterpolation, SpecifiedColor, SystemColor,
+    UsedColorContext,
+};
 pub use length::{
     CalcLengthPercentage, ContainerAxisSize, Length, LengthPercentage, LengthUnit,
     MathLengthPercentage, RelativeLengthEnvironment, TreeCounts,
@@ -100,7 +103,7 @@ unchanged_viewport_resolution!(
     Contain,
     ContainerName,
     ContainerType,
-    Color,
+    ComputedColor,
     Direction,
     Display,
     Duration,
@@ -197,7 +200,8 @@ impl ResolveViewport for BoxShadow {
                 offset_y: value.offset_y.resolve_relative(environment),
                 blur_radius: value.blur_radius.resolve_relative(environment),
                 spread_radius: value.spread_radius.resolve_relative(environment),
-                ..*value
+                color: value.color.clone(),
+                inset: value.inset,
             }),
         }
     }
@@ -463,6 +467,12 @@ impl Interpolate for Radius {
 }
 
 impl Interpolate for BoxShadow {
+    fn interpolate_value(&self, other: &Self, progress: f32) -> Self {
+        self.interpolate(other, progress)
+    }
+}
+
+impl Interpolate for ComputedColor {
     fn interpolate_value(&self, other: &Self, progress: f32) -> Self {
         self.interpolate(other, progress)
     }

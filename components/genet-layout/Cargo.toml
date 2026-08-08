@@ -17,6 +17,7 @@ accesskit = { workspace = true }
 app_units = { workspace = true }
 atomic_refcell = { workspace = true }
 data-url = { workspace = true }
+genet-document-resources = { workspace = true }
 cssparser = { workspace = true }
 euclid = { workspace = true }
 # Font enumeration + family resolution (fontique) and font metrics reading

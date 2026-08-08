@@ -90,8 +90,20 @@ fn is_token_byte(c: u8) -> bool {
     c.is_ascii_alphanumeric()
         || matches!(
             c,
-            b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^' | b'_'
-                | b'`' | b'|' | b'~'
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
         )
 }
 
@@ -101,7 +113,8 @@ fn is_token(s: &str) -> bool {
 
 /// An HTTP quoted-string token code point: tab, or 0x20..=0x7E, or 0x80..=0xFF.
 fn is_quoted_value(s: &str) -> bool {
-    s.bytes().all(|b| b == 0x09 || (0x20..=0x7E).contains(&b) || b >= 0x80)
+    s.bytes()
+        .all(|b| b == 0x09 || (0x20..=0x7E).contains(&b) || b >= 0x80)
 }
 
 /// Parse + re-serialize a MIME type (MIME Sniffing "parse a MIME type" +
@@ -133,7 +146,11 @@ fn parse_mime(input: &str) -> Option<String> {
         return None;
     }
 
-    let mut out = format!("{}/{}", typ.to_ascii_lowercase(), subtype.to_ascii_lowercase());
+    let mut out = format!(
+        "{}/{}",
+        typ.to_ascii_lowercase(),
+        subtype.to_ascii_lowercase()
+    );
     let mut seen: Vec<String> = Vec::new();
 
     while i < b.len() {
@@ -176,7 +193,10 @@ fn parse_mime(input: &str) -> Option<String> {
             while i < b.len() && b[i] != b';' {
                 i += 1;
             }
-            (s[val_start..i].trim_end_matches(is_http_ws).to_owned(), false)
+            (
+                s[val_start..i].trim_end_matches(is_http_ws).to_owned(),
+                false,
+            )
         };
 
         // An unquoted empty value is dropped; a quoted empty value (`a=""`) is kept.
@@ -233,8 +253,8 @@ fn hex(c: u8) -> Option<u8> {
 /// trailing `=` only when the length is a multiple of 4, reject `len % 4 == 1`
 /// and any non-alphabet byte, then decode.
 fn forgiving_base64(data: &[u8]) -> Option<Vec<u8>> {
-    use base64::engine::{GeneralPurpose, GeneralPurposeConfig};
     use base64::Engine;
+    use base64::engine::{GeneralPurpose, GeneralPurposeConfig};
     let mut s: Vec<u8> = data.iter().copied().filter(|&b| !is_ascii_ws(b)).collect();
     if s.len() % 4 == 0 {
         if s.ends_with(b"==") {
@@ -246,7 +266,10 @@ fn forgiving_base64(data: &[u8]) -> Option<Vec<u8>> {
     if s.len() % 4 == 1 {
         return None;
     }
-    if !s.iter().all(|&b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/') {
+    if !s
+        .iter()
+        .all(|&b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/')
+    {
         return None;
     }
     // Forgiving-base64 keeps the leading bytes even when a final group has
@@ -255,7 +278,9 @@ fn forgiving_base64(data: &[u8]) -> Option<Vec<u8>> {
     let cfg = GeneralPurposeConfig::new()
         .with_decode_allow_trailing_bits(true)
         .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent);
-    GeneralPurpose::new(&base64::alphabet::STANDARD, cfg).decode(&s).ok()
+    GeneralPurpose::new(&base64::alphabet::STANDARD, cfg)
+        .decode(&s)
+        .ok()
 }
 
 #[cfg(test)]
@@ -288,7 +313,10 @@ mod tests {
 
     #[test]
     fn base64_suffix_detection() {
-        assert_eq!(strip_base64_suffix("text/plain;base64"), Some("text/plain".to_owned()));
+        assert_eq!(
+            strip_base64_suffix("text/plain;base64"),
+            Some("text/plain".to_owned())
+        );
         // zero-or-more U+0020 SPACE may sit between ';' and "base64"
         assert_eq!(strip_base64_suffix("; base64"), Some(String::new()));
         assert_eq!(strip_base64_suffix(";  base64"), Some(String::new()));

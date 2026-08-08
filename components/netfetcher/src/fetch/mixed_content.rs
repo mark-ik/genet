@@ -6,8 +6,8 @@
 
 use url::Url;
 
-use crate::hsts;
 use crate::FetchContext;
+use crate::hsts;
 
 /// Resolve HSTS + mixed content for `url`, returning `true` if the request must
 /// be **blocked** (a network error).

@@ -514,14 +514,14 @@ where
                 } else {
                     (i + len - 1) % len
                 }
-            }
+            },
             None => {
                 if forward {
                     0
                 } else {
                     focusables.len() - 1
                 }
-            }
+            },
         };
         self.set_focus(logic, state, Some(focusables[next]));
     }
@@ -623,7 +623,7 @@ where
                 Key::Named(NamedKey::Tab) => {
                     self.focus_traverse(logic, state, !event.mods.shift);
                     return actions; // focus_traverse rebuilt
-                }
+                },
                 // Enter/Space activate a focusable control that has a click handler
                 // according to its native tag or ARIA role. Checkbox, switch,
                 // roles use Space; buttons use Enter and Space. Radio groups
@@ -643,8 +643,8 @@ where
                     // its own default (e.g. Space scrolling the page).
                     self.last_default_prevented = true;
                     return actions; // dispatch_click rebuilt
-                }
-                _ => {}
+                },
+                _ => {},
             }
         }
 
@@ -1209,7 +1209,7 @@ fn semantic_activation_matches(dom: &ScriptedDom, node: NodeId, key: &Key) -> bo
                 || !dom
                     .element_name(node)
                     .is_some_and(|name| matches!(name.local.as_ref(), "input" | "textarea"))
-        }
+        },
         _ => false,
     }
 }

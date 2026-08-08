@@ -2,12 +2,14 @@
 
 **Date:** 2026-07-26
 **Status:** in execution, corrected 2026-08-08. K0 through K3 are accepted.
-K4's box model, grid formation, inline and block sizing, live table dispatch,
-structural fragments, wrapper/caption behavior, and collapsed-track handling
-have landed through K4f. The compatibility bridge remains for named table
-deferrals. K4g1 is accepted; K4g2 is the next K4 implementation gate, with
-K4g3 interoperability research recorded ahead of implementation. K4 closes
-only after K4g and K4h delete the remaining bridge and flattening seams.
+K4a through K4e have accepted capability receipts, and K4f's collapsed-track
+slice has landed. K4f's separated table paint remains open. The compatibility
+bridge remains for named table deferrals. K4g1 is accepted; K4g2 is the next
+K4 implementation gate, with K4g3 interoperability research recorded ahead
+of implementation. K4 closes only after the K4f remainder, K4g, and K4h
+delete the remaining bridge and flattening seams. The
+[K4 completion lane](2026-08-08_buckram_k4_completion_lane.md) schedules the
+stranded K4d-K4f work and the serial path to that receipt.
 **Decision:** Buckram owns CSS box generation, formatting contexts, intrinsic
 sizing, and fragments. Taffy is an algorithm library for flex and grid, with
 block layout retained only as a migration aid.
@@ -933,9 +935,10 @@ Those tests are the useful distinction. A line spans a cleared 1px or
 zero-height float boundary; looking only at the line's top would miss the
 exclusion. The full-span query causes a rebreak against the 100px inset.
 
-The frozen K3e JSON contains 41 css-position passes, although K3e's printed
-table said 40; its stated 5,733 total was correct. Comparing frozen JSON to
-frozen JSON gives:
+The frozen K3e JSON contains 41 css-position passes. K3e's table above
+originally printed 40 and was corrected 2026-08-08 to match its frozen JSON;
+its stated 5,733 total was always correct. Comparing frozen JSON to frozen
+JSON gives:
 
 | directory | K3e pass | K3f pass | delta | gains | regressions |
 |---|---:|---:|---:|---:|---:|
@@ -1516,17 +1519,21 @@ log are under
 **Execution plan:** [Buckram K4 CSS tables execution
 plan](./2026-07-28_buckram_k4_css_tables_execution_plan.md).
 
+**Completion lane:** [Buckram K4 completion
+lane](./2026-08-08_buckram_k4_completion_lane.md). It is the executable
+handoff from contextual-color C1 through K4 closure and stops before K5.
+
 Implement anonymous table fixup, row and column structure, spans, fixed and
 auto sizing, captions, separate and collapsed borders, and positioned table
 parts. A Taffy grid call may solve track constraints after Buckram has run the
 CSS table algorithm. Grid auto-sizing is not the table algorithm.
 
-K4a through K4f capabilities have landed. Supported tables use Buckram's table
-model, inline and block sizing, fragments, wrapper and caption behavior, and
-separated-track state. Named deferrals retain the compatibility bridge. K4g1
-is accepted; contextual-color C1 is the entry dependency for K4g2, the next K4
-gate. K4g3 interoperability research is recorded ahead, not accepted
-implementation.
+K4a through K4e have accepted capability receipts. K4f's collapsed-track
+slice has landed; its separated table paint remains open. Supported tables use
+Buckram's table model, inline and block sizing, fragments, and wrapper/caption
+behavior. Named deferrals retain the compatibility bridge. K4g1 is accepted;
+contextual-color C1 is the entry dependency for K4g2, the next K4 gate. K4g3
+interoperability research is recorded ahead, not accepted implementation.
 
 **Receipt:** carry forward the old B3a-c family ledger; remove the
 positioned-row flattening guard and the partial `table-layout` marker only

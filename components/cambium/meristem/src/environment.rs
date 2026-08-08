@@ -109,7 +109,7 @@ impl Environment {
                     vacant_entry.insert(slot);
                     slot
                 }
-            }
+            },
         }
     }
 
@@ -581,7 +581,7 @@ where
                 None => {
                     tracing::warn!("Expected `Rebuild` in WithContext::Message, got {message:?}");
                     return MessageResult::Stale;
-                }
+                },
             }
         };
         debug_assert_eq!(

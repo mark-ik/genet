@@ -73,7 +73,7 @@ impl WebSocket {
                         return Some(msg);
                     }
                     // Frame(_) → keep reading.
-                }
+                },
                 _ => return None,
             }
         }
