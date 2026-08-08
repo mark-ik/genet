@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Livery product-route fixture</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 24px;
+      background-color: #f3ecdc;
+      color: #3d2b1f;
+    }
+
+    .source-order { color: #8b1e3f; }
+  </style>
+  <link rel="preload stylesheet" href="assets/route.css" media="screen">
+  <style>
+    /* This later inline sheet must beat the linked sheet at equal specificity. */
+    .source-order { color: #6b1f2d; }
+  </style>
+  <link rel="stylesheet" href="assets/print-only.css" media="print">
+</head>
+<body id="route-body">
+  <main>
+    <h1 id="source-order" class="source-order">Livery product route</h1>
+    <p class="webfont">The local fixture carries a linked Ahem font and a linked PNG.</p>
+    <div class="linked-surface" aria-label="CSS background image"></div>
+    <img src="../../../../resources/servo_64.png" alt="Servo icon" width="64" height="64">
+
+    <table class="separate">
+      <caption>Separate-border caption</caption>
+      <tbody>
+        <tr><th>route</th><th>state</th></tr>
+        <tr><td>linked CSS</td><td>screen</td></tr>
+      </tbody>
+    </table>
+
+    <table class="collapsed">
+      <caption>Collapsed border, recorded against K4g</caption>
+      <tbody>
+        <tr><td>one</td><td>two</td></tr>
+      </tbody>
+    </table>
+
+    <a class="jump" href="#resource-target">Jump to the retained target</a>
+    <div class="spacer"></div>
+    <section id="resource-target" class="target">
+      <h2>Retained target</h2>
+      <p>This target makes the headed route exercise link hit testing and scroll.</p>
+    </section>
+  </main>
+</body>
+</html>

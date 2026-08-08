@@ -28,9 +28,12 @@ pub use automatic_used::{
     size_automatic_table_inline,
 };
 pub use borders::{
-    GridEdgeOrientation, TableBorderCandidate, TableBorderCandidates, TableBorderError,
-    TableBorderOrderKey, TableBorderOrigin, TableBorderSide, TableBorderSides, TableBorderSource,
-    TableBorderStyle, TableGridEdge, collect_table_border_candidates,
+    GridEdgeOrientation, ResolvedTableBorder, ResolvedTableBorderGrid, TableBorderCandidate,
+    TableBorderCandidates, TableBorderDisposition, TableBorderError, TableBorderLedgerEntry,
+    TableBorderOrderKey, TableBorderOrigin, TableBorderPrecedence, TableBorderResolutionError,
+    TableBorderSide, TableBorderSides, TableBorderSource, TableBorderStyle, TableGridEdge,
+    collect_table_border_candidates, compare_table_border_candidates,
+    resolve_table_border_candidates,
 };
 pub use fixed::{
     TableFixedColumnGroupInput, TableFixedColumnInput, TableFixedInlineSizingInput,

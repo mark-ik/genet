@@ -191,6 +191,141 @@ mod title_tests {
     }
 }
 
+/// Product-level local receipt for the explicit Livery pin. It uses the same
+/// registry construction as `run_livery_viewer`, but keeps scene inspection
+/// GPU-free so the resource and interaction assertions are stable in CI.
+#[cfg(all(test, feature = "livery"))]
+mod livery_route_tests {
+    use genet_documents::{LiveryDocumentSession, LiverySessionEngine, LocalFetcher};
+    use inker::{
+        DocumentSession, SessionEngine, SessionRegistry, SessionScrollKey, SessionSpawnRequest,
+    };
+    use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
+    use netrender::{Scene, SceneOp};
+
+    fn node_by_id(
+        dom: &genet_static_dom::StaticDocument,
+        expected: &str,
+    ) -> genet_static_dom::StaticNodeId {
+        fn find(
+            dom: &genet_static_dom::StaticDocument,
+            node: genet_static_dom::StaticNodeId,
+            expected: &str,
+        ) -> Option<genet_static_dom::StaticNodeId> {
+            if dom.kind(node) == NodeKind::Element
+                && dom.attribute(node, &Namespace::default(), &LocalName::from("id"))
+                    == Some(expected)
+            {
+                return Some(node);
+            }
+            dom.dom_children(node)
+                .find_map(|child| find(dom, child, expected))
+        }
+
+        find(dom, dom.document(), expected).expect("fixture element by id")
+    }
+
+    #[test]
+    fn local_livery_route_keeps_resource_identity_and_interaction_after_resize() {
+        let fixture = format!(
+            r"{}\..\examples\livery-route\index.html",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let mut registry: SessionRegistry<Scene> = SessionRegistry::new();
+        registry.register(Box::new(LiverySessionEngine::new(LocalFetcher)));
+        let request = SessionSpawnRequest::new(&fixture).with_viewport(960, 640);
+        let mut session = registry
+            .spawn(inker::routing::ENGINE_GENET_LIVERY, &request)
+            .expect("Pelt can spawn the explicit Livery pin");
+
+        let first = session.frame(960, 640);
+        assert!(
+            first
+                .ops
+                .iter()
+                .any(|operation| matches!(operation, SceneOp::Image(_))),
+            "the linked CSS background or HTML image reaches the product scene"
+        );
+
+        let concrete = session
+            .as_any()
+            .downcast_mut::<LiveryDocumentSession>()
+            .expect("the registry returned a Livery document session");
+        let resources = concrete.resource_set();
+        assert_eq!(
+            resources.stylesheets.len(),
+            4,
+            "two inline and two linked sheets"
+        );
+        assert!(
+            resources.stylesheets.iter().any(|sheet| sheet
+                .source_url
+                .as_deref()
+                .is_some_and(|url| url.replace('\\', "/").ends_with("assets/route.css"))),
+            "the linked stylesheet retains its own local identity"
+        );
+        assert!(
+            resources.resources.iter().any(|resource| resource
+                .resolved_url
+                .replace('\\', "/")
+                .ends_with("resources/servo_64.png")),
+            "the linked image remains attributed to its source-relative URL"
+        );
+        assert!(
+            resources.resources.iter().any(|resource| resource
+                .resolved_url
+                .replace('\\', "/")
+                .ends_with("components/genet-layout/Ahem.ttf")),
+            "the linked font remains attributed to its stylesheet-relative URL"
+        );
+        assert!(
+            resources.diagnostics.is_empty(),
+            "the product fixture has no missing or deferred resources: {:?}",
+            resources.diagnostics
+        );
+
+        let body = node_by_id(concrete.document().dom(), "route-body");
+        assert_eq!(
+            concrete
+                .document()
+                .computed_style(body, "background-color")
+                .as_deref(),
+            Some("rgb(243, 236, 220)"),
+            "the print-media sheet does not apply on the screen route"
+        );
+        let source_order = node_by_id(concrete.document().dom(), "source-order");
+        assert_eq!(
+            concrete
+                .document()
+                .computed_style(source_order, "color")
+                .as_deref(),
+            Some("rgb(107, 31, 45)"),
+            "the later inline stylesheet wins the linked sheet at equal specificity"
+        );
+
+        // A second frame at a different viewport is the same resize path the
+        // headed viewer uses. Link geometry must survive it and drive fragment
+        // navigation before ordinary viewport scrolling resumes.
+        let _resized = session.frame(640, 480);
+        assert!(
+            session.content_height(640, 480) > 480,
+            "fixture is scrollable"
+        );
+        let link = session
+            .links()
+            .into_iter()
+            .find(|link| link.url == "#resource-target")
+            .expect("fixture jump link");
+        assert!(matches!(
+            session.click_at(link.rect[0] + 2.0, link.rect[1] + 2.0),
+            inker::SessionClick::Handled
+        ));
+        assert!(session.scroll_for_key(SessionScrollKey::Home));
+        assert!(session.scroll_by(0.0, 120.0));
+        assert!(session.scroll_at(8.0, 8.0, 0.0, -80.0));
+    }
+}
+
 /// Run the static viewer for `config`. Headless returns immediately with no window
 /// (the CI smoke shape); headed opens a window, presents the document, and scrolls
 /// it on the wheel until the window is closed.

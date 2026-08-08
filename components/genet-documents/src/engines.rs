@@ -318,6 +318,13 @@ impl LiveryDocumentSession {
         &self.doc
     }
 
+    /// The immutable host-owned inputs used to construct this Livery session.
+    /// Hosts can inspect this ledger for a product receipt without gaining a
+    /// path to mutate resources or fetch behind the host boundary.
+    pub fn resource_set(&self) -> &ResolvedDocumentResources {
+        &self.resources
+    }
+
     pub fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
     }

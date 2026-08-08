@@ -15,6 +15,8 @@
 //! Physical computed sides are mapped into the table's logical axes at the
 //! adapter boundary, once, before a candidate reaches this module.
 
+use std::cmp::Ordering;
+
 use crate::BoxId;
 
 use super::{TableGrid, TableTrackVisibility};
@@ -93,6 +95,17 @@ impl TableBorderStyle {
     pub fn draws_nothing(self) -> bool {
         matches!(self, Self::None | Self::Hidden)
     }
+
+    /// CSS 2.1 resolves `inset` and `outset` as `ridge` and `groove` in the
+    /// collapsed model. Keep the original winner style for diagnostics; the
+    /// paint phase asks for this mapped value instead.
+    pub fn collapsed_paint_style(self) -> Self {
+        match self {
+            Self::Inset => Self::Ridge,
+            Self::Outset => Self::Groove,
+            other => other,
+        }
+    }
 }
 
 /// A stable tiebreak for two candidates that agree on style, width, and
@@ -109,7 +122,7 @@ pub struct TableBorderOrderKey(pub u32);
 /// origin, and order, and only carries the color of whichever candidate wins.
 /// Buckram never inspects it, which is what keeps Livery's color model out of
 /// the table model.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TableBorderCandidate<Color> {
     pub edge: TableGridEdge,
     pub source: BoxId,
@@ -128,7 +141,7 @@ pub struct TableBorderCandidate<Color> {
 /// Retained through resolution: K4g5 needs to know that a segment's winner was
 /// some row's block-end rather than the next row's block-start, because the
 /// two are painted from different boxes even where they land on one line.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum TableBorderSide {
     InlineStart,
     InlineEnd,
@@ -137,7 +150,7 @@ pub enum TableBorderSide {
 }
 
 /// One box's four logical border sides, as the adapter lowered them.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TableBorderSides<Color> {
     pub inline_start: (TableBorderStyle, f32, Color),
     pub inline_end: (TableBorderStyle, f32, Color),
@@ -148,7 +161,7 @@ pub struct TableBorderSides<Color> {
 /// A source box's borders together with the identity conflict resolution
 /// needs. The adapter builds one of these per participating box; this module
 /// decides which atomic segments each one reaches.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TableBorderSource<Color> {
     pub source: BoxId,
     pub origin: TableBorderOrigin,
@@ -169,6 +182,84 @@ pub enum TableBorderError {
     },
     /// The visibility mask does not describe this grid.
     TrackVisibilityShape,
+    /// One table-role input did not cover the corresponding K4b topology.
+    /// Silently zipping it would omit candidates before conflict resolution.
+    SourceShape {
+        origin: TableBorderOrigin,
+        expected: usize,
+        actual: usize,
+    },
+}
+
+/// The first CSS2 comparison that distinguished two candidates.
+///
+/// `SourceIdentity` and `SourceSide` are not CSS precedence. They only make
+/// a malformed adapter input with equal order keys deterministic. A valid
+/// lowering supplies direction-corrected order keys, so ordinary CSS ties
+/// end at [`Self::Order`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TableBorderPrecedence {
+    Hidden,
+    None,
+    Width,
+    Style,
+    Origin,
+    Order,
+    SourceIdentity,
+    SourceSide,
+}
+
+/// The resolution status of one candidate in an atomic-segment ledger.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TableBorderDisposition {
+    Winner,
+    /// `none` was the only style present, so the segment has no winner.
+    OmittedNone,
+    /// This candidate lost directly to the selected winner at this step.
+    Lost {
+        winner: BoxId,
+        at: TableBorderPrecedence,
+    },
+}
+
+/// One candidate plus the exact outcome it received at an atomic segment.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableBorderLedgerEntry<Color> {
+    pub candidate: TableBorderCandidate<Color>,
+    pub disposition: TableBorderDisposition,
+}
+
+/// One resolved atomic segment. A hidden winner remains present as an
+/// identity and diagnostic, but suppresses its painted output. An all-`none`
+/// or empty segment has no winner.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedTableBorder<Color> {
+    pub edge: TableGridEdge,
+    pub winner: Option<TableBorderCandidate<Color>>,
+    pub suppressed_by_hidden: bool,
+    pub ledger: Vec<TableBorderLedgerEntry<Color>>,
+}
+
+/// The one resolved winner (or explicit omission) for every atomic table
+/// edge. K4g3 keeps these atomic answers before any spanning-side rule can
+/// harmonize connected segments.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedTableBorderGrid<Color> {
+    pub segments: Vec<ResolvedTableBorder<Color>>,
+}
+
+/// An adapter gave two distinct colors the same complete CSS conflict
+/// identity. Color does not participate in CSS2 ranking, so selecting either
+/// would make the result depend on candidate-vector order. Normal candidate
+/// extraction cannot produce this shape; retain it as a diagnostic instead
+/// of making a silent choice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TableBorderResolutionError {
+    IndistinguishableCandidates {
+        edge: TableGridEdge,
+        source: BoxId,
+        side: TableBorderSide,
+    },
 }
 
 /// Every candidate that meets every atomic segment, in a stable order.
@@ -199,6 +290,171 @@ impl<Color> TableBorderCandidates<Color> {
     pub fn is_empty(&self) -> bool {
         self.candidates.is_empty()
     }
+
+    /// Resolve every atomic edge in this candidate grid. Empty edges and
+    /// all-`none` conflicts remain visible as omitted segments.
+    pub fn resolve(&self) -> Result<ResolvedTableBorderGrid<Color>, TableBorderResolutionError>
+    where
+        Color: Clone + PartialEq,
+    {
+        resolve_table_border_candidates(self)
+    }
+}
+
+/// Compare two candidates by CSS 2.1 collapsed-border precedence.
+///
+/// A greater result means `left` wins. The returned step is the first rule
+/// that decided the result. Color is intentionally absent: it travels with
+/// the winner but never ranks it.
+pub fn compare_table_border_candidates<Color>(
+    left: &TableBorderCandidate<Color>,
+    right: &TableBorderCandidate<Color>,
+) -> (Ordering, Option<TableBorderPrecedence>) {
+    let compare_style = |style: TableBorderStyle| match style {
+        TableBorderStyle::Hidden => 2u8,
+        TableBorderStyle::None => 0,
+        _ => 1,
+    };
+    let hidden = compare_style(left.style).cmp(&compare_style(right.style));
+    if hidden != Ordering::Equal
+        && (left.style == TableBorderStyle::Hidden || right.style == TableBorderStyle::Hidden)
+    {
+        return (hidden, Some(TableBorderPrecedence::Hidden));
+    }
+    if hidden != Ordering::Equal {
+        return (hidden, Some(TableBorderPrecedence::None));
+    }
+
+    let width = left.width.total_cmp(&right.width);
+    if width != Ordering::Equal {
+        return (width, Some(TableBorderPrecedence::Width));
+    }
+    // The enums intentionally run strongest to weakest, so reverse their
+    // natural order when the larger `Ordering` value means "wins".
+    let style = right.style.cmp(&left.style);
+    if style != Ordering::Equal {
+        return (style, Some(TableBorderPrecedence::Style));
+    }
+    let origin = right.origin.cmp(&left.origin);
+    if origin != Ordering::Equal {
+        return (origin, Some(TableBorderPrecedence::Origin));
+    }
+    // The adapter supplies a direction-corrected key whose smaller value is
+    // closer to logical block-start and inline-start.
+    let order = right.order.cmp(&left.order);
+    if order != Ordering::Equal {
+        return (order, Some(TableBorderPrecedence::Order));
+    }
+    let source = right.source.cmp(&left.source);
+    if source != Ordering::Equal {
+        return (source, Some(TableBorderPrecedence::SourceIdentity));
+    }
+    let side = right.source_side.cmp(&left.source_side);
+    if side != Ordering::Equal {
+        return (side, Some(TableBorderPrecedence::SourceSide));
+    }
+    (Ordering::Equal, None)
+}
+
+/// Resolve one winner (or omission) for every atomic segment in a candidate
+/// ledger. This is intentionally free of layout geometry and paint order.
+pub fn resolve_table_border_candidates<Color>(
+    candidates: &TableBorderCandidates<Color>,
+) -> Result<ResolvedTableBorderGrid<Color>, TableBorderResolutionError>
+where
+    Color: Clone + PartialEq,
+{
+    let mut segments = Vec::new();
+    for line in 0..candidates.inline_running_lines {
+        for segment in 0..candidates.block_running_lines.saturating_sub(1) {
+            let edge = TableGridEdge {
+                orientation: GridEdgeOrientation::InlineRunning,
+                line,
+                segment,
+            };
+            segments.push(resolve_edge(edge, candidates.at(edge))?);
+        }
+    }
+    for line in 0..candidates.block_running_lines {
+        for segment in 0..candidates.inline_running_lines.saturating_sub(1) {
+            let edge = TableGridEdge {
+                orientation: GridEdgeOrientation::BlockRunning,
+                line,
+                segment,
+            };
+            segments.push(resolve_edge(edge, candidates.at(edge))?);
+        }
+    }
+    Ok(ResolvedTableBorderGrid { segments })
+}
+
+fn resolve_edge<'a, Color: Clone + PartialEq>(
+    edge: TableGridEdge,
+    candidates: impl Iterator<Item = &'a TableBorderCandidate<Color>>,
+) -> Result<ResolvedTableBorder<Color>, TableBorderResolutionError>
+where
+    Color: 'a,
+{
+    let candidates = candidates.collect::<Vec<_>>();
+    let Some(mut winner) = candidates.first().copied() else {
+        return Ok(ResolvedTableBorder {
+            edge,
+            winner: None,
+            suppressed_by_hidden: false,
+            ledger: Vec::new(),
+        });
+    };
+
+    for candidate in candidates.iter().copied().skip(1) {
+        let (ordering, _) = compare_table_border_candidates(candidate, winner);
+        match ordering {
+            Ordering::Greater => winner = candidate,
+            Ordering::Less => {},
+            Ordering::Equal if candidate.color != winner.color => {
+                return Err(TableBorderResolutionError::IndistinguishableCandidates {
+                    edge,
+                    source: candidate.source,
+                    side: candidate.source_side,
+                });
+            },
+            Ordering::Equal => {},
+        }
+    }
+
+    let all_none = candidates
+        .iter()
+        .all(|candidate| candidate.style == TableBorderStyle::None);
+    let ledger = candidates
+        .into_iter()
+        .map(|candidate| {
+            let disposition = if all_none {
+                TableBorderDisposition::OmittedNone
+            } else {
+                let (ordering, at) = compare_table_border_candidates(candidate, winner);
+                match ordering {
+                    Ordering::Equal => TableBorderDisposition::Winner,
+                    Ordering::Less => TableBorderDisposition::Lost {
+                        winner: winner.source,
+                        at: at.expect("a non-equal border comparison names its rule"),
+                    },
+                    Ordering::Greater => {
+                        unreachable!("the selected winner outranks every candidate")
+                    },
+                }
+            };
+            TableBorderLedgerEntry {
+                candidate: candidate.clone(),
+                disposition,
+            }
+        })
+        .collect();
+    let suppressed_by_hidden = winner.style.suppresses();
+    Ok(ResolvedTableBorder {
+        edge,
+        winner: (!all_none).then(|| winner.clone()),
+        suppressed_by_hidden,
+        ledger,
+    })
 }
 
 /// A rectangular range of the grid, in tracks.
@@ -249,16 +505,41 @@ impl TrackRange {
 /// K4f's collapsed tracks stay in the topology. A collapsed track still has
 /// intersections and still has borders meeting them; removing it here would
 /// delete the model rather than the rendering, which is the wrong layer.
-pub fn collect_table_border_candidates<Color: Copy>(
+pub fn collect_table_border_candidates<Color: Clone>(
     grid: &TableGrid,
     visibility: &TableTrackVisibility,
     table: TableBorderSource<Color>,
+    row_groups: &[TableBorderSource<Color>],
     rows: &[TableBorderSource<Color>],
+    column_groups: &[TableBorderSource<Color>],
     columns: &[TableBorderSource<Color>],
     cells: &[TableBorderSource<Color>],
 ) -> Result<TableBorderCandidates<Color>, TableBorderError> {
     if visibility.rows.len() != grid.rows.len() || visibility.columns.len() != grid.columns.len() {
         return Err(TableBorderError::TrackVisibilityShape);
+    }
+    for (origin, expected, actual) in [
+        (
+            TableBorderOrigin::RowGroup,
+            grid.row_groups.len(),
+            row_groups.len(),
+        ),
+        (TableBorderOrigin::Row, grid.rows.len(), rows.len()),
+        (
+            TableBorderOrigin::ColumnGroup,
+            grid.column_groups.len(),
+            column_groups.len(),
+        ),
+        (TableBorderOrigin::Column, grid.columns.len(), columns.len()),
+        (TableBorderOrigin::Cell, grid.cells.len(), cells.len()),
+    ] {
+        if expected != actual {
+            return Err(TableBorderError::SourceShape {
+                origin,
+                expected,
+                actual,
+            });
+        }
     }
     let mut candidates = Vec::new();
 
@@ -273,40 +554,30 @@ pub fn collect_table_border_candidates<Color: Copy>(
     };
     project(&mut candidates, grid, table, whole)?;
 
-    for group in &grid.column_groups {
+    for (group, source) in grid.column_groups.iter().zip(column_groups) {
         let range = TrackRange {
             row: 0,
             row_span: grid.rows.len(),
             column: group.start,
             column_span: group.span,
         };
-        let source = TableBorderSource {
-            source: group.source,
-            origin: TableBorderOrigin::ColumnGroup,
-            ..table
-        };
-        project(&mut candidates, grid, source, range)?;
+        project(&mut candidates, grid, source.clone(), range)?;
     }
-    for group in &grid.row_groups {
+    for (group, source) in grid.row_groups.iter().zip(row_groups) {
         let range = TrackRange {
             row: group.start,
             row_span: group.span,
             column: 0,
             column_span: grid.columns.len(),
         };
-        let source = TableBorderSource {
-            source: group.source,
-            origin: TableBorderOrigin::RowGroup,
-            ..table
-        };
-        project(&mut candidates, grid, source, range)?;
+        project(&mut candidates, grid, source.clone(), range)?;
     }
 
     for (index, row) in rows.iter().enumerate() {
         project(
             &mut candidates,
             grid,
-            *row,
+            row.clone(),
             TrackRange {
                 row: index,
                 row_span: 1,
@@ -319,7 +590,7 @@ pub fn collect_table_border_candidates<Color: Copy>(
         project(
             &mut candidates,
             grid,
-            *column,
+            column.clone(),
             TrackRange {
                 row: 0,
                 row_span: grid.rows.len(),
@@ -332,7 +603,7 @@ pub fn collect_table_border_candidates<Color: Copy>(
         project(
             &mut candidates,
             grid,
-            *source,
+            source.clone(),
             TrackRange {
                 row: cell.row,
                 row_span: cell.row_span,
@@ -351,7 +622,7 @@ pub fn collect_table_border_candidates<Color: Copy>(
 
 /// Spread one source's four sides over the perimeter of its track range, one
 /// candidate per atomic segment.
-fn project<Color: Copy>(
+fn project<Color: Clone>(
     out: &mut Vec<TableBorderCandidate<Color>>,
     grid: &TableGrid,
     source: TableBorderSource<Color>,
@@ -406,7 +677,7 @@ fn project<Color: Copy>(
                 origin: source.origin,
                 style,
                 width,
-                color,
+                color: color.clone(),
                 order: source.order,
             });
         }
@@ -497,7 +768,9 @@ mod tests {
     /// exactly the one it is about.
     struct Scene {
         table: TableBorderSource<u8>,
+        row_groups: Vec<TableBorderSource<u8>>,
         rows: Vec<TableBorderSource<u8>>,
+        column_groups: Vec<TableBorderSource<u8>>,
         columns: Vec<TableBorderSource<u8>>,
         cells: Vec<TableBorderSource<u8>>,
     }
@@ -508,10 +781,20 @@ mod tests {
         };
         Scene {
             table: source(grid.grid, TableBorderOrigin::Table, 1.0),
+            row_groups: grid
+                .row_groups
+                .iter()
+                .map(|group| source(group.source, TableBorderOrigin::RowGroup, 1.0))
+                .collect(),
             rows: grid
                 .rows
                 .iter()
                 .map(|row| track(row, TableBorderOrigin::Row))
+                .collect(),
+            column_groups: grid
+                .column_groups
+                .iter()
+                .map(|group| source(group.source, TableBorderOrigin::ColumnGroup, 1.0))
                 .collect(),
             columns: grid
                 .columns
@@ -540,8 +823,10 @@ mod tests {
             collect_table_border_candidates(
                 grid,
                 visibility,
-                self.table,
+                self.table.clone(),
+                &self.row_groups,
                 &self.rows,
+                &self.column_groups,
                 &self.columns,
                 &self.cells,
             )
@@ -697,5 +982,237 @@ mod tests {
         assert!(TableBorderStyle::Hidden.suppresses());
         assert!(TableBorderStyle::None.draws_nothing());
         assert!(!TableBorderStyle::None.suppresses());
+    }
+
+    fn candidate(
+        _grid: &TableGrid,
+        source: BoxId,
+        style: TableBorderStyle,
+        width: f32,
+        origin: TableBorderOrigin,
+        order: u32,
+    ) -> TableBorderCandidate<u8> {
+        TableBorderCandidate {
+            edge: TableGridEdge {
+                orientation: GridEdgeOrientation::InlineRunning,
+                line: 1,
+                segment: 0,
+            },
+            source,
+            source_side: TableBorderSide::BlockEnd,
+            origin,
+            style,
+            width,
+            color: source.index() as u8,
+            order: TableBorderOrderKey(order),
+        }
+    }
+
+    fn resolved(candidates: Vec<TableBorderCandidate<u8>>) -> ResolvedTableBorder<u8> {
+        let edge = candidates[0].edge;
+        let grid = TableBorderCandidates {
+            candidates,
+            inline_running_lines: 2,
+            block_running_lines: 2,
+        }
+        .resolve()
+        .expect("resolves");
+        grid.segments
+            .into_iter()
+            .find(|segment| segment.edge == edge)
+            .expect("edge result")
+    }
+
+    #[test]
+    fn css2_comparator_checks_hidden_none_width_style_origin_and_order_in_order() {
+        let grid = table_2x2(&[]);
+        let cell = grid.cells[0].source;
+        let row = grid.rows[0].source.expect("row source");
+        let left = candidate(
+            &grid,
+            cell,
+            TableBorderStyle::Solid,
+            1.0,
+            TableBorderOrigin::Cell,
+            2,
+        );
+        let mut right = candidate(
+            &grid,
+            row,
+            TableBorderStyle::Solid,
+            9.0,
+            TableBorderOrigin::Row,
+            1,
+        );
+
+        right.style = TableBorderStyle::Hidden;
+        assert_eq!(
+            compare_table_border_candidates(&right, &left),
+            (Ordering::Greater, Some(TableBorderPrecedence::Hidden))
+        );
+        right.style = TableBorderStyle::None;
+        assert_eq!(
+            compare_table_border_candidates(&left, &right),
+            (Ordering::Greater, Some(TableBorderPrecedence::None))
+        );
+        right.style = TableBorderStyle::Solid;
+        assert_eq!(
+            compare_table_border_candidates(&right, &left),
+            (Ordering::Greater, Some(TableBorderPrecedence::Width))
+        );
+        right.width = left.width;
+        right.style = TableBorderStyle::Double;
+        assert_eq!(
+            compare_table_border_candidates(&right, &left),
+            (Ordering::Greater, Some(TableBorderPrecedence::Style))
+        );
+        right.style = left.style;
+        assert_eq!(
+            compare_table_border_candidates(&left, &right),
+            (Ordering::Greater, Some(TableBorderPrecedence::Origin))
+        );
+        right.origin = left.origin;
+        assert_eq!(
+            compare_table_border_candidates(&right, &left),
+            (Ordering::Greater, Some(TableBorderPrecedence::Order))
+        );
+    }
+
+    #[test]
+    fn resolution_is_permutation_invariant_and_its_ledger_names_the_loss() {
+        let grid = table_2x2(&[]);
+        let cell = grid.cells[0].source;
+        let row = grid.rows[0].source.expect("row source");
+        let table = grid.grid;
+        let candidates = vec![
+            candidate(
+                &grid,
+                table,
+                TableBorderStyle::Solid,
+                3.0,
+                TableBorderOrigin::Table,
+                3,
+            ),
+            candidate(
+                &grid,
+                row,
+                TableBorderStyle::Solid,
+                3.0,
+                TableBorderOrigin::Row,
+                2,
+            ),
+            candidate(
+                &grid,
+                cell,
+                TableBorderStyle::Solid,
+                4.0,
+                TableBorderOrigin::Cell,
+                1,
+            ),
+        ];
+        let winner = resolved(candidates.clone());
+        let mut reversed = candidates;
+        reversed.reverse();
+        let permuted = resolved(reversed);
+        assert_eq!(winner.winner, permuted.winner);
+        assert_eq!(
+            winner.winner.as_ref().map(|winner| winner.source),
+            Some(cell)
+        );
+        assert!(winner.ledger.iter().any(|entry| {
+            entry.candidate.source == row
+                && entry.disposition
+                    == TableBorderDisposition::Lost {
+                        winner: cell,
+                        at: TableBorderPrecedence::Width,
+                    }
+        }));
+    }
+
+    #[test]
+    fn hidden_and_all_none_have_distinct_resolved_results() {
+        let grid = table_2x2(&[]);
+        let cell = grid.cells[0].source;
+        let row = grid.rows[0].source.expect("row source");
+        let hidden = resolved(vec![
+            candidate(
+                &grid,
+                cell,
+                TableBorderStyle::Hidden,
+                0.0,
+                TableBorderOrigin::Cell,
+                1,
+            ),
+            candidate(
+                &grid,
+                row,
+                TableBorderStyle::Double,
+                12.0,
+                TableBorderOrigin::Row,
+                0,
+            ),
+        ]);
+        assert!(hidden.suppressed_by_hidden);
+        assert_eq!(
+            hidden.winner.as_ref().map(|winner| winner.style),
+            Some(TableBorderStyle::Hidden)
+        );
+
+        let none = resolved(vec![
+            candidate(
+                &grid,
+                cell,
+                TableBorderStyle::None,
+                0.0,
+                TableBorderOrigin::Cell,
+                1,
+            ),
+            candidate(
+                &grid,
+                row,
+                TableBorderStyle::None,
+                3.0,
+                TableBorderOrigin::Row,
+                0,
+            ),
+        ]);
+        assert!(!none.suppressed_by_hidden);
+        assert_eq!(none.winner, None);
+        assert!(
+            none.ledger
+                .iter()
+                .all(|entry| entry.disposition == TableBorderDisposition::OmittedNone)
+        );
+    }
+
+    #[test]
+    fn collapsed_paint_style_keeps_the_diagnostic_winner_but_maps_relief_styles() {
+        assert_eq!(
+            TableBorderStyle::Inset.collapsed_paint_style(),
+            TableBorderStyle::Ridge
+        );
+        assert_eq!(
+            TableBorderStyle::Outset.collapsed_paint_style(),
+            TableBorderStyle::Groove
+        );
+        assert_eq!(
+            TableBorderStyle::Double.collapsed_paint_style(),
+            TableBorderStyle::Double
+        );
+    }
+
+    #[test]
+    fn group_sources_supply_their_own_candidate_sides() {
+        let grid = table_2x2(&[]);
+        let mut scene = scene(&grid);
+        scene.row_groups[0].sides.block_start = (TableBorderStyle::Dotted, 7.0, 9);
+        let candidates = scene.collect(&grid);
+        assert!(candidates.candidates.iter().any(|candidate| {
+            candidate.source == grid.row_groups[0].source
+                && candidate.source_side == TableBorderSide::BlockStart
+                && candidate.style == TableBorderStyle::Dotted
+                && candidate.width == 7.0
+                && candidate.color == 9
+        }));
     }
 }

@@ -80,7 +80,7 @@ impl SmolwebDocument {
     /// Lower already-fetched content through the matching Nematic engine.
     pub fn parse(url: &str, body: &str, theme: SmolwebTheme) -> Self {
         let document = lower(url, body);
-        let (style, background) = style_for_theme(&theme, url);
+        let (style, background) = style_for_theme(&theme, url, &document.content_type);
         Self::from_document(document, style, background)
     }
 
@@ -269,7 +269,21 @@ fn looks_like_feed(body: &str) -> bool {
     body.starts_with("<?xml") || body.starts_with("<rss") || body.starts_with("<feed")
 }
 
-fn style_for_theme(theme: &SmolwebTheme, url: &str) -> (DocumentStyleSheet, [f32; 4]) {
+/// The content types whose whole document is a fixed-width menu, so its body
+/// font has to be the monospace one.
+///
+/// A gopher menu's informational lines lower to `Preformatted` and carry ASCII
+/// art and column alignment, but its selector lines lower to a `Paragraph` with
+/// a link span, because `Preformatted` holds text and cannot hold a link. Those
+/// lines would otherwise take the body serif and break the very column grid the
+/// lines above and below them establish. Nex listings have the same shape.
+const FIXED_WIDTH_MENU_TYPES: &[&str] = &["application/gopher-menu", "application/x-nex-listing"];
+
+fn style_for_theme(
+    theme: &SmolwebTheme,
+    url: &str,
+    content_type: &str,
+) -> (DocumentStyleSheet, [f32; 4]) {
     let palette = match theme {
         SmolwebTheme::Site => site_palette(url),
         SmolwebTheme::Plain => fixed_palette("#ffffff", "#1a1a1a", "#0b57d0", "#555555", "#f4f4f4"),
@@ -288,8 +302,12 @@ fn style_for_theme(theme: &SmolwebTheme, url: &str) -> (DocumentStyleSheet, [f32
     let mut style = DocumentStyleSheet::default();
     // These values are user-facing defaults rather than host chrome. Hosts
     // can still pass an explicit sheet through `from_document`.
-    style.body_font_family = "serif".into();
     style.mono_font_family = "monospace".into();
+    style.body_font_family = if FIXED_WIDTH_MENU_TYPES.contains(&content_type) {
+        style.mono_font_family.clone()
+    } else {
+        "serif".into()
+    };
     style.body_font_size = 16.0;
     style.line_height_ratio = 1.5;
     style.horizontal_padding = 32.0;
@@ -488,6 +506,26 @@ mod tests {
         );
     }
 
+    /// A gopher menu is one fixed-width document. Its info lines lower to
+    /// `Preformatted` and its selector lines to a paragraph with a link span,
+    /// so a serif body font renders the links in a different typeface from the
+    /// ASCII art directly above them and the columns stop lining up.
+    #[test]
+    fn a_fixed_width_menu_sets_its_body_font_to_the_monospace_one() {
+        for content_type in ["application/gopher-menu", "application/x-nex-listing"] {
+            let (style, _) = style_for_theme(&SmolwebTheme::Dark, "gopher://x.test/", content_type);
+            assert_eq!(
+                style.body_font_family, style.mono_font_family,
+                "{content_type} must not mix typefaces inside one column grid"
+            );
+        }
+        // A prose format keeps the body serif: gemtext is not column-aligned.
+        for content_type in ["text/gemini", "text/plain"] {
+            let (style, _) = style_for_theme(&SmolwebTheme::Dark, "gemini://x.test/", content_type);
+            assert_eq!(style.body_font_family, "serif", "{content_type} is prose");
+        }
+    }
+
     #[test]
     fn app_rgb_palette_maps_into_document_style() {
         let theme = SmolwebTheme::App(SmolwebPalette {
@@ -497,7 +535,7 @@ mod tests {
             quote: "rgb(153, 170, 187)".into(),
             pre_bg: "rgb(10, 22, 34)".into(),
         });
-        let (style, background) = style_for_theme(&theme, "gemini://x.test/");
+        let (style, background) = style_for_theme(&theme, "gemini://x.test/", "text/gemini");
         assert_eq!(background, [16.0 / 255.0, 32.0 / 255.0, 48.0 / 255.0, 1.0]);
         assert_eq!(
             style.colors.link_text,

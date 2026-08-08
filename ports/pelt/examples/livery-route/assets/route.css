@@ -1,0 +1,40 @@
+@font-face {
+  font-family: RouteAhem;
+  src: url("../../../../../components/genet-layout/Ahem.ttf") format("truetype");
+}
+
+.webfont { font-family: RouteAhem, sans-serif; }
+
+.linked-surface {
+  width: 64px;
+  height: 64px;
+  margin: 12px 0;
+  background-color: #d9b46c;
+  background-image: url("../../../../../resources/servo_64.png");
+  background-repeat: no-repeat;
+}
+
+/* The later inline sheet in index.html must win this equal-specificity rule. */
+.source-order { color: #2d5b78; }
+
+table { margin: 18px 0; }
+
+.separate {
+  border-collapse: separate;
+  border-spacing: 6px;
+  background-color: #fffaf0;
+}
+
+.separate caption { caption-side: top; }
+.separate th, .separate td { border: 2px solid #6b1f2d; padding: 5px; }
+
+.collapsed {
+  border-collapse: collapse;
+  background-color: #fffaf0;
+}
+
+.collapsed td { border: 3px solid #6b1f2d; padding: 5px; }
+
+.jump, .target { display: block; }
+.spacer { height: 850px; }
+.target { height: 80px; background-color: #ead7b0; }

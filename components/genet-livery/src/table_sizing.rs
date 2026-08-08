@@ -6,17 +6,22 @@
 
 use buckram::{
     AffineLengthPercentage, CellBlockOffsets, CellInlineOffsets, FlowAxes, InlineSizeConstraint,
-    PhysicalSide, TableAutomaticColumnGroupInput, TableAutomaticColumnInput, TableBlockConstraint,
-    TableBoxSizing, TableCellAlignment, TableCellBlockStyle, TableCellInlineStyle, TableDeferral,
-    TableFixedColumnGroupInput, TableFixedColumnInput, TableGrid, TableInlineConstraints,
-    TableInlineProperty, TableInlineSizingError,
+    PhysicalSide, ResolvedTableBorderGrid, TableAutomaticColumnGroupInput,
+    TableAutomaticColumnInput, TableBlockConstraint, TableBorderError, TableBorderOrderKey,
+    TableBorderOrigin, TableBorderResolutionError, TableBorderSides, TableBorderSource,
+    TableBorderStyle, TableBoxSizing, TableCellAlignment, TableCellBlockStyle,
+    TableCellInlineStyle, TableDeferral, TableFixedColumnGroupInput, TableFixedColumnInput,
+    TableGrid, TableInlineConstraints, TableInlineProperty, TableInlineSizingError,
+    collect_table_border_candidates,
 };
 use livery::{
     ComputedValues,
-    values::{BorderStyle, BorderWidth, BoxSizing, LengthPercentage, Size, VerticalAlign},
+    values::{
+        BorderStyle, BorderWidth, BoxSizing, ComputedColor, LengthPercentage, Size, VerticalAlign,
+    },
 };
 
-use crate::layout::border_width_px;
+use crate::{box_tree::GeneratedBoxTree, layout::border_width_px, style::StylePlane};
 
 /// Lower a computed cell style into logical table sizing data. The caller must
 /// supply the already-computed local and root font sizes. A percentage padding
@@ -49,6 +54,254 @@ pub(crate) fn table_cell_inline_style(
             border_end: logical_border(computed, axes.inline_end(), font_size),
         },
     })
+}
+
+/// Lower every physical computed border side into the table's logical axes,
+/// collect K4g1's candidates, and retain K4g2's atomic winner grid. The
+/// result is deliberately not sizing or paint input yet: K4g3 determines how
+/// those atomic answers become scalar metrics, and K4g5 owns their geometry.
+pub(crate) fn collapsed_table_border_grid<Id>(
+    boxes: &GeneratedBoxTree<Id>,
+    styles: &StylePlane<Id>,
+    grid: &TableGrid,
+    table: buckram::BoxId,
+    table_computed: &ComputedValues,
+    font_size: f32,
+) -> Result<ResolvedTableBorderGrid<ComputedColor>, CollapsedBorderLoweringError>
+where
+    Id: Copy + Eq + std::hash::Hash,
+{
+    let axes = boxes[table].flow;
+    let default = ComputedValues::default();
+    let style_of = |source| {
+        boxes
+            .origin_node(source)
+            .and_then(|node| styles.get(node))
+            .unwrap_or(&default)
+    };
+    let source = |source, origin, order, computed: &ComputedValues| TableBorderSource {
+        source,
+        origin,
+        sides: table_border_sides(computed, axes, font_size),
+        order,
+    };
+    let table = source(
+        table,
+        TableBorderOrigin::Table,
+        table_border_order_key(grid, axes, grid.grid),
+        table_computed,
+    );
+    let row_groups = grid
+        .row_groups
+        .iter()
+        .map(|group| {
+            source(
+                group.source,
+                TableBorderOrigin::RowGroup,
+                table_border_order_key(grid, axes, group.source),
+                style_of(group.source),
+            )
+        })
+        .collect::<Vec<_>>();
+    let rows = grid
+        .rows
+        .iter()
+        .map(|track| {
+            let source_id = track.source.unwrap_or(grid.grid);
+            let order = table_border_order_for_position(grid, axes, track.index, 0);
+            source(
+                source_id,
+                TableBorderOrigin::Row,
+                order,
+                track.source.map_or(&default, style_of),
+            )
+        })
+        .collect::<Vec<_>>();
+    let column_groups = grid
+        .column_groups
+        .iter()
+        .map(|group| {
+            source(
+                group.source,
+                TableBorderOrigin::ColumnGroup,
+                table_border_order_key(grid, axes, group.source),
+                style_of(group.source),
+            )
+        })
+        .collect::<Vec<_>>();
+    let columns = grid
+        .columns
+        .iter()
+        .map(|track| {
+            let source_id = track.source.unwrap_or(grid.grid);
+            let order = table_border_order_for_position(grid, axes, 0, track.index);
+            source(
+                source_id,
+                TableBorderOrigin::Column,
+                order,
+                track.source.map_or(&default, style_of),
+            )
+        })
+        .collect::<Vec<_>>();
+    let cells = grid
+        .cells
+        .iter()
+        .map(|cell| {
+            source(
+                cell.source,
+                TableBorderOrigin::Cell,
+                table_border_order_key(grid, axes, cell.source),
+                style_of(cell.source),
+            )
+        })
+        .collect::<Vec<_>>();
+    let candidates = collect_table_border_candidates(
+        grid,
+        &crate::table_shadow::track_visibility(boxes, styles, grid),
+        table,
+        &row_groups,
+        &rows,
+        &column_groups,
+        &columns,
+        &cells,
+    )?;
+    Ok(candidates.resolve()?)
+}
+
+/// A lowering failure remains distinct from the normal K4g sizing deferral.
+/// B1 retains the candidate and winner model even though K4c/K4d still wait
+/// for B2's collapsed metrics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CollapsedBorderLoweringError {
+    Candidates(TableBorderError),
+    Resolution(TableBorderResolutionError),
+}
+
+impl From<TableBorderError> for CollapsedBorderLoweringError {
+    fn from(error: TableBorderError) -> Self {
+        Self::Candidates(error)
+    }
+}
+
+impl From<TableBorderResolutionError> for CollapsedBorderLoweringError {
+    fn from(error: TableBorderResolutionError) -> Self {
+        Self::Resolution(error)
+    }
+}
+
+fn table_border_sides(
+    computed: &ComputedValues,
+    axes: FlowAxes,
+    font_size: f32,
+) -> TableBorderSides<ComputedColor> {
+    TableBorderSides {
+        inline_start: physical_table_border(computed, axes.inline_start(), font_size),
+        inline_end: physical_table_border(computed, axes.inline_end(), font_size),
+        block_start: physical_table_border(computed, axes.block_start(), font_size),
+        block_end: physical_table_border(computed, axes.block_end(), font_size),
+    }
+}
+
+fn physical_table_border(
+    computed: &ComputedValues,
+    side: PhysicalSide,
+    font_size: f32,
+) -> (TableBorderStyle, f32, ComputedColor) {
+    let (style, width, color) = match side {
+        PhysicalSide::Top => (
+            computed.border_top_style,
+            computed.border_top_width,
+            computed.border_top_color.clone(),
+        ),
+        PhysicalSide::Right => (
+            computed.border_right_style,
+            computed.border_right_width,
+            computed.border_right_color.clone(),
+        ),
+        PhysicalSide::Bottom => (
+            computed.border_bottom_style,
+            computed.border_bottom_width,
+            computed.border_bottom_color.clone(),
+        ),
+        PhysicalSide::Left => (
+            computed.border_left_style,
+            computed.border_left_width,
+            computed.border_left_color.clone(),
+        ),
+    };
+    (
+        table_border_style(style),
+        border_width_px(style, width, font_size),
+        color,
+    )
+}
+
+fn table_border_style(style: BorderStyle) -> TableBorderStyle {
+    match style {
+        BorderStyle::None => TableBorderStyle::None,
+        BorderStyle::Hidden => TableBorderStyle::Hidden,
+        BorderStyle::Dotted => TableBorderStyle::Dotted,
+        BorderStyle::Dashed => TableBorderStyle::Dashed,
+        BorderStyle::Solid => TableBorderStyle::Solid,
+        BorderStyle::Double => TableBorderStyle::Double,
+        BorderStyle::Groove => TableBorderStyle::Groove,
+        BorderStyle::Ridge => TableBorderStyle::Ridge,
+        BorderStyle::Inset => TableBorderStyle::Inset,
+        BorderStyle::Outset => TableBorderStyle::Outset,
+    }
+}
+
+/// CSS2's positional tie is defined in table-flow coordinates, not raw
+/// physical left and top. Writing mode maps physical sides above; this key
+/// then compares logical block-start first and reverses logical inline order
+/// for RTL tables.
+fn table_border_order_key(
+    grid: &TableGrid,
+    axes: FlowAxes,
+    source: buckram::BoxId,
+) -> TableBorderOrderKey {
+    if source == grid.grid {
+        return TableBorderOrderKey(0);
+    }
+    if let Some(cell) = grid.cells.iter().find(|cell| cell.source == source) {
+        return table_border_order_for_position(grid, axes, cell.row, cell.column);
+    }
+    if let Some(track) = grid.rows.iter().find(|track| track.source == Some(source)) {
+        return table_border_order_for_position(grid, axes, track.index, 0);
+    }
+    if let Some(group) = grid.row_groups.iter().find(|group| group.source == source) {
+        return table_border_order_for_position(grid, axes, group.start, 0);
+    }
+    if let Some(track) = grid
+        .columns
+        .iter()
+        .find(|track| track.source == Some(source))
+    {
+        return table_border_order_for_position(grid, axes, 0, track.index);
+    }
+    if let Some(group) = grid
+        .column_groups
+        .iter()
+        .find(|group| group.source == source)
+    {
+        return table_border_order_for_position(grid, axes, 0, group.start);
+    }
+    TableBorderOrderKey(u32::try_from(source.index()).unwrap_or(u32::MAX))
+}
+
+fn table_border_order_for_position(
+    grid: &TableGrid,
+    axes: FlowAxes,
+    row: usize,
+    column: usize,
+) -> TableBorderOrderKey {
+    let columns = grid.columns.len().max(1);
+    let inline = match axes.direction {
+        buckram::Direction::Ltr => column,
+        buckram::Direction::Rtl => columns.saturating_sub(1).saturating_sub(column),
+    };
+    let order = row.saturating_mul(columns).saturating_add(inline);
+    TableBorderOrderKey(u32::try_from(order).unwrap_or(u32::MAX))
 }
 
 /// Lower a computed cell style into Buckram's block-axis contract.
@@ -445,6 +698,51 @@ mod tests {
         let style = table_cell_inline_style(&computed, FlowAxes::HORIZONTAL_LTR, 16.0, 16.0)
             .expect("unreduced math is retained on the constraint");
         assert_eq!(style.constraints.preferred, InlineSizeConstraint::Unreduced);
+    }
+
+    #[test]
+    fn collapsed_border_lowering_maps_physical_sides_once_and_reverses_only_the_rtl_tie() {
+        let mut computed = ComputedValues::default();
+        computed.border_top_style = BorderStyle::Dotted;
+        computed.border_top_width = "1px".parse().expect("top width");
+        computed.border_top_color = "red".parse().expect("top color");
+        computed.border_right_style = BorderStyle::Dashed;
+        computed.border_right_width = "2px".parse().expect("right width");
+        computed.border_right_color = "green".parse().expect("right color");
+        computed.border_bottom_style = BorderStyle::Double;
+        computed.border_bottom_width = "3px".parse().expect("bottom width");
+        computed.border_bottom_color = "blue".parse().expect("bottom color");
+        computed.border_left_style = BorderStyle::Solid;
+        computed.border_left_width = "4px".parse().expect("left width");
+        computed.border_left_color = "black".parse().expect("left color");
+
+        let horizontal = table_border_sides(&computed, FlowAxes::HORIZONTAL_LTR, 16.0);
+        assert_eq!(horizontal.inline_start.0, TableBorderStyle::Solid);
+        assert_eq!(horizontal.inline_start.1, 4.0);
+        assert_eq!(horizontal.inline_start.2.to_srgb8(), Some((0, 0, 0, 255)));
+        assert_eq!(horizontal.block_start.0, TableBorderStyle::Dotted);
+
+        let vertical = table_border_sides(
+            &computed,
+            FlowAxes::new(WritingMode::VerticalRl, Direction::Ltr),
+            16.0,
+        );
+        assert_eq!(vertical.inline_start.0, TableBorderStyle::Dotted);
+        assert_eq!(vertical.block_start.0, TableBorderStyle::Dashed);
+
+        let grid = k4b_grid();
+        let first = grid.cells[0].source;
+        let second = grid.cells[1].source;
+        let ltr_first = table_border_order_key(&grid, FlowAxes::HORIZONTAL_LTR, first);
+        let ltr_second = table_border_order_key(&grid, FlowAxes::HORIZONTAL_LTR, second);
+        let rtl = FlowAxes::new(WritingMode::HorizontalTb, Direction::Rtl);
+        let rtl_first = table_border_order_key(&grid, rtl, first);
+        let rtl_second = table_border_order_key(&grid, rtl, second);
+        assert!(
+            ltr_first < ltr_second,
+            "LTR chooses logical inline-start first"
+        );
+        assert!(rtl_second < rtl_first, "RTL reverses only inline position");
     }
 
     /// K4d5 lowering: only four `vertical-align` values reach a table cell.

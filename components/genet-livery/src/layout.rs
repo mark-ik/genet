@@ -18,7 +18,7 @@ use livery::{
     media::{Device, ViewportSizes},
     stylesheet::ContainerSnapshot,
     values::{
-        Alignment as CssAlignment, AspectRatio, BorderStyle, BorderWidth,
+        Alignment as CssAlignment, AspectRatio, BorderCollapse, BorderStyle, BorderWidth,
         BoxSizing as CssBoxSizing, CaptionSide, Clear as CssClear, ContainerType,
         Display as CssDisplay, FlexDirection as CssFlexDirection, FlexWrap as CssFlexWrap,
         Float as CssFloat, FontSize, Gap as CssGap, GridAutoFlow as CssGridAutoFlow,
@@ -55,6 +55,7 @@ use crate::{
         LIVE_ROOT_FONT_SIZE, PendingTable, TableShadowLedger, buckram_table_columns,
         verify_assigned_columns,
     },
+    table_sizing::collapsed_table_border_grid,
     table_wrapper::{grid_style, wrapper_style},
     text::{InlineLayout, InlineRequest, TextFrame},
 };
@@ -1550,6 +1551,7 @@ where
                         wrapper: None,
                         captions: Vec::new(),
                         grid,
+                        collapsed_borders: None,
                         cell_nodes,
                         font_size,
                         containing_width: containing_size.0,
@@ -1797,6 +1799,27 @@ where
         for pending in &mut pendings {
             let Some(computed) = self.styles.get(pending.node).cloned() else {
                 continue;
+            };
+            pending.collapsed_borders = if computed.border_collapse == BorderCollapse::Collapse {
+                match collapsed_table_border_grid(
+                    self.boxes,
+                    self.styles,
+                    &pending.grid,
+                    pending.table,
+                    &computed,
+                    pending.font_size,
+                ) {
+                    Ok(winners) => Some(winners),
+                    Err(error) => {
+                        self.table_shadow.skip(
+                            pending.table,
+                            crate::table_shadow::TableShadowSkip::CollapsedBorder(error),
+                        );
+                        None
+                    },
+                }
+            } else {
+                None
             };
             let intrinsics = pending
                 .cell_nodes
@@ -2210,6 +2233,27 @@ where
             let Some(computed) = self.styles.get(pending.node).cloned() else {
                 continue;
             };
+            pending.collapsed_borders = if computed.border_collapse == BorderCollapse::Collapse {
+                match collapsed_table_border_grid(
+                    self.boxes,
+                    self.styles,
+                    &pending.grid,
+                    pending.table,
+                    &computed,
+                    pending.font_size,
+                ) {
+                    Ok(winners) => Some(winners),
+                    Err(error) => {
+                        self.table_shadow.skip(
+                            pending.table,
+                            crate::table_shadow::TableShadowSkip::CollapsedBorder(error),
+                        );
+                        None
+                    },
+                }
+            } else {
+                None
+            };
             let intrinsics = pending
                 .cell_nodes
                 .clone()
@@ -2497,6 +2541,7 @@ where
                         wrapper: None,
                         captions: Vec::new(),
                         grid,
+                        collapsed_borders: None,
                         cell_nodes: std::mem::take(&mut table_cell_nodes),
                         font_size,
                         containing_width: containing_size.0,

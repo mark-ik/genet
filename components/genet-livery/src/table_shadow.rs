@@ -16,7 +16,7 @@
 use std::hash::Hash;
 
 use buckram::{
-    AlgorithmNodeId, BoxId, CaptionMinContribution, IntrinsicSizes,
+    AlgorithmNodeId, BoxId, CaptionMinContribution, IntrinsicSizes, ResolvedTableBorderGrid,
     TableAutomaticColumnMeasureInput, TableAutomaticInlineSizingIndefinite,
     TableAutomaticInlineSizingInput, TableAutomaticInlineSizingOutcome, TableBlockLayout,
     TableCellInlineMeasure, TableDeferral, TableFixedInlineSizingInput,
@@ -28,7 +28,10 @@ use buckram::{
 use layout_dom_api::LayoutDom;
 use livery::{
     ComputedValues,
-    values::{BorderCollapse, Display as CssDisplay, TableLayout as CssTableLayout, Visibility},
+    values::{
+        BorderCollapse, ComputedColor, Display as CssDisplay, TableLayout as CssTableLayout,
+        Visibility,
+    },
 };
 
 use crate::{
@@ -36,8 +39,8 @@ use crate::{
     box_tree::GeneratedBoxTree,
     table_block::TableBlockLedger,
     table_sizing::{
-        automatic_table_track_inputs, fixed_table_track_inputs, table_cell_inline_style,
-        table_inline_constraints,
+        CollapsedBorderLoweringError, automatic_table_track_inputs, fixed_table_track_inputs,
+        table_cell_inline_style, table_inline_constraints,
     },
 };
 
@@ -70,6 +73,9 @@ pub enum TableShadowSkip {
     AutomaticIncompleteCells,
     /// Buckram declined a used size for an explicitly named missing basis.
     AutomaticIndefinite(TableAutomaticInlineSizingIndefinite),
+    /// K4g2 could not retain a collapsed-border winner grid. This is distinct
+    /// from K4g4's normal missing-metrics deferral and is never silent.
+    CollapsedBorder(CollapsedBorderLoweringError),
     Error(TableInlineSizingError),
 }
 
@@ -107,7 +113,7 @@ impl TableShadowLedger {
         self.block.merge(other.block);
     }
 
-    fn skip(&mut self, table: BoxId, reason: TableShadowSkip) {
+    pub(crate) fn skip(&mut self, table: BoxId, reason: TableShadowSkip) {
         self.skipped.push((table, reason));
     }
 
@@ -152,6 +158,9 @@ pub struct PendingTable<Id> {
     /// get the floor a caption puts under the table's inline size.
     pub captions: Vec<(AlgorithmNodeId, f32)>,
     pub grid: TableGrid,
+    /// K4g2's logical atomic winners. The existing Grid/Flex bridge does not
+    /// inspect them; K4g3 turns them into metrics before sizing consumes them.
+    pub collapsed_borders: Option<ResolvedTableBorderGrid<ComputedColor>>,
     /// One entry per K4b grid cell, in topology order.
     pub cell_nodes: Vec<Option<AlgorithmNodeId>>,
     pub font_size: f32,
