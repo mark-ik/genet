@@ -127,14 +127,14 @@ pub use script_runtime_api::CookieProvider;
 // so the host names the post-JS extract without a direct `genet-extract` dep. (Phase 4.)
 #[cfg(feature = "chrome")]
 pub use chrome::{Chrome, ChromeIntent, ChromeState, StripSide};
-#[cfg(feature = "chrome")]
-pub use theme::PeltTheme;
 #[cfg(all(feature = "viewer", feature = "chrome"))]
 pub use chrome_viewer::run_chrome_viewer;
 #[cfg(feature = "scripted")]
 pub use genet_extract::{Heading, Link, Metadata, PageExtract};
 #[cfg(all(feature = "viewer", feature = "scripted"))]
 pub use scripted_viewer::run_scripted_viewer;
+#[cfg(feature = "chrome")]
+pub use theme::PeltTheme;
 #[cfg(feature = "tile-surface")]
 pub use tile_shell::TileShell;
 #[cfg(feature = "tile-surface")]

@@ -987,10 +987,10 @@ fn absolute_rect(
 }
 
 /// A short tab title from a content URL: the last path segment without its query /
-/// fragment or `.html` suffix, capped to 24 chars (`"tile"` when empty). A GPU-free
-/// helper shared by the surface (retitling a tile on a followed link) and the
-/// windowed tile viewer (`tile_viewer`); lives here so the surface lib does not
-/// reach back into the present-stack module.
+/// fragment or `.html` suffix, then the host, capped to 24 chars (`"tile"` when
+/// neither is there). A GPU-free helper shared by the surface (retitling a tile on
+/// a followed link) and the windowed tile viewer (`tile_viewer`); lives here so the
+/// surface lib does not reach back into the present-stack module.
 pub(crate) fn tile_title(url: &str) -> String {
     // A data: URL carries no filename. Splitting one on '/' returns whatever
     // followed the last slash in the payload, which for
@@ -1001,11 +1001,32 @@ pub(crate) fn tile_title(url: &str) -> String {
     let trimmed = url.split(['#', '?']).next().unwrap_or(url);
     let name = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
     let stem = name.strip_suffix(".html").unwrap_or(name);
-    if stem.is_empty() {
-        "tile".into()
-    } else {
-        stem.chars().take(24).collect()
+    if !stem.is_empty() {
+        return stem.chars().take(24).collect();
     }
+    // A host front page ends in `/`, so its last segment is empty. That is the
+    // most common URL there is, and it is exactly the case where a document
+    // title is most likely to be missing too: gopher and finger carry none, so
+    // every root tab fell back to the literal "tile". Name the host instead.
+    url_host(trimmed).map_or_else(|| "tile".into(), |host| host.chars().take(24).collect())
+}
+
+/// The host of an absolute URL, without userinfo or port. `None` for anything
+/// without an authority, which includes every local filesystem path.
+fn url_host(url: &str) -> Option<&str> {
+    let authority = url.split_once("://")?.1.split(['/', '\\']).next()?;
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    // An IPv6 literal is bracketed and its colons are part of the address.
+    let host = if authority.starts_with('[') {
+        authority.split_inclusive(']').next().unwrap_or(authority)
+    } else {
+        authority
+            .split_once(':')
+            .map_or(authority, |(host, _)| host)
+    };
+    (!host.is_empty()).then_some(host)
 }
 
 fn document_title(document: &dyn DocumentSession<Scene>, url: &str) -> String {
@@ -1395,6 +1416,29 @@ mod tests {
         // The stack collapsed to a single remaining tile (tab1).
         let ids: Vec<u64> = surface.tree().tiles().iter().map(|t| t.id.0).collect();
         assert_eq!(ids, vec![1], "tab2 was removed: {ids:?}");
+    }
+
+    /// A tab is named from the URL when the document carries no title. A host
+    /// front page ends in `/`, so its last path segment is empty; that used to
+    /// fall through to the literal "tile", which is what every gopher, finger
+    /// and nex root tab was labelled, since those formats have no title element.
+    #[test]
+    fn a_root_url_names_its_host_rather_than_every_tab_alike() {
+        for (url, expected) in [
+            ("gopher://gopher.floodgap.com/", "gopher.floodgap.com"),
+            ("gemini://geminiprotocol.net/", "geminiprotocol.net"),
+            ("https://merelyllc.com/", "merelyllc.com"),
+            // An authority is still the answer with userinfo, a port, or both.
+            ("https://user@example.org:8443/", "example.org"),
+            ("https://[2001:db8::1]:443/", "[2001:db8::1]"),
+            // A path segment still wins over the host when there is one.
+            ("https://merelyllc.com/repos.html", "repos"),
+            // No authority to fall back on: keep the generic name.
+            ("C:\\Users\\mark_\\docs\\", "tile"),
+            ("data:text/html,<p>two</p>", "document"),
+        ] {
+            assert_eq!(tile_title(url), expected, "titling {url}");
+        }
     }
 
     /// Clicking a cross-document link in a tile navigates that tile: the linked

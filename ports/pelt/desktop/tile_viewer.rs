@@ -71,13 +71,24 @@ fn tree_from_urls(urls: &[String]) -> TileTree {
                 TileBranch::new(0.5, TileTree::single(tile(1, 2))),
             ],
         ),
-        _ => TileTree::split(
-            SplitAxis::Row,
-            vec![
-                TileBranch::new(0.5, TileTree::stack(vec![tile(0, 1), tile(1, 2)], 0)),
-                TileBranch::new(0.5, TileTree::single(tile(2, 3))),
-            ],
-        ),
+        _ => {
+            // The demo tree is a fixed shape, so anything past the third URL has
+            // nowhere to go. Say so: a document that silently never appears reads
+            // as a rendering failure rather than as a limit of this profile.
+            if urls.len() > 3 {
+                eprintln!(
+                    "[pelt-tiles] the demo tree holds three documents; ignoring {}",
+                    urls[3..].join(", ")
+                );
+            }
+            TileTree::split(
+                SplitAxis::Row,
+                vec![
+                    TileBranch::new(0.5, TileTree::stack(vec![tile(0, 1), tile(1, 2)], 0)),
+                    TileBranch::new(0.5, TileTree::single(tile(2, 3))),
+                ],
+            )
+        },
     }
 }
 

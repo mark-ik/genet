@@ -905,7 +905,7 @@ Options:
     --engine <browser|viewer|static|scripted|headless>
     --chrome                           (wrap the content viewer in an omnibar + back/forward strip; needs --features chrome)
     --strip <top|bottom|left|right>    (chrome strip side; default top)
-    --tiles <url>...                   (split the window into tiles, one document each; needs --features tiles)
+    --tiles <url>...                   (one or two tile side by side; three or more stack the first two beside the third, and ignore the rest; needs --features tiles)
     --js <boa|nova>                    (scripted profile: JS backend; nova needs --features scripted-nova)
     --out <path>                       (headless profile: write the scene snapshot for <file>)
     --reftest <dir>                    (headless profile: run a name.html + name.scene fixture dir)
