@@ -155,6 +155,22 @@ fn quote_emits_group_block_with_indented_children() {
 }
 
 #[test]
+fn capped_content_column_is_centred_and_preserves_narrow_view_padding() {
+    let mut style = DocumentStyleSheet::default();
+    style.horizontal_padding = 32.0;
+    style.max_content_width = Some(720.0);
+    let document = doc(vec![Block::Paragraph {
+        spans: vec![InlineSpan::Text("A readable line.".into())],
+    }]);
+
+    let wide = layout_document(&document, Viewport::new(1_680.0, 480.0), &style).packet;
+    assert_eq!(wide.blocks[0].bounds.origin.x, 480.0);
+
+    let narrow = layout_document(&document, Viewport::new(400.0, 480.0), &style).packet;
+    assert_eq!(narrow.blocks[0].bounds.origin.x, 32.0);
+}
+
+#[test]
 fn rule_emits_rule_block() {
     let packet = layout_document(
         &doc(vec![Block::Rule]),

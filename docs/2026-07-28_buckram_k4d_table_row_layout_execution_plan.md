@@ -2,12 +2,14 @@
 
 **Date:** 2026-07-28
 
-**Status:** in execution from accepted K4c5b commit `a96fe7d147e`. K4d1
-through K4d5 are complete, and K4d6 is split: K4d6a's fragment model has
-landed. Both 10/10 gates selected their algorithms from measured Chrome 150 /
-Firefox 153 matrices. K4d6b is next: it is the live cutover and the
-bridge-deletion gate, so it is the first K4d gate whose WPT maps are expected
-to move.
+**Status:** live implementation landed through K4d6b, corrected 2026-08-08.
+Supported tables now paint Buckram's block-axis geometry and commit Buckram's
+row, group, and column fragments. The promised removal receipt is still open:
+tables with named later-K4 deferrals retain the Grid/Flex bridge, so
+`place_table_cell`, `table_is_flattenable`, and the table/row backend mappings
+cannot yet be deleted. K4g closes the dominant collapsed-border deferral and
+K4h owns the final positioned-table audit and bridge deletion. There is no
+further standalone K4d implementation handoff.
 
 **Parent plan:** [Buckram K4 CSS tables execution plan](2026-07-28_buckram_k4_css_tables_execution_plan.md)
 
@@ -1456,9 +1458,10 @@ Proof directory:
 Commit:
 ```
 
-## First executable task
+## Historical K4d1 handoff
 
-The initial handoff is:
+The following was the accepted handoff into K4d1. It is retained as execution
+history and is not a current task:
 
 > Read this plan, the accepted K4c receipt, CSS 2.1 section 17.5.3, the CSS2
 > inline-table baseline rule, and the live seams named under

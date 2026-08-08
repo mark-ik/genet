@@ -1,12 +1,16 @@
 # Livery contextual color computation plan
 
-**Date:** 2026-07-28  
+**Date:** 2026-07-28
 **Status:** corrective F0 subplan. C0 is complete; C1 is next.
 
 **Parent:** `2026-07-24_livery_fullweb_cutover_and_servo_retirement_plan.md`
 
-This seam must close before K4g, whose collapsed-border paint needs a resolved
-contextual winner for `currentcolor` border colors.
+This seam is now an explicit K4g dependency. K4g1 landed first because its
+candidate topology is generic over color and has no Livery adapter. C1 must
+close before K4g2's adapter commits a border-color representation. C2 and C3
+must close before K4g5 accepts headed collapsed-border paint, whose winning
+border must resolve `currentcolor` and system colors in the winning element's
+computed and used contexts.
 
 ## Why this is a separate seam
 

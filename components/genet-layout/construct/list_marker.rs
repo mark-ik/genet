@@ -196,7 +196,7 @@ where
     Some(InlineContent {
         runs: vec![run],
         boxes: Vec::new(),
-        no_wrap: false,
+        align: InlineTextAlign::Start,
     })
 }
 

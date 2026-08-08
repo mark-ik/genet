@@ -21,6 +21,14 @@ licensing posture in
 [2026-07-13_stylo_fork_decomposition_and_divergence_plan.md](./2026-07-13_stylo_fork_decomposition_and_divergence_plan.md).
 The value is ownership and decomposability, not license purity.
 
+**Execution authority correction, 2026-08-08:** this document remains the
+harvest ledger and provenance authority. It is not the current product
+cutover queue. Buckram owns layout sequencing, the fullweb cutover plan owns
+replacement safety, and the
+[Livery product route and document resources plan](2026-08-08_livery_product_route_and_document_resources_execution_plan.md)
+owns the first Pelt projection. H5 value work remains valid but does not
+outrank those gates merely because an older receipt calls one slice "next."
+
 **Companions:**
 [2026-07-13_genet_consumed_css_property_audit.md](./2026-07-13_genet_consumed_css_property_audit.md)
 (the 126-longhand consumed set),

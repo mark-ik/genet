@@ -28,7 +28,7 @@ use std::sync::Mutex;
 
 use parley::{
     Alignment, AlignmentOptions, FontContext, FontFamily, FontStyle, FontWeight, GenericFamily,
-    InlineBox, InlineBoxKind, Layout, LayoutContext, LineHeight, StyleProperty,
+    InlineBox, InlineBoxKind, Layout, LayoutContext, LineHeight, StyleProperty, TextWrapMode,
 };
 use rustc_hash::FxHashMap;
 use taffy::InlineFloatBand;
@@ -135,6 +135,10 @@ pub struct InlineRun {
     /// Cascaded `line-height`. Pushed to parley as `StyleProperty::LineHeight`
     /// (skipped when `Normal`, which is parley's default).
     pub line_height: LineHeightSpec,
+    /// `white-space: nowrap` for this styled text span. This is a run property,
+    /// rather than a leaf-wide measure shortcut, so Parley can still receive the
+    /// real line width and position a centered or end-aligned no-wrap line.
+    pub no_wrap: bool,
 }
 
 impl InlineRun {
@@ -155,6 +159,7 @@ impl InlineRun {
             letter_spacing: 0.0,
             word_spacing: 0.0,
             line_height: LineHeightSpec::Normal,
+            no_wrap: false,
         }
     }
 }
@@ -213,11 +218,29 @@ pub struct InlineBlockBox<NodeId> {
 pub struct InlineContent<NodeId> {
     pub runs: Vec<InlineRun>,
     pub boxes: Vec<InlineBoxItem<NodeId>>,
-    /// `white-space: nowrap` (CSS `text-wrap-mode: nowrap`): the content is laid
-    /// out on a single line — parley does not soft-wrap it to the available
-    /// width; only a `<br>` / `\n` breaks. Set from the element's cascade in
-    /// `construct`; read by the measure pass to drop `max_advance`.
-    pub no_wrap: bool,
+    /// The cascaded inline alignment. Justification remains deliberately
+    /// start-aligned until float-banded line boxes can distribute spacing
+    /// without changing their measured geometry.
+    pub align: InlineTextAlign,
+}
+
+/// The implemented `text-align` subset for an inline formatting context.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InlineTextAlign {
+    #[default]
+    Start,
+    Center,
+    End,
+}
+
+impl InlineTextAlign {
+    fn parley(self) -> Alignment {
+        match self {
+            Self::Start => Alignment::Start,
+            Self::Center => Alignment::Center,
+            Self::End => Alignment::End,
+        }
+    }
 }
 
 impl<NodeId> InlineContent<NodeId> {
@@ -226,7 +249,7 @@ impl<NodeId> InlineContent<NodeId> {
         Self {
             runs: vec![InlineRun::new(text)],
             boxes: Vec::new(),
-            no_wrap: false,
+            align: InlineTextAlign::Start,
         }
     }
 
@@ -248,9 +271,10 @@ impl<NodeId> InlineContent<NodeId> {
                 letter_spacing: 0.0,
                 word_spacing: 0.0,
                 line_height: LineHeightSpec::Normal,
+                no_wrap: false,
             }],
             boxes: Vec::new(),
-            no_wrap: false,
+            align: InlineTextAlign::Start,
         }
     }
 
@@ -531,17 +555,14 @@ pub fn measure_inline_content<NodeId>(
         };
     }
 
-    // Translate Taffy's available_space into parley's max_advance. `white-space:
-    // nowrap` forces a single line (no soft wrap) regardless of available width —
-    // `None` lets parley break only on mandatory `\n` / `<br>`.
-    let max_advance: Option<f32> = if content.no_wrap {
-        None
-    } else {
-        match available_space.width {
-            AvailableSpace::Definite(w) => Some(w),
-            AvailableSpace::MinContent => Some(0.0),
-            AvailableSpace::MaxContent => None,
-        }
+    // Translate Taffy's available_space into parley's max_advance. A `nowrap`
+    // span receives the same finite line box and disables soft wrapping through
+    // `StyleProperty::TextWrapMode`, rather than dropping this width to `None`.
+    // That preserves line alignment for centered/end-aligned no-wrap content.
+    let max_advance: Option<f32> = match available_space.width {
+        AvailableSpace::Definite(w) => Some(w),
+        AvailableSpace::MinContent => Some(0.0),
+        AvailableSpace::MaxContent => None,
     };
 
     // Float wrap-around: if this leaf has float exclusion bands snapshotted for
@@ -555,7 +576,7 @@ pub fn measure_inline_content<NodeId>(
     // the intrinsic min/max-content probes never see them.
     let float_bands: Option<Vec<InlineFloatBand>> =
         match (ctx.float_bands.get(&taffy_id), max_advance) {
-            (Some(b), Some(_)) if !content.no_wrap && !b.is_empty() => Some(b.clone()),
+            (Some(b), Some(_)) if !b.is_empty() => Some(b.clone()),
             _ => None,
         };
 
@@ -569,9 +590,9 @@ pub fn measure_inline_content<NodeId>(
     if let Some(layout) = ctx.layouts.get_mut(&taffy_id) {
         match (&float_bands, max_advance) {
             (Some(bands), Some(content_width)) => {
-                break_and_align_floats(layout, bands, content_width)
+                break_and_align_floats(layout, bands, content_width, content.align)
             },
-            _ => break_and_align(layout, max_advance),
+            _ => break_and_align(layout, max_advance, content.align),
         }
         return Size {
             width: known_dimensions.width.unwrap_or_else(|| layout.width()),
@@ -590,9 +611,9 @@ pub fn measure_inline_content<NodeId>(
     }
     match (&float_bands, max_advance) {
         (Some(bands), Some(content_width)) => {
-            break_and_align_floats(&mut layout, bands, content_width)
+            break_and_align_floats(&mut layout, bands, content_width, content.align)
         },
-        _ => break_and_align(&mut layout, max_advance),
+        _ => break_and_align(&mut layout, max_advance, content.align),
     }
     let size = Size {
         width: known_dimensions.width.unwrap_or_else(|| layout.width()),
@@ -626,7 +647,7 @@ fn measure_inline_box<NodeId>(
         })
         .collect();
     let mut layout = shape_inline_layout(font_ctx, layout_ctx, &ib.content, &inner_sizes);
-    break_and_align(&mut layout, ib.css_width);
+    break_and_align(&mut layout, ib.css_width, ib.content.align);
     let w = ib.css_width.unwrap_or_else(|| layout.width());
     let h = ib.css_height.unwrap_or_else(|| layout.height());
     (w, h, Some(layout))
@@ -664,9 +685,13 @@ pub(crate) fn shape_leaf<NodeId>(
 /// each candidate width Taffy probes (min-content, max-content, then the final
 /// width) without re-shaping — the glyphs are width-independent; only the line
 /// breaks change. This is the cheap half of inline measurement.
-fn break_and_align(layout: &mut Layout<ColorBrush>, max_advance: Option<f32>) {
+fn break_and_align(
+    layout: &mut Layout<ColorBrush>,
+    max_advance: Option<f32>,
+    align: InlineTextAlign,
+) {
     layout.break_all_lines(max_advance);
-    layout.align(Alignment::Start, AlignmentOptions::default());
+    layout.align(align.parley(), AlignmentOptions::default());
 }
 
 /// Break a shaped `Layout` into lines that wrap around float exclusion `bands`,
@@ -691,6 +716,7 @@ fn break_and_align_floats(
     layout: &mut Layout<ColorBrush>,
     bands: &[InlineFloatBand],
     content_width: f32,
+    align: InlineTextAlign,
 ) {
     {
         let mut breaker = layout.break_lines();
@@ -708,7 +734,7 @@ fn break_and_align_floats(
         // `breaker` drops here: its lines swap back into `layout` and the
         // layout's width/height are recomputed from the per-line metrics.
     }
-    layout.align(Alignment::Start, AlignmentOptions::default());
+    layout.align(align.parley(), AlignmentOptions::default());
 }
 
 /// The inline `(x_offset, max_advance)` for a line whose top sits at `y`
@@ -820,6 +846,14 @@ fn shape_inline_layout<NodeId>(
                 );
             },
         }
+        builder.push(
+            StyleProperty::TextWrapMode(if run.no_wrap {
+                TextWrapMode::NoWrap
+            } else {
+                TextWrapMode::Wrap
+            }),
+            range.clone(),
+        );
     }
 
     // Atomic inline boxes (`<img>` / inline-block) — parley reserves the
@@ -908,6 +942,65 @@ mod tests {
     }
 
     #[test]
+    fn centered_nowrap_keeps_the_finite_line_box() {
+        let available = Size {
+            width: AvailableSpace::Definite(200.0),
+            height: AvailableSpace::MaxContent,
+        };
+        let none = Size {
+            width: None,
+            height: None,
+        };
+
+        let mut centered_run = InlineRun::new("short label");
+        centered_run.no_wrap = true;
+        let centered = InlineContent::<u64> {
+            runs: vec![centered_run],
+            boxes: Vec::new(),
+            align: InlineTextAlign::Center,
+        };
+        let mut ctx = TextMeasureCtx::new();
+        let centered_id = taffy::NodeId::from(91u64);
+        let _ = measure_inline_content(&mut ctx, &centered, centered_id, none, available);
+        let layout = ctx.layouts.get(&centered_id).expect("layout cached");
+        let line = layout.lines().next().expect("one line");
+        assert!(
+            line.metrics().offset > 0.0,
+            "centered no-wrap text uses the 200px line box, offset={}",
+            line.metrics().offset
+        );
+        assert_eq!(layout.len(), 1, "short label stays on one line");
+        assert!(
+            (layout.layout_max_advance() - 200.0).abs() < 0.01,
+            "no-wrap must retain the real line width for alignment"
+        );
+
+        let mut long_run = InlineRun::new("one two three four five six");
+        long_run.no_wrap = true;
+        let long = InlineContent::<u64> {
+            runs: vec![long_run],
+            boxes: Vec::new(),
+            align: InlineTextAlign::Center,
+        };
+        let long_id = taffy::NodeId::from(92u64);
+        let _ = measure_inline_content(
+            &mut ctx,
+            &long,
+            long_id,
+            none,
+            Size {
+                width: AvailableSpace::Definite(40.0),
+                height: AvailableSpace::MaxContent,
+            },
+        );
+        assert_eq!(
+            ctx.layouts.get(&long_id).expect("layout cached").len(),
+            1,
+            "no-wrap content does not soft-wrap in a narrow line box"
+        );
+    }
+
+    #[test]
     fn known_dimensions_override_measurement() {
         let mut ctx = TextMeasureCtx::new();
         let content = InlineContent::<u64>::new("ignored");
@@ -936,7 +1029,7 @@ mod tests {
         let combined = InlineContent::<u64> {
             runs: vec![InlineRun::new("Hello "), InlineRun::new("world")],
             boxes: Vec::new(),
-            no_wrap: false,
+            align: InlineTextAlign::Start,
         };
         let just_hello = InlineContent::<u64>::new("Hello ");
         let avail = Size {

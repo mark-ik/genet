@@ -324,6 +324,29 @@ where
     translated_frame_from_session_dom(session, dom, width, height).scene
 }
 
+/// The document-viewer variant of [`scene_from_session_dom`]: it overlays the
+/// retained session's document and element scrollbars after ordinary content.
+/// Kept separate from the bare entry so snapshot/reftest callers retain their
+/// stable content-only output.
+pub fn scene_from_session_dom_with_scrollbars<D>(
+    session: &IncrementalLayout<D::NodeId>,
+    dom: &D,
+    width: u32,
+    height: u32,
+) -> netrender::Scene
+where
+    D: LayoutDom,
+    D::NodeId: Copy + Eq + Hash + Send + Sync + 'static,
+{
+    let mut plist = session.emit_paint_list(
+        dom,
+        &ScrollOffsets::default(),
+        DeviceIntSize::new(width as i32, height as i32),
+    );
+    session.append_scrollbars(dom, &mut plist, &|_| 1.0);
+    paint::translate_paint_list(&plist)
+}
+
 /// Emit and translate a retained document session, preserving the external
 /// producer-texture side channel alongside the ordinary Scene.
 pub fn translated_frame_from_session_dom<D>(

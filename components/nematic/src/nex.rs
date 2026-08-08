@@ -60,7 +60,7 @@ impl Engine for NexEngine {
         match parse_nex(&input.body) {
             Some(entries) => Ok(render_directory(&input.address, &entries)),
             None => {
-                let mut doc = self.text.render(input)?;
+                let mut doc = self.text.render_verbatim(input);
                 doc.provenance = DocumentProvenance {
                     source_kind: Some(ENGINE_ID.to_string()),
                     canonical_uri: Some(input.address.clone()),
@@ -176,8 +176,8 @@ mod tests {
     fn content_response_dispatches_to_text() {
         let body = "This is a content response.\n\nIt has multiple paragraphs of prose with spaces and punctuation.\n";
         let doc = render("nex://example.test/page", body);
-        // Text engine produces paragraphs, not a List.
-        assert!(matches!(doc.blocks[0], Block::Paragraph { .. }));
+        // Content responses retain their literal line structure, not a List.
+        assert!(matches!(doc.blocks[0], Block::Preformatted { .. }));
         assert_eq!(doc.content_type, "text/plain");
         assert_eq!(doc.provenance.source_kind.as_deref(), Some("nematic.nex"));
         assert_eq!(doc.provenance.source_label.as_deref(), Some("nematic.text"));
@@ -196,7 +196,7 @@ mod tests {
         // First line is a valid entry, but second line has whitespace ("a b").
         let body = "ok\na b\n";
         let doc = render("nex://example.test/", body);
-        assert!(matches!(doc.blocks[0], Block::Paragraph { .. }));
+        assert!(matches!(doc.blocks[0], Block::Preformatted { .. }));
     }
 
     #[test]

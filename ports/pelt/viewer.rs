@@ -22,6 +22,11 @@ pub(crate) fn main() {
     let mut out_path: Option<String> = None;
     let mut reftest_dir: Option<String> = None;
     let mut bless = false;
+    // Physical client size for headed viewers and explicit-size headless captures.
+    // Reftests stay pinned at 800x600 so their committed fixtures remain meaningful.
+    let mut size: Option<(u32, u32)> = None;
+    // Bounded headed capture/smoke run. Interactive profiles leave this unset.
+    let mut frames: Option<u32> = None;
     // Chrome demo (V2): wrap the content viewer in an omnibar + back/forward strip.
     let mut with_chrome = false;
     let mut strip_side = String::from("top");
@@ -96,6 +101,26 @@ pub(crate) fn main() {
             },
             "--bless" => {
                 bless = true;
+            },
+            "--size" => {
+                let Some(value) = args.next() else {
+                    eprintln!("--size requires WxH in physical pixels");
+                    std::process::exit(2);
+                };
+                size = Some(parse_size(&value));
+            },
+            value if value.starts_with("--size=") => {
+                size = Some(parse_size(&value["--size=".len()..]));
+            },
+            "--frames" => {
+                let Some(value) = args.next() else {
+                    eprintln!("--frames requires a positive integer");
+                    std::process::exit(2);
+                };
+                frames = Some(parse_frames(&value));
+            },
+            value if value.starts_with("--frames=") => {
+                frames = Some(parse_frames(&value["--frames=".len()..]));
             },
             "--chrome" => {
                 with_chrome = true;
@@ -231,31 +256,44 @@ pub(crate) fn main() {
         // A smolweb scheme (gemini/gopher/…) renders natively through the smolweb
         // viewer (errand transport + parse + native themed view), not the HTML path.
         #[cfg(feature = "smolweb")]
-        if is_smolweb_url(&url) {
-            run_smolweb_profile(url, strip_side.clone(), engine_profile);
-            return;
-        }
         // `--tiles`: split the window into tiles, one document each (V5's tile surface).
         if with_tiles {
-            run_tiles_profile(tile_urls);
+            run_tiles_profile(tile_urls, size, frames);
+            return;
+        }
+        // A smolweb scheme (gemini/gopher/…) renders natively through the smolweb
+        // viewer (errand transport + parse + native themed view), not the HTML path.
+        #[cfg(feature = "smolweb")]
+        if is_smolweb_url(&url) {
+            run_smolweb_profile(url, strip_side.clone(), engine_profile, size, frames);
             return;
         }
         // `--chrome`: wrap the content in a xilem-serval omnibar + back/forward strip
         // (V2's two-root browser shell).
         if with_chrome {
-            run_chrome_profile(url, strip_side, engine_profile);
+            run_chrome_profile(url, strip_side, engine_profile, size, frames);
             return;
         }
-        let config = pelt_desktop::StaticViewerConfig::new(
+        let mut config = pelt_desktop::StaticViewerConfig::new(
             engine_profile,
             pelt_desktop::WindowingMode::Headed,
             url,
         );
+        if let Some((width, height)) = size {
+            config = config.with_size(width, height);
+        }
+        if let Some(limit) = frames {
+            config = config.with_frame_limit(limit);
+        }
         match pelt_desktop::run_static_viewer(config) {
             Ok(outcome) => {
                 println!(
-                    "pelt static viewer url={} window={} redraws={}",
-                    outcome.url, outcome.created_window, outcome.redraws
+                    "pelt static viewer url={} window={} redraws={} size={}x{}",
+                    outcome.url,
+                    outcome.created_window,
+                    outcome.redraws,
+                    outcome.size.0,
+                    outcome.size.1
                 );
                 return;
             },
@@ -270,7 +308,7 @@ pub(crate) fn main() {
     // document profile (V4). Runs the page's inline <script> on the chosen engine and
     // renders the mutated DOM, driving timers + the GC tick at frame cadence.
     if matches!(engine_profile, EngineProfile::Scripted) {
-        run_scripted_profile(url, js_engine);
+        run_scripted_profile(url, js_engine, size, frames);
         return;
     }
 
@@ -278,7 +316,7 @@ pub(crate) fn main() {
     // `--reftest <dir>` runs a fixture directory; otherwise `--out <path>` (or stdout)
     // writes the snapshot for `<file>`.
     if matches!(engine_profile, EngineProfile::Headless) {
-        run_headless_profile(url, out_path, reftest_dir, bless);
+        run_headless_profile(url, out_path, reftest_dir, bless, size, frames);
         return;
     }
 
@@ -306,10 +344,46 @@ fn is_smolweb_url(url: &str) -> bool {
     .any(|scheme| url.starts_with(scheme))
 }
 
+/// Parse a physical client size accepted by headed profiles and explicit headless
+/// captures. Keep it separate from reftests, whose fixtures are authored at 800x600.
+fn parse_size(value: &str) -> (u32, u32) {
+    let Some((width, height)) = value.split_once(['x', 'X']) else {
+        eprintln!("--size expects WxH in physical pixels (got '{value}')");
+        std::process::exit(2);
+    };
+    let width = width.parse::<u32>().ok().filter(|value| *value > 0);
+    let height = height.parse::<u32>().ok().filter(|value| *value > 0);
+    match (width, height) {
+        (Some(width), Some(height)) => (width, height),
+        _ => {
+            eprintln!("--size expects positive WxH dimensions (got '{value}')");
+            std::process::exit(2);
+        },
+    }
+}
+
+/// Parse a deterministic headed-frame limit. Zero would open and immediately close a
+/// window without proving it presented, so it is deliberately rejected.
+fn parse_frames(value: &str) -> u32 {
+    match value.parse::<u32>().ok().filter(|value| *value > 0) {
+        Some(value) => value,
+        None => {
+            eprintln!("--frames expects a positive integer (got '{value}')");
+            std::process::exit(2);
+        },
+    }
+}
+
 /// Dispatch a smolweb URL to the chrome browser over a native smolweb content root:
 /// omnibar + back/forward + link navigation, the same shell `--chrome` uses for HTML.
 #[cfg(feature = "smolweb")]
-fn run_smolweb_profile(url: String, side: String, profile: EngineProfile) {
+fn run_smolweb_profile(
+    url: String,
+    side: String,
+    profile: EngineProfile,
+    size: Option<(u32, u32)>,
+    frames: Option<u32>,
+) {
     use pelt_desktop::StripSide;
     let side = match side.to_ascii_lowercase().as_str() {
         "top" => StripSide::Top,
@@ -326,12 +400,18 @@ fn run_smolweb_profile(url: String, side: String, profile: EngineProfile) {
     } else {
         40
     };
-    let config =
+    let mut config =
         pelt_desktop::StaticViewerConfig::new(profile, pelt_desktop::WindowingMode::Headed, url);
+    if let Some((width, height)) = size {
+        config = config.with_size(width, height);
+    }
+    if let Some(limit) = frames {
+        config = config.with_frame_limit(limit);
+    }
     match pelt_desktop::run_smolweb_browser(config, side, thickness) {
         Ok(outcome) => println!(
-            "pelt smolweb browser url={} window={} redraws={}",
-            outcome.url, outcome.created_window, outcome.redraws
+            "pelt smolweb browser url={} window={} redraws={} size={}x{}",
+            outcome.url, outcome.created_window, outcome.redraws, outcome.size.0, outcome.size.1
         ),
         Err(error) => {
             eprintln!("{error}");
@@ -343,23 +423,31 @@ fn run_smolweb_profile(url: String, side: String, profile: EngineProfile) {
 /// Dispatch the scripted profile to the on-screen scripted viewer on the chosen JS
 /// backend. Present only when built with `--features scripted`.
 #[cfg(feature = "scripted")]
-fn run_scripted_profile(url: String, js: String) {
+fn run_scripted_profile(url: String, js: String, size: Option<(u32, u32)>, frames: Option<u32>) {
     let Some(engine) = pelt_desktop::ScriptedEngine::parse(&js) else {
         eprintln!("--js expects boa or nova (got '{js}')");
         std::process::exit(2);
     };
-    let config = pelt_desktop::StaticViewerConfig::new(
+    let mut config = pelt_desktop::StaticViewerConfig::new(
         EngineProfile::Scripted,
         pelt_desktop::WindowingMode::Headed,
         url,
     );
+    if let Some((width, height)) = size {
+        config = config.with_size(width, height);
+    }
+    if let Some(limit) = frames {
+        config = config.with_frame_limit(limit);
+    }
     match pelt_desktop::run_scripted_viewer(config, engine) {
         Ok(outcome) => println!(
-            "pelt scripted viewer engine={} url={} window={} redraws={}",
+            "pelt scripted viewer engine={} url={} window={} redraws={} size={}x{}",
             engine.label(),
             outcome.url,
             outcome.created_window,
-            outcome.redraws
+            outcome.redraws,
+            outcome.size.0,
+            outcome.size.1,
         ),
         Err(error) => {
             eprintln!("{error}");
@@ -371,11 +459,18 @@ fn run_scripted_profile(url: String, js: String) {
 /// Dispatch `--tiles` to the tile viewer: a window split into tiles, one document per
 /// content URL. Present only when built with `--features tiles`.
 #[cfg(feature = "tiles")]
-fn run_tiles_profile(urls: Vec<String>) {
-    match pelt_desktop::run_tile_viewer(urls, pelt_desktop::WindowingMode::Headed) {
+fn run_tiles_profile(urls: Vec<String>, size: Option<(u32, u32)>, frames: Option<u32>) {
+    let mut config = pelt_desktop::TileViewerConfig::new(urls, pelt_desktop::WindowingMode::Headed);
+    if let Some((width, height)) = size {
+        config = config.with_size(width, height);
+    }
+    if let Some(limit) = frames {
+        config = config.with_frame_limit(limit);
+    }
+    match pelt_desktop::run_tile_viewer_with_config(config) {
         Ok(outcome) => println!(
-            "pelt tile viewer url={} window={} redraws={}",
-            outcome.url, outcome.created_window, outcome.redraws
+            "pelt tile viewer url={} window={} redraws={} size={}x{}",
+            outcome.url, outcome.created_window, outcome.redraws, outcome.size.0, outcome.size.1
         ),
         Err(error) => {
             eprintln!("{error}");
@@ -387,7 +482,7 @@ fn run_tiles_profile(urls: Vec<String>) {
 /// Without the tiles demo compiled in, `--tiles` is a clean error pointing at the
 /// feature to enable.
 #[cfg(not(feature = "tiles"))]
-fn run_tiles_profile(_urls: Vec<String>) {
+fn run_tiles_profile(_urls: Vec<String>, _size: Option<(u32, u32)>, _frames: Option<u32>) {
     eprintln!("pelt was built without the tiles demo; rebuild with `--features tiles`");
     std::process::exit(2);
 }
@@ -396,7 +491,13 @@ fn run_tiles_profile(_urls: Vec<String>) {
 /// xilem-serval omnibar + back/forward strip on the chosen side. Present only when
 /// built with `--features chrome`.
 #[cfg(feature = "chrome")]
-fn run_chrome_profile(url: String, side: String, profile: EngineProfile) {
+fn run_chrome_profile(
+    url: String,
+    side: String,
+    profile: EngineProfile,
+    size: Option<(u32, u32)>,
+    frames: Option<u32>,
+) {
     use pelt_desktop::StripSide;
     let side = match side.to_ascii_lowercase().as_str() {
         "top" => StripSide::Top,
@@ -414,12 +515,18 @@ fn run_chrome_profile(url: String, side: String, profile: EngineProfile) {
     } else {
         40
     };
-    let config =
+    let mut config =
         pelt_desktop::StaticViewerConfig::new(profile, pelt_desktop::WindowingMode::Headed, url);
+    if let Some((width, height)) = size {
+        config = config.with_size(width, height);
+    }
+    if let Some(limit) = frames {
+        config = config.with_frame_limit(limit);
+    }
     match pelt_desktop::run_chrome_viewer(config, side, thickness) {
         Ok(outcome) => println!(
-            "pelt chrome viewer url={} window={} redraws={}",
-            outcome.url, outcome.created_window, outcome.redraws
+            "pelt chrome viewer url={} window={} redraws={} size={}x{}",
+            outcome.url, outcome.created_window, outcome.redraws, outcome.size.0, outcome.size.1
         ),
         Err(error) => {
             eprintln!("{error}");
@@ -431,7 +538,13 @@ fn run_chrome_profile(url: String, side: String, profile: EngineProfile) {
 /// Without the chrome demo compiled in, `--chrome` is a clean error pointing at the
 /// feature to enable.
 #[cfg(not(feature = "chrome"))]
-fn run_chrome_profile(_url: String, _side: String, _profile: EngineProfile) {
+fn run_chrome_profile(
+    _url: String,
+    _side: String,
+    _profile: EngineProfile,
+    _size: Option<(u32, u32)>,
+    _frames: Option<u32>,
+) {
     eprintln!("pelt was built without the chrome demo; rebuild with `--features chrome`");
     std::process::exit(2);
 }
@@ -439,7 +552,12 @@ fn run_chrome_profile(_url: String, _side: String, _profile: EngineProfile) {
 /// Without the scripted profile compiled in, `--engine scripted` is a clean error
 /// pointing at the feature to enable.
 #[cfg(not(feature = "scripted"))]
-fn run_scripted_profile(_url: String, _js: String) {
+fn run_scripted_profile(
+    _url: String,
+    _js: String,
+    _size: Option<(u32, u32)>,
+    _frames: Option<u32>,
+) {
     eprintln!(
         "pelt was built without the scripted profile; rebuild with `--features scripted` \
          (or `--features scripted-nova` for the Nova backend)"
@@ -452,10 +570,26 @@ fn run_scripted_profile(_url: String, _js: String) {
 /// otherwise render `url` to a single scene snapshot, to `out` (or stdout). Exits
 /// non-zero on any reftest failure / error. (Always available here — viewer.rs is
 /// wholly under `viewer-engine`, which enables pelt-desktop's viewer stack.)
-fn run_headless_profile(url: String, out: Option<String>, reftest: Option<String>, bless: bool) {
+fn run_headless_profile(
+    url: String,
+    out: Option<String>,
+    reftest: Option<String>,
+    bless: bool,
+    size: Option<(u32, u32)>,
+    frames: Option<u32>,
+) {
     use pelt_desktop::{DEFAULT_HEIGHT, DEFAULT_WIDTH, Outcome, render_snapshot, run_reftests};
 
+    if frames.is_some() {
+        eprintln!("--frames applies to headed viewers, not --engine headless");
+        std::process::exit(2);
+    }
+
     if let Some(dir) = reftest {
+        if size.is_some() {
+            eprintln!("--size cannot be combined with --reftest; fixtures are pinned at 800x600");
+            std::process::exit(2);
+        }
         let results = match run_reftests(
             std::path::Path::new(&dir),
             DEFAULT_WIDTH,
@@ -506,11 +640,12 @@ fn run_headless_profile(url: String, out: Option<String>, reftest: Option<String
     // text snapshot. GPU-required, so behind the png-reftest feature.
     if out.as_deref().is_some_and(|p| p.ends_with(".png")) {
         let path = out.expect("checked Some above");
-        write_headless_png(&url, &path);
+        write_headless_png(&url, &path, size.unwrap_or((DEFAULT_WIDTH, DEFAULT_HEIGHT)));
         return;
     }
 
-    match render_snapshot(&url, DEFAULT_WIDTH, DEFAULT_HEIGHT) {
+    let (width, height) = size.unwrap_or((DEFAULT_WIDTH, DEFAULT_HEIGHT));
+    match render_snapshot(&url, width, height) {
         Ok(snapshot) => match out {
             Some(path) => match std::fs::write(&path, &snapshot) {
                 Ok(()) => println!("pelt headless wrote {} bytes to {path}", snapshot.len()),
@@ -531,9 +666,9 @@ fn run_headless_profile(url: String, out: Option<String>, reftest: Option<String
 /// Render `url` to a PNG and write it to `path`. Present only with `--features
 /// png-reftest` (it boots wgpu); without it, a clean pointer to the feature.
 #[cfg(feature = "png-reftest")]
-fn write_headless_png(url: &str, path: &str) {
-    use pelt_desktop::{DEFAULT_HEIGHT, DEFAULT_WIDTH, render_png};
-    match render_png(url, DEFAULT_WIDTH, DEFAULT_HEIGHT) {
+fn write_headless_png(url: &str, path: &str, size: (u32, u32)) {
+    use pelt_desktop::render_png;
+    match render_png(url, size.0, size.1) {
         Ok(png) => match std::fs::write(path, &png) {
             Ok(()) => println!("pelt headless wrote {} PNG bytes to {path}", png.len()),
             Err(error) => {
@@ -549,7 +684,7 @@ fn write_headless_png(url: &str, path: &str) {
 }
 
 #[cfg(not(feature = "png-reftest"))]
-fn write_headless_png(_url: &str, _path: &str) {
+fn write_headless_png(_url: &str, _path: &str, _size: (u32, u32)) {
     eprintln!(
         "pelt was built without the PNG lane; rebuild with `--features png-reftest` to \
          write a .png (the GPU-free .scene snapshot needs no feature)."
@@ -758,8 +893,8 @@ pelt {VERSION}
 Usage: pelt [--engine <profile>] [<url-or-file>] [options]
 
 Script-free Pelt: genet's reference browser. `--engine static <url-or-file>`
-opens the genet-native on-screen document viewer (file://, a bare path, and
-data: URLs — percent-encoded or base64; http(s) needs --features netfetch);
+opens the genet-native on-screen document viewer (file://, a bare path, data:
+URLs, and http(s) in the default build);
 `--chrome` wraps it in an omnibar + back/forward strip, `--tiles` splits the
 window into per-document tiles. The
 other profiles: `--engine scripted` runs a page's <script> (needs --features
@@ -775,6 +910,8 @@ Options:
     --out <path>                       (headless profile: write the scene snapshot for <file>)
     --reftest <dir>                    (headless profile: run a name.html + name.scene fixture dir)
     --bless                            (headless --reftest: (re)write the .scene snapshots)
+    --size <WxH>                       (physical client/capture size; rejected for --reftest)
+    --frames <N>                       (headed profiles: exit after N presented frames)
     --netrender-smoke
     --webgl-wgpu-smoke
     --windows-present-smoke            (requires --features windows-present, target_os = \"windows\")

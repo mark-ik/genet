@@ -1,8 +1,13 @@
 # Buckram: a CSS layout engine over reusable algorithms
 
 **Date:** 2026-07-26
-**Status:** in execution. K0 through K3 are accepted; K4a and K4b are
-accepted, and K4c is next.
+**Status:** in execution, corrected 2026-08-08. K0 through K3 are accepted.
+K4's box model, grid formation, inline and block sizing, live table dispatch,
+structural fragments, wrapper/caption behavior, and collapsed-track handling
+have landed through K4f. The compatibility bridge remains for named table
+deferrals. K4g1 is accepted; K4g2 is the next K4 implementation gate, with
+K4g3 interoperability research recorded ahead of implementation. K4 closes
+only after K4g and K4h delete the remaining bridge and flattening seams.
 **Decision:** Buckram owns CSS box generation, formatting contexts, intrinsic
 sizing, and fragments. Taffy is an algorithm library for flex and grid, with
 block layout retained only as a migration aid.
@@ -1516,9 +1521,12 @@ auto sizing, captions, separate and collapsed borders, and positioned table
 parts. A Taffy grid call may solve track constraints after Buckram has run the
 CSS table algorithm. Grid auto-sizing is not the table algorithm.
 
-K4a and K4b are accepted. Buckram now has the complete table vocabulary,
-wrapper/grid box generation, ordered anonymous repair, a typed table grid, and
-HTML span normalization. K4c is the next executable gate.
+K4a through K4f capabilities have landed. Supported tables use Buckram's table
+model, inline and block sizing, fragments, wrapper and caption behavior, and
+separated-track state. Named deferrals retain the compatibility bridge. K4g1
+is accepted; contextual-color C1 is the entry dependency for K4g2, the next K4
+gate. K4g3 interoperability research is recorded ahead, not accepted
+implementation.
 
 **Receipt:** carry forward the old B3a-c family ledger; remove the
 positioned-row flattening guard and the partial `table-layout` marker only

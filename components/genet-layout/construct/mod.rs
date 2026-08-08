@@ -22,6 +22,7 @@ use layout_dom_api::{LayoutDom, NodeKind};
 
 use servo_arc::Arc as ServoArc;
 use style::properties::ComputedValues;
+use stylo_traits::ToCss;
 
 use crate::adapter::NodeRef;
 use crate::box_tree::PseudoKind;
@@ -29,7 +30,7 @@ use crate::image_decode::ImagePlane;
 use crate::style::StylePlane;
 use crate::text_measure::{
     FontFamilySpec, GenericFamilyKind, InlineBlockBox, InlineBoxItem, InlineContent, InlineRun,
-    LineHeightSpec,
+    InlineTextAlign, LineHeightSpec,
 };
 
 /// Default font size used for runs whose element has no cascaded
@@ -220,16 +221,37 @@ where
 /// inline content lays out on a single line, not soft-wrapped to the available
 /// width. `false` (wrap) when the cascade has not run.
 fn no_wrap_of<NodeId: Copy + Eq + Hash>(styles: &StylePlane<NodeId>, id: NodeId) -> bool {
-    use style::properties::longhands::text_wrap_mode::computed_value::T as Mode;
     styles
         .get(id)
         .and_then(|e| e.borrow_data())
-        .is_some_and(|d| {
-            matches!(
-                d.styles.primary().get_inherited_text().text_wrap_mode,
-                Mode::Nowrap
-            )
-        })
+        .is_some_and(|d| no_wrap_from_computed(d.styles.primary()))
+}
+
+fn no_wrap_from_computed(cv: &ComputedValues) -> bool {
+    use style::properties::longhands::text_wrap_mode::computed_value::T as Mode;
+    matches!(cv.get_inherited_text().text_wrap_mode, Mode::Nowrap)
+}
+
+/// Map the readable CSS alignment values onto Parley's three stable line
+/// alignments. `justify` stays start-aligned for now: float-narrowed line boxes
+/// need a separate spacing implementation before that can be honest.
+fn text_align_from_computed(cv: &ComputedValues) -> InlineTextAlign {
+    match cv.clone_text_align().to_css_string().as_str() {
+        "center" | "-moz-center" | "-webkit-center" => InlineTextAlign::Center,
+        "right" | "end" | "-moz-right" | "-webkit-right" => InlineTextAlign::End,
+        _ => InlineTextAlign::Start,
+    }
+}
+
+fn text_align_of<NodeId: Copy + Eq + Hash>(
+    styles: &StylePlane<NodeId>,
+    id: NodeId,
+) -> InlineTextAlign {
+    styles
+        .get(id)
+        .and_then(|entry| entry.borrow_data())
+        .map(|data| text_align_from_computed(data.styles.primary()))
+        .unwrap_or_default()
 }
 
 /// Read an element's cascaded outer display: `Some(true)` for

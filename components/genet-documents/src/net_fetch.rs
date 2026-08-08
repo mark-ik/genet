@@ -16,6 +16,8 @@
 //! `fetch()` uses.
 
 use std::sync::OnceLock;
+#[cfg(feature = "netfetch")]
+use std::time::Duration;
 
 use tokio::runtime::Runtime;
 
@@ -43,13 +45,21 @@ fn runtime() -> &'static Runtime {
 pub(crate) fn http_get_bytes(url: &str) -> Option<Vec<u8>> {
     runtime().block_on(async move {
         let parsed = url::Url::parse(url).ok()?;
-        let request = netfetcher::Request::get(parsed);
-        let cx = netfetcher::FetchContext::permissive();
-        let response = netfetcher::fetch(request, &cx).await;
-        if response.is_network_error() || response.status < 200 || response.status >= 300 {
-            return None;
-        }
-        response.bytes().await.ok().map(|b| b.to_vec())
+        // The current shell loads synchronously before it opens a window. Bound
+        // the entire request, including body consumption, so an unresponsive
+        // origin cannot strand a headed capture or a normal launch forever.
+        tokio::time::timeout(Duration::from_secs(15), async move {
+            let request = netfetcher::Request::get(parsed);
+            let cx = netfetcher::FetchContext::permissive();
+            let response = netfetcher::fetch(request, &cx).await;
+            if response.is_network_error() || response.status < 200 || response.status >= 300 {
+                return None;
+            }
+            response.bytes().await.ok().map(|b| b.to_vec())
+        })
+        .await
+        .ok()
+        .flatten()
     })
 }
 

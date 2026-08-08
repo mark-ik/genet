@@ -114,6 +114,11 @@ impl TileShell {
         self.surface.set_theme(css);
     }
 
+    /// The first loaded document title, for the standalone window's native caption.
+    pub fn primary_document_title(&self) -> Option<String> {
+        self.surface.primary_document_title()
+    }
+
     /// Set the shell's UI scale so transient drag visuals match the host's chrome scale.
     pub fn set_ui_scale(&mut self, scale: f32) {
         self.ui_scale = scale.clamp(0.5, 4.0);

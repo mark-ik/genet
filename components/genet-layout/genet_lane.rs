@@ -48,6 +48,7 @@ use engine_observables_api::{
 };
 use layout_dom_api::LayoutDom;
 use paint_list_api::{LayoutPoint, LayoutTransform};
+use stylo_traits::ToCss;
 
 use crate::fragment::FragmentPlane;
 use crate::paint_emit::{
@@ -505,7 +506,10 @@ fn walk_for_hit<D>(
         // through to whatever sits behind it. The walk still descends into children,
         // so a `pointer-events: auto` descendant of a `none` box stays hittable (the
         // computed value already encodes the inheritance).
-        if rect.contains(local) && !cv.as_deref().is_some_and(pointer_events_none) {
+        let visible = cv
+            .as_deref()
+            .is_none_or(|style| style.clone_visibility().to_css_string() == "visible");
+        if rect.contains(local) && visible && !cv.as_deref().is_some_and(pointer_events_none) {
             *out = Some(FragmentHit {
                 fragment: SourceNodeId(dom.opaque_id(id)),
                 source_node: SourceNodeId(dom.opaque_id(id)),
@@ -880,6 +884,36 @@ mod tests {
             hit.source_node.0, expected_opaque,
             "expected hit on <p> (opaque_id {expected_opaque}), got opaque_id {}",
             hit.source_node.0
+        );
+    }
+
+    #[test]
+    fn hidden_overlay_does_not_swallow_clicks() {
+        let document = StaticDocument::parse(
+            "<html><body><p class=\"behind\">behind</p><div class=\"hidden\">hidden</div></body></html>",
+        );
+        let mut styles: StylePlane<StaticNodeId> = StylePlane::new();
+        crate::cascade::run_cascade(
+            &document,
+            &mut styles,
+            euclid::Size2D::new(200.0, 200.0),
+            &["html, body { display:block; margin:0; padding:0; } \
+               p { display:block; width:200px; height:200px; margin:0; } \
+               .hidden { position:absolute; inset:0; width:200px; height:200px; visibility:hidden; }"],
+            None,
+        );
+        let viewport = taffy::Size {
+            width: taffy::AvailableSpace::Definite(200.0),
+            height: taffy::AvailableSpace::Definite(200.0),
+        };
+        let (fragments, _, _) = layout(&document, &styles, &ImagePlane::new(), viewport);
+        let behind = find_element(NodeRef::document(&document), local_name!("p")).unwrap();
+        let hit = GenetLaneView::new(&document, &styles, &fragments)
+            .hit_test(Point::new(20.0, 20.0))
+            .expect("visible paragraph remains hittable");
+        assert_eq!(
+            hit.source_node,
+            SourceNodeId(document.opaque_id(behind.id()))
         );
     }
 

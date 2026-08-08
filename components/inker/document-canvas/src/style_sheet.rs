@@ -216,6 +216,10 @@ pub struct DocumentStyleSheet {
     pub indent_per_level: f32,
     /// Horizontal padding (px) inside the viewport.
     pub horizontal_padding: f32,
+    /// Optional maximum width (px) for the readable document column. When
+    /// present, the layout centres that column inside the viewport while
+    /// retaining `horizontal_padding` as the narrow-viewport minimum.
+    pub max_content_width: Option<f32>,
     /// Vertical padding (px) at the top + bottom of the viewport.
     pub vertical_padding: f32,
     /// Palette the [`ColorToken`]s resolve against.
@@ -327,6 +331,7 @@ impl Default for DocumentStyleSheet {
             line_height_ratio: 1.4,
             indent_per_level: 24.0,
             horizontal_padding: 16.0,
+            max_content_width: None,
             vertical_padding: 16.0,
             colors: ColorVocabulary::default(),
             link_adornment: LinkAdornment::SchemeArrow,
@@ -495,6 +500,7 @@ mod tests {
         assert_eq!(sheet.line_height_ratio, 1.4);
         assert_eq!(sheet.indent_per_level, 24.0);
         assert_eq!(sheet.horizontal_padding, 16.0);
+        assert_eq!(sheet.max_content_width, None);
         assert_eq!(sheet.vertical_padding, 16.0);
         assert_eq!(sheet.colors, ColorVocabulary::default());
     }

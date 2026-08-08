@@ -50,6 +50,8 @@ mod scripted_viewer;
 
 #[cfg(feature = "chrome")]
 mod chrome;
+#[cfg(feature = "chrome")]
+mod theme;
 
 #[cfg(all(feature = "viewer", feature = "chrome"))]
 mod chrome_viewer;
@@ -125,6 +127,8 @@ pub use script_runtime_api::CookieProvider;
 // so the host names the post-JS extract without a direct `genet-extract` dep. (Phase 4.)
 #[cfg(feature = "chrome")]
 pub use chrome::{Chrome, ChromeIntent, ChromeState, StripSide};
+#[cfg(feature = "chrome")]
+pub use theme::PeltTheme;
 #[cfg(all(feature = "viewer", feature = "chrome"))]
 pub use chrome_viewer::run_chrome_viewer;
 #[cfg(feature = "scripted")]
@@ -136,4 +140,4 @@ pub use tile_shell::TileShell;
 #[cfg(feature = "tile-surface")]
 pub use tile_surface::{DividerHit, TileFrame, TileLayer, TileSurface};
 #[cfg(feature = "tiles")]
-pub use tile_viewer::run_tile_viewer;
+pub use tile_viewer::{TileViewerConfig, run_tile_viewer, run_tile_viewer_with_config};

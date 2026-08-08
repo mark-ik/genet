@@ -21,6 +21,24 @@ impl TextEngine {
     pub fn new() -> Self {
         Self
     }
+
+    /// Preserve a plain-text response's line structure. Protocols such as
+    /// finger and Nex commonly use columns, banners, and blank lines as
+    /// content, so paragraph reflow would discard information rather than
+    /// merely change its appearance.
+    pub fn render_verbatim(&self, input: &EngineInput) -> EngineDocument {
+        let text = input.body.trim_end_matches(['\r', '\n']);
+        document(
+            input,
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![Block::Preformatted {
+                    text: text.to_string(),
+                }]
+            },
+        )
+    }
 }
 
 impl Default for TextEngine {
@@ -41,19 +59,23 @@ impl Engine for TextEngine {
             })
             .collect();
 
-        Ok(EngineDocument {
-            address: input.address.clone(),
-            title: None,
-            content_type: input
-                .content_type
-                .clone()
-                .unwrap_or_else(|| "text/plain".to_string()),
-            lang: None,
-            provenance: DocumentProvenance::for_engine(self.engine_id(), &input.address),
-            trust: DocumentTrustState::Unknown,
-            diagnostics: Vec::new(),
-            blocks,
-        })
+        Ok(document(input, blocks))
+    }
+}
+
+fn document(input: &EngineInput, blocks: Vec<Block>) -> EngineDocument {
+    EngineDocument {
+        address: input.address.clone(),
+        title: None,
+        content_type: input
+            .content_type
+            .clone()
+            .unwrap_or_else(|| "text/plain".to_string()),
+        lang: None,
+        provenance: DocumentProvenance::for_engine(ENGINE_ID, &input.address),
+        trust: DocumentTrustState::Unknown,
+        diagnostics: Vec::new(),
+        blocks,
     }
 }
 
@@ -130,5 +152,19 @@ mod tests {
             .render(&EngineInput::new("text:1", "hi").with_content_type("text/x-custom"))
             .expect("render");
         assert_eq!(doc.content_type, "text/x-custom");
+    }
+
+    #[test]
+    fn verbatim_mode_preserves_lines_columns_and_blank_lines() {
+        let doc = TextEngine::new().render_verbatim(&EngineInput::new(
+            "text:verbatim",
+            "name      idle\n\n  indented banner\n",
+        ));
+        assert_eq!(
+            doc.blocks,
+            vec![Block::Preformatted {
+                text: "name      idle\n\n  indented banner".into(),
+            }]
+        );
     }
 }

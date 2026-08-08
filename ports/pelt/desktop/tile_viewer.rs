@@ -16,6 +16,36 @@ use genet_host_api::tile::{
 
 use crate::{StaticViewerOutcome, WindowingMode};
 
+/// Configuration for a headed tile-viewer run. It parallels [`StaticViewerConfig`]
+/// without pretending the heterogeneous tile sessions are one static document.
+pub struct TileViewerConfig {
+    pub urls: Vec<String>,
+    pub windowing: WindowingMode,
+    pub size: Option<(u32, u32)>,
+    pub frames: Option<u32>,
+}
+
+impl TileViewerConfig {
+    pub fn new(urls: Vec<String>, windowing: WindowingMode) -> Self {
+        Self {
+            urls,
+            windowing,
+            size: None,
+            frames: None,
+        }
+    }
+
+    pub fn with_size(mut self, width: u32, height: u32) -> Self {
+        self.size = Some((width.max(1), height.max(1)));
+        self
+    }
+
+    pub fn with_frame_limit(mut self, frames: u32) -> Self {
+        self.frames = Some(frames.max(1));
+        self
+    }
+}
+
 /// Build a demo tile tree from content URLs: one tile is a single document, two are a
 /// side-by-side row split, and three or more put the first two in a tab-stack beside a
 /// single tile (so the demo shows a split, tabs, and content compositing at once).
@@ -57,14 +87,23 @@ pub fn run_tile_viewer(
     urls: Vec<String>,
     windowing: WindowingMode,
 ) -> Result<StaticViewerOutcome, String> {
-    let tree = tree_from_urls(&urls);
-    match windowing {
+    run_tile_viewer_with_config(TileViewerConfig::new(urls, windowing))
+}
+
+/// Run the tile viewer with an explicit physical size and optional deterministic
+/// frame limit for capture/CI profiles.
+pub fn run_tile_viewer_with_config(
+    config: TileViewerConfig,
+) -> Result<StaticViewerOutcome, String> {
+    let tree = tree_from_urls(&config.urls);
+    match config.windowing {
         WindowingMode::Headless => Ok(StaticViewerOutcome {
-            url: urls.first().cloned().unwrap_or_default(),
+            url: config.urls.first().cloned().unwrap_or_default(),
             created_window: false,
             redraws: 0,
+            size: (0, 0),
         }),
-        WindowingMode::Headed => windowed::run(tree, urls),
+        WindowingMode::Headed => windowed::run(tree, config),
     }
 }
 
@@ -79,21 +118,23 @@ mod windowed {
     use netrender::external_texture::ExternalTexturePlacement;
     use netrender::{ColorLoad, NetrenderOptions};
     use winit::application::ApplicationHandler;
-    use winit::dpi::PhysicalSize;
     use winit::event::{ElementState, MouseButton, WindowEvent};
     use winit::event_loop::{ActiveEventLoop, EventLoop};
     use winit::window::{Window, WindowId};
 
-    use super::StaticViewerOutcome;
+    use super::{StaticViewerOutcome, TileViewerConfig};
     use crate::tile_shell::TileShell;
 
     type Rect = (f32, f32, f32, f32);
 
-    pub(super) fn run(tree: TileTree, urls: Vec<String>) -> Result<StaticViewerOutcome, String> {
+    pub(super) fn run(
+        tree: TileTree,
+        config: TileViewerConfig,
+    ) -> Result<StaticViewerOutcome, String> {
         let shell = TileShell::new(tree);
         let event_loop =
             EventLoop::new().map_err(|error| format!("could not create event loop: {error}"))?;
-        let mut app = TileApp::new(shell, urls);
+        let mut app = TileApp::new(shell, config);
         event_loop
             .run_app(&mut app)
             .map_err(|error| format!("tile event loop failed: {error}"))?;
@@ -109,7 +150,9 @@ mod windowed {
         host: Option<SurfaceHost>,
         width: u32,
         height: u32,
+        scale_factor: f32,
         redraws: u32,
+        frames: Option<u32>,
         /// OS accessibility bridge: the frame DOM pelt renders is projected to an
         /// AccessKit tree each frame and pushed here, so a screen reader reads the
         /// tab bars and the status bar's leaves. `None` until the window exists.
@@ -120,15 +163,17 @@ mod windowed {
     }
 
     impl TileApp {
-        fn new(shell: TileShell, urls: Vec<String>) -> Self {
+        fn new(shell: TileShell, config: TileViewerConfig) -> Self {
             Self {
                 shell,
-                first_url: urls.into_iter().next().unwrap_or_default(),
+                first_url: config.urls.into_iter().next().unwrap_or_default(),
                 window: None,
                 host: None,
-                width: 1100,
-                height: 750,
+                width: config.size.map_or(1100, |size| size.0),
+                height: config.size.map_or(750, |size| size.1),
+                scale_factor: 1.0,
                 redraws: 0,
+                frames: config.frames,
                 a11y: None,
                 a11y_route: HashMap::new(),
             }
@@ -176,10 +221,19 @@ mod windowed {
                 url: self.first_url.clone(),
                 created_window: self.window.is_some(),
                 redraws: self.redraws,
+                size: if self.window.is_some() {
+                    (self.width, self.height)
+                } else {
+                    (0, 0)
+                },
             }
         }
 
-        fn render(&mut self) {
+        fn window_title(&self) -> String {
+            crate::static_viewer::pelt_window_title(self.shell.primary_document_title().as_deref())
+        }
+
+        fn render(&mut self, event_loop: &ActiveEventLoop) {
             // A screen reader's request lands on the previous frame's tree; apply it
             // first so its effect shows in the frame we are about to build.
             self.pump_a11y_actions();
@@ -187,7 +241,11 @@ mod windowed {
             // status bar's meter for the NEXT frame: real measured wall time.
             let frame_t0 = std::time::Instant::now();
             let (win_w, win_h) = (self.width.max(1), self.height.max(1));
-            self.shell.resize(win_w, win_h);
+            let (logical_w, logical_h) = (
+                crate::static_viewer::logical_extent(win_w, self.scale_factor),
+                crate::static_viewer::logical_extent(win_h, self.scale_factor),
+            );
+            self.shell.resize(logical_w, logical_h);
             let frame = self.shell.frame();
             self.sync_a11y();
 
@@ -196,7 +254,7 @@ mod windowed {
             };
             // The frame (tab bars + content backgrounds) is the bottom layer; each
             // tile's document composites over its content rect.
-            let (_ft, frame_view) = host.rasterize(
+            let (_ft, frame_view) = host.rasterize_scaled(
                 &frame.frame_scene,
                 win_w,
                 win_h,
@@ -206,14 +264,23 @@ mod windowed {
                     b: 0.16,
                     a: 1.0,
                 }),
+                self.scale_factor,
             );
             let tile_layers: Vec<(wgpu::Texture, wgpu::TextureView, Rect)> = frame
                 .tiles
                 .iter()
                 .map(|layer| {
-                    let (w, h) = (layer.rect.2.max(1.0) as u32, layer.rect.3.max(1.0) as u32);
-                    let (tex, view) =
-                        host.rasterize(&layer.scene, w, h, ColorLoad::Clear(wgpu::Color::WHITE));
+                    let (w, h) = (
+                        physical_extent(layer.rect.2, self.scale_factor),
+                        physical_extent(layer.rect.3, self.scale_factor),
+                    );
+                    let (tex, view) = host.rasterize_scaled(
+                        &layer.scene,
+                        w,
+                        h,
+                        ColorLoad::Clear(wgpu::Color::WHITE),
+                        self.scale_factor,
+                    );
                     (tex, view, layer.rect)
                 })
                 .collect();
@@ -238,18 +305,22 @@ mod windowed {
                     host.format(),
                     win_w,
                     win_h,
-                    placement(*rect),
+                    placement(*rect, self.scale_factor),
                 );
             }
             // The drag ghost composites last (over everything), on a transparent clear so
             // only its box shows. `_gt` holds the texture alive until present.
             if let Some(ghost) = frame.ghost.as_ref() {
-                let (gw, gh) = (ghost.rect.2.max(1.0) as u32, ghost.rect.3.max(1.0) as u32);
-                let (_gt, gview) = host.rasterize(
+                let (gw, gh) = (
+                    physical_extent(ghost.rect.2, self.scale_factor),
+                    physical_extent(ghost.rect.3, self.scale_factor),
+                );
+                let (_gt, gview) = host.rasterize_scaled(
                     &ghost.scene,
                     gw,
                     gh,
                     ColorLoad::Clear(wgpu::Color::TRANSPARENT),
+                    self.scale_factor,
                 );
                 renderer.compose_external_texture(
                     &gview,
@@ -257,13 +328,16 @@ mod windowed {
                     host.format(),
                     win_w,
                     win_h,
-                    placement(ghost.rect),
+                    placement(ghost.rect, self.scale_factor),
                 );
             }
             swap.present();
             self.redraws += 1;
             self.shell
                 .note_frame_millis(frame_t0.elapsed().as_secs_f32() * 1000.0);
+            if self.frames.is_some_and(|limit| self.redraws >= limit) {
+                event_loop.exit();
+            }
         }
 
         fn request_redraw(&self) {
@@ -273,8 +347,17 @@ mod windowed {
         }
     }
 
-    fn placement(r: Rect) -> ExternalTexturePlacement {
-        ExternalTexturePlacement::new([r.0, r.1, r.0 + r.2, r.1 + r.3])
+    fn physical_extent(logical: f32, scale_factor: f32) -> u32 {
+        ((logical.max(1.0) * scale_factor.max(1.0)).round() as u32).max(1)
+    }
+
+    fn placement(r: Rect, scale_factor: f32) -> ExternalTexturePlacement {
+        ExternalTexturePlacement::new([
+            r.0 * scale_factor,
+            r.1 * scale_factor,
+            (r.0 + r.2) * scale_factor,
+            (r.1 + r.3) * scale_factor,
+        ])
     }
 
     impl ApplicationHandler for TileApp {
@@ -282,15 +365,17 @@ mod windowed {
             if self.window.is_some() {
                 return;
             }
-            let attributes = Window::default_attributes()
-                .with_title("Pelt — tiles")
-                .with_inner_size(PhysicalSize::new(self.width, self.height))
-                // Hidden until the first frame has installed the accessibility
-                // adapter: `accesskit_windows` subclasses the window and must do
-                // so before it is shown, while the adapter itself cannot exist
-                // until there is a laid-out tree to hand it. Showing here panics
-                // on Windows. It also means the window never appears unpainted.
-                .with_visible(false);
+            let attributes = crate::static_viewer::pelt_window_attributes(
+                self.window_title(),
+                self.width,
+                self.height,
+            )
+            // Hidden until the first frame has installed the accessibility
+            // adapter: `accesskit_windows` subclasses the window and must do
+            // so before it is shown, while the adapter itself cannot exist
+            // until there is a laid-out tree to hand it. Showing here panics
+            // on Windows. It also means the window never appears unpainted.
+            .with_visible(false);
             let window = match event_loop.create_window(attributes) {
                 Ok(window) => Arc::new(window),
                 Err(err) => {
@@ -302,7 +387,12 @@ mod windowed {
             let size = window.inner_size();
             self.width = size.width.max(1);
             self.height = size.height.max(1);
-            self.shell.resize(self.width, self.height);
+            self.scale_factor = window.scale_factor() as f32;
+            window.set_title(&self.window_title());
+            self.shell.resize(
+                crate::static_viewer::logical_extent(self.width, self.scale_factor),
+                crate::static_viewer::logical_extent(self.height, self.scale_factor),
+            );
             // A screen-reader action wakes the loop so the next frame drains and
             // routes it. The adapter installs on the first laid-out frame, in
             // `sync_a11y`, once there is a tree to hand it.
@@ -350,14 +440,39 @@ mod windowed {
                     if let Some(host) = self.host.as_mut() {
                         host.resize(self.width, self.height);
                     }
-                    self.shell.resize(self.width, self.height);
+                    self.shell.resize(
+                        crate::static_viewer::logical_extent(self.width, self.scale_factor),
+                        crate::static_viewer::logical_extent(self.height, self.scale_factor),
+                    );
+                    self.request_redraw();
+                },
+                WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                    self.scale_factor = scale_factor as f32;
+                    if let Some(window) = self.window.as_ref() {
+                        let size = window.inner_size();
+                        self.width = size.width.max(1);
+                        self.height = size.height.max(1);
+                    }
+                    if let Some(host) = self.host.as_mut() {
+                        host.resize(self.width, self.height);
+                    }
+                    self.shell.resize(
+                        crate::static_viewer::logical_extent(self.width, self.scale_factor),
+                        crate::static_viewer::logical_extent(self.height, self.scale_factor),
+                    );
                     self.request_redraw();
                 },
                 WindowEvent::CursorMoved { position, .. } => {
-                    if self
-                        .shell
-                        .pointer_move(position.x as f32, position.y as f32)
-                    {
+                    if self.shell.pointer_move(
+                        crate::static_viewer::logical_position(
+                            position.x as f32,
+                            self.scale_factor,
+                        ),
+                        crate::static_viewer::logical_position(
+                            position.y as f32,
+                            self.scale_factor,
+                        ),
+                    ) {
                         self.request_redraw();
                     }
                 },
@@ -375,11 +490,14 @@ mod windowed {
                 },
                 WindowEvent::MouseWheel { delta, .. } => {
                     let (dx, dy) = wheel_delta_from_winit(delta);
-                    if self.shell.wheel(dx, dy) {
+                    if self
+                        .shell
+                        .wheel(dx / self.scale_factor, dy / self.scale_factor)
+                    {
                         self.request_redraw();
                     }
                 },
-                WindowEvent::RedrawRequested => self.render(),
+                WindowEvent::RedrawRequested => self.render(event_loop),
                 _ => {},
             }
         }

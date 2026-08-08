@@ -38,7 +38,9 @@ use crate::cascade::{
 };
 use crate::fragment::FragmentPlane;
 use crate::genet_lane::GenetLaneView;
-use crate::image_decode::{BackgroundImagePlane, DecodedImage, ImagePlane};
+use crate::image_decode::{
+    BackgroundImagePlane, DecodedImage, ImageLoader, ImagePlane, NoImageLoader,
+};
 use crate::invalidate::{classify, coalesce};
 use crate::paint_emit::{
     GenetPaintList, LeafPaintSource, ScrollOffsets, emit_paint_list_scrolled,
@@ -241,6 +243,25 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
     where
         D: LayoutDom<NodeId = Id>,
     {
+        Self::new_with_resources(dom, stylesheets, width, height, None, &NoImageLoader)
+    }
+
+    /// Initial full cascade + layout with a document base and host-owned resource
+    /// loader. The loader supplies non-`data:` image bytes for this session;
+    /// `base_url` lets Stylo resolve CSS `url()` references before it asks for
+    /// them. [`new`](Self::new) remains the resource-free convenience entry.
+    pub fn new_with_resources<D, L>(
+        dom: &D,
+        stylesheets: &[&str],
+        width: f32,
+        height: f32,
+        base_url: Option<&str>,
+        loader: &L,
+    ) -> Self
+    where
+        D: LayoutDom<NodeId = Id>,
+        L: ImageLoader,
+    {
         let mut styles = StylePlane::new();
         // Build the persistent Stylist under the plane's stable lock, so the
         // sheets here, the inline-style blocks parsed each pass, and the cascade
@@ -250,7 +271,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         let stylist = build_stylist(
             euclid::Size2D::new(width, height),
             stylesheets,
-            None,
+            base_url,
             &lock,
             quirks,
         );
@@ -274,7 +295,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
         let bg_images = BackgroundImagePlane::decode_from_cascade_cached(
             dom,
             &styles,
-            &crate::image_decode::NoImageLoader,
+            loader,
             &mut bg_decode_cache,
         );
         Self {
@@ -284,7 +305,7 @@ impl<Id: Copy + Eq + Hash + Send + Sync + 'static> IncrementalLayout<Id> {
             fragments,
             built,
             text_ctx,
-            images: ImagePlane::decode_from_dom(dom),
+            images: ImagePlane::decode_from_dom_with_loader(dom, loader),
             bg_images,
             bg_decode_cache,
             paint_side_valid: true,

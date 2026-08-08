@@ -15,7 +15,7 @@
 //!
 //! Item types this engine handles explicitly:
 //!
-//! - `i` informational text (no resource) — merged into paragraph runs
+//! - `i` informational text (no resource) — retained as literal menu rows
 //! - `0` text file — emitted as link
 //! - `1` submenu / directory — emitted as link
 //! - `7` full-text search server — emitted as link
@@ -65,7 +65,7 @@ impl Engine for GopherEngine {
 
     fn render(&self, input: &EngineInput) -> Result<EngineDocument, EngineError> {
         // errand parses the RFC 1436 menu into typed items (with synthesised URLs);
-        // nematic folds info/error runs into paragraphs and resources into links.
+        // nematic retains info/error runs as literal rows and resources as links.
         let mut blocks: Vec<Block> = Vec::new();
         let mut info_run: Vec<String> = Vec::new();
 
@@ -104,16 +104,9 @@ fn flush_info(info_run: &mut Vec<String>, blocks: &mut Vec<Block>) {
     if info_run.is_empty() {
         return;
     }
-    let mut spans = Vec::with_capacity(info_run.len() * 2);
-    let mut first = true;
-    for line in info_run.drain(..) {
-        if !first {
-            spans.push(InlineSpan::SoftBreak);
-        }
-        spans.push(InlineSpan::Text(line));
-        first = false;
-    }
-    blocks.push(Block::Paragraph { spans });
+    blocks.push(Block::Preformatted {
+        text: info_run.drain(..).collect::<Vec<_>>().join("\n"),
+    });
 }
 
 fn link_paragraph(display: String, url: String) -> Block {
@@ -186,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn info_lines_merge_into_one_paragraph() {
+    fn info_lines_remain_literal_menu_rows() {
         let body = format!(
             "{}{}{}",
             line('i', "Welcome to the menu", "", "example.test", "70"),
@@ -195,14 +188,10 @@ mod tests {
         );
         let doc = render(&body);
         assert_eq!(doc.blocks.len(), 1);
-        let Block::Paragraph { spans } = &doc.blocks[0] else {
-            panic!("expected paragraph");
+        let Block::Preformatted { text } = &doc.blocks[0] else {
+            panic!("expected preformatted menu rows");
         };
-        let breaks = spans
-            .iter()
-            .filter(|s| matches!(s, InlineSpan::SoftBreak))
-            .count();
-        assert_eq!(breaks, 2);
+        assert_eq!(text.lines().count(), 3);
     }
 
     #[test]
@@ -233,11 +222,8 @@ mod tests {
     fn error_lines_become_info_with_prefix() {
         let body = line('3', "host unreachable", "", "example.test", "70");
         let doc = render(&body);
-        let Block::Paragraph { spans } = &doc.blocks[0] else {
-            panic!("expected paragraph");
-        };
-        let InlineSpan::Text(text) = &spans[0] else {
-            panic!("expected text");
+        let Block::Preformatted { text } = &doc.blocks[0] else {
+            panic!("expected menu error row");
         };
         assert!(text.starts_with("[error]"), "got: {text}");
     }

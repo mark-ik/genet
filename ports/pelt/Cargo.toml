@@ -24,7 +24,7 @@ bench = false
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)', 'cfg(llvm_pgo)'] }
 
 [features]
-default = ["viewer-netrender"]
+default = ["viewer-netrender", "netfetch"]
 # viewer-engine pulls the desktop host (smoke runners, present backends).
 # The Masonry-era Xilem viewer (pelt-viewer) was retired 2026-06-12 — its
 # CPU-readback render path predated direct present; pelt-live is the
@@ -51,9 +51,10 @@ chrome = ["viewer-engine", "pelt-desktop/viewer", "pelt-desktop/chrome"]
 # The tile-tree demo (V5): `pelt --tiles <url>...` splits the window into tiles, each
 # showing a document, with switchable tabs. Pulls pelt-desktop's tile surface.
 tiles = ["viewer-engine", "pelt-desktop/viewer", "pelt-desktop/tiles"]
-# Remote document loading (V1's http(s) half): `pelt --features netfetch --engine
-# static https://…` loads over the netfetcher engine. Off by default — the async
-# network stack is opt-in; the default build stays local-first.
+# Remote document loading (V1's http(s) half): `pelt --engine static https://…`
+# loads over the netfetcher engine in the default reference-browser build. The
+# feature remains selectable so `--no-default-features` can keep the light contracts
+# profile free of the async network stack.
 netfetch = ["viewer-engine", "pelt-desktop/viewer", "pelt-desktop/netfetch"]
 # Smolweb document loading: `pelt --features smolweb --engine static gemini://…`
 # renders a native, per-site-themed capsule (gemtext / gopher / feed) over the errand

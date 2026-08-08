@@ -128,27 +128,28 @@ impl ImageLoader for LocalFileImageLoader {
 /// well-formed style blocks (preferred for the render path).
 pub fn inline_stylesheets<D: LayoutDom>(dom: &D) -> Vec<String> {
     let mut sheets = Vec::new();
-    let mut stack = vec![dom.document()];
-    while let Some(id) = stack.pop() {
-        if dom
-            .element_name(id)
-            .is_some_and(|q| q.local.as_ref() == "style")
-        {
-            let mut css = String::new();
-            for child in dom.dom_children(id) {
-                if let Some(text) = dom.text(child) {
-                    css.push_str(text);
-                }
-            }
-            if !css.trim().is_empty() {
-                sheets.push(css);
+    collect_inline_stylesheets(dom, dom.document(), &mut sheets);
+    sheets
+}
+
+fn collect_inline_stylesheets<D: LayoutDom>(dom: &D, id: D::NodeId, sheets: &mut Vec<String>) {
+    if dom
+        .element_name(id)
+        .is_some_and(|q| q.local.as_ref() == "style")
+    {
+        let mut css = String::new();
+        for child in dom.dom_children(id) {
+            if let Some(text) = dom.text(child) {
+                css.push_str(text);
             }
         }
-        for child in dom.dom_children(id) {
-            stack.push(child);
+        if !css.trim().is_empty() {
+            sheets.push(css);
         }
     }
-    sheets
+    for child in dom.dom_children(id) {
+        collect_inline_stylesheets(dom, child, sheets);
+    }
 }
 
 /// Text of every `<style>` block by scanning the raw source. Robust to
@@ -194,34 +195,114 @@ where
     D: LayoutDom,
     L: ImageLoader,
 {
+    let mut sheets = Vec::new();
+    collect_linked_stylesheets(dom, dom.document(), loader, &mut sheets, false);
+    sheets
+}
+
+/// Collect author stylesheets in document order. Inline `<style>` and linked
+/// `<link rel=stylesheet>` nodes share the same walk, so the CSS vector keeps
+/// the order-of-appearance cascade tie-breaker. A linked sheet's `media`
+/// attribute is preserved by wrapping its source in an `@media` rule; Stylo
+/// then evaluates it against the screen device instead of accidentally applying
+/// a print sheet to every document.
+///
+/// `loader` receives each raw `href`. Hosts that have a document base should
+/// resolve it before fetching (and do the same for image resources).
+pub fn author_stylesheets_with_loader<D, L>(dom: &D, loader: &L) -> Vec<String>
+where
+    D: LayoutDom,
+    L: ImageLoader,
+{
+    let mut sheets = Vec::new();
+    collect_author_stylesheets(dom, dom.document(), loader, &mut sheets);
+    sheets
+}
+
+fn collect_linked_stylesheets<D, L>(
+    dom: &D,
+    id: D::NodeId,
+    loader: &L,
+    sheets: &mut Vec<String>,
+    wrap_media: bool,
+) where
+    D: LayoutDom,
+    L: ImageLoader,
+{
+    if let Some(css) = linked_stylesheet_at(dom, id, loader, wrap_media) {
+        sheets.push(css);
+    }
+    for child in dom.dom_children(id) {
+        collect_linked_stylesheets(dom, child, loader, sheets, wrap_media);
+    }
+}
+
+fn linked_stylesheet_at<D, L>(
+    dom: &D,
+    id: D::NodeId,
+    loader: &L,
+    wrap_media: bool,
+) -> Option<String>
+where
+    D: LayoutDom,
+    L: ImageLoader,
+{
     let no_ns = Namespace::default();
     let rel_attr = LocalName::from("rel");
     let href_attr = LocalName::from("href");
+    let media_attr = LocalName::from("media");
 
-    let mut sheets = Vec::new();
-    let mut stack = vec![dom.document()];
-    while let Some(id) = stack.pop() {
-        let is_stylesheet = dom
-            .element_name(id)
-            .is_some_and(|q| q.local.as_ref() == "link")
-            && dom
-                .attribute(id, &no_ns, &rel_attr)
-                .is_some_and(|rel| rel.eq_ignore_ascii_case("stylesheet"));
-        if is_stylesheet {
-            if let Some(href) = dom.attribute(id, &no_ns, &href_attr) {
-                if let Some(css) = loader
-                    .load(href)
-                    .and_then(|bytes| String::from_utf8(bytes).ok())
-                {
-                    sheets.push(css);
-                }
+    let is_stylesheet = dom
+        .element_name(id)
+        .is_some_and(|q| q.local.as_ref() == "link")
+        && dom.attribute(id, &no_ns, &rel_attr).is_some_and(|rel| {
+            rel.split_ascii_whitespace()
+                .any(|token| token.eq_ignore_ascii_case("stylesheet"))
+        });
+    if !is_stylesheet {
+        return None;
+    }
+    let href = dom.attribute(id, &no_ns, &href_attr)?;
+    let css = String::from_utf8(loader.load(href)?).ok()?;
+    let media = dom
+        .attribute(id, &no_ns, &media_attr)
+        .filter(|media| !media.trim().is_empty());
+    Some(match (wrap_media, media) {
+        (true, Some(media)) => format!("@media {media} {{\n{css}\n}}"),
+        _ => css,
+    })
+}
+
+fn collect_author_stylesheets<D, L>(dom: &D, id: D::NodeId, loader: &L, sheets: &mut Vec<String>)
+where
+    D: LayoutDom,
+    L: ImageLoader,
+{
+    if dom
+        .element_name(id)
+        .is_some_and(|q| q.local.as_ref() == "style")
+    {
+        let mut css = String::new();
+        for child in dom.dom_children(id) {
+            if let Some(text) = dom.text(child) {
+                css.push_str(text);
             }
         }
-        for child in dom.dom_children(id) {
-            stack.push(child);
+        if !css.trim().is_empty() {
+            sheets.push(css);
         }
     }
-    sheets
+
+    // Keep the link branch separate from the inline branch. A `<link>` never
+    // has CSS text children, but processing the current node here means
+    // stylesheet assembly follows the DOM exactly rather than doing two
+    // order-losing walks.
+    if let Some(css) = linked_stylesheet_at(dom, id, loader, true) {
+        sheets.push(css);
+    }
+    for child in dom.dom_children(id) {
+        collect_author_stylesheets(dom, child, loader, sheets);
+    }
 }
 
 /// The `href` of the page's favicon `<link rel="icon">` (also `rel="shortcut icon"`
@@ -334,6 +415,36 @@ mod tests {
         let sheets = linked_stylesheets_with_loader(&doc, &FakeFetcher);
         assert_eq!(sheets.len(), 1);
         assert!(sheets[0].contains("color: purple"));
+    }
+
+    #[test]
+    fn author_stylesheets_keep_document_order_and_wrap_link_media() {
+        use crate::image_decode::ImageLoader;
+
+        struct FakeFetcher;
+        impl ImageLoader for FakeFetcher {
+            fn load(&self, url: &str) -> Option<Vec<u8>> {
+                match url {
+                    "early.css" => Some(b"p { color: green; }".to_vec()),
+                    "print.css" => Some(b"p { color: black; }".to_vec()),
+                    _ => None,
+                }
+            }
+        }
+
+        let doc = StaticDocument::parse(
+            "<html><head><style>p { color: red; }</style>\
+             <link rel=\"preload stylesheet\" href=\"early.css\">\
+             <link rel=\"stylesheet\" href=\"print.css\" media=\"print\">\
+             <style>p { color: blue; }</style></head><body></body></html>",
+        );
+        let sheets = author_stylesheets_with_loader(&doc, &FakeFetcher);
+        assert_eq!(sheets.len(), 4);
+        assert!(sheets[0].contains("color: red"));
+        assert!(sheets[1].contains("color: green"));
+        assert!(sheets[2].starts_with("@media print"));
+        assert!(sheets[2].contains("color: black"));
+        assert!(sheets[3].contains("color: blue"));
     }
 
     #[test]

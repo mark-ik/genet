@@ -73,7 +73,7 @@ where
         InlineContent {
             runs,
             boxes,
-            no_wrap: no_wrap_of(styles, elem.id()),
+            align: text_align_of(styles, elem.id()),
         },
         sources,
     )
@@ -229,7 +229,7 @@ pub(crate) fn block_pseudo_content<NodeId: Copy + Eq + Hash>(
     let content = InlineContent {
         runs: vec![run_from_computed(cv, text)],
         boxes: Vec::new(),
-        no_wrap: false,
+        align: text_align_from_computed(cv),
     };
     Some((cv.clone(), content))
 }
@@ -456,7 +456,7 @@ where
         InlineContent {
             runs,
             boxes,
-            no_wrap: no_wrap_of(styles, styling),
+            align: text_align_of(styles, styling),
         },
         sources,
     )
@@ -485,6 +485,7 @@ pub(crate) fn run_for_element<NodeId: Copy + Eq + Hash>(
         letter_spacing: letter_spacing_of(styles, id).unwrap_or(0.0),
         word_spacing: word_spacing_of(styles, id).unwrap_or(0.0),
         line_height: line_height_of(styles, id).unwrap_or_default(),
+        no_wrap: no_wrap_of(styles, id),
     }
 }
 
@@ -547,6 +548,7 @@ pub(crate) fn run_from_computed(cv: &ComputedValues, text: String) -> InlineRun 
         letter_spacing: itext.letter_spacing.0.resolve(Length::new(fs)).px(),
         word_spacing: itext.word_spacing.resolve(Length::new(fs)).px(),
         line_height,
+        no_wrap: no_wrap_from_computed(cv),
     }
 }
 

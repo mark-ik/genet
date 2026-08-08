@@ -1,9 +1,20 @@
 # Livery fullweb cutover and the servo-* retirement
 
 **Date:** 2026-07-24
-**Status:** in execution, as of 2026-07-26. D0 is ruled (lane, at the
-revised price; multicol knocked out). Every stage F0-F6 carries its detail,
-its instrument, and its receipt.
+**Status:** in execution, current-state correction 2026-08-08. D0 is ruled
+(lane, at the revised price; multicol knocked out). Every stage F0-F6 carries
+its detail, instrument, and receipt. Product reachability is now an earlier
+projection gate rather than part of the final F4 flip; see the
+[Livery product route and document resources plan](2026-08-08_livery_product_route_and_document_resources_execution_plan.md).
+
+**Current truth.** Pelt still routes static HTML through `genet.web` and
+Stylo; no shipping port enables `genet-documents/livery`. The product-facing
+`LiverySessionEngine` exists, but it assembles host CSS plus inline `<style>`
+blocks and does not share the linked-stylesheet/resource path Pelt just proved
+on the incumbent route. Buckram has advanced through live table dispatch,
+captions, and collapsed tracks; K4g1 is accepted and K4g2 is next after
+contextual-color C1. The recorded F0/F3 figures below remain the latest full
+cutover ledger, not a fresh 2026-08-08 rerun.
 
 **Where the two lanes stand.**
 
@@ -36,9 +47,11 @@ three of them the plan's own diagnosis was wrong in a way worth recording:
   placement and alignment shorthands were unimplemented, so placements never
   reached taffy. Behind it sat an engine bug (whitespace generating
   anonymous boxes) worth more than the slice itself.
-- **Tables.** Predicted as `table-layout: fixed`; **neither lane implements
-  it.** The incumbent wins by laying tables out as a grid, which Livery now
-  does too.
+- **Tables, historical 2026-07-26 diagnosis.** Predicted as
+  `table-layout: fixed`; neither lane implemented it at that point. The
+  incumbent won by laying tables out as a grid, which the first Livery parity
+  slice also did. Buckram has since replaced that diagnosis with
+  standards-owned table models and algorithms through K4f.
 
 **The method that produced those corrections is the transferable part.**
 Measure the whole affected set before believing a slice, because two of
@@ -48,11 +61,10 @@ had to be corrected. Prefer a bisect to a hypothesis: reverting one hunk
 attributed a 128-file CSS2 regression precisely and cleared three other
 changes of suspicion in one run.
 
-**Awaiting a ruling:** table layout. The 2026-07-26 work improved the
-emulation and did not build the standard; per the project's own practice a
-capability is either implemented or a recorded knockout, and an emulation
-that scores on the ledger is neither. See the table entry under the
-sub-diff findings.
+**Ruling closed 2026-07-26:** Buckram owns table layout. The parity emulation
+was a useful falsifier and is now a deletion target. K4 has reached live
+dispatch, row/column fragments, captions, and collapsed tracks; collapsed
+border resolution/paint and the positioned-table closure remain K4g/K4h.
 
 **Open, in measured value order:** the `content` longhand (F0 ratchet plus
 19 CSS2 files, one slice paid twice), contextual color computation
@@ -96,7 +108,9 @@ receipts"), and the teardown that rides behind it.
 **Companions:** the harvest plan (H0-H6, receipts live there), the
 [consumed-property audit](./2026-07-13_genet_consumed_css_property_audit.md)
 (the 126-longhand bar), the
-[profile ladder plan](./2026-05-12_genet_profile_ladder_plan.md).
+[profile ladder plan](./2026-05-12_genet_profile_ladder_plan.md), the
+[Livery product route and document resources plan](2026-08-08_livery_product_route_and_document_resources_execution_plan.md),
+and the [HTML presentational-hints plan](2026-08-08_livery_html_presentational_hints_execution_plan.md).
 
 ## D0. The cutover shape: lane, not re-seam (recommendation)
 
@@ -685,7 +699,10 @@ reviewed; the direction holds and the grind is accepted. Two riders:
     enables `genet-scripted/livery`, not `genet-documents/livery`.
 
   So the Livery product lane is written and unreachable: dead code in every
-  shipping port. F4 is three moves, in order.
+  shipping port. The original plan placed all three corrective moves inside
+  F4. That hid the first real product projection behind the final parity bar.
+  The first two now belong to the linked product-route plan and must land
+  while Stylo remains the default:
 
   1. **Make the lane reachable.** Enable `genet-documents/livery` in the
      ports and get it building and smoking. Until this lands, every claim
@@ -697,8 +714,9 @@ reviewed; the direction holds and the grind is accepted. Two riders:
      `SessionEngine<Scene>`, which the Stylo lane and `LiverySessionEngine`
      both implement today; the profile tier picks the impl with both in the
      binary. This is a selection point, not a new abstraction.
-  3. **Flip the default.** The fullweb profile routes to Livery, Stylo
-     behind an explicit opt-out that F5 removes.
+  F4 retains only the third move: **flip the default** after those opt-in
+  product receipts and the parity bar both hold. The fullweb profile routes
+  to Livery, with Stylo behind an explicit opt-out that F5 removes.
 
   **The parity bar, revised 2026-07-25.** Two changes from the original
   wording. First, the measure on the reftest lane is **`S-only`, not net
@@ -879,18 +897,18 @@ the ones to take first, ahead of anything ranked purely by file count.
 | capability | state | new or inherited | compounds |
 |---|---|---|---|
 | multicol (`column-*`) | **recorded knockout**, ruled D0 | inherited | no |
-| table layout: fixed sizing | **partial**, subset named in the catalog | inherited | no |
-| table layout: auto sizing, spans, border-collapse, captions, colgroups, fixup | not built (box-tree B3) | inherited | no |
-| `display` outer/inner roles, formatting contexts | **collapsed onto Taffy modes** (box-tree B1/B2) | inherited | **yes** |
-| `position: fixed` and `sticky` | collapsed onto absolute/relative (box-tree B5) | inherited | no |
+| table model, fixed/auto sizing, rows, spans, captions, colgroups, fixup, collapsed tracks | **built through Buckram K4f**, with named per-table fallback | inherited | no |
+| collapsed-border conflict, metrics, and paint | K4g1 topology accepted; K4g2 next after contextual-color C1 | inherited | **yes** |
+| positioned-table closure and compatibility-bridge deletion | K4h | inherited | no |
+| `display` outer/inner roles and admitted normal-flow formatting contexts | **Buckram K0-K3 accepted**; remaining positioned, fragmented, and sizing shapes route to K5-K7 | inherited | no |
+| `position: fixed` and `sticky` | retained as named K5 gaps; compatibility mappings survive | inherited | no |
 | CSSOM used values | handwritten per-property list (box-tree B6) | inherited | no |
 | block-flow anonymous boxes | **wrong behaviour retained**, scoped away (box-tree B1) | **new** | **yes** |
-| `min-content` / `max-content` sizing | **wrong behaviour retained** (box-tree B4) | inherited | **yes** |
+| `min-content` / `max-content` sizing | admitted Buckram K3 queries built; cycles, percentages, replaced/atomic, and fragmentainer-dependent shapes route to K5-K7 | inherited | **yes** |
 | gamut mapping (out-of-gamut colors clip per channel) | not built | inherited | no |
-| `color-layers()`, `alpha()`, `contrast-color()` | not built | inherited | no |
-| percentage `calc()` in color channels | rejected, not approximated | inherited | no |
+| contextual `color-layers()`, `alpha()`, `contrast-color()`, relative colors, and system colors | absolute forms built; retained contextual computation is C1-C3 | inherited | **yes** |
 | `order` with grid auto-placement | not built | inherited | no |
-| relative-position rows inside a flattened table | guarded fallback | **new** | no |
+| relative-position table parts | structural boxes now survive; K4h applies offsets and retires guarded fallback | **new** | no |
 
 **The two that compound, in detail, because they are the ones that will hurt:**
 
@@ -931,6 +949,13 @@ start now in parallel (it is read-only over both renderers). F4 needs D0
 confirmed plus F0-F3 receipts. F5 fires the harvest plan's trigger. F6 is
 strictly after F5, per the 2026-07-24 ruling, with F6b's media knockout held
 to that sequencing even though it is technically independent today.
+
+**Correction 2026-08-08:** product reachability R0-R4 now precedes F4 rather
+than waiting inside it. It can proceed while F0 and the ledgers remain open,
+but it stops with an explicit Livery pin. Contextual-color C1 is the entry
+dependency for K4g2's Livery adapter and for presentational-hint PH0; K4g5
+headed paint additionally requires C2/C3. These gates touch overlapping
+cascade and style seams and land serially.
 
 **Ordered 2026-07-25 (audit with Mark), and where each stands:**
 

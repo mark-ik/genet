@@ -22,13 +22,16 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use cambium::{
-    AnyView, DomHandle, GenetAppRunner, GenetCtx, GenetElement, KeyEvent, PointerClick, TextField,
-    TextInput, el, lens, on_click, text_field_typed,
+    AnyView, CaretAffinity, DomHandle, GenetAppRunner, GenetCtx, GenetElement, KeyEvent,
+    PointerClick, TextField, TextInput, el, lens, on_click, text_field_typed,
 };
-use genet_layout::{IncrementalLayout, ScrollOffsets};
-use genet_render::scene_from_scripted_dom;
+use genet_layout::{IncrementalLayout, ScrollOffsets, VisualAffinity};
+use genet_render::{TextCursor, scene_from_scripted_dom};
 use genet_scripted_dom::{NodeId, ScriptedDom};
+use layout_dom_api::LayoutDom;
 use netrender::Scene;
+
+use crate::theme::{PeltTheme, chrome_css};
 
 /// Which side of the window the chrome strip occupies. A horizontal strip (top/bottom)
 /// is the full window width by its thickness; a vertical strip (left/right) is its
@@ -162,6 +165,10 @@ fn go_forward(c: &mut ChromeState, _: PointerClick) {
     c.queue(ChromeIntent::Forward);
 }
 
+fn reload(c: &mut ChromeState, _: PointerClick) {
+    c.queue(ChromeIntent::Reload);
+}
+
 /// The chrome toolbar as genet DOM: back / forward buttons and an editable omnibar
 /// (`text_field` lensed onto [`ChromeState::omnibar`]). A spent direction carries a
 /// `disabled` class the default sheet greys (the handler is already a no-op at the
@@ -181,25 +188,19 @@ fn chrome_view(c: &ChromeState) -> ChromeView {
         el::<_, ChromeState, ()>("button", "forward").attr("class", fwd_class),
         go_forward as fn(&mut ChromeState, PointerClick),
     );
+    let reload = on_click(
+        el::<_, ChromeState, ()>("button", "reload").attr("class", "nav"),
+        reload as fn(&mut ChromeState, PointerClick),
+    );
     // The omnibar text_field, lensed onto `ChromeState::omnibar`. `text_field_typed`
     // names its concrete view so the `lens` projection is a plain `fn` pointer.
     let make: fn(&mut TextInput) -> TextField = |t: &mut TextInput| text_field_typed(t);
     let to_omnibar: fn(&mut ChromeState) -> &mut TextInput = |c: &mut ChromeState| &mut c.omnibar;
     let omnibar = lens(make, to_omnibar);
     let toolbar =
-        el::<_, ChromeState, ()>("div", (back, forward, omnibar)).attr("class", "toolbar");
+        el::<_, ChromeState, ()>("div", (back, forward, reload, omnibar)).attr("class", "toolbar");
     Box::new(toolbar)
 }
-
-/// The default chrome stylesheet — the theming seam. A user theme layers over (or
-/// replaces) this; the chrome is CSS-styled DOM, so theming is "add CSS," not a
-/// refactor. (Structural display defaults + a dark toolbar.)
-const DEFAULT_CHROME_CSS: &str = "\
-    div, button, span { display: block; } \
-    head, style, script, title, meta, link, base { display: none; } \
-    .toolbar { display: flex; align-items: center; background: #2b2b33; padding: 6px; } \
-    button { padding: 4px 10px; margin-right: 6px; background: #444444; color: #eeeeee; } \
-    button.disabled { color: #888888; }";
 
 /// A view-driven chrome strip: a [`GenetAppRunner`] over its own `ScriptedDom`, plus
 /// the strip placement and the stylesheets it renders with.
@@ -220,7 +221,17 @@ impl Chrome {
             runner,
             side,
             thickness,
-            sheets: vec![DEFAULT_CHROME_CSS.to_string()],
+            sheets: {
+                let mut sheets = vec![chrome_css(PeltTheme::default())];
+                if !side.is_horizontal() {
+                    sheets.push(
+                        ".toolbar { flex-direction: column; align-items: stretch; } \
+                         button { margin-right: 0; margin-bottom: 6px; }"
+                            .into(),
+                    );
+                }
+                sheets
+            },
         }
     }
 
@@ -243,18 +254,42 @@ impl Chrome {
         self.sheets.push(css.into());
     }
 
+    /// Replace the generated Pelt base theme while preserving orientation and
+    /// caller-added override sheets.
+    pub fn set_theme(&mut self, theme: PeltTheme) {
+        self.sheets[0] = chrome_css(theme);
+    }
+
     /// Render the chrome strip to a [`Scene`] at `width`×`height` (the shell sizes it
     /// from [`side`](Self::side) + [`thickness`](Self::thickness)).
     pub fn frame(&self, width: u32, height: u32) -> Scene {
         let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
         let dom = self.runner.dom();
         let dom = dom.borrow();
+        let cursor = self.runner.focus().map(|node| {
+            let position = self.runner.state().omnibar.caret_position();
+            let selection = self.runner.state().omnibar.caret_selection();
+            let editable = dom
+                .element_name(node)
+                .is_some_and(|name| name.local.as_ref() == "input");
+            TextCursor {
+                node,
+                caret: position.byte,
+                affinity: match position.affinity {
+                    CaretAffinity::Downstream => VisualAffinity::Downstream,
+                    CaretAffinity::Upstream => VisualAffinity::Upstream,
+                },
+                selection: (selection.anchor.byte != selection.focus.byte)
+                    .then_some((selection.anchor.byte, selection.focus.byte)),
+                editable,
+            }
+        });
         scene_from_scripted_dom(
             &dom,
             &sheets,
             width.max(1),
             height.max(1),
-            None,
+            cursor,
             &ScrollOffsets::default(),
         )
     }

@@ -571,6 +571,9 @@ impl<'a, D: LayoutDom> SelectorsElement for StyleNodeRef<'a, D> {
         pc: &NonTSPseudoClass,
         _context: &mut MatchingContext<Self::Impl>,
     ) -> bool {
+        if matches!(pc, NonTSPseudoClass::AnyLink) {
+            return self.is_link();
+        }
         // State-backed pseudo-classes (`:hover`, `:focus`, `:active`,
         // `:focus-within`, `:disabled`, `:checked`, …) match against the
         // element's `ElementState` (stored in the `StyleEntry`, set by the
@@ -614,7 +617,14 @@ impl<'a, D: LayoutDom> SelectorsElement for StyleNodeRef<'a, D> {
     }
 
     fn is_link(&self) -> bool {
-        false
+        let Some(name) = self.dom().element_name(self.id) else {
+            return false;
+        };
+        name.local.as_ref() == "a"
+            && self
+                .dom()
+                .attribute(self.id, &Namespace::default(), &LocalName::from("href"))
+                .is_some()
     }
 
     fn is_html_slot_element(&self) -> bool {

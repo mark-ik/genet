@@ -80,6 +80,45 @@ impl<Fetch: ResourceFetcher + Send + Sync> SessionEngine<Scene> for StaticSessio
     }
 }
 
+/// Open the retained document lane appropriate for one address. This is the
+/// small host seam for compositions such as Pelt tiles: the static and
+/// smolweb session implementations stay private, while the host stores one
+/// honest `DocumentSession<Scene>` per pane.
+pub fn open_document_session(
+    fetcher: &impl ResourceFetcher,
+    address: &str,
+) -> Result<Box<dyn DocumentSession<Scene>>, String> {
+    #[cfg(feature = "smolweb")]
+    if is_smolweb_address(address) {
+        let doc = crate::SmolwebDocument::load(fetcher, address, crate::SmolwebTheme::default())?;
+        return Ok(Box::new(SmolwebDocumentSession::new(doc, (0, 0))));
+    }
+
+    let doc = LoadedDocument::load(fetcher, address)?;
+    Ok(Box::new(StaticDocumentSession {
+        doc,
+        address: address.to_string(),
+    }))
+}
+
+#[cfg(feature = "smolweb")]
+fn is_smolweb_address(address: &str) -> bool {
+    matches!(
+        address.split_once("://").map(|(scheme, _)| scheme),
+        Some(
+            "gemini"
+                | "gopher"
+                | "nex"
+                | "finger"
+                | "spartan"
+                | "titan"
+                | "misfin"
+                | "guppy"
+                | "scroll"
+        )
+    )
+}
+
 struct StaticDocumentSession {
     doc: LoadedDocument,
     address: String,
@@ -87,7 +126,7 @@ struct StaticDocumentSession {
 
 impl DocumentSession<Scene> for StaticDocumentSession {
     fn frame(&mut self, width: u32, height: u32) -> Scene {
-        self.doc.frame(width, height)
+        self.doc.frame_for_viewer(width, height)
     }
     fn scroll_by(&mut self, dx: f32, dy: f32) -> bool {
         self.doc.scroll_by(dx, dy)
@@ -871,6 +910,19 @@ impl DocumentSession<Scene> for SmolwebDocumentSession {
     }
     fn content_height(&mut self, width: u32, height: u32) -> u32 {
         self.doc.content_height(width, height)
+    }
+    fn inspect(&self) -> Option<inker::ContentReport> {
+        Some(inker::ContentReport {
+            title: self.doc.document().title.clone(),
+            links: self
+                .doc
+                .document()
+                .outgoing_links()
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            ..Default::default()
+        })
     }
     fn as_any_ref(&self) -> &dyn Any {
         self

@@ -42,7 +42,7 @@ pub use engines::{LiveryDocumentSession, LiverySessionEngine};
 pub use engines::{ScriptedDocumentSession, ScriptedSessionEngine};
 #[cfg(feature = "smolweb")]
 pub use engines::{SmolwebDocumentSession, SmolwebSessionEngine};
-pub use engines::{StaticSessionEngine, session_click_from_outcome};
+pub use engines::{StaticSessionEngine, open_document_session, session_click_from_outcome};
 pub use genet_host_api::ResourceFetcher;
 pub use href::resolve_href;
 

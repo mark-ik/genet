@@ -45,7 +45,7 @@ impl Engine for FingerEngine {
     }
 
     fn render(&self, input: &EngineInput) -> Result<EngineDocument, EngineError> {
-        let mut doc = self.text.render(input)?;
+        let mut doc = self.text.render_verbatim(input);
         if input.content_type.is_none() {
             doc.content_type = "text/x-finger".to_string();
         }
@@ -77,8 +77,9 @@ mod tests {
             "Login: alice              Name: Alice Example\nDirectory: /home/alice    Shell: /bin/zsh\n",
         );
         assert_eq!(doc.content_type, "text/x-finger");
-        // Body parsed as text — single paragraph with soft breaks.
+        // Body is a literal record: columns and blank lines are significant.
         assert_eq!(doc.blocks.len(), 1);
+        assert!(matches!(doc.blocks[0], inker::Block::Preformatted { .. }));
     }
 
     #[test]

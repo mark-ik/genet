@@ -2,9 +2,43 @@
 
 **Date:** 2026-08-07
 
-**Status:** not started. Seven investigation lanes and their adversarial
-verdicts are folded in below. Where a verdict overturned a report, the verdict
-wins and the plan says so.
+**Status:** implemented 2026-08-07. Seven investigation lanes and their
+adversarial verdicts are folded in below. Where a verdict overturned a report,
+the verdict wins and the plan says so.
+
+## Completion record
+
+This is the implementation record, not a claim that Pelt is now a conforming
+web browser. The stated presentability gates are wired through the actual
+headed viewers, their headless receipts, and the native document stack.
+
+| Gate | Delivered | Receipt |
+|---|---|---|
+| G1 | Chromium-like strip styling, focused caret/ring, reload, and vertical-strip layout | chrome scene tests plus the headed viewer path |
+| G2 | Page titles, neutral Windows caption colours, icon, `--size`, and achieved-size reporting | `--tiles ... --size 800x600 --frames 3` reported three redraws at 800x600 |
+| G3 | Measured and centred smolweb columns, stronger host identity, real font families, and preserved verbatim regions | `document-canvas`, `nematic`, and `genet-documents/smolweb` tests pass |
+| G4 | One tile surface can own HTML or native smolweb sessions, with titles and load errors | tile-surface is in the checked Pelt feature set |
+| G5 | Tinct and Illume now resolve from the workspace and the Pelt theme reaches chrome and tiles without removing Frisket | `cargo check -p cambium --features highlight` passes |
+| G6 | `text-align`, including centred `nowrap`, visibility-aware paint/hit testing, `:any-link`, UA defaults, and viewer-only scrollbars | focused layout tests and all seven reftests pass |
+| G7 | Ordered inline/linked stylesheets, media filtering, origin-aware subresource resolution, initial image caching, and default-on HTTP fetching | remote `https://merelyllc.com` presented three headed frames at 1000x700; the scene contains its authored parchment and oxblood colours |
+| G8 | Logical layout space, scale-aware rasterization/compositing, pointer conversion, and `ScaleFactorChanged` handling in static, chrome, and tile viewers | the static-viewer DPI-coordinate test passes; a second physical display remains the final hardware receipt |
+| G9 | `--frames N`, requested/achieved size reporting, and clean exit for all headed profiles | static remote smoke and tiles smoke exit after exactly three redraws with no retained Pelt process |
+
+### Completion boundaries
+
+- The `legacy clip` item was rechecked against the current published
+  `genet-stylo` source. It has no computed longhand to read on this path, so it
+  is a Stylo property implementation, not the small paint-only read described
+  by the investigation. It remains deferred rather than receiving a source-text
+  heuristic.
+- `@import`, `@font-face`, webfont registration, and asynchronous loading remain
+  the named deferrals below. The initial cache intentionally skips font URLs and
+  `loading=lazy` images: Pelt cannot use either before a later asynchronous
+  resource phase, and serially downloading them would delay the first frame
+  without improving it.
+- The remote headed proof is a real Windows present receipt. It is not a claim
+  of cross-monitor DPI parity; that still needs the 100% external-display run
+  specified in G8.
 
 ## Ruling
 

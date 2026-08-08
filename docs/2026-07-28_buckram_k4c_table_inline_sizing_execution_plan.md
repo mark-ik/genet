@@ -2,10 +2,11 @@
 
 **Date:** 2026-07-28
 
-**Status:** K4c4a is complete on the accepted K4b base `26eda4cd9fe`; K4c5a is
-next. K4c1 through K4c4a landed pure model code. Livery still owns every live
-table sizing decision, so no WPT movement is creditable to K4c yet. K4c5 is
-split into K4c5a shadow comparison and K4c5b authority and deletion.
+**Status:** complete, corrected 2026-08-08. K4c1 through K4c4a landed the pure
+model and K4c5a/5b completed shadow comparison, authority transfer, and
+deletion on accepted commit `a96fe7d147e`. Buckram owns live supported table
+inline sizing. Named caption, track-visibility, and collapsed-border inputs
+remain with K4e through K4g; this plan has no current implementation handoff.
 
 **Parent plan:** [Buckram K4 CSS tables execution plan](2026-07-28_buckram_k4_css_tables_execution_plan.md)
 
@@ -460,7 +461,8 @@ result. K4d still owns removal of the Grid/Flex bridge.
 
 ## K4c3. Automatic column measures
 
-**Status:** complete as a model-only gate on 2026-07-29. K4c4 is next.
+**Status:** complete as a model-only gate on 2026-07-29. Its recorded handoff
+was K4c4, which is also complete.
 
 ### Outcome
 
@@ -1297,9 +1299,10 @@ Proof directory:
 Commit:
 ```
 
-## Next executable task
+## Historical K4c5 handoff
 
-K4c1 through K4c4a are accepted. The current handoff is:
+The following was the accepted handoff into K4c5a. It is retained as execution
+history and is not a current task:
 
 > Read this plan, the accepted K4c4a receipt, CSS 2.1 sections 17.5.2.1 and
 > 17.5.2.2, and the live seams named under K4c5a. Execute K4c5a only. Preserve
@@ -1311,7 +1314,8 @@ K4c1 through K4c4a are accepted. The current handoff is:
 > K4c5a passes its verification ladder, append its receipt here, stage only
 > K4c5a paths, and commit. Do not begin K4c5b in the same task.
 
-K4c5 is the first gate that changes live behavior, which is why it is split.
-K4c5a proves Buckram agrees with the live path while both exist; K4c5b makes
-Buckram authoritative and deletes the old path. Landing both at once would mix
-any regression with the removal of the code that would have revealed it.
+K4c5 was the first gate that changed live behavior, which is why it was split.
+K4c5a proved Buckram agreed with the live path while both existed; K4c5b made
+Buckram authoritative and deleted the old path. Landing both at once would
+have mixed any regression with the removal of the code that would have
+revealed it.

@@ -2,7 +2,10 @@
 
 **Date:** 2026-07-28
 
-**Status:** scoped; execution starts after the accepted K4f receipt
+**Status:** in execution from accepted K4f commit `bad53b5cb2f`, corrected
+2026-08-08. K4g1 is accepted at `19b91b6ebef`; K4g2 is next after contextual
+color C1. K4g3's Chrome/Firefox spanning-side matrix is recorded research
+ahead of its gate and does not authorize skipping K4g2.
 
 **Parent plan:** [Buckram K4 CSS tables execution plan](2026-07-28_buckram_k4_css_tables_execution_plan.md)
 
@@ -11,6 +14,14 @@
 **Row-layout predecessor:** [Buckram K4d table row layout execution plan](2026-07-28_buckram_k4d_table_row_layout_execution_plan.md)
 
 **Architectural authority:** [Buckram CSS layout engine plan](2026-07-26_buckram_css_layout_engine_plan.md)
+
+**Color entry dependency:** [Livery contextual color computation
+plan](2026-07-28_livery_contextual_color_computation_plan.md). K4g1 was able
+to land first because its candidate model is generic over color and has no
+Livery adapter. C1 must land before K4g2's adapter commits a border-color
+representation. C2 and C3 must land before K4g5 accepts headed paint, so a
+valid contextual or system color never becomes an eager fallback while the
+collapsed winner is carried through sizing and geometry.
 
 ## Ruling
 
@@ -828,14 +839,14 @@ Proof directory:
 Commit:
 ```
 
-## First executable task
+## Current executable task
 
-The initial handoff is:
+K4g1 is accepted at `19b91b6ebef`. The current handoff is:
 
-> Read this plan, the accepted K4f receipt, CSS 2.1 sections 17.6.2 and
-> 17.6.2.1, and the live seams named under K4g1. Execute K4g1 only. Preserve
-> unrelated worktree changes. Record the accepted K4f commit and freeze fresh
-> `css/CSS2/tables`, `css/css-tables`, and `css/css-writing-modes` maps before
-> changing layout or paint behavior. Stop after K4g1 passes its verification
-> ladder, append its receipt here, stage only K4g1 paths, and commit. Do not
-> begin K4g2 in the same task.
+> Complete contextual-color C1 from the Livery contextual color computation
+> plan. Then read this plan, the accepted K4g1 receipt, CSS 2.1 sections 17.6.2
+> and 17.6.2.1, and the live seams named under K4g2. Execute K4g2 only.
+> Preserve unrelated worktree changes. Feed the accepted logical winner grid
+> into the Livery adapter without changing live paint authority. Stop after
+> K4g2 passes its verification ladder, append its receipt here, stage only
+> K4g2 paths, and commit. Do not begin K4g3 or combine the C1 and K4g2 commits.

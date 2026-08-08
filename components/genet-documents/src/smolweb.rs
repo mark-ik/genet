@@ -286,9 +286,14 @@ fn style_for_theme(theme: &SmolwebTheme, url: &str) -> (DocumentStyleSheet, [f32
     let quote = parse_color(&palette.quote).unwrap_or(defaults.badge_text);
     let pre = parse_color(&palette.pre_bg).unwrap_or(defaults.placeholder_image);
     let mut style = DocumentStyleSheet::default();
+    // These values are user-facing defaults rather than host chrome. Hosts
+    // can still pass an explicit sheet through `from_document`.
     style.body_font_family = "serif".into();
+    style.mono_font_family = "monospace".into();
+    style.body_font_size = 16.0;
     style.line_height_ratio = 1.5;
     style.horizontal_padding = 32.0;
+    style.max_content_width = Some(720.0);
     style.vertical_padding = 24.0;
     style.colors = ColorVocabulary {
         body_text: foreground,
@@ -325,11 +330,13 @@ fn site_palette(url: &str) -> SmolwebPalette {
         )
     };
     SmolwebPalette {
-        bg: css(0.30, 0.97),
-        fg: css(0.25, 0.15),
-        link: css(0.70, 0.36),
-        quote: css(0.18, 0.40),
-        pre_bg: css(0.28, 0.93),
+        // A restrained capsule tint: legibility stays stable while related
+        // pages retain a little identity. `App` remains the host-theme path.
+        bg: css(0.22, 0.975),
+        fg: css(0.20, 0.14),
+        link: css(0.62, 0.34),
+        quote: css(0.15, 0.38),
+        pre_bg: css(0.24, 0.93),
     }
 }
 

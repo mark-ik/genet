@@ -169,6 +169,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn cascade_text_align_flows_into_text_leaf() {
+        use crate::text_measure::InlineTextAlign;
+
+        let (document, styles) = cascade(
+            "<html><body><p>centered</p></body></html>",
+            &["p { text-align: center; }"],
+        );
+        let images = ImagePlane::new();
+        let (_frags, built, _ctx) = layout(&document, &styles, &images, viewport());
+
+        let p = find_element(NodeRef::document(&document), local_name!("p")).unwrap();
+        let taffy_id = built.node_map.get(&p.id()).expect("<p> in node_map");
+        let content = built
+            .get_node_context(*taffy_id)
+            .expect("<p> carries an InlineContent context");
+        assert_eq!(content.align, InlineTextAlign::Center);
+    }
+
+    #[test]
+    fn href_anchor_matches_any_link_selector() {
+        let (document, styles) = cascade(
+            "<html><body><a href=\"/next\">next</a></body></html>",
+            &["a:any-link { color: rgb(12, 34, 56); }"],
+        );
+        let anchor = find_element(NodeRef::document(&document), local_name!("a")).unwrap();
+        let color = crate::computed_query::computed_value_string(&styles, anchor.id(), "color")
+            .expect("anchor has a cascaded color");
+        assert!(color.contains("12"), "unexpected :any-link color: {color}");
+    }
+
     /// Inline flow: `<p>Hello <b>world</b> !</p>` gathers into one
     /// inline-context leaf whose runs carry per-element styling — the
     /// `<b>` run is bold (UA `b { font-weight: bold }`), the surrounding

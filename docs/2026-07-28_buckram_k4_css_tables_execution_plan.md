@@ -2,10 +2,14 @@
 
 **Date:** 2026-07-28
 
-**Status:** in execution. K4a through K4c are accepted: Buckram owns live
-table inline sizing on every route (K4c5b, `a96fe7d147e`), with the named
-K4e, K4f, and K4g inputs still pending by design. K4d is in execution; K4d1
-is accepted and K4d2 is next.
+**Status:** in execution, corrected 2026-08-08. K4a through K4f capabilities
+have landed: supported live tables use Buckram's inline and block sizing,
+table dispatch, structural fragments, wrapper/caption behavior, and collapsed
+track state. Named deferrals still retain the Grid/Flex compatibility bridge.
+K4g1 is accepted; K4g2 is next. K4g3's interoperability matrix is research
+recorded ahead of its gate, not implementation authority. K4 closure still
+requires K4g2 through K4g6 and K4h's positioned-table audit and bridge
+deletion.
 
 **Architectural authority:** [Buckram CSS layout engine plan](2026-07-26_buckram_css_layout_engine_plan.md)
 
@@ -1251,10 +1255,17 @@ So the family is a **presentational-attribute gap**, not a table-model one and
 not an anonymous-box one. Livery has no attribute-to-style mapping at all:
 `cellpadding` and `cellspacing` appear only in `script-runtime-api` as
 reflected IDL attributes, never as declarations. HTML's presentational hints
-are a cascade feature - derived declarations entering at the bottom of the
-author origin - so the work belongs in `livery/src/cascade.rs` and
+are a cascade feature: derived declarations enter the distinct author
+presentational-hint origin below normal author and above normal user
+declarations. The work therefore belongs in `livery/src/cascade.rs` and
 `genet-livery/src/style.rs`, and it is a lane of its own rather than a fix
-inside K4.
+inside K4. The lane now has an execution authority: [Livery HTML
+presentational hints](2026-08-08_livery_html_presentational_hints_execution_plan.md).
+
+**Cascade correction, 2026-08-08:** the old diagnosis treated hints as
+ordinary low-priority author declarations. CSS Cascade Level 5 gives them a
+distinct author presentational-hint origin. The execution plan owns that
+corrected priority; this section remains the WPT attribution receipt.
 
 Its reach is wider than these 40: `border`, `width`, `bgcolor`, and `align`
 are the same mechanism, and every one of them is currently ignored.
@@ -1305,16 +1316,17 @@ Generated WPT expectations, screenshots, and logs remain outside Git.
 
 ## Current executable task
 
-K4a and K4b are accepted below. The current handoff is K4c1 from the
-[K4c execution plan](2026-07-28_buckram_k4c_table_inline_sizing_execution_plan.md):
+K4g1 is accepted at `19b91b6ebef`. The next K4 gate is K4g2 from the
+[collapsed-border execution plan](2026-07-28_buckram_k4g_collapsed_border_execution_plan.md),
+after that plan's contextual-color entry dependency is accepted:
 
-> Read the K4c plan, the accepted K4b receipt, CSS 2.1 sections 17.5.2.1 and
-> 17.5.2.2, and the live seams named under K4c1. Execute K4c1 only. Record
-> `26eda4cd9fe` as the accepted K4b base and produce fresh
-> `css/CSS2/tables` and `css/css-tables` maps before changing layout behavior.
-> Stop after K4c1 passes its verification ladder, append its receipt to the
-> K4c plan, stage only K4c1 paths, and commit. Do not begin K4c2 in the same
-> task.
+> Complete contextual-color C1 before the K4g2 Livery adapter freezes a
+> border-color representation. Then execute K4g2 only: resolve one CSS 2.1
+> winner for each atomic table-grid segment without reading layout geometry
+> or paint order. Preserve hidden suppression, all-none omission, original
+> winner diagnostics, direction-aware ties, and the carried color value. Run
+> the K4g verification ladder, append the receipt to the K4g plan, stage only
+> K4g2 paths, and stop before K4g3 implementation.
 
 ## K4a execution receipt (2026-07-28)
 

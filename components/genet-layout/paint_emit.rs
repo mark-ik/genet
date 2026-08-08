@@ -54,6 +54,7 @@ use serde::{Deserialize, Serialize};
 
 use servo_arc::Arc as ServoArc;
 use style::properties::ComputedValues;
+use stylo_traits::ToCss;
 
 use crate::box_tree::BoxTree;
 use crate::fragment::FragmentPlane;
@@ -1119,6 +1120,10 @@ pub(crate) fn walk<Id>(
     if cv.get_box().display.is_none() {
         return;
     }
+    // `visibility` inherits, but a descendant may explicitly restore
+    // `visible`. Keep descending with the normal geometry chain while this
+    // box's own paint primitives are suppressed.
+    let visible = cv.clone_visibility().to_css_string() == "visible";
 
     // Every box has a laid-out position + size (its `final_layout`); style + DOM
     // identity come off the box node, not a DOM lookup. `dom_id` keys the
@@ -1208,7 +1213,10 @@ pub(crate) fn walk<Id>(
     // background. (Inset shadows paint over the background instead — emitted
     // after it, below.) An anonymous box paints none of its (borrowed-key's)
     // box decorations.
-    for shadow in box_shadows_of(cv).into_iter().filter(|_| !is_anon) {
+    for shadow in box_shadows_of(cv)
+        .into_iter()
+        .filter(|_| !is_anon && visible)
+    {
         if shadow.inset {
             continue;
         }
@@ -1241,7 +1249,7 @@ pub(crate) fn walk<Id>(
     // Background, then replaced content (image), then border — CSS paint order. The
     // element whose background was propagated to the canvas (root / body) skips its
     // own-box background — already painted over the canvas.
-    let suppress_bg = is_anon || em.canvas_bg_source == Some(dom_id);
+    let suppress_bg = is_anon || !visible || em.canvas_bg_source == Some(dom_id);
     if !suppress_bg {
         commands.push(PaintCmd::DrawRect(RectItem {
             placement: CommonPlacement::new(local_bounds),
@@ -1381,7 +1389,7 @@ pub(crate) fn walk<Id>(
     // under the content + border (CSS Backgrounds-3 paint order). `box_bounds` is
     // the padding box (border box inset by the border widths); the renderer casts
     // the shadow inward from that edge and clips it there.
-    if !is_anon {
+    if !is_anon && visible {
         let pad = LayoutRect::new(
             LayoutPoint::new(l.border.left, l.border.top),
             LayoutPoint::new(
@@ -1402,52 +1410,55 @@ pub(crate) fn walk<Id>(
             }));
         }
     }
-    if let Some(texture_key) = node.external_texture_key {
-        if let Some((intrinsic_w, intrinsic_h)) = node.replaced_intrinsic_size {
-            emit_object_external_texture(
-                cv,
-                content_box(&l),
-                texture_key,
-                intrinsic_w,
-                intrinsic_h,
-                commands,
-            );
-        }
-    } else if let Some(decoded) = em.images_plane.get(dom_id) {
-        emit_object_image(cv, content_box(&l), decoded, &mut em.images, commands);
-    } else if let Some(leaf_key) = node.custom_leaf_key {
-        // A chisel Path-A leaf paints its own command stream in place of
-        // genet-painted content, in the leaf's local coordinates with (0,0) at
-        // the content-box origin — the same content box `<img>` and
-        // `<external-texture>` paint into. Offset by `content_offset`
-        // (border + padding) so a leaf with CSS border/padding lands correctly.
-        // Chained onto the replaced-content `if`/`else if` so a box paints at
-        // most one replaced payload.
-        if let Some(cmds) = em.leaves.and_then(|src| src.leaf_commands(leaf_key)) {
-            let (ox, oy) = content_offset;
-            let shift = ox != 0.0 || oy != 0.0;
-            if shift {
-                commands.push(PaintCmd::PushTransform(TransformSpec {
-                    origin: LayoutPoint::new(ox, oy),
-                    transform: LayoutTransform::identity(),
-                    kind: TransformKind::Standard,
-                }));
+    if visible {
+        if let Some(texture_key) = node.external_texture_key {
+            if let Some((intrinsic_w, intrinsic_h)) = node.replaced_intrinsic_size {
+                emit_object_external_texture(
+                    cv,
+                    content_box(&l),
+                    texture_key,
+                    intrinsic_w,
+                    intrinsic_h,
+                    commands,
+                );
             }
-            commands.extend_from_slice(cmds);
-            if shift {
-                commands.push(PaintCmd::PopTransform);
+        } else if let Some(decoded) = em.images_plane.get(dom_id) {
+            emit_object_image(cv, content_box(&l), decoded, &mut em.images, commands);
+        } else if let Some(leaf_key) = node.custom_leaf_key {
+            // A chisel Path-A leaf paints its own command stream in place of
+            // genet-painted content, in the leaf's local coordinates with (0,0) at
+            // the content-box origin — the same content box `<img>` and
+            // `<external-texture>` paint into. Offset by `content_offset`
+            // (border + padding) so a leaf with CSS border/padding lands correctly.
+            // Chained onto the replaced-content `if`/`else if` so a box paints at
+            // most one replaced payload.
+            if let Some(cmds) = em.leaves.and_then(|src| src.leaf_commands(leaf_key)) {
+                let (ox, oy) = content_offset;
+                let shift = ox != 0.0 || oy != 0.0;
+                if shift {
+                    commands.push(PaintCmd::PushTransform(TransformSpec {
+                        origin: LayoutPoint::new(ox, oy),
+                        transform: LayoutTransform::identity(),
+                        kind: TransformKind::Standard,
+                    }));
+                }
+                commands.extend_from_slice(cmds);
+                if shift {
+                    commands.push(PaintCmd::PopTransform);
+                }
             }
         }
     }
     // A loaded `border-image` replaces the normal border (CSS Backgrounds-3 §6):
     // paint the 9-slice and skip the regular border below. Anonymous boxes never
     // carry a border-image.
-    let painted_border_image = !is_anon
+    let painted_border_image = visible
+        && !is_anon
         && em
             .bg_images_plane
             .get_border_image(dom_id)
             .is_some_and(|src| emit_border_image(cv, src, &l, &mut em.images, commands));
-    if !painted_border_image {
+    if visible && !painted_border_image {
         if let Some((widths, normal)) = (!is_anon)
             .then(|| border_of(cv, local_bounds.width(), local_bounds.height()))
             .flatten()
@@ -1467,21 +1478,22 @@ pub(crate) fn walk<Id>(
     // layout time). `None` = no truncation.
     let ellipsis = text_ellipsis(cv)
         .then(|| l.size.width - l.border.left - l.border.right - l.padding.left - l.padding.right);
-    let emitted = emit_inline_content(
-        taffy_id,
-        text_ctx,
-        node.inline_content.as_ref(),
-        local_bounds,
-        content_offset,
-        ellipsis,
-        em.styles,
-        em.images_plane,
-        em.leaves,
-        &mut em.fonts,
-        &mut em.images,
-        commands,
-    );
-    if !emitted && node.inline_content.is_some() {
+    let emitted = visible
+        && emit_inline_content(
+            taffy_id,
+            text_ctx,
+            node.inline_content.as_ref(),
+            local_bounds,
+            content_offset,
+            ellipsis,
+            em.styles,
+            em.images_plane,
+            em.leaves,
+            &mut em.fonts,
+            &mut em.images,
+            commands,
+        );
+    if visible && !emitted && node.inline_content.is_some() {
         // Cache-less path (no shaped layout): emit one empty text run so the
         // command structure still reflects the leaf's text.
         let [r, g, b, a] = *cv
@@ -1500,7 +1512,9 @@ pub(crate) fn walk<Id>(
     }
     // A list item's marker (bullet / ordinal) hangs to the left of its content
     // box; no-op for non-list-items.
-    emit_list_marker(taffy_id, text_ctx, content_offset, &mut em.fonts, commands);
+    if visible {
+        emit_list_marker(taffy_id, text_ctx, content_offset, &mut em.fonts, commands);
+    }
 
     if clips_overflow(cv) {
         clip_rect = Some(LayoutRect::new(

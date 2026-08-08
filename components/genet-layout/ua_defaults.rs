@@ -94,6 +94,34 @@ input[type="hidden"] {
     display: none;
 }
 
+/* The global HTML `hidden` attribute has the same display:none default.
+   Authors can still override it with a stronger explicit display rule. */
+[hidden] {
+    display: none;
+}
+
+/* Familiar document affordances. The selector is deliberately `[href]`, not
+   bare `a`, so an anchor used only as a fragment target does not pretend to
+   be navigable. `StyleNodeRef::is_link` separately makes :link/:any-link
+   selectors available to authored styles. */
+a[href] {
+    color: #0000ee;
+    text-decoration: underline;
+}
+
+/* Fixed-width source and keyboard notation are legible before a page's own
+   stylesheet arrives. `pre` already supplies the preserve/nowrap behavior. */
+code, kbd, samp, pre {
+    font-family: monospace;
+}
+
+/* Controls need a visible boundary even when the document has no reset or
+   component library. Rich native-control metrics remain a later form lane. */
+button, input, select, textarea {
+    padding: 2px 6px;
+    border: 1px solid #767676;
+}
+
 /* Table box hierarchy. genet lays a `display: table` box out as a CSS grid
    (`stylo_taffy` maps table -> grid; `box_tree` flattens the row-group / row
    nesting and gives each cell an explicit grid position). These real display

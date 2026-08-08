@@ -12,7 +12,7 @@
 //!    [`GlyphRun`] records (positions in packet-local coordinates) plus
 //!    interaction regions for links.
 
-use std::ops::Range;
+use std::{borrow::Cow, ops::Range};
 
 use inker::InlineSpan;
 use parley::{
@@ -212,7 +212,7 @@ pub fn layout_text_block(
     let body_family = if base.monospace {
         FontFamily::from(GenericFamily::Monospace)
     } else {
-        FontFamily::from(GenericFamily::SystemUi)
+        FontFamily::Source(Cow::Borrowed(&base.font_family))
     };
     builder.push_default(body_family);
     builder.push_default(StyleProperty::FontSize(base.font_size));

@@ -118,6 +118,21 @@ impl SurfaceHost {
         self.core.rasterize(scene, w, h, clear)
     }
 
+    /// Rasterize a logical-coordinate scene into a physical `(w, h)` texture at
+    /// `scale` device pixels per logical pixel. The same scale must be used for
+    /// layout and hit testing by the caller; this wrapper keeps the window host
+    /// on the crisp renderer path instead of upscaling a low-resolution texture.
+    pub fn rasterize_scaled(
+        &self,
+        scene: &Scene,
+        w: u32,
+        h: u32,
+        clear: ColorLoad,
+        scale: f32,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        self.core.rasterize_scaled(scene, w, h, clear, scale)
+    }
+
     /// Acquire the surface backbuffer for this frame (`None` to skip on outdated).
     pub fn acquire(&self) -> Option<wgpu::SurfaceTexture> {
         self.surface.acquire(&self.core)

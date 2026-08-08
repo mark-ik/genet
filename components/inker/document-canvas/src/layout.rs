@@ -107,12 +107,27 @@ impl<'a> DocumentLayouter<'a> {
     }
 
     fn content_left(&self, indent_level: u32) -> f32 {
-        self.style.horizontal_padding + (indent_level as f32) * self.style.indent_per_level
+        self.column_left() + (indent_level as f32) * self.style.indent_per_level
     }
 
     fn available_width(&self, indent_level: u32) -> f32 {
-        let used = self.content_left(indent_level) + self.style.horizontal_padding;
-        (self.viewport.width - used).max(0.0)
+        (self.column_width() - (indent_level as f32) * self.style.indent_per_level).max(0.0)
+    }
+
+    /// The body column's actual width, bounded by the viewport's padding and
+    /// an optional reader-mode measure.
+    fn column_width(&self) -> f32 {
+        let available = (self.viewport.width - 2.0 * self.style.horizontal_padding).max(0.0);
+        self.style
+            .max_content_width
+            .map(|maximum| available.min(maximum.max(0.0)))
+            .unwrap_or(available)
+    }
+
+    /// The body column is centred only when it has been capped. Without a
+    /// cap, this remains exactly the historic horizontal padding.
+    fn column_left(&self) -> f32 {
+        ((self.viewport.width - self.column_width()) * 0.5).max(self.style.horizontal_padding)
     }
 
     fn lay_out_block(&mut self, block: &Block, source_index: usize, indent_level: u32) {

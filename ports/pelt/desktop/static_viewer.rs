@@ -20,9 +20,10 @@ pub struct StaticViewerConfig {
     pub profile: DesktopHostProfile,
     pub url: String,
     pub title: String,
-    /// Exit after the first presented frame (a one-shot render smoke). Interactive
-    /// runs leave it `false` and stay open until the window is closed.
-    pub exit_after_first_redraw: bool,
+    /// Requested physical client size. `None` keeps the profile's established size.
+    pub size: Option<(u32, u32)>,
+    /// Exit after this many presented frames. `None` keeps the window interactive.
+    pub frames: Option<u32>,
 }
 
 impl StaticViewerConfig {
@@ -30,10 +31,23 @@ impl StaticViewerConfig {
         let url = url.into();
         Self {
             profile: DesktopHostProfile::new(engine, windowing),
-            title: format!("Pelt — {url}"),
+            title: "Pelt".into(),
             url,
-            exit_after_first_redraw: false,
+            size: None,
+            frames: None,
         }
+    }
+
+    /// Request a physical client size for a headed run.
+    pub fn with_size(mut self, width: u32, height: u32) -> Self {
+        self.size = Some((width.max(1), height.max(1)));
+        self
+    }
+
+    /// Exit after presenting `frames` frames, for deterministic headed smoke runs.
+    pub fn with_frame_limit(mut self, frames: u32) -> Self {
+        self.frames = Some(frames.max(1));
+        self
     }
 }
 
@@ -42,6 +56,98 @@ pub struct StaticViewerOutcome {
     pub url: String,
     pub created_window: bool,
     pub redraws: u32,
+    /// The physical client size the headed run actually achieved, or `(0, 0)` when
+    /// no window was created.
+    pub size: (u32, u32),
+}
+
+/// Turn an optional document title into the stable native-window title.
+#[cfg(feature = "viewer")]
+pub(crate) fn pelt_window_title(document_title: Option<&str>) -> String {
+    match document_title
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+    {
+        Some(title) => format!("Pelt — {title}"),
+        None => "Pelt".into(),
+    }
+}
+
+/// Pelt's native window treatment, shared by all three headed profiles. The icon is
+/// intentionally generated here: it is a real taskbar/title-bar icon without adding a
+/// platform-specific asset pipeline to the reference host.
+#[cfg(feature = "viewer")]
+pub(crate) fn pelt_window_attributes(
+    title: impl Into<String>,
+    width: u32,
+    height: u32,
+) -> winit::window::WindowAttributes {
+    use winit::dpi::PhysicalSize;
+    use winit::window::{Icon, Window};
+
+    const EDGE: u32 = 32;
+    let mut rgba = vec![0; (EDGE * EDGE * 4) as usize];
+    for y in 0..EDGE {
+        for x in 0..EDGE {
+            let i = ((y * EDGE + x) * 4) as usize;
+            let (r, g, b) = if (4..28).contains(&x) && (4..28).contains(&y) {
+                if (9..23).contains(&x) && (9..15).contains(&y)
+                    || (9..15).contains(&x) && (9..24).contains(&y)
+                    || (14..23).contains(&x) && (18..24).contains(&y)
+                {
+                    (133, 202, 255)
+                } else {
+                    (43, 43, 51)
+                }
+            } else {
+                (0, 0, 0)
+            };
+            rgba[i..i + 4].copy_from_slice(&[
+                r,
+                g,
+                b,
+                if r == 0 && g == 0 && b == 0 { 0 } else { 255 },
+            ]);
+        }
+    }
+    let icon = Icon::from_rgba(rgba, EDGE, EDGE).expect("the fixed Pelt icon is valid RGBA");
+    let attributes = Window::default_attributes()
+        .with_title(title)
+        .with_inner_size(PhysicalSize::new(width.max(1), height.max(1)))
+        .with_window_icon(Some(icon));
+    #[cfg(windows)]
+    let attributes = {
+        use winit::platform::windows::{Color, WindowAttributesExtWindows};
+        attributes
+            .with_title_background_color(Some(Color::from_rgb(43, 43, 51)))
+            .with_title_text_color(Color::from_rgb(245, 245, 247))
+    };
+    attributes
+}
+
+/// Convert a physical window extent to the logical CSS/layout extent used by
+/// Pelt's scenes. Keep this conversion beside the window attributes so every
+/// headed profile shares the same DPI convention.
+pub(crate) fn logical_extent(physical: u32, scale_factor: f32) -> u32 {
+    ((physical.max(1) as f32 / scale_factor.max(1.0)).round() as u32).max(1)
+}
+
+/// Convert a physical winit pointer coordinate to the matching logical scene
+/// coordinate. Layout, painting, and hit tests all use this one space.
+pub(crate) fn logical_position(physical: f32, scale_factor: f32) -> f32 {
+    physical / scale_factor.max(1.0)
+}
+
+#[cfg(test)]
+mod dpi_tests {
+    use super::{logical_extent, logical_position};
+
+    #[test]
+    fn physical_window_space_maps_to_one_logical_scene_space() {
+        assert_eq!(logical_extent(1600, 2.0), 800);
+        assert_eq!(logical_extent(900, 1.5), 600);
+        assert!((logical_position(640.0, 2.0) - 320.0).abs() < f32::EPSILON);
+    }
 }
 
 /// Run the static viewer for `config`. Headless returns immediately with no window
@@ -53,6 +159,7 @@ pub fn run_static_viewer(config: StaticViewerConfig) -> Result<StaticViewerOutco
             url: config.url,
             created_window: false,
             redraws: 0,
+            size: (0, 0),
         }),
         WindowingMode::Headed => run_headed(config),
     }
@@ -107,7 +214,6 @@ pub(crate) mod windowed {
     use netrender::external_texture::ExternalTexturePlacement;
     use netrender::{ColorLoad, NetrenderOptions, Scene};
     use winit::application::ApplicationHandler;
-    use winit::dpi::PhysicalSize;
     use winit::event::{ElementState, MouseButton, WindowEvent};
     use winit::event_loop::ActiveEventLoop;
     use winit::keyboard::{Key, NamedKey};
@@ -122,6 +228,10 @@ pub(crate) mod windowed {
     /// implement it, so they share this one winit shell — the lib-first surface the
     /// pelt plan's V5/V6 grow from.
     pub(crate) trait ViewerContent {
+        /// The document title for native window chrome, when this content has one.
+        fn title(&self) -> Option<String> {
+            None
+        }
         /// Render at `width`×`height` at the current scroll.
         fn frame(&mut self, width: u32, height: u32) -> Scene;
         /// Scroll by a device-px wheel delta; return whether the offset moved.
@@ -149,8 +259,12 @@ pub(crate) mod windowed {
     }
 
     impl ViewerContent for LoadedDocument {
+        fn title(&self) -> Option<String> {
+            LoadedDocument::inspect(self).title
+        }
+
         fn frame(&mut self, width: u32, height: u32) -> Scene {
-            LoadedDocument::frame(self, width, height)
+            LoadedDocument::frame_for_viewer(self, width, height)
         }
         fn scroll_by(&mut self, dx: f32, dy: f32) -> bool {
             LoadedDocument::scroll_by(self, dx, dy)
@@ -207,6 +321,8 @@ pub(crate) mod windowed {
         host: Option<SurfaceHost>,
         width: u32,
         height: u32,
+        /// Physical device pixels per logical CSS/layout pixel.
+        scale_factor: f32,
         redraws: u32,
         /// Shift state, tracked from `ModifiersChanged`, so `Shift+Space` pages up.
         shift: bool,
@@ -221,12 +337,13 @@ pub(crate) mod windowed {
     impl<C: ViewerContent> ViewerApp<C> {
         pub(crate) fn new(config: StaticViewerConfig, doc: C) -> Self {
             Self {
+                width: config.size.map_or(800, |size| size.0),
+                height: config.size.map_or(600, |size| size.1),
+                scale_factor: 1.0,
                 config,
                 doc,
                 window: None,
                 host: None,
-                width: 800,
-                height: 600,
                 redraws: 0,
                 shift: false,
                 cursor: (0.0, 0.0),
@@ -239,7 +356,23 @@ pub(crate) mod windowed {
                 url: self.config.url.clone(),
                 created_window: self.window.is_some(),
                 redraws: self.redraws,
+                size: if self.window.is_some() {
+                    (self.width, self.height)
+                } else {
+                    (0, 0)
+                },
             }
+        }
+
+        fn window_title(&self) -> String {
+            super::pelt_window_title(self.doc.title().as_deref())
+        }
+
+        fn logical_size(&self) -> (u32, u32) {
+            (
+                super::logical_extent(self.width, self.scale_factor),
+                super::logical_extent(self.height, self.scale_factor),
+            )
         }
 
         /// Render the document at the current size + scroll and present it. The
@@ -254,11 +387,17 @@ pub(crate) mod windowed {
             let Some(host) = self.host.as_ref() else {
                 return;
             };
-            let (w, h) = (self.width.max(1), self.height.max(1));
+            let (w, h) = self.logical_size();
             let scene = self.doc.frame(w, h);
             // White canvas: a document with no root/body background paints over white
             // (the page background), as a browser does.
-            let (_tex, view) = host.rasterize(&scene, w, h, ColorLoad::Clear(wgpu::Color::WHITE));
+            let (_tex, view) = host.rasterize_scaled(
+                &scene,
+                self.width.max(1),
+                self.height.max(1),
+                ColorLoad::Clear(wgpu::Color::WHITE),
+                self.scale_factor,
+            );
             let Some(frame) = host.acquire() else { return };
             let target = frame
                 .texture
@@ -267,13 +406,17 @@ pub(crate) mod windowed {
                 &view,
                 &target,
                 host.format(),
-                w,
-                h,
-                ExternalTexturePlacement::new([0.0, 0.0, w as f32, h as f32]),
+                self.width,
+                self.height,
+                ExternalTexturePlacement::new([0.0, 0.0, self.width as f32, self.height as f32]),
             );
             frame.present();
             self.redraws += 1;
-            if self.config.exit_after_first_redraw {
+            if self
+                .config
+                .frames
+                .is_some_and(|limit| self.redraws >= limit)
+            {
                 event_loop.exit();
                 return;
             }
@@ -294,9 +437,8 @@ pub(crate) mod windowed {
             if self.window.is_some() {
                 return;
             }
-            let attributes = Window::default_attributes()
-                .with_title(self.config.title.clone())
-                .with_inner_size(PhysicalSize::new(self.width, self.height));
+            let attributes =
+                super::pelt_window_attributes(self.window_title(), self.width, self.height);
             let window = match event_loop.create_window(attributes) {
                 Ok(window) => Arc::new(window),
                 Err(err) => {
@@ -308,6 +450,8 @@ pub(crate) mod windowed {
             let size = window.inner_size();
             self.width = size.width.max(1);
             self.height = size.height.max(1);
+            self.scale_factor = window.scale_factor() as f32;
+            window.set_title(&self.window_title());
             let options = NetrenderOptions {
                 tile_cache_size: Some(64),
                 enable_vello: true,
@@ -346,6 +490,18 @@ pub(crate) mod windowed {
                     // (re-resolving %-height + viewport units).
                     self.request_redraw();
                 },
+                WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                    self.scale_factor = scale_factor as f32;
+                    if let Some(window) = self.window.as_ref() {
+                        let size = window.inner_size();
+                        self.width = size.width.max(1);
+                        self.height = size.height.max(1);
+                    }
+                    if let Some(host) = self.host.as_mut() {
+                        host.resize(self.width, self.height);
+                    }
+                    self.request_redraw();
+                },
                 WindowEvent::MouseWheel { delta, .. } => {
                     // The shared wheel default action (scope doc rule 5): map the wheel
                     // to a device-px delta and scroll at the cursor — a nested
@@ -354,6 +510,7 @@ pub(crate) mod windowed {
                     // cursor is already in document space. Redraw only when something
                     // moved (not at an edge).
                     let (dx, dy) = wheel_delta_from_winit(delta);
+                    let (dx, dy) = (dx / self.scale_factor, dy / self.scale_factor);
                     if self.doc.scroll_at(self.cursor.0, self.cursor.1, dx, dy) {
                         self.request_redraw();
                     }
@@ -362,7 +519,10 @@ pub(crate) mod windowed {
                     self.shift = mods.state().shift_key();
                 },
                 WindowEvent::CursorMoved { position, .. } => {
-                    self.cursor = (position.x as f32, position.y as f32);
+                    self.cursor = (
+                        super::logical_position(position.x as f32, self.scale_factor),
+                        super::logical_position(position.y as f32, self.scale_factor),
+                    );
                 },
                 WindowEvent::MouseInput { state, button, .. } => {
                     // A left click on an in-page link (`<a href="#id">`) scrolls its

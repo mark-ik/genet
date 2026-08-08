@@ -88,8 +88,9 @@ pub use genet_lane::{
 };
 pub use highlights::{HighlightRange, HighlightStyle};
 pub use host_loader::{
-    LocalFileImageLoader, ResourceResolver, inline_stylesheets, inline_stylesheets_from_source,
-    linked_icon_href, linked_stylesheets, linked_stylesheets_with_loader,
+    LocalFileImageLoader, ResourceResolver, author_stylesheets_with_loader, inline_stylesheets,
+    inline_stylesheets_from_source, linked_icon_href, linked_stylesheets,
+    linked_stylesheets_with_loader,
 };
 pub use image_decode::{
     BackgroundImagePlane, DecodedImage, ImageLoader, ImagePlane, NoImageLoader, decode_image_bytes,
@@ -110,7 +111,7 @@ pub use snapshot::build_snapshot_map;
 pub use style::{StyleEntry, StylePlane};
 pub use subtree::{SubtreeView, layout_subtree, render_subtree};
 pub use text_measure::{
-    FontFamilySpec, GenericFamilyKind, InlineContent, InlineRun, TextMeasureCtx,
+    FontFamilySpec, GenericFamilyKind, InlineContent, InlineRun, InlineTextAlign, TextMeasureCtx,
     measure_inline_content, register_host_font,
 };
 pub use transition_events::{TransitionEventKind, TransitionEventRecord};

@@ -10,12 +10,18 @@
 //! GPU-free and testable; the windowed present loop (`static_viewer`) drives it.
 
 use genet_host_api::ResourceFetcher;
+use std::collections::HashMap;
+
 use genet_layout::{
-    IncrementalLayout, ScrollKey, ScrollOffsets, TextRange, TextSelection, inline_stylesheets,
+    ImageLoader, IncrementalLayout, ScrollKey, ScrollOffsets, TextRange, TextSelection,
+    author_stylesheets_with_loader,
 };
-use genet_render::{ContentReport, content_report, scene_from_session_dom};
+use genet_render::{
+    ContentReport, content_report, scene_from_session_dom, scene_from_session_dom_with_scrollbars,
+};
 use genet_static_dom::{StaticDocument, StaticNodeId};
 use inker::SessionTextTarget;
+use layout_dom_api::{LayoutDom, LocalName, Namespace};
 use netrender::Scene;
 
 /// A local-scheme [`ResourceFetcher`]: `data:` decodes the inline payload,
@@ -87,8 +93,16 @@ fn file_url_to_path(after_scheme: &str) -> String {
 /// path — so wheel scrolling never re-runs layout.
 pub struct LoadedDocument {
     doc: StaticDocument,
-    /// The structural UA defaults plus the document's own inline `<style>` sheets.
+    /// The structural UA defaults plus every discovered author sheet, in document
+    /// order. Linked sheets are included when the document was loaded through a
+    /// host fetcher.
     sheets: Vec<String>,
+    /// The fetched document URL, retained so relative CSS `url()` values resolve
+    /// in Stylo and raw `<img src>` values resolve in the resource cache.
+    base_url: Option<String>,
+    /// Bytes for the document's initial image resources. Keeping the cache owned by
+    /// the session means resize rebuilds do not re-fetch the page's assets.
+    resources: ResourceCache,
     /// The retained cascade + layout session, owner of the document viewport (size
     /// + propagated overflow + scroll). Built lazily at the first render size and
     /// rebuilt on a resize (which re-resolves `%`-height and viewport units);
@@ -105,6 +119,135 @@ pub struct LoadedDocument {
     /// The current DOM text range. A collapsed range is retained during the
     /// gesture but is not exposed as a clip.
     selection_range: Option<TextRange<StaticNodeId>>,
+}
+
+struct FetchingResourceLoader<'a> {
+    fetcher: &'a dyn ResourceFetcher,
+    base_url: &'a str,
+}
+
+impl ImageLoader for FetchingResourceLoader<'_> {
+    fn load(&self, url: &str) -> Option<Vec<u8>> {
+        self.fetcher.fetch(&crate::resolve_href(self.base_url, url))
+    }
+}
+
+#[derive(Default)]
+struct ResourceCache {
+    base_url: Option<String>,
+    bytes: HashMap<String, Vec<u8>>,
+}
+
+impl ResourceCache {
+    fn with_base(base_url: Option<String>) -> Self {
+        Self {
+            base_url,
+            bytes: HashMap::new(),
+        }
+    }
+
+    fn prefetch_document_resources(
+        &mut self,
+        fetcher: &dyn ResourceFetcher,
+        doc: &StaticDocument,
+        sheets: &[String],
+    ) {
+        for url in document_image_urls(doc)
+            .into_iter()
+            .chain(sheets.iter().flat_map(|sheet| stylesheet_image_urls(sheet)))
+        {
+            self.prefetch(fetcher, &url);
+        }
+    }
+
+    fn prefetch(&mut self, fetcher: &dyn ResourceFetcher, url: &str) {
+        if url.starts_with("data:") {
+            return;
+        }
+        let resolved = self
+            .base_url
+            .as_deref()
+            .map(|base| crate::resolve_href(base, url))
+            .unwrap_or_else(|| url.to_string());
+        if self.bytes.contains_key(&resolved) {
+            return;
+        }
+        if let Some(bytes) = fetcher.fetch(&resolved) {
+            self.bytes.insert(resolved, bytes);
+        }
+    }
+}
+
+impl ImageLoader for ResourceCache {
+    fn load(&self, url: &str) -> Option<Vec<u8>> {
+        let resolved = self
+            .base_url
+            .as_deref()
+            .map(|base| crate::resolve_href(base, url))
+            .unwrap_or_else(|| url.to_string());
+        self.bytes.get(&resolved).cloned()
+    }
+}
+
+fn document_image_urls(doc: &StaticDocument) -> Vec<String> {
+    let no_ns = Namespace::default();
+    let src = LocalName::from("src");
+    let data = LocalName::from("data");
+    let poster = LocalName::from("poster");
+    let loading = LocalName::from("loading");
+    let mut urls = Vec::new();
+    let mut stack = vec![doc.document()];
+    while let Some(id) = stack.pop() {
+        if let Some(name) = doc.element_name(id) {
+            let attr = match name.local.as_ref() {
+                "img" | "embed" => Some(&src),
+                "object" => Some(&data),
+                "video" => Some(&poster),
+                _ => None,
+            };
+            let is_lazy = name.local.as_ref() == "img"
+                && doc
+                    .attribute(id, &no_ns, &loading)
+                    .is_some_and(|value| value.trim().eq_ignore_ascii_case("lazy"));
+            if !is_lazy && let Some(url) = attr.and_then(|attr| doc.attribute(id, &no_ns, attr)) {
+                urls.push(url.to_string());
+            }
+        }
+        stack.extend(doc.dom_children(id));
+    }
+    urls
+}
+
+/// Find stylesheet `url()`s which can feed the image plane. `@font-face` URLs
+/// are deliberately excluded: webfont registration is not implemented, so
+/// fetching those bytes only serializes a synchronous initial load without
+/// changing the rendered page.
+fn stylesheet_image_urls(css: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut offset = 0;
+    while let Some(found) = css[offset..].to_ascii_lowercase().find("url(") {
+        let start = offset + found + 4;
+        let Some(end) = css[start..].find(')') else {
+            break;
+        };
+        let raw = css[start..start + end].trim();
+        let raw = raw.trim_matches(['\'', '"']);
+        if !raw.is_empty() && !is_font_url(raw) {
+            urls.push(raw.to_string());
+        }
+        offset = start + end + 1;
+    }
+    urls
+}
+
+fn is_font_url(url: &str) -> bool {
+    let path = url
+        .split_once(['?', '#'])
+        .map_or(url, |(path, _)| path)
+        .to_ascii_lowercase();
+    [".woff", ".woff2", ".ttf", ".otf", ".eot"]
+        .iter()
+        .any(|extension| path.ends_with(extension))
 }
 
 /// What a content click ([`LoadedDocument::click_at`]) resolved to.
@@ -133,7 +276,8 @@ impl LoadedDocument {
         let bytes = fetcher
             .fetch(resource)
             .ok_or_else(|| format!("could not load {resource}"))?;
-        let mut me = Self::parse(&String::from_utf8_lossy(&bytes));
+        let doc = StaticDocument::parse(&String::from_utf8_lossy(&bytes));
+        let mut me = Self::from_document(doc, Some(resource), Some(fetcher));
         me.pending_fragment = fragment;
         Ok(me)
     }
@@ -142,14 +286,39 @@ impl LoadedDocument {
     /// `data:` content), layering the document's inline sheets over the defaults.
     pub fn parse(html: &str) -> Self {
         let doc = StaticDocument::parse(html);
+        Self::from_document(doc, None, None)
+    }
+
+    fn from_document(
+        doc: StaticDocument,
+        base_url: Option<&str>,
+        fetcher: Option<&dyn ResourceFetcher>,
+    ) -> Self {
         let mut sheets: Vec<String> = crate::STRUCTURAL_SHEET
             .iter()
             .map(|s| s.to_string())
             .collect();
-        sheets.extend(inline_stylesheets(&doc));
+        let base_url = base_url.map(str::to_string);
+        if let (Some(fetcher), Some(base)) = (fetcher, base_url.as_deref()) {
+            let loader = FetchingResourceLoader {
+                fetcher,
+                base_url: base,
+            };
+            sheets.extend(author_stylesheets_with_loader(&doc, &loader));
+        } else {
+            // Fetch-free parses deliberately retain only inline sheets: there is
+            // no base or byte authority with which to resolve a linked resource.
+            sheets.extend(genet_layout::inline_stylesheets(&doc));
+        }
+        let mut resources = ResourceCache::with_base(base_url.clone());
+        if let Some(fetcher) = fetcher {
+            resources.prefetch_document_resources(fetcher, &doc, &sheets);
+        }
         Self {
             doc,
             sheets,
+            base_url,
+            resources,
             session: None,
             size: (0, 0),
             pending_fragment: None,
@@ -164,19 +333,33 @@ impl LoadedDocument {
             return;
         }
         let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
-        self.session = Some(IncrementalLayout::new(
+        self.session = Some(IncrementalLayout::new_with_resources(
             &self.doc,
             &sheets,
             width as f32,
             height as f32,
+            self.base_url.as_deref(),
+            &self.resources,
         ));
         self.size = (width, height);
     }
 
     /// Render the document to a [`netrender::Scene`] at `width`×`height`, painting
     /// at the current document scroll. Rebuilds the layout session on a size change
-    /// (re-resolving `%`-height and viewport units against the new viewport).
+    /// (re-resolving `%`-height and viewport units against the new viewport). This
+    /// reftest-safe entry emits content only, without viewer adornments.
     pub fn frame(&mut self, width: u32, height: u32) -> Scene {
+        self.frame_inner(width, height, false)
+    }
+
+    /// Render the document for an interactive viewer. This adds scrollbar thumbs
+    /// over the retained document and nested overflow containers while preserving
+    /// [`frame`](Self::frame)'s content-only snapshot contract.
+    pub fn frame_for_viewer(&mut self, width: u32, height: u32) -> Scene {
+        self.frame_inner(width, height, true)
+    }
+
+    fn frame_inner(&mut self, width: u32, height: u32, show_scrollbars: bool) -> Scene {
         self.ensure_session(width, height);
         // One-shot anchor-fragment scroll: now that the session / layout exists, bring
         // a `url#id` target into view so the document opens scrolled to it.
@@ -189,7 +372,11 @@ impl LoadedDocument {
             .session
             .as_ref()
             .expect("session built by ensure_session");
-        let mut scene = scene_from_session_dom(session, &self.doc, width, height);
+        let mut scene = if show_scrollbars {
+            scene_from_session_dom_with_scrollbars(session, &self.doc, width, height)
+        } else {
+            scene_from_session_dom(session, &self.doc, width, height)
+        };
         if let Some(selection) = self.text_selection() {
             let (scroll_x, scroll_y) = session.viewport_scroll();
             for rect in selection.rects {
@@ -379,6 +566,74 @@ impl LoadedDocument {
 mod tests {
     use super::*;
 
+    #[test]
+    fn loaded_document_orders_linked_sheets_skips_print_and_caches_images() {
+        struct Fetcher;
+        impl ResourceFetcher for Fetcher {
+            fn fetch(&self, url: &str) -> Option<Vec<u8>> {
+                match url {
+                    "https://example.test/page/index.html" => Some(
+                        b"<style>p { color: red; }</style>\
+                          <link rel=\"preload stylesheet\" href=\"site.css\">\
+                          <link rel=\"stylesheet\" href=\"print.css\" media=\"print\">\
+                          <style>p { color: blue; }</style>\
+                          <img src=\"images/logo.png\"><p>screen text</p>"
+                            .to_vec(),
+                    ),
+                    "https://example.test/page/site.css" => Some(b"p { color: green; }".to_vec()),
+                    "https://example.test/page/print.css" => {
+                        Some(b"body { display: none; }".to_vec())
+                    },
+                    "https://example.test/page/images/logo.png" => Some(vec![0, 1, 2]),
+                    _ => None,
+                }
+            }
+        }
+
+        let mut doc = LoadedDocument::load(&Fetcher, "https://example.test/page/index.html")
+            .expect("fixture document loads");
+        assert_eq!(
+            doc.base_url.as_deref(),
+            Some("https://example.test/page/index.html")
+        );
+        assert!(doc.sheets[3].contains("color: red"));
+        assert!(doc.sheets[4].contains("color: green"));
+        assert!(doc.sheets[5].starts_with("@media print"));
+        assert!(doc.sheets[6].contains("color: blue"));
+        assert!(
+            doc.resources.load("images/logo.png").is_some(),
+            "a raw image URL resolves against the fetched document base"
+        );
+        let scene = doc.frame(400, 300);
+        assert!(
+            scene
+                .ops
+                .iter()
+                .any(|op| matches!(op, netrender::SceneOp::GlyphRun(_))),
+            "media=print does not hide screen content",
+        );
+    }
+
+    #[test]
+    fn stylesheet_image_urls_skip_unimplemented_webfonts() {
+        assert_eq!(
+            stylesheet_image_urls(
+                "@font-face { src: url(https://fonts.example/a.woff2); } \
+                 .hero { background-image: url('images/banner.png?v=2'); }"
+            ),
+            vec!["images/banner.png?v=2"],
+            "only image resources are preloaded while webfont support is deferred"
+        );
+    }
+
+    #[test]
+    fn initial_resource_cache_skips_lazy_images() {
+        let doc = StaticDocument::parse(
+            "<img src=\"eager.png\"><img src=\"later.png\" loading=\"lazy\">",
+        );
+        assert_eq!(document_image_urls(&doc), vec!["eager.png"]);
+    }
+
     /// A `data:` document loads, parses, and paints text (glyph runs in the
     /// scene) -- the whole load -> parse -> genet-render path, no window.
     #[test]
@@ -469,6 +724,20 @@ mod tests {
         assert!(
             !doc.scroll_by(0.0, 100.0),
             "already at the bottom edge → no change"
+        );
+    }
+
+    #[test]
+    fn viewer_frame_adds_scrollbar_without_changing_snapshot_frame() {
+        let mut doc = LoadedDocument::parse(
+            "<style>body { margin: 0; padding: 0; } .tall { height: 2000px; }</style>\
+             <div class=\"tall\">tall</div>",
+        );
+        let snapshot = doc.frame(400, 300);
+        let viewer = doc.frame_for_viewer(400, 300);
+        assert!(
+            viewer.ops.len() > snapshot.ops.len(),
+            "the interactive frame carries a document scrollbar overlay",
         );
     }
 

@@ -27,8 +27,7 @@ use cambium::{
     custom_leaf, divider_target, el, frisket, tab_drop_index, tab_target,
 };
 use genet_host_api::tile::{
-    ContentSource, DocumentRef, DropTarget, SplitAxis, TileEvent, TileId, TilePath,
-    TileTree,
+    ContentSource, DocumentRef, DropTarget, SplitAxis, TileEvent, TileId, TilePath, TileTree,
 };
 use genet_layout::{IncrementalLayout, LeafPaintSource, ScrollOffsets};
 use genet_render::{ContentReport, scene_from_session_dom};
@@ -38,8 +37,9 @@ use netrender::Scene;
 use paint_list_api::PaintCmd;
 use sprigging::{ColorF, GraphGlyph, GraphGlyphNode, LeafRegistry, Meter, RenderedLeaves, Size};
 
-use crate::document::{ClickOutcome, LoadedDocument, LocalFetcher};
+use crate::document::LocalFetcher;
 use crate::href::resolve_href;
+use inker::session_engine::{DocumentSession, SessionClick};
 
 struct RenderedLeafSource<'a>(&'a RenderedLeaves);
 
@@ -258,7 +258,8 @@ const DEFAULT_TILE_CSS: &str = "\
     .tile-statusbar { display: flex; align-items: center; height: 26px; padding: 0 10px; background: #1a1a1f; } \
     .tile-status-spacer { flex: 1 1 auto; height: 1px; } \
     .tile-status-leaf { margin-left: 10px; } \
-    .tile-ghost { display: inline-block; padding: 8px 14px; font-size: 15px; line-height: 1.2; color: #ffffff; background: #4a4a55; border: 1px solid #6a6a77; opacity: 0.85; }";
+    .tile-ghost { display: inline-block; padding: 8px 14px; font-size: 15px; line-height: 1.2; color: #ffffff; background: #4a4a55; border: 1px solid #6a6a77; opacity: 0.85; } \
+    .tile-load-error { display: block; margin: 16px; padding: 12px; color: #ffd7d7; background: #3b2024; border: 1px solid #a85b65; }";
 
 /// Walk from a divider element to the split container holding it: the parent,
 /// whose measured extent sets the pixels-per-fraction of a divider drag. Ours
@@ -328,10 +329,13 @@ pub struct GhostLayer {
 }
 
 /// A tile-tree surface: a [`GenetAppRunner`] over the frame view + the authoritative
-/// tree, plus a live [`LoadedDocument`] per document-lane tile.
+/// tree, plus a live retained document session per document-lane tile.
 pub struct TileSurface {
     runner: GenetAppRunner<TileState, TileLogic, TileView, ()>,
-    docs: HashMap<TileId, LoadedDocument>,
+    docs: HashMap<TileId, Box<dyn DocumentSession<Scene>>>,
+    /// Failed loads remain visible in their pane instead of producing a blank
+    /// content area. The address remains in the tree for an explicit retry.
+    load_errors: HashMap<TileId, String>,
     sheets: Vec<String>,
     /// The status bar's chisel widget leaves (frame meter, tree glyph), keyed by
     /// the `<custom-leaf key>`s the frame view emits.
@@ -395,6 +399,7 @@ impl TileSurface {
         let mut surface = Self {
             runner,
             docs: HashMap::new(),
+            load_errors: HashMap::new(),
             sheets: vec![DEFAULT_TILE_CSS.to_string(), FRISKET_CSS.to_string()],
             leaves,
             rendered: RenderedLeaves::new(),
@@ -445,12 +450,27 @@ impl TileSurface {
     /// theme need only restate the properties it overrides (e.g. the panel background on
     /// `.frisket-content`, the tab-bar / active-tab colors).
     pub fn set_theme(&mut self, css: impl Into<String>) {
-        self.sheets.truncate(1); // keep DEFAULT_TILE_CSS as the base
+        self.sheets.truncate(2); // keep DEFAULT_TILE_CSS + FRISKET_CSS as the base
         self.sheets.push(css.into());
     }
 
-    /// Ensure a [`LoadedDocument`] exists for every document-lane tile currently in the
-    /// tree (and drop docs for tiles that are gone). Lazily loads new tiles.
+    /// The first loaded document title in the projected tree. The standalone tile
+    /// host uses this only for its native caption; tabs retain their own titles.
+    pub fn primary_document_title(&self) -> Option<String> {
+        self.runner
+            .state()
+            .tree
+            .tiles()
+            .into_iter()
+            .find_map(|tile| {
+                self.docs
+                    .get(&tile.id)
+                    .and_then(|document| document.inspect().and_then(|report| report.title))
+            })
+    }
+
+    /// Ensure a retained document session exists for every document-lane tile currently
+    /// in the tree (and drop sessions for tiles that are gone). Lazily loads new tiles.
     fn load_docs(&mut self) {
         let mut wanted: Vec<(TileId, String)> = Vec::new();
         for tile in self.runner.state().tree.tiles() {
@@ -460,12 +480,29 @@ impl TileSurface {
         }
         let live: std::collections::HashSet<TileId> = wanted.iter().map(|(id, _)| *id).collect();
         self.docs.retain(|id, _| live.contains(id));
+        self.load_errors.retain(|id, _| live.contains(id));
+        let mut retitled = Vec::new();
         for (id, url) in wanted {
-            if !self.docs.contains_key(&id) {
-                if let Ok(doc) = LoadedDocument::load(&LocalFetcher, &url) {
-                    self.docs.insert(id, doc);
+            if !self.docs.contains_key(&id) && !self.load_errors.contains_key(&id) {
+                match genet_documents::open_document_session(&LocalFetcher, &url) {
+                    Ok(doc) => {
+                        retitled.push((id, document_title(doc.as_ref(), &url)));
+                        self.docs.insert(id, doc);
+                    },
+                    Err(error) => {
+                        self.load_errors.insert(id, error);
+                    },
                 }
             }
+        }
+        if !retitled.is_empty() {
+            self.runner.update(|state| {
+                for (id, title) in &retitled {
+                    if let Some(tile) = state.tree.tile_mut(*id) {
+                        tile.title = title.clone();
+                    }
+                }
+            });
         }
     }
 
@@ -577,6 +614,12 @@ impl TileSurface {
                     tile: tile_id,
                     rect,
                     scene,
+                });
+            } else if let Some(error) = self.load_errors.get(&tile_id) {
+                tiles.push(TileLayer {
+                    tile: tile_id,
+                    rect,
+                    scene: self.error_scene(error, rect.2.max(1.0) as u32, rect.3.max(1.0) as u32),
                 });
             }
         }
@@ -696,18 +739,18 @@ impl TileSurface {
             .is_some_and(|doc| doc.scroll_at(x, y, dx, dy))
     }
 
-    /// Handle a click at tile-local `(x, y)` in tile `id`'s document. An in-page link
-    /// scrolls the tile; a link to another resource navigates the tile to it (loading
-    /// the linked document, retitling the tab). Returns whether anything changed.
+    /// Handle a click at tile-local `(x, y)` through the tile's own retained
+    /// session. A session-owned click stays in the pane; a navigation updates
+    /// only that tile's address and title.
     pub fn click_tile(&mut self, id: TileId, x: f32, y: f32) -> bool {
         let outcome = match self.docs.get_mut(&id) {
             Some(doc) => doc.click_at(x, y),
             None => return false,
         };
         match outcome {
-            ClickOutcome::None => false,
-            ClickOutcome::Scrolled => true,
-            ClickOutcome::Navigate(href) => self.navigate_tile(id, &href),
+            SessionClick::Miss => false,
+            SessionClick::Handled => true,
+            SessionClick::Navigate(href) => self.navigate_tile(id, &href),
         }
     }
 
@@ -721,11 +764,17 @@ impl TileSurface {
             _ => return false,
         };
         let url = resolve_href(&base, href);
-        let Ok(doc) = LoadedDocument::load(&LocalFetcher, &url) else {
-            return false;
+        let doc = match genet_documents::open_document_session(&LocalFetcher, &url) {
+            Ok(doc) => doc,
+            Err(error) => {
+                self.docs.remove(&id);
+                self.load_errors.insert(id, error);
+                return true;
+            },
         };
+        let title = document_title(doc.as_ref(), &url);
         self.docs.insert(id, doc);
-        let title = tile_title(&url);
+        self.load_errors.remove(&id);
         self.runner.update(|s| {
             if let Some(tile) = s.tree.tile_mut(id) {
                 tile.content = ContentSource::Document(DocumentRef(url.clone()));
@@ -831,7 +880,7 @@ impl TileSurface {
     /// A structural [`ContentReport`] of tile `id`'s document (the inspector's read
     /// model — "inspect tile"). `None` for a tile with no document.
     pub fn inspect_tile(&self, id: TileId) -> Option<ContentReport> {
-        self.docs.get(&id).map(|doc| doc.inspect())
+        self.docs.get(&id).and_then(|doc| doc.inspect())
     }
 
     /// The title of tile `id`, if it is in the tree (the drag ghost's label).
@@ -850,6 +899,21 @@ impl TileSurface {
         let text = dom.create_text(title);
         dom.append_child(div, text);
         dom.append_child(root, div);
+        let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
+        let session =
+            IncrementalLayout::new(&dom, &sheets, width.max(1) as f32, height.max(1) as f32);
+        scene_from_session_dom(&session, &dom, width.max(1), height.max(1))
+    }
+
+    fn error_scene(&self, message: &str, width: u32, height: u32) -> Scene {
+        let mut dom = ScriptedDom::new();
+        let root = dom.document();
+        let panel = dom.create_element(qual("div"));
+        dom.set_attribute(panel, qual("class"), "tile-load-error");
+        let text_message = format!("Could not load this tile: {message}");
+        let text = dom.create_text(&text_message);
+        dom.append_child(panel, text);
+        dom.append_child(root, panel);
         let sheets: Vec<&str> = self.sheets.iter().map(String::as_str).collect();
         let session =
             IncrementalLayout::new(&dom, &sheets, width.max(1) as f32, height.max(1) as f32);
@@ -928,6 +992,12 @@ fn absolute_rect(
 /// windowed tile viewer (`tile_viewer`); lives here so the surface lib does not
 /// reach back into the present-stack module.
 pub(crate) fn tile_title(url: &str) -> String {
+    // A data: URL carries no filename. Splitting one on '/' returns whatever
+    // followed the last slash in the payload, which for
+    // `data:text/html,<p>two</p>` is "p>". Name the kind instead.
+    if url.starts_with("data:") {
+        return "document".into();
+    }
     let trimmed = url.split(['#', '?']).next().unwrap_or(url);
     let name = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
     let stem = name.strip_suffix(".html").unwrap_or(name);
@@ -938,16 +1008,30 @@ pub(crate) fn tile_title(url: &str) -> String {
     }
 }
 
+fn document_title(document: &dyn DocumentSession<Scene>, url: &str) -> String {
+    document
+        .inspect()
+        .and_then(|report| report.title)
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or_else(|| tile_title(url))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use genet_host_api::tile::{Edge, TextureKey, Tile, TileBranch};
 
     fn doc_tile(id: u64, html: &str) -> Tile {
+        // The document carries its own <title>. Loading a tile retitles its tab
+        // from the document, so a fixture that wants a stable label has to put
+        // the label where the tab will read it. `title` is display: none in
+        // DEFAULT_TILE_CSS, so it does not reach the rendered content.
         Tile {
             id: TileId(id),
             title: format!("tab{id}"),
-            content: ContentSource::Document(DocumentRef(format!("data:text/html,{html}"))),
+            content: ContentSource::Document(DocumentRef(format!(
+                "data:text/html,<title>tab{id}</title>{html}"
+            ))),
             accent: None,
         }
     }

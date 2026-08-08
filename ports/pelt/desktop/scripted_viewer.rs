@@ -54,6 +54,7 @@ pub fn run_scripted_viewer(
             url: config.url,
             created_window: false,
             redraws: 0,
+            size: (0, 0),
         }),
         WindowingMode::Headed => run_scripted_headed(config, engine),
     }

@@ -29,6 +29,7 @@ pub fn run_chrome_viewer(
             url: config.url,
             created_window: false,
             redraws: 0,
+            size: (0, 0),
         }),
         WindowingMode::Headed => {
             windowed::run::<crate::document::LoadedDocument>(config, side, thickness)
@@ -50,6 +51,7 @@ pub fn run_smolweb_browser(
             url: config.url,
             created_window: false,
             redraws: 0,
+            size: (0, 0),
         }),
         WindowingMode::Headed => windowed::run::<crate::SmolwebDocument>(config, side, thickness),
     }
@@ -70,7 +72,6 @@ pub(crate) mod windowed {
     use netrender::external_texture::ExternalTexturePlacement;
     use netrender::{ColorLoad, NetrenderOptions};
     use winit::application::ApplicationHandler;
-    use winit::dpi::PhysicalSize;
     use winit::event::{ElementState, MouseButton, WindowEvent};
     use winit::event_loop::{ActiveEventLoop, EventLoop};
     use winit::keyboard::{Key, ModifiersState, NamedKey};
@@ -118,6 +119,10 @@ pub(crate) mod windowed {
     /// (gemini/gopher/feed) both implement it, so they share this one chrome shell —
     /// the same omnibar + back/forward + navigation, different document underneath.
     pub(crate) trait BrowsableContent: Sized {
+        /// The document title for native window chrome, when this content has one.
+        fn title(&self) -> Option<String> {
+            None
+        }
         /// Fetch + parse `url` into a document (via the host's `LocalFetcher`).
         fn load(url: &str) -> Result<Self, String>;
         /// Render at `width`×`height` at the current scroll.
@@ -143,11 +148,15 @@ pub(crate) mod windowed {
     }
 
     impl BrowsableContent for LoadedDocument {
+        fn title(&self) -> Option<String> {
+            LoadedDocument::inspect(self).title
+        }
+
         fn load(url: &str) -> Result<Self, String> {
             LoadedDocument::load(&LocalFetcher, url)
         }
         fn frame(&mut self, width: u32, height: u32) -> netrender::Scene {
-            LoadedDocument::frame(self, width, height)
+            LoadedDocument::frame_for_viewer(self, width, height)
         }
         fn scroll_at(&mut self, x: f32, y: f32, dx: f32, dy: f32) -> bool {
             LoadedDocument::scroll_at(self, x, y, dx, dy)
@@ -194,6 +203,7 @@ pub(crate) mod windowed {
         host: Option<SurfaceHost>,
         width: u32,
         height: u32,
+        scale_factor: f32,
         cursor: (f32, f32),
         mods: Modifiers,
         redraws: u32,
@@ -203,14 +213,15 @@ pub(crate) mod windowed {
         fn new(config: StaticViewerConfig, chrome: Chrome, content: C) -> Self {
             let loaded_url = config.url.clone();
             Self {
+                width: config.size.map_or(1000, |size| size.0),
+                height: config.size.map_or(700, |size| size.1),
+                scale_factor: 1.0,
                 config,
                 chrome,
                 content,
                 loaded_url,
                 window: None,
                 host: None,
-                width: 1000,
-                height: 700,
                 cursor: (0.0, 0.0),
                 mods: Modifiers::default(),
                 redraws: 0,
@@ -222,12 +233,24 @@ pub(crate) mod windowed {
                 url: self.loaded_url.clone(),
                 created_window: self.window.is_some(),
                 redraws: self.redraws,
+                size: if self.window.is_some() {
+                    (self.width, self.height)
+                } else {
+                    (0, 0)
+                },
             }
+        }
+
+        fn window_title(&self) -> String {
+            crate::static_viewer::pelt_window_title(self.content.title().as_deref())
         }
 
         /// `(strip_rect, content_rect)` for the current side + thickness + window size.
         fn regions(&self) -> (Rect, Rect) {
-            let (w, h) = (self.width.max(1), self.height.max(1));
+            let (w, h) = (
+                crate::static_viewer::logical_extent(self.width, self.scale_factor),
+                crate::static_viewer::logical_extent(self.height, self.scale_factor),
+            );
             let side = self.chrome.side();
             let t = self
                 .chrome
@@ -257,15 +280,19 @@ pub(crate) mod windowed {
                     ChromeIntent::Navigate(_) | ChromeIntent::Back | ChromeIntent::Forward
                 )
             });
-            if !navigated {
+            let reloaded = intents.iter().any(|i| matches!(i, ChromeIntent::Reload));
+            if !navigated && !reloaded {
                 return;
             }
             let url = self.chrome.state().current().to_string();
-            if url != self.loaded_url {
+            if reloaded || url != self.loaded_url {
                 match C::load(&url) {
                     Ok(doc) => {
                         self.content = doc;
                         self.loaded_url = url;
+                        if let Some(window) = self.window.as_ref() {
+                            window.set_title(&self.window_title());
+                        }
                     },
                     Err(error) => eprintln!("[pelt] could not navigate to {url}: {error}"),
                 }
@@ -288,22 +315,24 @@ pub(crate) mod windowed {
 
             // Rasterize both layers (kept alive until present), then composite each into
             // its window rect over the backbuffer.
-            let (_ct, chrome_view) = host.rasterize(
+            let (_ct, chrome_view) = host.rasterize_scaled(
                 &chrome_scene,
-                strip.2.max(1),
-                strip.3.max(1),
+                physical_extent(strip.2, self.scale_factor),
+                physical_extent(strip.3, self.scale_factor),
                 ColorLoad::Clear(wgpu::Color {
                     r: 0.17,
                     g: 0.17,
                     b: 0.2,
                     a: 1.0,
                 }),
+                self.scale_factor,
             );
-            let (_vt, content_view) = host.rasterize(
+            let (_vt, content_view) = host.rasterize_scaled(
                 &content_scene,
-                content_rect.2.max(1),
-                content_rect.3.max(1),
+                physical_extent(content_rect.2, self.scale_factor),
+                physical_extent(content_rect.3, self.scale_factor),
                 ColorLoad::Clear(wgpu::Color::WHITE),
+                self.scale_factor,
             );
             let Some(frame) = host.acquire() else { return };
             let target = frame
@@ -316,7 +345,7 @@ pub(crate) mod windowed {
                 host.format(),
                 win_w,
                 win_h,
-                placement(strip),
+                placement(strip, self.scale_factor),
             );
             renderer.compose_external_texture(
                 &content_view,
@@ -324,11 +353,15 @@ pub(crate) mod windowed {
                 host.format(),
                 win_w,
                 win_h,
-                placement(content_rect),
+                placement(content_rect, self.scale_factor),
             );
             frame.present();
             self.redraws += 1;
-            if self.config.exit_after_first_redraw {
+            if self
+                .config
+                .frames
+                .is_some_and(|limit| self.redraws >= limit)
+            {
                 event_loop.exit();
             }
         }
@@ -341,12 +374,17 @@ pub(crate) mod windowed {
     }
 
     /// Map a window-pixel rect to an [`ExternalTexturePlacement`] (`[x0, y0, x1, y1]`).
-    fn placement(r: Rect) -> ExternalTexturePlacement {
+    fn physical_extent(logical: u32, scale_factor: f32) -> u32 {
+        ((logical.max(1) as f32 * scale_factor.max(1.0)).round() as u32).max(1)
+    }
+
+    /// Map a logical scene rect to physical window pixels for composition.
+    fn placement(r: Rect, scale_factor: f32) -> ExternalTexturePlacement {
         ExternalTexturePlacement::new([
-            r.0 as f32,
-            r.1 as f32,
-            (r.0 + r.2) as f32,
-            (r.1 + r.3) as f32,
+            r.0 as f32 * scale_factor,
+            r.1 as f32 * scale_factor,
+            (r.0 + r.2) as f32 * scale_factor,
+            (r.1 + r.3) as f32 * scale_factor,
         ])
     }
 
@@ -399,9 +437,11 @@ pub(crate) mod windowed {
             if self.window.is_some() {
                 return;
             }
-            let attributes = Window::default_attributes()
-                .with_title(self.config.title.clone())
-                .with_inner_size(PhysicalSize::new(self.width, self.height));
+            let attributes = crate::static_viewer::pelt_window_attributes(
+                self.window_title(),
+                self.width,
+                self.height,
+            );
             let window = match event_loop.create_window(attributes) {
                 Ok(window) => Arc::new(window),
                 Err(err) => {
@@ -413,6 +453,8 @@ pub(crate) mod windowed {
             let size = window.inner_size();
             self.width = size.width.max(1);
             self.height = size.height.max(1);
+            self.scale_factor = window.scale_factor() as f32;
+            window.set_title(&self.window_title());
             let options = NetrenderOptions {
                 tile_cache_size: Some(64),
                 enable_vello: true,
@@ -449,8 +491,29 @@ pub(crate) mod windowed {
                     }
                     self.request_redraw();
                 },
+                WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                    self.scale_factor = scale_factor as f32;
+                    if let Some(window) = self.window.as_ref() {
+                        let size = window.inner_size();
+                        self.width = size.width.max(1);
+                        self.height = size.height.max(1);
+                    }
+                    if let Some(host) = self.host.as_mut() {
+                        host.resize(self.width, self.height);
+                    }
+                    self.request_redraw();
+                },
                 WindowEvent::CursorMoved { position, .. } => {
-                    self.cursor = (position.x as f32, position.y as f32);
+                    self.cursor = (
+                        crate::static_viewer::logical_position(
+                            position.x as f32,
+                            self.scale_factor,
+                        ),
+                        crate::static_viewer::logical_position(
+                            position.y as f32,
+                            self.scale_factor,
+                        ),
+                    );
                 },
                 WindowEvent::ModifiersChanged(mods) => {
                     self.mods = modifiers_from_winit(mods.state());
@@ -499,6 +562,7 @@ pub(crate) mod windowed {
                     let (_, content_rect) = self.regions();
                     if in_rect(self.cursor, content_rect) {
                         let (dx, dy) = wheel_delta_from_winit(delta);
+                        let (dx, dy) = (dx / self.scale_factor, dy / self.scale_factor);
                         // The content renders into a sub-rect below the chrome strip;
                         // convert the cursor to content-local space (as the click path
                         // does) so the wheel scrolls the nested container under the

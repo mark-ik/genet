@@ -20,7 +20,8 @@ pub use render::{
     ExternalTextureDraw, RenderedFrame, TextCursor, caret_byte_at, caret_position_at,
     caret_screen_rect, caret_screen_rect_for_position, fragments_from_scripted_dom, hit_test_node,
     paint_list_from_scripted_dom, paint_list_from_session, scene_from_layout_dom,
-    scene_from_scripted_dom, scene_from_session, scene_from_session_dom, soft_wrap_caret_byte,
+    scene_from_scripted_dom, scene_from_session, scene_from_session_dom,
+    scene_from_session_dom_with_scrollbars, soft_wrap_caret_byte,
     translated_frame_from_session_dom,
 };
 
