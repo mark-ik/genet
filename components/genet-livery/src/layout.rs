@@ -7,10 +7,10 @@ use buckram::{
     FloatContextProvenance, FloatLineConstraints, FloatSide, FlowAxes, FlowLength, FlowLengthAuto,
     FormattingContextKind, Fragment as TreeFragment, FragmentDraftTree, FragmentId, FragmentTree,
     InternalTableRole, IntrinsicSizeCache, IntrinsicSizeKind, IntrinsicSizeQuery, IntrinsicSizes,
-    LayoutResult, LogicalAxis, LogicalRect, PhysicalRect, PhysicalSides, PhysicalSize,
-    PositioningScheme, TableCell, TableCellInput, TableCellLayoutInput, TableCellLayoutOutput,
-    TableCellLayoutPass, TableFragmentRole, TableFragments, TableGrid, TableGridInputs,
-    TableRowLayoutError, TableRowSpan, TableTrackInput,
+    LayoutResult, LogicalAxis, LogicalRect, PhysicalRect, PhysicalSide, PhysicalSides,
+    PhysicalSize, PositioningScheme, TableCell, TableCellInput, TableCellLayoutInput,
+    TableCellLayoutOutput, TableCellLayoutPass, TableFragmentRole, TableFragments, TableGrid,
+    TableGridInputs, TableRowLayoutError, TableRowSpan, TableTrackInput,
 };
 use layout_dom_api::{LayoutDom, LocalName, Namespace, NodeKind};
 use livery::{
@@ -1675,6 +1675,8 @@ where
                         children.push(child_node);
                     }
                     let mut taffy_style = to_taffy_style(&computed, font_size);
+                    let logical_wrapper =
+                        wrapper_uses_logical_block_axis(&mut taffy_style, self.boxes[box_id].flow);
                     if wrapper_needs_float_fallback(self.boxes, box_id, &taffy_style) {
                         taffy_style.float = TaffyFloat::Left;
                     }
@@ -1685,7 +1687,11 @@ where
                         taffy_style.size.width = width;
                     }
                     let block_style = to_block_style(self.boxes, box_id, &computed, font_size);
-                    let kind = algorithm_kind(&self.boxes[box_id], children.is_empty());
+                    let kind = if logical_wrapper {
+                        AlgorithmKind::Flex
+                    } else {
+                        algorithm_kind(&self.boxes[box_id], children.is_empty())
+                    };
                     let node = self.tree.new_with_children_and_block_style(
                         kind,
                         block_style,
@@ -2719,6 +2725,8 @@ where
                         children.push(child_node);
                     }
                     let mut taffy_style = to_taffy_style(&computed, font_size);
+                    let logical_wrapper =
+                        wrapper_uses_logical_block_axis(&mut taffy_style, self.boxes[box_id].flow);
                     if wrapper_needs_float_fallback(self.boxes, box_id, &taffy_style) {
                         taffy_style.float = TaffyFloat::Left;
                     }
@@ -2729,7 +2737,11 @@ where
                         taffy_style.size.width = width;
                     }
                     let block_style = to_block_style(self.boxes, box_id, &computed, font_size);
-                    let kind = algorithm_kind(&self.boxes[box_id], children.is_empty());
+                    let kind = if logical_wrapper {
+                        AlgorithmKind::Flex
+                    } else {
+                        algorithm_kind(&self.boxes[box_id], children.is_empty())
+                    };
                     let node = self.tree.new_with_children_and_block_style(
                         kind,
                         block_style,
@@ -3222,6 +3234,22 @@ where
         .filter(|child| !below(*child))
         .chain(children.iter().copied().filter(|child| below(*child)))
         .collect()
+}
+
+/// Taffy's block algorithm stacks physical top to bottom. A table wrapper is
+/// responsible for caption order, so a vertical writing mode must select the
+/// matching physical main axis before the generic backend sees its children.
+/// The grid remains a distinct child and still owns table tracks; this is not
+/// a table-row projection or a fragmentation rule.
+fn wrapper_uses_logical_block_axis(style: &mut Style, flow: FlowAxes) -> bool {
+    style.flex_direction = match flow.block_start() {
+        PhysicalSide::Top => return false,
+        PhysicalSide::Bottom => FlexDirection::ColumnReverse,
+        PhysicalSide::Left => FlexDirection::Row,
+        PhysicalSide::Right => FlexDirection::RowReverse,
+    };
+    style.display = Display::Flex;
+    true
 }
 
 /// The horizontal margins a caption carries into its contribution.
@@ -5500,6 +5528,40 @@ mod tests {
         // The side is placement only; the sizing it forces is the same.
         assert!((top_grid.width - bottom_grid.width).abs() < 0.5);
         assert!((top_wrapper.height - bottom_wrapper.height).abs() < 0.5);
+    }
+
+    /// B3: `caption-side` is the table wrapper's logical block-axis order.
+    /// In vertical-rl, block-start is physical right and block-end is left;
+    /// assigning caption placement to fragmentation would lose that wrapper
+    /// relationship before any fragmentainer exists.
+    #[test]
+    fn b3_vertical_caption_side_uses_the_wrappers_logical_block_axis() {
+        let html = "<div id=host><table><caption>x</caption>\
+                    <tr><td></td></tr></table></div>";
+        for (writing_mode, top_at_right) in [("vertical-rl", true), ("vertical-lr", false)] {
+            let top = format!(
+                "#host {{ width: 300px; height: 200px; }}\
+                 table {{ display: table; writing-mode: {writing_mode}; height: 100px; border-spacing: 0; }}\
+                 caption {{ display: table-caption; width: 40px; height: 20px; margin: 0; padding: 0; }}\
+                 tr {{ display: table-row; }} td {{ display: table-cell; padding: 0; width: 60px; height: 30px; }}"
+            );
+            let bottom = format!("{top} caption {{ caption-side: bottom; }}");
+            let top_caption = table_role_rects(html, &top, InternalTableRole::Caption)[0];
+            let top_grid = table_role_rects(html, &top, InternalTableRole::Grid)[0];
+            let bottom_caption = table_role_rects(html, &bottom, InternalTableRole::Caption)[0];
+            let bottom_grid = table_role_rects(html, &bottom, InternalTableRole::Grid)[0];
+
+            assert_eq!(
+                top_caption.x > top_grid.x,
+                top_at_right,
+                "{writing_mode} top caption must occupy its block-start: {top_caption:?} {top_grid:?}"
+            );
+            assert_eq!(
+                bottom_caption.x < bottom_grid.x,
+                top_at_right,
+                "{writing_mode} bottom caption must occupy its block-end: {bottom_caption:?} {bottom_grid:?}"
+            );
+        }
     }
 
     /// K4d6: a table row now has a fragment of its own.

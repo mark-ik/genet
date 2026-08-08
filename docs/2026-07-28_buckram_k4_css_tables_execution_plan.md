@@ -832,8 +832,13 @@ pre-existing Clippy 1.97.0 warnings recorded in the K4e1 receipt. Rustfmt and
 defers, which is the safety net rather than a gap with a known trigger.
 Multiple captions stack in source order within a side, but their block-axis
 margins are Taffy's ordinary block layout rather than anything caption-aware.
-Writing modes are untouched: `wrapper_children_in_caption_order` orders in the
-block axis of a horizontal flow, and a vertical-flow table's captions are K6's.
+
+**B3c update - 2026-08-08:** caption order now runs through the wrapper's
+logical block axis. Horizontal flow retains its block stack; vertical-rl uses
+right-to-left wrapper row flow and vertical-lr left-to-right row flow. The
+grid remains a child rather than a caption-aware grid row. This closes the old
+vertical-caption-to-K6 route without claiming vertical table-track layout or
+fragmentation.
 
 - **K4e4. CSSOM, hit testing, and removal.** Make wrapper/grid/caption
   selection explicit, and delete the remaining compatibility routes: the

@@ -270,6 +270,20 @@ baseline agrees with its inline text peer, rejecting the former 100px wrapper
 block-end substitution. This subreceipt leaves B3 vertical captions and the
 deferral census open.
 
+### B3c. Vertical-flow caption placement - 2026-08-08
+
+The wrapper now chooses its backend main axis from its own logical block axis:
+top-to-bottom remains ordinary block flow; vertical-rl uses right-to-left row
+flow; vertical-lr uses left-to-right row flow. The wrapper is the only new
+flex consumer. The grid remains its separate table child and retains ownership
+of tracks and cell geometry.
+
+The live fixture proves top and bottom captions on both `vertical-rl` and
+`vertical-lr`: each lands at the wrapper's logical block-start or block-end,
+rather than above or below the grid in physical y. This corrects the K4e3
+route to K6. It does not claim vertical table-track layout or fragmentation;
+those remain separate table-core and K6 work. The B3 census is still open.
+
 ## B4. Collapsed sizing and overflow
 
 Execute K4g4. Feed B2 metrics into the accepted K4c and K4d algorithms. Do
