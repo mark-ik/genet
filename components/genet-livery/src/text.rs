@@ -730,10 +730,51 @@ impl TextSystem {
             } else {
                 0.0
             };
+            // Parley positions an atomic inline box from its block-start and
+            // otherwise gives a line containing only that atom its
+            // block-end baseline. An inline table instead exports its first
+            // table-row baseline. Choose that baseline before positioning the
+            // atom: translating the atom afterwards would preserve Parley's
+            // old bottom baseline and introduce a false leading gap above a
+            // table-only line.
+            let atom_baseline = line
+                .items()
+                .filter_map(|item| {
+                    let PositionedLayoutItem::InlineBox(positioned) = item else {
+                        return None;
+                    };
+                    let inline_box = usize::try_from(positioned.id)
+                        .ok()
+                        .and_then(|index| inline_boxes.get(index))?;
+                    if !inline_box.exported_baseline
+                        || !matches!(
+                            inline_box.vertical_align,
+                            VerticalAlign::Baseline
+                                | VerticalAlign::Sub
+                                | VerticalAlign::Super
+                                | VerticalAlign::Length(_)
+                        )
+                    {
+                        return None;
+                    }
+                    Some(positioned.y + inline_box.baseline)
+                })
+                .reduce(f32::max);
+            // `positioned_glyphs` advances Parley's positioned-run iterator.
+            // Do not inspect it for ordinary lines: only a line that actually
+            // contains an exported table baseline needs to distinguish a
+            // table-only line from one with text peers.
+            let line_has_glyph = atom_baseline.is_some()
+                && line.items().any(|item| {
+                    matches!(item, PositionedLayoutItem::GlyphRun(run) if run.positioned_glyphs().next().is_some())
+                });
             let mut metrics = source_metrics;
             metrics.line_height = line_box_height;
             metrics.block_max_coord = metrics.block_min_coord + metrics.line_height;
-            metrics.baseline += extra_leading * 0.5;
+            metrics.baseline = atom_baseline
+                .filter(|_| !line_has_glyph)
+                .unwrap_or(metrics.baseline)
+                + extra_leading * 0.5;
             let strut_height = super::layout::line_height_px(
                 &root_style.line_height,
                 super::paint::used_font_size(root_style),
@@ -885,13 +926,14 @@ impl TextSystem {
                         let vertical_shift = if inline_box.edge {
                             0.0
                         } else {
-                            let baseline_shift = matches!(
-                                inline_box.vertical_align,
-                                VerticalAlign::Baseline
-                                    | VerticalAlign::Sub
-                                    | VerticalAlign::Super
-                                    | VerticalAlign::Length(_)
-                            )
+                            let baseline_shift = (inline_box.exported_baseline
+                                && matches!(
+                                    inline_box.vertical_align,
+                                    VerticalAlign::Baseline
+                                        | VerticalAlign::Sub
+                                        | VerticalAlign::Super
+                                        | VerticalAlign::Length(_)
+                                ))
                             .then_some(metrics.baseline - (base_y + inline_box.baseline))
                             .unwrap_or(0.0);
                             baseline_shift
@@ -1643,6 +1685,9 @@ struct InlineAtom<Id> {
     /// First baseline from this atom's margin-box block-start. Non-table
     /// atomic boxes keep their prior block-end fallback here.
     baseline: f32,
+    /// True only when a layout producer supplied the baseline above. The
+    /// ordinary block-end fallback must not alter a line's own metrics.
+    exported_baseline: bool,
     margin_left: f32,
     margin_top: f32,
     edge: bool,
@@ -1849,11 +1894,11 @@ where
         let font_size = super::paint::used_font_size(style);
         let (line_width, line_box_height, margin_left, margin_top) =
             inline_margin_box(style, fragment, font_size, self.percentage_basis);
-        let baseline = self
+        let exported_baseline = self
             .fragments
             .atomic_box_baseline(box_id)
-            .filter(|baseline| baseline.is_finite() && *baseline >= 0.0)
-            .map_or(line_box_height, |baseline| margin_top + baseline);
+            .filter(|baseline| baseline.is_finite() && *baseline >= 0.0);
+        let baseline = exported_baseline.map_or(line_box_height, |baseline| margin_top + baseline);
         self.inline_boxes.push(InlineAtom {
             source: box_id,
             owners: self.owners.clone(),
@@ -1862,6 +1907,7 @@ where
             line_width,
             line_box_height,
             baseline,
+            exported_baseline: exported_baseline.is_some(),
             margin_left,
             margin_top,
             edge: false,
@@ -1890,6 +1936,7 @@ where
                     line_width: width,
                     line_box_height: 0.0,
                     baseline: 0.0,
+                    exported_baseline: false,
                     margin_left: 0.0,
                     margin_top: 0.0,
                     edge: true,
@@ -1930,6 +1977,7 @@ where
             line_width: 0.0,
             line_box_height: height,
             baseline: height,
+            exported_baseline: false,
             margin_left: 0.0,
             margin_top: 0.0,
             edge: false,
@@ -1951,6 +1999,7 @@ where
             line_width: 0.0,
             line_box_height: super::layout::line_height_px(&style.line_height, font_size),
             baseline: super::layout::line_height_px(&style.line_height, font_size),
+            exported_baseline: false,
             margin_left: 0.0,
             margin_top: 0.0,
             edge: false,
@@ -2026,6 +2075,7 @@ where
                             line_width,
                             line_box_height,
                             baseline: line_box_height,
+                            exported_baseline: false,
                             margin_left,
                             margin_top,
                             edge: false,
@@ -2053,6 +2103,7 @@ where
                             line_width,
                             line_box_height,
                             baseline: line_box_height,
+                            exported_baseline: false,
                             margin_left,
                             margin_top,
                             edge: false,
@@ -2119,6 +2170,7 @@ where
                     line_width: width,
                     line_box_height: 0.0,
                     baseline: 0.0,
+                    exported_baseline: false,
                     margin_left: 0.0,
                     margin_top: 0.0,
                     edge: true,
@@ -2164,6 +2216,7 @@ where
             line_width: 0.0,
             line_box_height: height,
             baseline: height,
+            exported_baseline: false,
             margin_left: 0.0,
             margin_top: 0.0,
             edge: false,
@@ -2185,6 +2238,7 @@ where
             line_width: 0.0,
             line_box_height: super::layout::line_height_px(&style.line_height, font_size),
             baseline: super::layout::line_height_px(&style.line_height, font_size),
+            exported_baseline: false,
             margin_left: 0.0,
             margin_top: 0.0,
             edge: false,

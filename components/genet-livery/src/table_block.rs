@@ -14,12 +14,12 @@
 use std::hash::Hash;
 
 use buckram::{
-    AlgorithmKind, AlgorithmLayout, AlgorithmNodeId, AlgorithmTree, BoxId, CellBlockOffsets,
-    FlowAxes, TableBlockBorderMetrics, TableBlockConstraint, TableBlockDeferral, TableBlockLayout,
-    TableBlockSizingInput, TableBoxSizing, TableCellBlockStyle, TableCellFormatter,
-    TableCellLayoutInput, TableCellLayoutOutput, TableGrid, TableInlineSizingError,
-    TableInlineSizingResult, TableRowLayoutError, TableSeparatedBlockMetrics, TableTrackVisibility,
-    layout_table_block,
+    AlgorithmKind, AlgorithmLayout, AlgorithmNodeId, AlgorithmTree, BoxId, BoxOrigin,
+    CellBlockOffsets, FlowAxes, InternalTableRole, TableBlockBorderMetrics, TableBlockConstraint,
+    TableBlockDeferral, TableBlockLayout, TableBlockSizingInput, TableBoxSizing,
+    TableCellBlockStyle, TableCellFormatter, TableCellLayoutInput, TableCellLayoutOutput,
+    TableGrid, TableInlineSizingError, TableInlineSizingResult, TableRowLayoutError,
+    TableSeparatedBlockMetrics, TableTrackVisibility, layout_table_block,
 };
 use livery::{
     ComputedValues,
@@ -212,9 +212,26 @@ where
 
     let mut row_groups = Vec::with_capacity(grid.row_groups.len());
     for group in &grid.row_groups {
-        // A K4b row group always has its generated source box. Keep the
-        // lowering explicit: inventing `auto` for a missing style would turn
-        // an adapter fault into silent geometry.
+        // K4b records direct rows as one-row visual groups so spans and
+        // ordering stay uniform. They have no row-group box of their own:
+        // reusing the row's `height` as a group constraint would make that
+        // height participate twice. Only an authored row-group element owns
+        // the CSS `height` that B3 carries to the row algorithm.
+        if !matches!(boxes[group.source].origin, BoxOrigin::Element(_))
+            || !matches!(
+                boxes[group.source].display.internal_table,
+                Some(
+                    InternalTableRole::RowGroup
+                        | InternalTableRole::HeaderGroup
+                        | InternalTableRole::FooterGroup
+                )
+            )
+        {
+            row_groups.push(TableBlockConstraint::Auto);
+            continue;
+        }
+        // An authored group must have an author style. Inventing `auto` for a
+        // missing style would turn an adapter fault into silent geometry.
         let Some(style) = style_of(group.source) else {
             ledger.skip(table, TableBlockSkip::IncompleteRowGroup);
             return None;

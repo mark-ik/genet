@@ -26,7 +26,10 @@ use genet_layout::{
     StylePlane, emit_paint_list_with_layouts, inline_stylesheets, layout, linked_stylesheets,
     run_cascade,
 };
-use genet_livery::{Device as LiveryDevice, LiveryDocument, StyleSet as LiveryStyleSet};
+use genet_livery::{
+    Device as LiveryDevice, LiveryDocument, StyleSet as LiveryStyleSet,
+    table_shadow::TableShadowLedger,
+};
 use genet_static_dom::StaticDocument;
 use layout_dom_api::LayoutDom;
 use netrender::{NetrenderOptions, boot, create_netrender_instance};
@@ -43,6 +46,16 @@ use paint_types::units::{DeviceIntRect, LayoutSize};
 use servo_base::id::{PainterId, PipelineNamespace, PipelineNamespaceId, WebViewId};
 
 pub type Image = image::ImageBuffer<image::Rgba<u8>, Vec<u8>>;
+
+/// The visual result and the exact table dispatch record that produced it.
+///
+/// Reftest comparisons consume only [`Self::image`]. The ledger is an
+/// optional accounting surface for the table lane: it distinguishes a painted
+/// result supplied by Buckram from one that remained on an explicit fallback.
+pub struct LiveryRender {
+    pub image: Image,
+    pub table_ledger: TableShadowLedger,
+}
 
 /// A booted renderer reused across a subset's tests.
 pub struct Renderer {
@@ -157,7 +170,7 @@ impl Renderer {
         width: u32,
         height: u32,
         is_xml: bool,
-    ) -> Image {
+    ) -> LiveryRender {
         let pipeline_id = self.next_pipeline_id();
         let document = if is_xml {
             StaticDocument::parse_xml(html)
@@ -191,6 +204,7 @@ impl Renderer {
         let list = session
             .frame(width, height)
             .expect("Livery WPT reftest layout");
+        let table_ledger = session.table_shadow_ledger().cloned().unwrap_or_default();
         let envelope = isolate_image_keys(
             with_reftest_backdrop(PaintEnvelope::from_list(&list), width, height),
             pipeline_id,
@@ -222,7 +236,10 @@ impl Renderer {
             pipeline_id.into(),
             PipelineExitSource::default(),
         )]);
-        image
+        LiveryRender {
+            image,
+            table_ledger,
+        }
     }
 }
 

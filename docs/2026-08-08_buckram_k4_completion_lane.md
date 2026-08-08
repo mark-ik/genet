@@ -284,6 +284,57 @@ rather than above or below the grid in physical y. This corrects the K4e3
 route to K6. It does not claim vertical table-track layout or fragmentation;
 those remain separate table-core and K6 work. The B3 census is still open.
 
+### B3d. Live dispatch census and baseline closure - 2026-08-08
+
+`LiveryDocument` now exposes the completed frame's table-shadow ledger and
+`genet-wpt reftest --renderer livery --write-table-ledger <path>` writes its
+per-rendered-document counters. The WPT runner retains a ledger for both the
+test and reference, so a reftest cannot hide a table route exercised only by
+its reference. The proof is generated outside Git at
+`testing/genet/wpt-ledger/2026-08-08_buckram_b3`.
+
+The census covers all 784 rendered documents in `css/css-tables` and
+`css/CSS2/tables`. Buckram assigned 524 inline tables, verified 476, and
+honored all 476; it laid out 524 block axes, verified 477, and agreed with all
+477. There are no inline or block divergences. The remaining outcomes are
+explicit:
+
+| outcome | live count | disposition |
+|---|---:|---|
+| `CollapsedBorderMetricsPendingK4g` | 215 | B4 consumes the already-recorded metrics. |
+| `PercentagePaddingPendingBasis` | 3 | CSS table used-size phase must supply the definite table-width basis after intrinsic measure, never a bridge-selected zero. |
+| `FixedLayoutWithoutColumns` | 1 | Existing K4c input-validation error, not a named deferral. |
+| `InvalidConstraint` | 1 | Existing K4c lowering error, not a named deferral. |
+| `CaptionMinPendingK4e` | 0 | Closed by K4e's measured-caption path. |
+| `TrackVisibilityPendingK4f` | 0 | Closed as a live sizing blocker; B5 retains its paint/clipping work. |
+| `GridSizeMismatch` | 0 | Closed by the K4c empty-table repair. |
+
+The last two errors stay visible as errors rather than being relabelled as
+support. They are not B3 blockers or later-gate deferrals: K4c owns their
+invalid input/lowering boundary. `getClientRects()` remains the general
+multi-fragment API gap assigned to K6; B3 does not manufacture a table-only
+DOM API.
+
+The WPT run found two real baseline regressions before this receipt closed.
+First, B3b's post-placement baseline correction affected ordinary
+baseline-aligned atomic boxes. It now applies only when an inline table has
+actually exported K4d5's first baseline. Second, direct rows and anonymous
+row groups are topology groups, not authored `tbody`/`thead`/`tfoot` boxes;
+their height must remain `auto` rather than reusing an owner height as a
+second group constraint. `caption-side-applies-to-007.xht` and
+`containing-block-029.xht` both render at a zero-pixel diff after those
+corrections. The focused Livery receipts cover the text-peer baseline,
+table-only baseline, vertical caption axis, explicit row-group distribution,
+and an auto group that does not repeat the table height.
+
+The refreshed maps are `62/68/198` for `css/css-tables`, `142/120/877` for
+`css/CSS2/tables`, and `242/871/255` for `css/css-writing-modes`
+(pass/fail/skip, zero errors). `css/css-tables` is unchanged from K4f.
+`css/CSS2/tables` has twelve `needs-script` to `pass` changes from the WPT
+runner's post-K4f classification update, not table geometry. The final
+cross-lane comparison is against the B2 source under the main `Cargo.lock`;
+every one of its nine map scopes remained at `unexpected=0`.
+
 ## B4. Collapsed sizing and overflow
 
 Execute K4g4. Feed B2 metrics into the accepted K4c and K4d algorithms. Do

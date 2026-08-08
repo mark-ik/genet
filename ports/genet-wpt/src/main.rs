@@ -21,6 +21,10 @@ use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
+use genet_livery::{
+    table_block::TableBlockSkip,
+    table_shadow::{TableShadowLedger, TableShadowSkip},
+};
 use genet_static_dom::StaticDocument;
 use layout_dom_api::{LayoutDom, LocalName};
 use script_engine_api::ScriptEngine;
@@ -426,6 +430,9 @@ struct Args {
     expectations: Option<String>,
     /// Write current per-test statuses to a JSON expectations file.
     write_expectations: Option<String>,
+    /// Write aggregate Buckram table-dispatch counters for the documents the
+    /// Livery reftest renderer actually laid out.
+    write_table_ledger: Option<PathBuf>,
     /// Exact reftest result files joined by the absolute conformance command.
     reftest_results: Vec<PathBuf>,
     /// Exact testharness result files joined by the absolute conformance command.
@@ -454,6 +461,7 @@ fn parse_args() -> Result<Args, String> {
     let mut walk_discovery = false;
     let mut expectations = None;
     let mut write_expectations = None;
+    let mut write_table_ledger = None;
     let mut reftest_results = Vec::new();
     let mut testharness_results = Vec::new();
     let mut write_conformance = None;
@@ -496,6 +504,11 @@ fn parse_args() -> Result<Args, String> {
             },
             "--write-expectations" => {
                 write_expectations = Some(it.next().ok_or("--write-expectations needs a path")?);
+            },
+            "--write-table-ledger" => {
+                write_table_ledger = Some(PathBuf::from(
+                    it.next().ok_or("--write-table-ledger needs a path")?,
+                ));
             },
             "--reftest-results" => {
                 reftest_results.push(PathBuf::from(
@@ -543,6 +556,7 @@ fn parse_args() -> Result<Args, String> {
         walk_discovery,
         expectations,
         write_expectations,
+        write_table_ledger,
         reftest_results,
         testharness_results,
         write_conformance,
@@ -575,6 +589,8 @@ Options:
     --expectations <f>   fail if testharness results differ from JSON expectations
     --write-expectations <f>
                          write current testharness results as JSON expectations
+    --write-table-ledger <f>
+                         write Livery reftest table-dispatch counters
     --reftest-results <f>
                          add an exact reftest result file to `conformance`
     --testharness-results <f>
@@ -676,6 +692,13 @@ fn real_main() {
         eprintln!(
             "--expectations / --write-expectations are supported for `testharness` and `reftest`"
         );
+        std::process::exit(2);
+    }
+
+    if args.write_table_ledger.is_some()
+        && !(args.command == "reftest" && args.renderer == ReftestRenderer::Livery)
+    {
+        eprintln!("--write-table-ledger requires `reftest --renderer livery`");
         std::process::exit(2);
     }
 
@@ -2602,6 +2625,119 @@ fn resolve_ref(test_path: &Path, href: &str, tests_root: &Path) -> Option<PathBu
     })
 }
 
+/// Aggregate the exact dispatch records from documents the Livery reftest
+/// renderer completed. This is deliberately separate from reftest pass/fail:
+/// a fallback can still paint the expected pixels, so pixels cannot stand in
+/// for ownership accounting.
+#[derive(Default)]
+struct TableLedgerSummary {
+    documents: usize,
+    inline_assigned: usize,
+    inline_verified: usize,
+    inline_honored: usize,
+    collapsed_metrics: usize,
+    inline_divergences: usize,
+    inline_skips: BTreeMap<String, usize>,
+    block_laid_out: usize,
+    block_relaid_out: usize,
+    block_verified: usize,
+    block_agreed: usize,
+    block_divergences: usize,
+    block_skips: BTreeMap<String, usize>,
+}
+
+impl TableLedgerSummary {
+    fn record(&mut self, ledger: &TableShadowLedger) {
+        self.documents += 1;
+        self.inline_assigned += ledger.assigned;
+        self.inline_verified += ledger.verified;
+        self.inline_honored += ledger.honored;
+        self.collapsed_metrics += ledger.collapsed_metrics;
+        self.inline_divergences += ledger.divergences.len();
+        for (_, skip) in &ledger.skipped {
+            *self
+                .inline_skips
+                .entry(shadow_skip_label(skip))
+                .or_default() += 1;
+        }
+
+        let block = &ledger.block;
+        self.block_laid_out += block.laid_out;
+        self.block_relaid_out += block.relaid_out;
+        self.block_verified += block.verified;
+        self.block_agreed += block.agreed;
+        self.block_divergences += block.divergences.len();
+        for (_, skip) in &block.skipped {
+            *self.block_skips.entry(block_skip_label(skip)).or_default() += 1;
+        }
+    }
+}
+
+fn variant_label(value: &impl std::fmt::Debug) -> String {
+    let debug = format!("{value:?}");
+    debug
+        .split(['(', '{'])
+        .next()
+        .unwrap_or(&debug)
+        .trim_end()
+        .to_owned()
+}
+
+fn shadow_skip_label(skip: &TableShadowSkip) -> String {
+    match skip {
+        TableShadowSkip::Deferred(deferral) => format!("Deferred::{deferral:?}"),
+        TableShadowSkip::AutomaticIncompleteCells => "AutomaticIncompleteCells".to_owned(),
+        TableShadowSkip::AutomaticIndefinite(reason) => {
+            format!("AutomaticIndefinite::{}", variant_label(reason))
+        },
+        TableShadowSkip::CollapsedBorder(error) => {
+            format!("CollapsedBorder::{}", variant_label(error))
+        },
+        TableShadowSkip::Error(error) => format!("Error::{}", variant_label(error)),
+    }
+}
+
+fn block_skip_label(skip: &TableBlockSkip) -> String {
+    match skip {
+        TableBlockSkip::Deferred(deferral) => format!("Deferred::{deferral:?}"),
+        TableBlockSkip::DeferredInLowering(error) => {
+            format!("DeferredInLowering::{}", variant_label(error))
+        },
+        TableBlockSkip::IncompleteCells => "IncompleteCells".to_owned(),
+        TableBlockSkip::IncompleteRowGroup => "IncompleteRowGroup".to_owned(),
+        TableBlockSkip::Error(error) => format!("Error::{}", variant_label(error)),
+    }
+}
+
+fn write_table_ledger(path: &Path, summary: &TableLedgerSummary) -> Result<(), std::io::Error> {
+    let mut out = String::from("# genet-wpt Livery table dispatch census\n");
+    out.push_str(&format!("rendered-documents: {}\n\n", summary.documents));
+    out.push_str("## inline\n");
+    out.push_str(&format!("assigned: {}\n", summary.inline_assigned));
+    out.push_str(&format!("verified: {}\n", summary.inline_verified));
+    out.push_str(&format!("honored: {}\n", summary.inline_honored));
+    out.push_str(&format!(
+        "collapsed-metrics: {}\n",
+        summary.collapsed_metrics
+    ));
+    out.push_str(&format!("divergences: {}\n", summary.inline_divergences));
+    out.push_str("skips:\n");
+    for (label, count) in &summary.inline_skips {
+        out.push_str(&format!("  {label}: {count}\n"));
+    }
+    out.push_str("\n## block\n");
+    out.push_str(&format!("laid-out: {}\n", summary.block_laid_out));
+    out.push_str(&format!("relaid-out: {}\n", summary.block_relaid_out));
+    out.push_str(&format!("verified: {}\n", summary.block_verified));
+    out.push_str(&format!("agreed: {}\n", summary.block_agreed));
+    out.push_str(&format!("divergences: {}\n", summary.block_divergences));
+    out.push_str("skips:\n");
+    for (label, count) in &summary.block_skips {
+        out.push_str(&format!("  {label}: {count}\n"));
+    }
+    fs::write(path, out)
+}
+
 fn reftest(tests: &[TestCase], args: &Args) {
     let renderer = match render::Renderer::boot() {
         Ok(r) => r,
@@ -2617,6 +2753,10 @@ fn reftest(tests: &[TestCase], args: &Args) {
 
     let (mut passed, mut failed, mut skipped, mut errored) = (0, 0, 0, 0);
     let mut buckets: HashMap<&'static str, u64> = HashMap::new();
+    let mut table_ledger = args
+        .write_table_ledger
+        .as_ref()
+        .map(|_| TableLedgerSummary::default());
     // Per-test coarse status for the optional expectations baseline (mirrors the
     // testharness lane's `ActualRecord`s), fed to `finish_expectations` below.
     let mut actuals: Vec<ActualRecord> = Vec::new();
@@ -2682,18 +2822,21 @@ fn reftest(tests: &[TestCase], args: &Args) {
         let ref_xml = is_xml_path(&ref_path);
         let rendered = panic::catch_unwind(AssertUnwindSafe(|| {
             let render = |html: &str, dir: &Path, xml: bool| match args.renderer {
-                ReftestRenderer::Stylo => {
-                    renderer.render_html(html, dir, tests_root, REFTEST_W, REFTEST_H, xml)
-                },
+                ReftestRenderer::Stylo => (
+                    renderer.render_html(html, dir, tests_root, REFTEST_W, REFTEST_H, xml),
+                    None,
+                ),
                 ReftestRenderer::Livery => {
-                    renderer.render_html_livery(html, dir, tests_root, REFTEST_W, REFTEST_H, xml)
+                    let rendered = renderer
+                        .render_html_livery(html, dir, tests_root, REFTEST_W, REFTEST_H, xml);
+                    (rendered.image, Some(rendered.table_ledger))
                 },
             };
             let t = render(&test_html, test_dir, test_xml);
             let r = render(&ref_html, ref_dir, ref_xml);
             (t, r)
         }));
-        let (test_img, ref_img) = match rendered {
+        let ((test_img, test_ledger), (ref_img, ref_ledger)) = match rendered {
             Ok(pair) => pair,
             Err(_) => {
                 failed += 1;
@@ -2702,6 +2845,14 @@ fn reftest(tests: &[TestCase], args: &Args) {
                 continue;
             },
         };
+        if let Some(summary) = &mut table_ledger {
+            if let Some(ledger) = test_ledger.as_ref() {
+                summary.record(ledger);
+            }
+            if let Some(ledger) = ref_ledger.as_ref() {
+                summary.record(ledger);
+            }
+        }
 
         let matches = images_match(&test_img, &ref_img, fuzzy);
         let pass = match kind {
@@ -2772,6 +2923,12 @@ fn reftest(tests: &[TestCase], args: &Args) {
         );
         println!("  ({legend})");
     }
+    if let (Some(path), Some(summary)) = (&args.write_table_ledger, &table_ledger)
+        && let Err(error) = write_table_ledger(path, summary)
+    {
+        eprintln!("cannot write table ledger {}: {error}", path.display());
+        std::process::exit(1);
+    }
     // Optional expectations baseline (write or check). When a baseline is
     // checked, its `unexpected=0` verdict owns the exit code; the raw
     // failed/errored exit only applies to un-guarded runs.
@@ -2828,7 +2985,9 @@ fn dump(tests: &[TestCase], args: &Args) {
                 renderer.render_html(html, dir, tests_root, REFTEST_W, REFTEST_H, xml)
             },
             ReftestRenderer::Livery => {
-                renderer.render_html_livery(html, dir, tests_root, REFTEST_W, REFTEST_H, xml)
+                renderer
+                    .render_html_livery(html, dir, tests_root, REFTEST_W, REFTEST_H, xml)
+                    .image
             },
         };
         let t = render(&test_html, test_dir, is_xml_path(&test.path));

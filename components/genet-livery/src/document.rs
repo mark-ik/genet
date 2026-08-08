@@ -164,6 +164,18 @@ where
         self.style_session.last_stats()
     }
 
+    /// The table dispatch record from the most recent completed layout.
+    ///
+    /// A retained document has no layout before its first frame, and an
+    /// invalidation deliberately clears the prior record with the rest of its
+    /// derived state. Hosts can therefore observe a ledger only for the exact
+    /// frame they rendered.
+    pub fn table_shadow_ledger(&self) -> Option<&crate::table_shadow::TableShadowLedger> {
+        self.layout
+            .as_ref()
+            .map(|layout| layout.fragments.table_shadow_ledger())
+    }
+
     /// Supply host-resolved image bytes for a non-data URL. The CSS engine
     /// still owns decoding and paint-key allocation; the host owns URL
     /// resolution and fetching.

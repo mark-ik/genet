@@ -4999,6 +4999,34 @@ mod tests {
         );
     }
 
+    /// B3: a table's own definite height distributes across its rows once;
+    /// an auto row group must not receive that height as a second constraint.
+    /// This is the table geometry used by CSS2 containing-block-029's
+    /// reference, kept here as a direct layout receipt.
+    #[test]
+    fn b3_auto_row_group_does_not_repeat_the_table_height() {
+        let html = "<table><col id=first><col id=second><tbody><tr><td></td><td></td></tr>\
+                    <tr id=last><td></td><td id=orange>.</td></tr></tbody></table>";
+        let css = "table { border-spacing: 0; height: 96px; table-layout: fixed; width: 96px; }\
+                   col#first { width: 72px; } col#second { width: 24px; }\
+                   td { background-color: blue; padding: 0; }\
+                   td#orange { background-color: orange; vertical-align: top; }\
+                   tr { height: 72px; } tr#last { height: 24px; }";
+        let grid = table_role_rects(html, css, InternalTableRole::Grid)[0];
+        let rows = table_role_rects(html, css, InternalTableRole::Row);
+        let cells = table_role_rects(html, css, InternalTableRole::Cell);
+        assert_eq!(rows.len(), 2, "rows: {rows:?}");
+        assert_eq!(cells.len(), 4, "cells: {cells:?}");
+        assert!((grid.height - 96.0).abs() < 0.5, "grid: {grid:?}");
+        assert!((rows[0].height - 72.0).abs() < 0.5, "rows: {rows:?}");
+        assert!((rows[1].height - 24.0).abs() < 0.5, "rows: {rows:?}");
+        assert!((cells[3].height - 24.0).abs() < 0.5, "cells: {cells:?}");
+        assert!(
+            (rows[0].height + rows[1].height - grid.height).abs() < 0.5,
+            "grid: {grid:?}; rows: {rows:?}"
+        );
+    }
+
     /// Lay out one document and return every table-role box's rectangle.
     fn table_boxes(html: &str, css: &str) -> Vec<(InternalTableRole, PhysicalRect)> {
         let dom = StaticDocument::parse(html);
