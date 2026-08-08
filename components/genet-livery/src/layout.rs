@@ -55,7 +55,7 @@ use crate::{
         LIVE_ROOT_FONT_SIZE, PendingTable, TableShadowLedger, buckram_table_columns,
         verify_assigned_columns,
     },
-    table_sizing::collapsed_table_border_grid,
+    table_sizing::collapsed_table_borders,
     table_wrapper::{grid_style, wrapper_style},
     text::{InlineLayout, InlineRequest, TextFrame},
 };
@@ -1552,6 +1552,7 @@ where
                         captions: Vec::new(),
                         grid,
                         collapsed_borders: None,
+                        collapsed_border_metrics: None,
                         cell_nodes,
                         font_size,
                         containing_width: containing_size.0,
@@ -1800,8 +1801,9 @@ where
             let Some(computed) = self.styles.get(pending.node).cloned() else {
                 continue;
             };
+            pending.collapsed_border_metrics = None;
             pending.collapsed_borders = if computed.border_collapse == BorderCollapse::Collapse {
-                match collapsed_table_border_grid(
+                match collapsed_table_borders(
                     self.boxes,
                     self.styles,
                     &pending.grid,
@@ -1809,7 +1811,11 @@ where
                     &computed,
                     pending.font_size,
                 ) {
-                    Ok(winners) => Some(winners),
+                    Ok(borders) => {
+                        pending.collapsed_border_metrics = Some(borders.metrics);
+                        self.table_shadow.collapsed_metrics += 1;
+                        Some(borders.winners)
+                    },
                     Err(error) => {
                         self.table_shadow.skip(
                             pending.table,
@@ -2233,8 +2239,9 @@ where
             let Some(computed) = self.styles.get(pending.node).cloned() else {
                 continue;
             };
+            pending.collapsed_border_metrics = None;
             pending.collapsed_borders = if computed.border_collapse == BorderCollapse::Collapse {
-                match collapsed_table_border_grid(
+                match collapsed_table_borders(
                     self.boxes,
                     self.styles,
                     &pending.grid,
@@ -2242,7 +2249,11 @@ where
                     &computed,
                     pending.font_size,
                 ) {
-                    Ok(winners) => Some(winners),
+                    Ok(borders) => {
+                        pending.collapsed_border_metrics = Some(borders.metrics);
+                        self.table_shadow.collapsed_metrics += 1;
+                        Some(borders.winners)
+                    },
                     Err(error) => {
                         self.table_shadow.skip(
                             pending.table,
@@ -2542,6 +2553,7 @@ where
                         captions: Vec::new(),
                         grid,
                         collapsed_borders: None,
+                        collapsed_border_metrics: None,
                         cell_nodes: std::mem::take(&mut table_cell_nodes),
                         font_size,
                         containing_width: containing_size.0,
@@ -4620,6 +4632,30 @@ mod tests {
             layout.table_bridge_counts(),
             TableBridgeCounts { grids: 1 },
             "the table's Grid/Flex compatibility route is counted once at its grid"
+        );
+    }
+
+    #[test]
+    fn k4g3_lowers_metrics_before_the_k4g4_sizing_deferral() {
+        let dom = StaticDocument::parse(
+            "<table><tbody><tr><td>one</td><td>two</td></tr></tbody></table>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&["table { display: table; border-collapse: collapse; } \
+                 tbody { display: table-row-group; } tr { display: table-row; } \
+                 td { display: table-cell; border: 5px solid; padding: 0; }"]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+
+        let layout = layout(&dom, &styles, 320.0, 240.0).expect("layout");
+        let ledger = layout.table_shadow_ledger();
+        assert_eq!(ledger.collapsed_metrics, 1, "{ledger:?}");
+        assert_eq!(
+            ledger.deferral_count(buckram::TableDeferral::CollapsedBorderMetricsPendingK4g),
+            1,
+            "B2 must retain metrics without making K4c consume them: {ledger:?}"
         );
     }
 

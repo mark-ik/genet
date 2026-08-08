@@ -181,6 +181,20 @@ those winners. CSS-pixel half widths remain unsnapped.
 records the selected spanning-side rule and any stable split retained as a
 named interoperability deferral.
 
+**2026-08-08 receipt:** B2 retains each atomic winner per logical cell side
+and projects only the scalar maximum half width, unsnapped, as
+`MaximumHalfPerCellSide`. Chrome 151.0.0.0 selected that rule in all 18
+focused spanning-side cases; Firefox 153.0 selected its order-dependent
+recurrence in all 18, retained as the explicit
+`FirefoxOrderDependentSpanningSide` deferral. The metrics carry exact winner
+provenance, distinguish zero-width `hidden` suppression from all-`none`, and
+separate outer-edge from overflow projections. Livery stores them beside the
+winner grid and proves lowering while the one K4g4 sizing deferral remains;
+there is no B2 sizing, fragment, or paint claim. Buckram (183), Livery (170
+passed, 5 existing C2/C3 deferrals), and all `genet-livery` targets (197)
+pass; both strict Clippy commands pass. The release WPT build passed in 3m02
+as a compile receipt only.
+
 ## B3. Stranded table geometry
 
 Close the model work named by accepted K4d and K4e receipts before rerunning

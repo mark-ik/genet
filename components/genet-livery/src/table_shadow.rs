@@ -16,14 +16,14 @@
 use std::hash::Hash;
 
 use buckram::{
-    AlgorithmNodeId, BoxId, CaptionMinContribution, IntrinsicSizes, ResolvedTableBorderGrid,
-    TableAutomaticColumnMeasureInput, TableAutomaticInlineSizingIndefinite,
-    TableAutomaticInlineSizingInput, TableAutomaticInlineSizingOutcome, TableBlockLayout,
-    TableCellInlineMeasure, TableDeferral, TableFixedInlineSizingInput,
-    TableFixedInlineSizingOutcome, TableGrid, TableInlineBorderMetrics, TableInlineSizingError,
-    TableInlineSizingResult, TableSeparatedBorderMetrics, TableTrackVisibility,
-    TableTrackVisibilityState, measure_automatic_columns, size_automatic_table_inline,
-    size_fixed_table_inline,
+    AlgorithmNodeId, BoxId, CaptionMinContribution, CollapsedBorderMetrics, IntrinsicSizes,
+    ResolvedTableBorderGrid, TableAutomaticColumnMeasureInput,
+    TableAutomaticInlineSizingIndefinite, TableAutomaticInlineSizingInput,
+    TableAutomaticInlineSizingOutcome, TableBlockLayout, TableCellInlineMeasure, TableDeferral,
+    TableFixedInlineSizingInput, TableFixedInlineSizingOutcome, TableGrid,
+    TableInlineBorderMetrics, TableInlineSizingError, TableInlineSizingResult,
+    TableSeparatedBorderMetrics, TableTrackVisibility, TableTrackVisibilityState,
+    measure_automatic_columns, size_automatic_table_inline, size_fixed_table_inline,
 };
 use layout_dom_api::LayoutDom;
 use livery::{
@@ -82,6 +82,9 @@ pub enum TableShadowSkip {
 /// Deferral counters and the honoring-verification record for one layout.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TableShadowLedger {
+    /// Collapsed tables whose K4g3 winners and metrics were lowered before
+    /// the still-explicit K4g4 sizing deferral.
+    pub collapsed_metrics: usize,
     /// Tables whose columns Buckram assigned.
     pub assigned: usize,
     /// Assigned tables whose painted fragments were verified.
@@ -105,6 +108,7 @@ impl TableShadowLedger {
     /// `BuildState`, and dropping their ledgers would leave tables reached
     /// through the text path unaccounted.
     pub fn merge(&mut self, other: Self) {
+        self.collapsed_metrics += other.collapsed_metrics;
         self.assigned += other.assigned;
         self.verified += other.verified;
         self.honored += other.honored;
@@ -161,6 +165,10 @@ pub struct PendingTable<Id> {
     /// K4g2's logical atomic winners. The existing Grid/Flex bridge does not
     /// inspect them; K4g3 turns them into metrics before sizing consumes them.
     pub collapsed_borders: Option<ResolvedTableBorderGrid<ComputedColor>>,
+    /// K4g3's exact segment-backed metric projection. K4g4 is its first
+    /// sizing consumer; retaining it beside the winner grid prevents either
+    /// K4c or K4d from selecting a side scalar on its own.
+    pub collapsed_border_metrics: Option<CollapsedBorderMetrics>,
     /// One entry per K4b grid cell, in topology order.
     pub cell_nodes: Vec<Option<AlgorithmNodeId>>,
     pub font_size: f32,

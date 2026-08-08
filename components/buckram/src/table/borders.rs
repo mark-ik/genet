@@ -15,9 +15,9 @@
 //! Physical computed sides are mapped into the table's logical axes at the
 //! adapter boundary, once, before a candidate reaches this module.
 
-use std::cmp::Ordering;
+use std::{cmp::Ordering, collections::BTreeMap};
 
-use crate::BoxId;
+use crate::{BoxId, LogicalSides};
 
 use super::{TableGrid, TableTrackVisibility};
 
@@ -264,6 +264,79 @@ pub struct ResolvedTableBorderGrid<Color> {
     pub segments: Vec<ResolvedTableBorder<Color>>,
 }
 
+/// One atomic winner as it contributes to a collapsed-border metric. The
+/// winner grid retains its color payload; metrics keep only the provenance and
+/// used CSS-pixel width that later sizing and geometry need to trace.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CollapsedBorderSegmentMetric {
+    pub edge: TableGridEdge,
+    pub winner: Option<BoxId>,
+    pub winner_side: Option<TableBorderSide>,
+    pub winner_style: Option<TableBorderStyle>,
+    /// The used width is zero for `hidden` and an all-`none` omission. It is
+    /// never device-pixel snapped here.
+    pub used_width: f32,
+    pub suppressed_by_hidden: bool,
+}
+
+/// One cell side's ordered atomic winners plus K4g3's accepted scalar
+/// projection. The segments remain the primary model: `projected_half_width`
+/// is the Chrome-observed maximum projection, not a replacement for them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CollapsedBorderSideMetrics {
+    pub segments: Vec<CollapsedBorderSegmentMetric>,
+    pub projected_half_width: f32,
+}
+
+/// The four side metrics owned by one normalized K4b cell.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CellCollapsedBorderMetrics {
+    pub cell: BoxId,
+    pub sides: LogicalSides<CollapsedBorderSideMetrics>,
+}
+
+/// The recorded spanning-side rule consumed by K4c and K4d in K4g4.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CollapsedBorderProjection {
+    /// Chrome's measured rule: the scalar offset is half of the largest used
+    /// winner along that one cell side.
+    MaximumHalfPerCellSide,
+}
+
+/// A stable engine split that remains visible beside the accepted projection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CollapsedBorderInteropDeferral {
+    /// Firefox 153's order-dependent spanning-side sizing diverges from the
+    /// CSS2 centering-compatible maximum projection, while its paint remains
+    /// segmented on the same grid lines.
+    FirefoxOrderDependentSpanningSide,
+}
+
+/// K4g3's explicit bridge from atomic winners to future K4c/K4d inputs.
+///
+/// `table_outer` and `overflow` are both half of the maximum winner on each
+/// outer edge. They are equal at this model boundary because a centered outer
+/// border contributes that half-width to the table edge and to outward spill;
+/// K4g4 owns applying the two facts to used geometry and ancestor overflow.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollapsedBorderMetrics {
+    pub cell_offsets: Vec<CellCollapsedBorderMetrics>,
+    pub table_outer_segments: LogicalSides<Vec<CollapsedBorderSegmentMetric>>,
+    pub table_outer: LogicalSides<f32>,
+    pub overflow: LogicalSides<f32>,
+    pub projection: CollapsedBorderProjection,
+    pub interop_deferral: Option<CollapsedBorderInteropDeferral>,
+}
+
+/// A resolved grid could not be projected against its K4b topology.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CollapsedBorderMetricError {
+    DuplicateSegment { edge: TableGridEdge },
+    MissingSegment { edge: TableGridEdge },
+    InvalidWinnerWidth { edge: TableGridEdge },
+    SuppressionWithoutWinner { edge: TableGridEdge },
+}
+
 /// An adapter gave two distinct colors the same complete CSS conflict
 /// identity. Color does not participate in CSS2 ranking, so selecting either
 /// would make the result depend on candidate-vector order. Normal candidate
@@ -402,6 +475,177 @@ where
         }
     }
     Ok(ResolvedTableBorderGrid { segments })
+}
+
+/// Project K4g2's atomic winners into K4g3's collapsed-border metrics.
+///
+/// The primary result remains each cell side's ordered segments. The scalar
+/// supplied for future K4c/K4d use is the recorded Chrome maximum projection:
+/// the largest used winner on that one side divided by two. No caller may
+/// replace the segment list with this scalar, and no device-pixel rounding
+/// happens at this boundary.
+pub fn project_collapsed_border_metrics<Color>(
+    grid: &TableGrid,
+    resolved: &ResolvedTableBorderGrid<Color>,
+) -> Result<CollapsedBorderMetrics, CollapsedBorderMetricError> {
+    let mut by_edge = BTreeMap::new();
+    for segment in &resolved.segments {
+        if by_edge.insert(segment.edge, segment).is_some() {
+            return Err(CollapsedBorderMetricError::DuplicateSegment { edge: segment.edge });
+        }
+    }
+
+    let mut cell_offsets = Vec::with_capacity(grid.cells.len());
+    for cell in &grid.cells {
+        let sides = LogicalSides {
+            inline_start: collapsed_side_metrics(
+                (cell.row..cell.row + cell.row_span).map(|segment| TableGridEdge {
+                    orientation: GridEdgeOrientation::BlockRunning,
+                    line: cell.column,
+                    segment,
+                }),
+                &by_edge,
+            )?,
+            inline_end: collapsed_side_metrics(
+                (cell.row..cell.row + cell.row_span).map(|segment| TableGridEdge {
+                    orientation: GridEdgeOrientation::BlockRunning,
+                    line: cell.column + cell.column_span,
+                    segment,
+                }),
+                &by_edge,
+            )?,
+            block_start: collapsed_side_metrics(
+                (cell.column..cell.column + cell.column_span).map(|segment| TableGridEdge {
+                    orientation: GridEdgeOrientation::InlineRunning,
+                    line: cell.row,
+                    segment,
+                }),
+                &by_edge,
+            )?,
+            block_end: collapsed_side_metrics(
+                (cell.column..cell.column + cell.column_span).map(|segment| TableGridEdge {
+                    orientation: GridEdgeOrientation::InlineRunning,
+                    line: cell.row + cell.row_span,
+                    segment,
+                }),
+                &by_edge,
+            )?,
+        };
+        cell_offsets.push(CellCollapsedBorderMetrics {
+            cell: cell.source,
+            sides,
+        });
+    }
+
+    let outer_sides = LogicalSides {
+        inline_start: collapsed_side_metrics(
+            (0..grid.rows.len()).map(|segment| TableGridEdge {
+                orientation: GridEdgeOrientation::BlockRunning,
+                line: 0,
+                segment,
+            }),
+            &by_edge,
+        )?,
+        inline_end: collapsed_side_metrics(
+            (0..grid.rows.len()).map(|segment| TableGridEdge {
+                orientation: GridEdgeOrientation::BlockRunning,
+                line: grid.columns.len(),
+                segment,
+            }),
+            &by_edge,
+        )?,
+        block_start: collapsed_side_metrics(
+            (0..grid.columns.len()).map(|segment| TableGridEdge {
+                orientation: GridEdgeOrientation::InlineRunning,
+                line: 0,
+                segment,
+            }),
+            &by_edge,
+        )?,
+        block_end: collapsed_side_metrics(
+            (0..grid.columns.len()).map(|segment| TableGridEdge {
+                orientation: GridEdgeOrientation::InlineRunning,
+                line: grid.rows.len(),
+                segment,
+            }),
+            &by_edge,
+        )?,
+    };
+    let table_outer = LogicalSides {
+        inline_start: outer_sides.inline_start.projected_half_width,
+        inline_end: outer_sides.inline_end.projected_half_width,
+        block_start: outer_sides.block_start.projected_half_width,
+        block_end: outer_sides.block_end.projected_half_width,
+    };
+    let table_outer_segments = LogicalSides {
+        inline_start: outer_sides.inline_start.segments,
+        inline_end: outer_sides.inline_end.segments,
+        block_start: outer_sides.block_start.segments,
+        block_end: outer_sides.block_end.segments,
+    };
+    Ok(CollapsedBorderMetrics {
+        cell_offsets,
+        table_outer_segments,
+        table_outer,
+        overflow: table_outer,
+        projection: CollapsedBorderProjection::MaximumHalfPerCellSide,
+        interop_deferral: Some(CollapsedBorderInteropDeferral::FirefoxOrderDependentSpanningSide),
+    })
+}
+
+fn collapsed_side_metrics<Color>(
+    edges: impl Iterator<Item = TableGridEdge>,
+    resolved: &BTreeMap<TableGridEdge, &ResolvedTableBorder<Color>>,
+) -> Result<CollapsedBorderSideMetrics, CollapsedBorderMetricError> {
+    let mut segments = Vec::new();
+    for edge in edges {
+        let resolved = resolved
+            .get(&edge)
+            .copied()
+            .ok_or(CollapsedBorderMetricError::MissingSegment { edge })?;
+        let metric = match resolved.winner.as_ref() {
+            Some(winner) => {
+                if !winner.width.is_finite() || winner.width < 0.0 {
+                    return Err(CollapsedBorderMetricError::InvalidWinnerWidth { edge });
+                }
+                let suppressed_by_hidden =
+                    resolved.suppressed_by_hidden || winner.style.suppresses();
+                CollapsedBorderSegmentMetric {
+                    edge,
+                    winner: Some(winner.source),
+                    winner_side: Some(winner.source_side),
+                    winner_style: Some(winner.style),
+                    used_width: if suppressed_by_hidden {
+                        0.0
+                    } else {
+                        winner.width
+                    },
+                    suppressed_by_hidden,
+                }
+            },
+            None if resolved.suppressed_by_hidden => {
+                return Err(CollapsedBorderMetricError::SuppressionWithoutWinner { edge });
+            },
+            None => CollapsedBorderSegmentMetric {
+                edge,
+                winner: None,
+                winner_side: None,
+                winner_style: None,
+                used_width: 0.0,
+                suppressed_by_hidden: false,
+            },
+        };
+        segments.push(metric);
+    }
+    let projected_half_width = segments
+        .iter()
+        .map(|segment| segment.used_width)
+        .fold(0.0, f32::max)
+        / 2.0;
+    Ok(CollapsedBorderSideMetrics {
+        segments,
+        projected_half_width,
+    })
 }
 
 fn resolve_edge<'a, Color>(
@@ -719,7 +963,7 @@ mod tests {
     use crate::{
         BoxGeneration, BoxOrigin, BoxTreeInput, CssBoxTree, DisplayInside, DisplayOutside,
         DisplayRole, FlowAxes, InternalTableRole, PositioningScheme, TableCellInput, TableGrid,
-        TableGridInputs, generate_box_tree,
+        TableGridInputs, TableRowSpan, generate_box_tree,
     };
 
     fn table_role(role: InternalTableRole) -> DisplayRole {
@@ -1053,6 +1297,34 @@ mod tests {
             .expect("edge result")
     }
 
+    fn projected_metrics(grid: &TableGrid, scene: &Scene) -> CollapsedBorderMetrics {
+        let winners = scene.collect(grid).resolve().expect("winners");
+        project_collapsed_border_metrics(grid, &winners).expect("metrics")
+    }
+
+    fn source_mut(scene: &mut Scene, source: BoxId) -> &mut TableBorderSource<u8> {
+        scene
+            .cells
+            .iter_mut()
+            .find(|candidate| candidate.source == source)
+            .expect("cell source")
+    }
+
+    fn make_none(scene: &mut Scene) {
+        let none = sides(TableBorderStyle::None, 0.0);
+        scene.table.sides = none.clone();
+        for source in scene
+            .row_groups
+            .iter_mut()
+            .chain(scene.rows.iter_mut())
+            .chain(scene.column_groups.iter_mut())
+            .chain(scene.columns.iter_mut())
+            .chain(scene.cells.iter_mut())
+        {
+            source.sides = none.clone();
+        }
+    }
+
     #[test]
     fn css2_comparator_checks_hidden_none_width_style_origin_and_order_in_order() {
         let grid = table_2x2(&[]);
@@ -1273,5 +1545,165 @@ mod tests {
                 && candidate.width == 7.0
                 && candidate.color == 9
         }));
+    }
+
+    #[test]
+    fn a_spanning_side_keeps_each_winner_and_projects_chromes_maximum_half() {
+        let grid = table_2x2(&[(
+            10,
+            TableCellInput {
+                column_span: 2,
+                row_span: TableRowSpan::Count(1),
+            },
+        )]);
+        let span = grid
+            .cells
+            .iter()
+            .find(|cell| cell.source == grid.cells[0].source && cell.column_span == 2)
+            .expect("spanning cell");
+        let lower = grid
+            .cells
+            .iter()
+            .filter(|cell| cell.row == 1)
+            .collect::<Vec<_>>();
+        assert_eq!(lower.len(), 2);
+
+        let mut scene = scene(&grid);
+        source_mut(&mut scene, span.source).sides.block_end = (TableBorderStyle::Solid, 0.0, 0);
+        source_mut(&mut scene, lower[0].source).sides.block_start =
+            (TableBorderStyle::Solid, 2.0, 0);
+        source_mut(&mut scene, lower[1].source).sides.block_start =
+            (TableBorderStyle::Solid, 10.0, 0);
+
+        let metrics = projected_metrics(&grid, &scene);
+        let span_metrics = metrics
+            .cell_offsets
+            .iter()
+            .find(|metrics| metrics.cell == span.source)
+            .expect("span metrics");
+        assert_eq!(
+            span_metrics
+                .sides
+                .block_end
+                .segments
+                .iter()
+                .map(|segment| segment.used_width)
+                .collect::<Vec<_>>(),
+            vec![2.0, 10.0]
+        );
+        assert_eq!(span_metrics.sides.block_end.projected_half_width, 5.0);
+        assert_eq!(
+            metrics.projection,
+            CollapsedBorderProjection::MaximumHalfPerCellSide
+        );
+        assert_eq!(
+            metrics.interop_deferral,
+            Some(CollapsedBorderInteropDeferral::FirefoxOrderDependentSpanningSide)
+        );
+        assert_eq!(
+            span_metrics
+                .sides
+                .block_end
+                .segments
+                .iter()
+                .map(|segment| segment.winner)
+                .collect::<Vec<_>>(),
+            vec![Some(lower[0].source), Some(lower[1].source)]
+        );
+    }
+
+    #[test]
+    fn outer_metrics_keep_later_row_spill_distinct_and_unsnapped() {
+        let grid = table_2x2(&[]);
+        let first = grid
+            .cells
+            .iter()
+            .find(|cell| cell.row == 0 && cell.column == 0)
+            .expect("first outer cell");
+        let later = grid
+            .cells
+            .iter()
+            .find(|cell| cell.row == 1 && cell.column == 0)
+            .expect("later outer cell");
+        let mut scene = scene(&grid);
+        source_mut(&mut scene, first.source).sides.inline_start = (TableBorderStyle::Solid, 5.0, 0);
+        source_mut(&mut scene, later.source).sides.inline_start = (TableBorderStyle::Solid, 9.0, 0);
+
+        let metrics = projected_metrics(&grid, &scene);
+        assert_eq!(metrics.table_outer.inline_start, 4.5);
+        assert_eq!(metrics.overflow.inline_start, 4.5);
+        assert_eq!(
+            metrics
+                .table_outer_segments
+                .inline_start
+                .iter()
+                .map(|segment| segment.used_width)
+                .collect::<Vec<_>>(),
+            vec![5.0, 9.0]
+        );
+    }
+
+    #[test]
+    fn group_winners_remain_traceable_in_outer_metrics() {
+        let grid = table_2x2(&[]);
+        let group = grid.row_groups[0].source;
+        let mut scene = scene(&grid);
+        scene.row_groups[0].sides.block_start = (TableBorderStyle::Dotted, 7.0, 0);
+
+        let metrics = projected_metrics(&grid, &scene);
+        assert_eq!(metrics.table_outer.block_start, 3.5);
+        assert!(
+            metrics
+                .table_outer_segments
+                .block_start
+                .iter()
+                .all(|segment| {
+                    segment.winner == Some(group)
+                        && segment.winner_style == Some(TableBorderStyle::Dotted)
+                        && segment.used_width == 7.0
+                })
+        );
+    }
+
+    #[test]
+    fn hidden_and_none_remain_distinct_zero_width_metrics() {
+        let grid = table_2x2(&[]);
+        let first = grid.cells[0].source;
+        let mut hidden = scene(&grid);
+        source_mut(&mut hidden, first).sides.inline_start = (TableBorderStyle::Hidden, 99.0, 0);
+        let hidden_metrics = projected_metrics(&grid, &hidden);
+        let hidden_segment = &hidden_metrics
+            .cell_offsets
+            .iter()
+            .find(|metrics| metrics.cell == first)
+            .expect("hidden cell")
+            .sides
+            .inline_start
+            .segments[0];
+        assert_eq!(hidden_segment.winner_style, Some(TableBorderStyle::Hidden));
+        assert!(hidden_segment.suppressed_by_hidden);
+        assert_eq!(hidden_segment.used_width, 0.0);
+
+        let mut none = scene(&grid);
+        make_none(&mut none);
+        let none_metrics = projected_metrics(&grid, &none);
+        let none_segment = &none_metrics.cell_offsets[0].sides.inline_start.segments[0];
+        assert_eq!(none_segment.winner, None);
+        assert!(!none_segment.suppressed_by_hidden);
+        assert_eq!(none_segment.used_width, 0.0);
+    }
+
+    #[test]
+    fn metric_projection_rejects_duplicate_atomic_segments() {
+        let grid = table_2x2(&[]);
+        let mut winners = scene(&grid).collect(&grid).resolve().expect("winners");
+        let duplicate = winners.segments[0].clone();
+        winners.segments.push(duplicate.clone());
+        assert_eq!(
+            project_collapsed_border_metrics(&grid, &winners),
+            Err(CollapsedBorderMetricError::DuplicateSegment {
+                edge: duplicate.edge,
+            })
+        );
     }
 }

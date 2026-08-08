@@ -609,6 +609,40 @@ Delete `CollapsedBorderMetricsPendingK4g` and
 accepted projection. Any surviving interoperability split keeps a named,
 counted reason.
 
+### K4g3 receipt - 2026-08-08
+
+**Rule:** B2 retains every atomic winning segment on each logical cell side,
+then projects the scalar offset as the largest winning width on that side
+divided by two. The value remains a CSS-pixel `f32`, with no device-pixel
+rounding. This is `CollapsedBorderProjection::MaximumHalfPerCellSide`, not a
+silent first, last, or average choice. `table_outer` and `overflow` each keep
+the corresponding largest half outer segment, while `table_outer_segments`
+keeps the contributing pieces for inspection.
+
+**Interop:** The focused `rule-check.html` recheck at
+`testing/genet/wpt-ledger/2026-08-06_buckram_k4g3_interop` found Chrome
+151.0.0.0 selecting `maximum` in all 18 cases. Firefox 153.0 selected its
+order-dependent recurrence in all 18. `CollapsedBorderMetrics` records that
+split as `FirefoxOrderDependentSpanningSide`; it is a named interoperability
+deferral, not a claim of common browser conformance.
+
+**Model and adapter:** `CollapsedBorderMetrics` preserves winner identity,
+side, style, used width, and hidden suppression for each segment. `hidden`
+therefore remains distinguishable from an all-`none` omission despite both
+using zero metric width. Livery retains the metrics beside the resolved grid
+on `PendingTable`, and its lowering ledger counts that result. The live
+lowering test proves the metrics arrive before exactly one K4g4 sizing
+deferral. B2 does not change sizing, fragments, or paint.
+
+**Proof:** Buckram has 183 library tests, including a spanning side with mixed
+widths, later-row outer spill, group-origin outer winners, hidden versus none,
+and duplicate atomic segment rejection. `cargo test -p livery --offline`
+passed 170 tests with five existing C2/C3 deferrals. `cargo test -p
+genet-livery --all-targets --offline` passed 197 tests. Both strict Clippy
+commands, including Buckram, Livery, and `genet-livery` together, pass.
+`cargo build -p genet-wpt --release --all-features --offline` passed in 3m02;
+it is a compile receipt only, not a collapsed-table behavior or paint claim.
+
 ## K4g4. K4c/K4d sizing and overflow integration
 
 ### Outcome

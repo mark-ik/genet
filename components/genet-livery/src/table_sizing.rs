@@ -5,14 +5,15 @@
 //! receives logical edges and box identity rather than backend layout state.
 
 use buckram::{
-    AffineLengthPercentage, CellBlockOffsets, CellInlineOffsets, FlowAxes, InlineSizeConstraint,
-    PhysicalSide, ResolvedTableBorderGrid, TableAutomaticColumnGroupInput,
-    TableAutomaticColumnInput, TableBlockConstraint, TableBorderError, TableBorderOrderKey,
-    TableBorderOrigin, TableBorderResolutionError, TableBorderSides, TableBorderSource,
-    TableBorderSources, TableBorderStyle, TableBoxSizing, TableCellAlignment, TableCellBlockStyle,
-    TableCellInlineStyle, TableDeferral, TableFixedColumnGroupInput, TableFixedColumnInput,
-    TableGrid, TableInlineConstraints, TableInlineProperty, TableInlineSizingError,
-    collect_table_border_candidates,
+    AffineLengthPercentage, CellBlockOffsets, CellInlineOffsets, CollapsedBorderMetricError,
+    CollapsedBorderMetrics, FlowAxes, InlineSizeConstraint, PhysicalSide, ResolvedTableBorderGrid,
+    TableAutomaticColumnGroupInput, TableAutomaticColumnInput, TableBlockConstraint,
+    TableBorderError, TableBorderOrderKey, TableBorderOrigin, TableBorderResolutionError,
+    TableBorderSides, TableBorderSource, TableBorderSources, TableBorderStyle, TableBoxSizing,
+    TableCellAlignment, TableCellBlockStyle, TableCellInlineStyle, TableDeferral,
+    TableFixedColumnGroupInput, TableFixedColumnInput, TableGrid, TableInlineConstraints,
+    TableInlineProperty, TableInlineSizingError, collect_table_border_candidates,
+    project_collapsed_border_metrics,
 };
 use livery::{
     ComputedValues,
@@ -56,18 +57,25 @@ pub(crate) fn table_cell_inline_style(
     })
 }
 
+/// The retained B1 winner grid together with B2's metric projection. Neither
+/// is sizing or paint input yet: K4g4 consumes metrics and K4g5 owns geometry.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CollapsedTableBorders {
+    pub winners: ResolvedTableBorderGrid<ComputedColor>,
+    pub metrics: CollapsedBorderMetrics,
+}
+
 /// Lower every physical computed border side into the table's logical axes,
-/// collect K4g1's candidates, and retain K4g2's atomic winner grid. The
-/// result is deliberately not sizing or paint input yet: K4g3 determines how
-/// those atomic answers become scalar metrics, and K4g5 owns their geometry.
-pub(crate) fn collapsed_table_border_grid<Id>(
+/// collect K4g1's candidates, resolve K4g2's winners, then project K4g3's
+/// metric seam.
+pub(crate) fn collapsed_table_borders<Id>(
     boxes: &GeneratedBoxTree<Id>,
     styles: &StylePlane<Id>,
     grid: &TableGrid,
     table: buckram::BoxId,
     table_computed: &ComputedValues,
     font_size: f32,
-) -> Result<ResolvedTableBorderGrid<ComputedColor>, CollapsedBorderLoweringError>
+) -> Result<CollapsedTableBorders, CollapsedBorderLoweringError>
 where
     Id: Copy + Eq + std::hash::Hash,
 {
@@ -167,16 +175,18 @@ where
             cells,
         },
     )?;
-    Ok(candidates.resolve()?)
+    let winners = candidates.resolve()?;
+    let metrics = project_collapsed_border_metrics(grid, &winners)?;
+    Ok(CollapsedTableBorders { winners, metrics })
 }
 
 /// A lowering failure remains distinct from the normal K4g sizing deferral.
-/// B1 retains the candidate and winner model even though K4c/K4d still wait
-/// for B2's collapsed metrics.
+/// B2 retains the metric model while K4g4 remains its first sizing consumer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CollapsedBorderLoweringError {
     Candidates(TableBorderError),
     Resolution(TableBorderResolutionError),
+    Metrics(CollapsedBorderMetricError),
 }
 
 impl From<TableBorderError> for CollapsedBorderLoweringError {
@@ -188,6 +198,12 @@ impl From<TableBorderError> for CollapsedBorderLoweringError {
 impl From<TableBorderResolutionError> for CollapsedBorderLoweringError {
     fn from(error: TableBorderResolutionError) -> Self {
         Self::Resolution(error)
+    }
+}
+
+impl From<CollapsedBorderMetricError> for CollapsedBorderLoweringError {
+    fn from(error: CollapsedBorderMetricError) -> Self {
+        Self::Metrics(error)
     }
 }
 

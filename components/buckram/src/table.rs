@@ -28,11 +28,14 @@ pub use automatic_used::{
     size_automatic_table_inline,
 };
 pub use borders::{
-    GridEdgeOrientation, ResolvedTableBorder, ResolvedTableBorderGrid, TableBorderCandidate,
-    TableBorderCandidates, TableBorderDisposition, TableBorderError, TableBorderLedgerEntry,
-    TableBorderOrderKey, TableBorderOrigin, TableBorderPrecedence, TableBorderResolutionError,
-    TableBorderSide, TableBorderSides, TableBorderSource, TableBorderSources, TableBorderStyle,
-    TableGridEdge, collect_table_border_candidates, compare_table_border_candidates,
+    CellCollapsedBorderMetrics, CollapsedBorderInteropDeferral, CollapsedBorderMetricError,
+    CollapsedBorderMetrics, CollapsedBorderProjection, CollapsedBorderSegmentMetric,
+    CollapsedBorderSideMetrics, GridEdgeOrientation, ResolvedTableBorder, ResolvedTableBorderGrid,
+    TableBorderCandidate, TableBorderCandidates, TableBorderDisposition, TableBorderError,
+    TableBorderLedgerEntry, TableBorderOrderKey, TableBorderOrigin, TableBorderPrecedence,
+    TableBorderResolutionError, TableBorderSide, TableBorderSides, TableBorderSource,
+    TableBorderSources, TableBorderStyle, TableGridEdge, collect_table_border_candidates,
+    compare_table_border_candidates, project_collapsed_border_metrics,
     resolve_table_border_candidates,
 };
 pub use fixed::{
