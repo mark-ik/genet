@@ -1896,6 +1896,7 @@ where
                 pending.table,
                 pending.node,
                 &computed,
+                pending.collapsed_border_metrics.as_ref(),
                 pending.font_size,
                 pending.containing_width,
                 caption_min,
@@ -1977,6 +1978,7 @@ where
                 &pending.grid,
                 pending.table,
                 computed,
+                pending.collapsed_border_metrics.as_ref(),
                 pending.font_size,
                 pending.containing_height,
                 &mut ledger,
@@ -2332,6 +2334,7 @@ where
                 pending.table,
                 pending.node,
                 &computed,
+                pending.collapsed_border_metrics.as_ref(),
                 pending.font_size,
                 pending.containing_width,
                 caption_min,
@@ -2404,6 +2407,7 @@ where
                 &pending.grid,
                 pending.table,
                 computed,
+                pending.collapsed_border_metrics.as_ref(),
                 pending.font_size,
                 pending.containing_height,
                 &mut ledger,
@@ -3379,6 +3383,15 @@ fn commit_table_structure(
             // children can hang from it.
             TableFragmentRole::Grid => {
                 ids[index] = Some(grid_fragment);
+                output.fragments.set_overflow(
+                    grid_fragment,
+                    LogicalRect {
+                        inline_start: grid_origin.x + fragment.overflow.inline_start,
+                        block_start: grid_origin.y + fragment.overflow.block_start,
+                        inline_size: fragment.overflow.inline_size,
+                        block_size: fragment.overflow.block_size,
+                    },
+                );
                 continue;
             },
             TableFragmentRole::Cell => continue,
@@ -4710,9 +4723,9 @@ mod tests {
     }
 
     #[test]
-    fn k4g3_lowers_metrics_before_the_k4g4_sizing_deferral() {
+    fn k4g4_consumes_projected_metrics_on_both_table_axes() {
         let dom = StaticDocument::parse(
-            "<table><tbody><tr><td>one</td><td>two</td></tr></tbody></table>",
+            "<table id=table><tbody><tr><td>one</td><td>two</td></tr></tbody></table>",
         );
         let styles = resolve_styles(
             &dom,
@@ -4728,8 +4741,23 @@ mod tests {
         assert_eq!(ledger.collapsed_metrics, 1, "{ledger:?}");
         assert_eq!(
             ledger.deferral_count(buckram::TableDeferral::CollapsedBorderMetricsPendingK4g),
-            1,
-            "B2 must retain metrics without making K4c consume them: {ledger:?}"
+            0,
+            "K4g4 must consume B2's projected metrics rather than deferring: {ledger:?}"
+        );
+        assert_eq!(ledger.assigned, 1, "{ledger:?}");
+        assert_eq!(ledger.honored, 1, "{ledger:?}");
+        assert_eq!(ledger.block.laid_out, 1, "{ledger:?}");
+        assert_eq!(ledger.block.agreed, 1, "{ledger:?}");
+        let table = node_by_id(&dom, dom.document(), "table").expect("table node");
+        let fragment = layout.principal_fragment(table).expect("table fragment");
+        assert!(
+            (fragment.logical_rect.inline_start - fragment.overflow.inline_start - 2.5).abs()
+                < 0.01,
+            "the first outer winner spills beyond the table border box: {fragment:?}"
+        );
+        assert!(
+            (fragment.logical_rect.block_start - fragment.overflow.block_start - 2.5).abs() < 0.01,
+            "the block-start winner also propagates into table overflow: {fragment:?}"
         );
     }
 

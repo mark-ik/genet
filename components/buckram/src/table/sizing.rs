@@ -205,6 +205,34 @@ pub struct TableSeparatedBorderMetrics {
     pub inline_spacing: f32,
 }
 
+/// Collapsed-model table geometry outside distributable column tracks.
+///
+/// K4g3 projects the resolved winner grid into half-width outer edges. The
+/// table's declared borders do not participate here: the accepted winner is
+/// the only border at a collapsed outer edge. Padding remains the table's own
+/// property and resolves against its containing block just as it does in the
+/// separated model.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TableCollapsedBorderMetrics {
+    pub table_padding: CellInlineOffsets,
+    pub outer_start: f32,
+    pub outer_end: f32,
+}
+
+impl TableCollapsedBorderMetrics {
+    /// Table padding plus the accepted half-width outer winners. Collapsed
+    /// borders have neither `border-spacing` nor a second declared table
+    /// border contribution.
+    pub fn undistributable_inline_size(self, percentage_basis: f32) -> Option<f32> {
+        let padding = self.table_padding.total(percentage_basis)?;
+        [padding, self.outer_start, self.outer_end]
+            .into_iter()
+            .all(|value| value.is_finite() && value >= 0.0)
+            .then_some(padding + self.outer_start + self.outer_end)
+            .filter(|total| total.is_finite())
+    }
+}
+
 impl TableSeparatedBorderMetrics {
     /// The two table edges plus one spacing interval before, after, and between
     /// every K4b column. The basis resolves a table padding percentage and is
@@ -230,6 +258,7 @@ impl TableSeparatedBorderMetrics {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TableInlineBorderMetrics {
     Separated(TableSeparatedBorderMetrics),
+    Collapsed(TableCollapsedBorderMetrics),
     CollapsedPendingK4g,
 }
 
@@ -375,24 +404,40 @@ pub struct TableInlineSizingInput<'a> {
 }
 
 impl<'a> TableInlineSizingInput<'a> {
+    fn collapsed_outer_inline_overflow(&self) -> (f32, f32) {
+        match self.border_metrics {
+            TableInlineBorderMetrics::Collapsed(metrics) => {
+                (metrics.outer_start, metrics.outer_end)
+            },
+            TableInlineBorderMetrics::Separated(_)
+            | TableInlineBorderMetrics::CollapsedPendingK4g => (0.0, 0.0),
+        }
+    }
+
     /// The basis for the table box's own padding percentage. CSS resolves it
     /// against the table's containing block, never against its used width.
     pub fn table_padding_basis(&self) -> Result<f32, TableInlineSizingError> {
-        let TableInlineBorderMetrics::Separated(metrics) = self.border_metrics else {
-            return Err(TableInlineSizingError::Deferral(
-                TableDeferral::CollapsedBorderMetricsPendingK4g,
-            ));
+        let offsets = match self.border_metrics {
+            TableInlineBorderMetrics::Separated(metrics) => metrics.table_offsets,
+            TableInlineBorderMetrics::Collapsed(metrics) => metrics.table_padding,
+            TableInlineBorderMetrics::CollapsedPendingK4g => {
+                return Err(TableInlineSizingError::Deferral(
+                    TableDeferral::CollapsedBorderMetricsPendingK4g,
+                ));
+            },
         };
         match self.available_inline_size {
             Some(basis) => Ok(basis),
-            None if !metrics.table_offsets.needs_percentage_basis() => Ok(0.0),
+            None if !offsets.needs_percentage_basis() => Ok(0.0),
             None => Err(TableInlineSizingError::Deferral(
                 TableDeferral::PercentagePaddingPendingBasis,
             )),
         }
     }
 
-    pub fn separated_undistributable_inline_size(&self) -> Result<f32, TableInlineSizingError> {
+    /// The table geometry outside distributable column tracks under the
+    /// selected border model.
+    pub fn undistributable_inline_size(&self) -> Result<f32, TableInlineSizingError> {
         if !self.track_visibility.matches_grid(self.grid) {
             return Err(TableInlineSizingError::TrackVisibilityShape);
         }
@@ -400,6 +445,9 @@ impl<'a> TableInlineSizingInput<'a> {
         match self.border_metrics {
             TableInlineBorderMetrics::Separated(metrics) => metrics
                 .undistributable_inline_size(self.grid.columns.len(), basis)
+                .ok_or(TableInlineSizingError::InvalidBorderMetrics),
+            TableInlineBorderMetrics::Collapsed(metrics) => metrics
+                .undistributable_inline_size(basis)
                 .ok_or(TableInlineSizingError::InvalidBorderMetrics),
             TableInlineBorderMetrics::CollapsedPendingK4g => Err(TableInlineSizingError::Deferral(
                 TableDeferral::CollapsedBorderMetricsPendingK4g,
@@ -492,6 +540,10 @@ pub struct TableInlineSizingResult {
     pub assignable_column_inline_size: f32,
     /// Table border, padding, and separated spacing outside the column tracks.
     pub undistributable_inline_size: f32,
+    /// K4g3's accepted outer inline winners spill half their width outside
+    /// the grid border box. Separated tables have zero spill.
+    pub overflow_inline_start: f32,
+    pub overflow_inline_end: f32,
     pub column_sizes: Vec<f32>,
 }
 
@@ -511,6 +563,7 @@ impl TableInlineSizingResult {
                 actual: column_sizes.len(),
             });
         }
+        let (overflow_inline_start, overflow_inline_end) = input.collapsed_outer_inline_overflow();
         if !intrinsic_sizes.min_content.is_finite()
             || !intrinsic_sizes.max_content.is_finite()
             || intrinsic_sizes.min_content < 0.0
@@ -522,11 +575,15 @@ impl TableInlineSizingResult {
             || column_sizes
                 .iter()
                 .any(|size| !size.is_finite() || *size < 0.0)
+            || !overflow_inline_start.is_finite()
+            || overflow_inline_start < 0.0
+            || !overflow_inline_end.is_finite()
+            || overflow_inline_end < 0.0
         {
             return Err(TableInlineSizingError::InvalidResultSize);
         }
         let assignable_column_inline_size = column_sizes.iter().sum::<f32>();
-        let undistributable_inline_size = input.separated_undistributable_inline_size()?;
+        let undistributable_inline_size = input.undistributable_inline_size()?;
         let expected_grid = assignable_column_inline_size + undistributable_inline_size;
         // The columns and the undistributable remainder account for the whole
         // used grid width only when the grid has tracks. A table with no
@@ -547,6 +604,8 @@ impl TableInlineSizingResult {
             used_grid_inline_size,
             assignable_column_inline_size,
             undistributable_inline_size,
+            overflow_inline_start,
+            overflow_inline_end,
             column_sizes,
         })
     }
@@ -951,11 +1010,11 @@ mod tests {
             },
             inline_spacing: 5.0,
         });
-        assert_eq!(input.separated_undistributable_inline_size(), Ok(20.0));
+        assert_eq!(input.undistributable_inline_size(), Ok(20.0));
 
         input.border_metrics = TableInlineBorderMetrics::CollapsedPendingK4g;
         assert_eq!(
-            input.separated_undistributable_inline_size(),
+            input.undistributable_inline_size(),
             Err(TableInlineSizingError::Deferral(
                 TableDeferral::CollapsedBorderMetricsPendingK4g
             ))

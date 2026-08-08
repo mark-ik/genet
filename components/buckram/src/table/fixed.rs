@@ -168,7 +168,7 @@ pub enum TableFixedLayoutFallback {
     TableWidthNotDefinite,
 }
 
-/// Size a `table-layout: fixed` table in the separated border model.
+/// Size a `table-layout: fixed` table under the selected border model.
 ///
 /// The precedence follows CSS 2: explicit columns, normalized column groups,
 /// first-row cells, then equal shares for unresolved columns. Later-row
@@ -197,7 +197,7 @@ pub fn size_fixed_table_inline(
     };
     requested_table_size = clamp_table_size(requested_table_size, &input.sizing)?.max(caption_min);
 
-    let (table_offsets, separated_spacing, undistributable) = separated_metrics(&input.sizing)?;
+    let (table_offsets, border_spacing, undistributable) = border_metrics(&input.sizing)?;
     let requested_grid_size = table_size_to_grid_size(
         requested_table_size,
         input.sizing.table_constraints.box_sizing,
@@ -283,7 +283,7 @@ pub fn size_fixed_table_inline(
         used_grid_inline_size,
         column_sizes,
     )?;
-    debug_assert!((separated_spacing + table_offsets - undistributable).abs() < 0.01);
+    debug_assert!((border_spacing + table_offsets - undistributable).abs() < 0.01);
     Ok(TableFixedInlineSizingOutcome::Fixed(result))
 }
 
@@ -329,24 +329,35 @@ fn clamp_table_size(
     Ok(table_size.max(minimum).min(maximum))
 }
 
-fn separated_metrics(
+fn border_metrics(
     sizing: &TableInlineSizingInput<'_>,
 ) -> Result<(f32, f32, f32), TableInlineSizingError> {
-    let TableInlineBorderMetrics::Separated(metrics) = sizing.border_metrics else {
-        return Err(TableInlineSizingError::Deferral(
-            TableDeferral::CollapsedBorderMetricsPendingK4g,
-        ));
+    let (table_offsets, border_spacing) = match sizing.border_metrics {
+        TableInlineBorderMetrics::Separated(metrics) => (
+            metrics
+                .table_offsets
+                .total(sizing.table_padding_basis()?)
+                .ok_or(TableInlineSizingError::InvalidBorderMetrics)?,
+            metrics.inline_spacing * (sizing.grid.columns.len() + 1) as f32,
+        ),
+        TableInlineBorderMetrics::Collapsed(metrics) => (
+            metrics
+                .table_padding
+                .total(sizing.table_padding_basis()?)
+                .ok_or(TableInlineSizingError::InvalidBorderMetrics)?,
+            metrics.outer_start + metrics.outer_end,
+        ),
+        TableInlineBorderMetrics::CollapsedPendingK4g => {
+            return Err(TableInlineSizingError::Deferral(
+                TableDeferral::CollapsedBorderMetricsPendingK4g,
+            ));
+        },
     };
-    let table_offsets = metrics
-        .table_offsets
-        .total(sizing.table_padding_basis()?)
-        .ok_or(TableInlineSizingError::InvalidBorderMetrics)?;
-    let undistributable = sizing.separated_undistributable_inline_size()?;
-    let separated_spacing = undistributable - table_offsets;
-    if !separated_spacing.is_finite() || separated_spacing < 0.0 {
+    let undistributable = sizing.undistributable_inline_size()?;
+    if !border_spacing.is_finite() || border_spacing < 0.0 {
         return Err(TableInlineSizingError::InvalidBorderMetrics);
     }
-    Ok((table_offsets, separated_spacing, undistributable))
+    Ok((table_offsets, border_spacing, undistributable))
 }
 
 fn table_size_to_grid_size(
@@ -484,8 +495,8 @@ mod tests {
     use crate::{
         AffineLengthPercentage, BoxGeneration, BoxOrigin, BoxTreeInput, CssBoxTree, DisplayInside,
         DisplayOutside, DisplayRole, InternalTableRole, PositioningScheme, TableCellInput,
-        TableGrid, TableGridInputs, TableRowSpan, TableSeparatedBorderMetrics,
-        TableTrackVisibility, generate_box_tree,
+        TableCollapsedBorderMetrics, TableGrid, TableGridInputs, TableRowSpan,
+        TableSeparatedBorderMetrics, TableTrackVisibility, generate_box_tree,
     };
 
     fn table_role(role: InternalTableRole) -> DisplayRole {
@@ -734,6 +745,23 @@ mod tests {
         assert_eq!(result.column_sizes, vec![28.0, 28.0, 28.0]);
         assert_eq!(result.used_table_inline_size, 104.0);
         assert_eq!(result.used_grid_inline_size, 108.0);
+    }
+
+    #[test]
+    fn collapsed_outer_winners_replace_spacing_without_a_second_sizing_path() {
+        let grid = grid(false);
+        let mut input = input(&grid, 104.0);
+        input.sizing.border_metrics =
+            TableInlineBorderMetrics::Collapsed(TableCollapsedBorderMetrics {
+                table_padding: super::super::CellInlineOffsets::ZERO,
+                outer_start: 3.0,
+                outer_end: 5.0,
+            });
+
+        let result = fixed(&input);
+        assert_eq!(result.undistributable_inline_size, 8.0);
+        assert_eq!(result.column_sizes, vec![32.0, 32.0, 32.0]);
+        assert_eq!(result.used_grid_inline_size, 104.0);
     }
 
     #[test]

@@ -60,6 +60,36 @@ pub struct TableSeparatedBlockMetrics {
     pub block_spacing: f32,
 }
 
+/// Collapsed-model geometry outside distributable row tracks.
+///
+/// The two values are K4g3's accepted half-width outer winners. Collapsed
+/// rows have neither table border-spacing nor a second declared table border
+/// contribution.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TableCollapsedBlockMetrics {
+    pub table_padding_start: f32,
+    pub table_padding_end: f32,
+    pub outer_start: f32,
+    pub outer_end: f32,
+}
+
+impl TableCollapsedBlockMetrics {
+    pub fn undistributable_block_size(self, _row_count: usize) -> Option<f32> {
+        [
+            self.table_padding_start,
+            self.table_padding_end,
+            self.outer_start,
+            self.outer_end,
+        ]
+        .into_iter()
+        .all(|value| value.is_finite() && value >= 0.0)
+        .then_some(
+            self.table_padding_start + self.table_padding_end + self.outer_start + self.outer_end,
+        )
+        .filter(|total| total.is_finite())
+    }
+}
+
 impl TableSeparatedBlockMetrics {
     /// The two table edges plus one spacing interval before, after, and
     /// between every K4b row.
@@ -86,7 +116,55 @@ impl TableSeparatedBlockMetrics {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TableBlockBorderMetrics {
     Separated(TableSeparatedBlockMetrics),
+    Collapsed(TableCollapsedBlockMetrics),
     CollapsedPendingK4g,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ResolvedBlockMetrics {
+    table_offset_start: f32,
+    block_spacing: f32,
+    undistributable: f32,
+}
+
+fn resolved_block_metrics(
+    metrics: TableBlockBorderMetrics,
+    row_count: usize,
+    table: BoxId,
+) -> Result<ResolvedBlockMetrics, TableRowLayoutError> {
+    let resolved = match metrics {
+        TableBlockBorderMetrics::Separated(metrics) => ResolvedBlockMetrics {
+            table_offset_start: metrics.table_offset_start,
+            block_spacing: metrics.block_spacing,
+            undistributable: 0.0,
+        },
+        TableBlockBorderMetrics::Collapsed(metrics) => ResolvedBlockMetrics {
+            table_offset_start: metrics.table_padding_start + metrics.outer_start,
+            block_spacing: 0.0,
+            undistributable: 0.0,
+        },
+        TableBlockBorderMetrics::CollapsedPendingK4g => {
+            return Err(TableRowLayoutError::Deferral(
+                TableBlockDeferral::CollapsedBlockBorderMetricsPendingK4g,
+            ));
+        },
+    };
+    let undistributable = match metrics {
+        TableBlockBorderMetrics::Separated(metrics) => {
+            metrics.undistributable_block_size(row_count)
+        },
+        TableBlockBorderMetrics::Collapsed(metrics) => {
+            metrics.undistributable_block_size(row_count)
+        },
+        TableBlockBorderMetrics::CollapsedPendingK4g => unreachable!(),
+    };
+    let Some(undistributable) = undistributable else {
+        return Err(TableRowLayoutError::InvalidCellOutput { box_id: table });
+    };
+    Ok(ResolvedBlockMetrics {
+        undistributable,
+        ..resolved
+    })
 }
 
 /// Named block-axis distinctions deferred to later gates or explicit interop
@@ -450,14 +528,7 @@ pub fn format_table_cells(
             actual: input.inline.column_sizes.len(),
         });
     }
-    if matches!(
-        input.border_metrics,
-        TableBlockBorderMetrics::CollapsedPendingK4g
-    ) {
-        return Err(TableRowLayoutError::Deferral(
-            TableBlockDeferral::CollapsedBlockBorderMetricsPendingK4g,
-        ));
-    }
+    let _ = resolved_block_metrics(input.border_metrics, input.grid.rows.len(), input.grid.grid)?;
 
     let mut outputs = Vec::with_capacity(input.grid.cells.len());
     for (index, cell) in input.grid.cells.iter().enumerate() {
@@ -637,14 +708,8 @@ pub fn size_table_rows(
             actual: cell_styles.len().min(cell_outputs.len()),
         });
     }
-    let TableBlockBorderMetrics::Separated(metrics) = input.border_metrics else {
-        return Err(TableRowLayoutError::Deferral(
-            TableBlockDeferral::CollapsedBlockBorderMetricsPendingK4g,
-        ));
-    };
-    let undistributable = metrics
-        .undistributable_block_size(grid.rows.len())
-        .ok_or(TableRowLayoutError::InvalidCellOutput { box_id: grid.grid })?;
+    let metrics = resolved_block_metrics(input.border_metrics, grid.rows.len(), grid.grid)?;
+    let undistributable = metrics.undistributable;
 
     let mut sizes = measures
         .iter()
@@ -906,11 +971,7 @@ pub fn align_table_cells(
             actual: cell_styles.len().min(cell_outputs.len()),
         });
     }
-    let TableBlockBorderMetrics::Separated(metrics) = input.border_metrics else {
-        return Err(TableRowLayoutError::Deferral(
-            TableBlockDeferral::CollapsedBlockBorderMetricsPendingK4g,
-        ));
-    };
+    let metrics = resolved_block_metrics(input.border_metrics, grid.rows.len(), grid.grid)?;
 
     // Step 1: every row's baseline, from the cells that originate in it.
     let mut rows = Vec::with_capacity(grid.rows.len());
@@ -1074,14 +1135,8 @@ pub fn resolve_percentage_block_sizes(
     formatter: &mut impl TableCellFormatter,
 ) -> Result<TablePercentagePass, TableRowLayoutError> {
     let grid = input.grid;
-    let TableBlockBorderMetrics::Separated(metrics) = input.border_metrics else {
-        return Err(TableRowLayoutError::Deferral(
-            TableBlockDeferral::CollapsedBlockBorderMetricsPendingK4g,
-        ));
-    };
-    let undistributable = metrics
-        .undistributable_block_size(grid.rows.len())
-        .ok_or(TableRowLayoutError::InvalidCellOutput { box_id: grid.grid })?;
+    let metrics = resolved_block_metrics(input.border_metrics, grid.rows.len(), grid.grid)?;
+    let undistributable = metrics.undistributable;
 
     // Only a specified definite table height is a basis for a percentage row
     // or cell height.
@@ -1183,7 +1238,7 @@ fn shrink_percentage_growth(
     resolved: TableRowSizing,
     minima: &[TableRowMeasure],
     distributable: f32,
-    metrics: TableSeparatedBlockMetrics,
+    metrics: ResolvedBlockMetrics,
 ) -> TableRowSizing {
     if minima.len() != resolved.row_sizes.len() {
         return resolved;
@@ -2137,6 +2192,34 @@ mod tests {
             metrics,
         );
         assert!((spanned.row_sizes.iter().sum::<f32>() - 195.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn collapsed_outer_winners_replace_block_spacing_without_a_second_row_algorithm() {
+        let grid = multi_row_grid(&[&[3], &[4]], &[]);
+        let inline = inline_result(&grid, vec![40.0]);
+        let mut input = block_input(&grid, &inline);
+        input.border_metrics = TableBlockBorderMetrics::Collapsed(TableCollapsedBlockMetrics {
+            outer_start: 1.5,
+            outer_end: 2.5,
+            ..TableCollapsedBlockMetrics::default()
+        });
+        let styles = vec![TableCellBlockStyle::default(); grid.cells.len()];
+        let outputs = grid
+            .cells
+            .iter()
+            .zip([output(20.0, 0.0), output(40.0, 0.0)])
+            .map(|(cell, output)| (cell.source, output))
+            .collect::<Vec<_>>();
+        let rows = vec![TableBlockConstraint::Auto; grid.rows.len()];
+        let measures = measure_single_span_rows(&input, &styles, &outputs, &rows)
+            .expect("collapsed row measures");
+        let sizing =
+            size_table_rows(&input, &measures, &styles, &outputs).expect("collapsed row sizing");
+
+        close(&sizing.row_sizes, &[20.0, 40.0]);
+        close(&sizing.row_offsets, &[1.5, 21.5]);
+        assert!((sizing.used_table_block_size - 64.0).abs() < 0.05);
     }
 
     /// The K4d3 monotonicity property: raising one spanning cell's

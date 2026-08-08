@@ -56,7 +56,7 @@ pub fn size_automatic_table_inline(
 ) -> Result<TableAutomaticInlineSizingOutcome, TableInlineSizingError> {
     validate(input)?;
 
-    let (table_offsets, undistributable) = separated_metrics(&input.sizing)?;
+    let (table_offsets, undistributable) = border_metrics(&input.sizing)?;
     let grid_intrinsic_sizes = grid_intrinsic_sizes(input, table_offsets, undistributable)?;
     let caption_min = input.sizing.caption_min.measured()?.unwrap_or(0.0);
     let intrinsic_sizes = IntrinsicSizes::new(
@@ -161,7 +161,7 @@ pub fn cache_automatic_table_grid_intrinsic_sizes(
     cache: &mut IntrinsicSizeCache,
 ) -> Result<IntrinsicSizes, TableInlineSizingError> {
     validate(input)?;
-    let (table_offsets, undistributable) = separated_metrics(&input.sizing)?;
+    let (table_offsets, undistributable) = border_metrics(&input.sizing)?;
     let intrinsic_sizes = grid_intrinsic_sizes(input, table_offsets, undistributable)?;
     cache.insert(input.sizing.grid.grid, LogicalAxis::Inline, intrinsic_sizes);
     Ok(intrinsic_sizes)
@@ -180,19 +180,22 @@ fn validate(input: &TableAutomaticInlineSizingInput<'_>) -> Result<(), TableInli
     Ok(())
 }
 
-fn separated_metrics(
+fn border_metrics(
     sizing: &TableInlineSizingInput<'_>,
 ) -> Result<(f32, f32), TableInlineSizingError> {
-    let TableInlineBorderMetrics::Separated(metrics) = sizing.border_metrics else {
-        return Err(TableInlineSizingError::Deferral(
-            TableDeferral::CollapsedBorderMetricsPendingK4g,
-        ));
+    let table_offsets = match sizing.border_metrics {
+        TableInlineBorderMetrics::Separated(metrics) => metrics.table_offsets,
+        TableInlineBorderMetrics::Collapsed(metrics) => metrics.table_padding,
+        TableInlineBorderMetrics::CollapsedPendingK4g => {
+            return Err(TableInlineSizingError::Deferral(
+                TableDeferral::CollapsedBorderMetricsPendingK4g,
+            ));
+        },
     };
-    let table_offsets = metrics
-        .table_offsets
+    let table_offsets = table_offsets
         .total(sizing.table_padding_basis()?)
         .ok_or(TableInlineSizingError::InvalidBorderMetrics)?;
-    let undistributable = sizing.separated_undistributable_inline_size()?;
+    let undistributable = sizing.undistributable_inline_size()?;
     Ok((table_offsets, undistributable))
 }
 
@@ -451,8 +454,9 @@ mod tests {
     use crate::{
         AffineLengthPercentage, BoxGeneration, BoxOrigin, BoxTreeInput, CssBoxTree, Direction,
         DisplayInside, DisplayOutside, DisplayRole, FlowAxes, InternalTableRole, IntrinsicSizeKind,
-        IntrinsicSizeQuery, PositioningScheme, TableGrid, TableGridInputs,
-        TableSeparatedBorderMetrics, TableTrackVisibility, WritingMode, generate_box_tree,
+        IntrinsicSizeQuery, PositioningScheme, TableCollapsedBorderMetrics, TableGrid,
+        TableGridInputs, TableSeparatedBorderMetrics, TableTrackVisibility, WritingMode,
+        generate_box_tree,
     };
 
     fn table_role(role: InternalTableRole) -> DisplayRole {
@@ -797,6 +801,24 @@ mod tests {
             result.column_sizes.iter().sum::<f32>() + result.undistributable_inline_size,
             result.used_grid_inline_size,
         );
+    }
+
+    #[test]
+    fn automatic_sizing_consumes_collapsed_outer_winners_once() {
+        let grid = grid(FlowAxes::HORIZONTAL_LTR);
+        let measures = measures();
+        let mut input = input(&grid, &measures);
+        input.sizing.border_metrics =
+            TableInlineBorderMetrics::Collapsed(TableCollapsedBorderMetrics {
+                table_padding: super::super::CellInlineOffsets::ZERO,
+                outer_start: 3.0,
+                outer_end: 5.0,
+            });
+
+        let result = sized(size_automatic_table_inline(&input).expect("collapsed table"));
+        assert_close(result.undistributable_inline_size, 8.0);
+        assert_close(result.column_sizes.iter().sum(), 392.0);
+        assert_close(result.used_grid_inline_size, 400.0);
     }
 
     #[test]

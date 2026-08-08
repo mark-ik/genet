@@ -332,7 +332,7 @@ fn ensure_automatic_prerequisites(
 ) -> Result<(), TableInlineSizingError> {
     // Cell offsets include declared borders. Their use is only sound in the
     // separated model until K4g supplies collapsed-border winners.
-    sizing.separated_undistributable_inline_size()?;
+    sizing.undistributable_inline_size()?;
     Ok(())
 }
 

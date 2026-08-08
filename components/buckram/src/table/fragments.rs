@@ -139,11 +139,25 @@ pub fn emit_table_fragments(
         inline_size: input.inline.used_grid_inline_size,
         block_size: sizing.used_table_block_size,
     };
+    let (overflow_block_start, overflow_block_end) = match input.border_metrics {
+        TableBlockBorderMetrics::Collapsed(metrics) => (metrics.outer_start, metrics.outer_end),
+        TableBlockBorderMetrics::Separated(_) | TableBlockBorderMetrics::CollapsedPendingK4g => {
+            (0.0, 0.0)
+        },
+    };
+    let grid_overflow = LogicalRect {
+        inline_start: -input.inline.overflow_inline_start,
+        block_start: -overflow_block_start,
+        inline_size: grid_rect.inline_size
+            + input.inline.overflow_inline_start
+            + input.inline.overflow_inline_end,
+        block_size: grid_rect.block_size + overflow_block_start + overflow_block_end,
+    };
     let mut fragments = vec![TableFragment {
         box_id: Some(grid.grid),
         role: TableFragmentRole::Grid,
         rect: grid_rect,
-        overflow: grid_rect,
+        overflow: grid_overflow,
         parent: None,
     }];
 

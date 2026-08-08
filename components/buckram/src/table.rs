@@ -48,18 +48,20 @@ pub use rows::{
     CellBlockOffsets, FragmentDraft, FragmentDraftTree, TableAlignment, TableBlockBorderMetrics,
     TableBlockConstraint, TableBlockDeferral, TableBlockSizingInput, TableCellAlignment,
     TableCellBlockStyle, TableCellFormatter, TableCellLayoutInput, TableCellLayoutOutput,
-    TableCellLayoutPass, TableCellPlacement, TablePercentagePass, TableRowBaseline,
-    TableRowLayoutError, TableRowMeasure, TableRowSizing, TableSeparatedBlockMetrics,
-    align_table_cells, apply_baseline_row_minima, format_table_cells, measure_single_span_rows,
-    resolve_percentage_block_sizes, size_table_rows, spanned_cell_content_inline_size,
+    TableCellLayoutPass, TableCellPlacement, TableCollapsedBlockMetrics, TablePercentagePass,
+    TableRowBaseline, TableRowLayoutError, TableRowMeasure, TableRowSizing,
+    TableSeparatedBlockMetrics, align_table_cells, apply_baseline_row_minima, format_table_cells,
+    measure_single_span_rows, resolve_percentage_block_sizes, size_table_rows,
+    spanned_cell_content_inline_size,
 };
 pub use sizing::{
     AffineLengthPercentage, CaptionMinContribution, CellInlineOffsets, InlineSizeConstraint,
-    TableBoxSizing, TableCellInlineMeasure, TableCellInlineStyle, TableDeferral,
-    TableInlineBorderMetrics, TableInlineConstraints, TableInlineProperty, TableInlineSizingError,
-    TableInlineSizingInput, TableInlineSizingResult, TableIntrinsicMeasureProvider,
-    TableSeparatedBorderMetrics, TableTrackVisibility, TableTrackVisibilityState, collapse_columns,
-    collect_table_cell_inline_measures, query_table_cell_inline_sizes,
+    TableBoxSizing, TableCellInlineMeasure, TableCellInlineStyle, TableCollapsedBorderMetrics,
+    TableDeferral, TableInlineBorderMetrics, TableInlineConstraints, TableInlineProperty,
+    TableInlineSizingError, TableInlineSizingInput, TableInlineSizingResult,
+    TableIntrinsicMeasureProvider, TableSeparatedBorderMetrics, TableTrackVisibility,
+    TableTrackVisibilityState, collapse_columns, collect_table_cell_inline_measures,
+    query_table_cell_inline_sizes,
 };
 
 /// The table topology needed by the temporary layout bridge and later table

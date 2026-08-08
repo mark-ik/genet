@@ -39,8 +39,9 @@ use crate::{
     box_tree::GeneratedBoxTree,
     table_block::TableBlockLedger,
     table_sizing::{
-        CollapsedBorderLoweringError, automatic_table_track_inputs, fixed_table_track_inputs,
-        table_cell_inline_style, table_inline_constraints,
+        CollapsedBorderLoweringError, automatic_table_track_inputs, collapsed_cell_inline_style,
+        collapsed_table_inline_metrics, fixed_table_track_inputs, table_cell_inline_style,
+        table_inline_constraints,
     },
 };
 
@@ -201,6 +202,7 @@ pub(crate) fn buckram_table_columns<D>(
     table: BoxId,
     table_node: D::NodeId,
     computed: &ComputedValues,
+    collapsed_border_metrics: Option<&CollapsedBorderMetrics>,
     font_size: f32,
     containing_width: Option<f32>,
     caption_min: Option<f32>,
@@ -219,6 +221,7 @@ where
             grid,
             table_node,
             computed,
+            collapsed_border_metrics,
             font_size,
             containing_width,
             caption_min,
@@ -251,6 +254,7 @@ where
         table,
         table_node,
         computed,
+        collapsed_border_metrics,
         font_size,
         containing_width,
         caption_min,
@@ -268,6 +272,7 @@ fn automatic_columns<D>(
     table: BoxId,
     table_node: D::NodeId,
     computed: &ComputedValues,
+    collapsed_border_metrics: Option<&CollapsedBorderMetrics>,
     font_size: f32,
     containing_width: Option<f32>,
     caption_min: Option<f32>,
@@ -285,6 +290,7 @@ where
         grid,
         table_node,
         computed,
+        collapsed_border_metrics,
         font_size,
         containing_width,
         caption_min,
@@ -303,8 +309,13 @@ where
                 table_inline_constraints(style, font_size, LIVE_ROOT_FONT_SIZE)
             })
     });
-    let cells =
-        match lowered_cells::<D>(boxes, styles, grid, font_size, |index, source, lowered| {
+    let cells = match lowered_cells::<D>(
+        boxes,
+        styles,
+        grid,
+        font_size,
+        collapsed_border_metrics,
+        |index, source, lowered| {
             let raw = cell_border_box_intrinsics
                 .get(index)
                 .copied()
@@ -326,17 +337,18 @@ where
                 (raw.max_content - offsets).max(0.0),
             )
             .ok_or(TableInlineSizingError::InvalidResultSize)
-        }) {
-            Ok(cells) => cells,
-            Err(TableInlineSizingError::InvalidResultSize) => {
-                ledger.skip(table, TableShadowSkip::AutomaticIncompleteCells);
-                return None;
-            },
-            Err(error) => {
-                ledger.skip(table, classify(error));
-                return None;
-            },
-        };
+        },
+    ) {
+        Ok(cells) => cells,
+        Err(TableInlineSizingError::InvalidResultSize) => {
+            ledger.skip(table, TableShadowSkip::AutomaticIncompleteCells);
+            return None;
+        },
+        Err(error) => {
+            ledger.skip(table, classify(error));
+            return None;
+        },
+    };
 
     let input = TableAutomaticColumnMeasureInput {
         sizing,
@@ -483,6 +495,7 @@ fn sizing_input<'a, D>(
     grid: &'a TableGrid,
     table_node: D::NodeId,
     computed: &ComputedValues,
+    collapsed_border_metrics: Option<&CollapsedBorderMetrics>,
     font_size: f32,
     containing_width: Option<f32>,
     caption_min: Option<f32>,
@@ -494,7 +507,18 @@ where
     let axes = buckram::FlowAxes::HORIZONTAL_LTR;
     let root_font_size = LIVE_ROOT_FONT_SIZE;
     let border_metrics = match computed.border_collapse {
-        BorderCollapse::Collapse => TableInlineBorderMetrics::CollapsedPendingK4g,
+        BorderCollapse::Collapse => {
+            let metrics = collapsed_border_metrics.ok_or(TableInlineSizingError::Deferral(
+                TableDeferral::CollapsedBorderMetricsPendingK4g,
+            ))?;
+            TableInlineBorderMetrics::Collapsed(collapsed_table_inline_metrics(
+                computed,
+                axes,
+                font_size,
+                root_font_size,
+                metrics,
+            )?)
+        },
         BorderCollapse::Separate => {
             let spacing = computed.border_spacing.horizontal;
             TableInlineBorderMetrics::Separated(TableSeparatedBorderMetrics {
@@ -538,6 +562,7 @@ fn lowered_cells<D>(
     styles: &StylePlane<D::NodeId>,
     grid: &TableGrid,
     font_size: f32,
+    collapsed_border_metrics: Option<&CollapsedBorderMetrics>,
     mut content_for: impl FnMut(
         usize,
         BoxId,
@@ -560,7 +585,17 @@ where
                 box_id: cell.source,
             });
         };
-        let lowered = table_cell_inline_style(&style, axes, font_size, LIVE_ROOT_FONT_SIZE)?;
+        let lowered = match collapsed_border_metrics {
+            Some(metrics) => collapsed_cell_inline_style(
+                &style,
+                axes,
+                font_size,
+                LIVE_ROOT_FONT_SIZE,
+                metrics,
+                cell.source,
+            )?,
+            None => table_cell_inline_style(&style, axes, font_size, LIVE_ROOT_FONT_SIZE)?,
+        };
         cells.push(TableCellInlineMeasure {
             box_id: cell.source,
             content: content_for(index, cell.source, &lowered)?,
@@ -586,6 +621,7 @@ fn fixed_input<'a, D>(
     grid: &'a TableGrid,
     table_node: D::NodeId,
     computed: &ComputedValues,
+    collapsed_border_metrics: Option<&CollapsedBorderMetrics>,
     font_size: f32,
     containing_width: Option<f32>,
     caption_min: Option<f32>,
@@ -602,6 +638,7 @@ where
         grid,
         table_node,
         computed,
+        collapsed_border_metrics,
         font_size,
         containing_width,
         caption_min,
@@ -618,9 +655,14 @@ where
         })
     });
     // Fixed layout never consults content, by definition of the algorithm.
-    let cells = lowered_cells::<D>(boxes, styles, grid, font_size, |_, _, _| {
-        IntrinsicSizes::new(0.0, 0.0).ok_or(TableInlineSizingError::InvalidResultSize)
-    })?;
+    let cells = lowered_cells::<D>(
+        boxes,
+        styles,
+        grid,
+        font_size,
+        collapsed_border_metrics,
+        |_, _, _| IntrinsicSizes::new(0.0, 0.0).ok_or(TableInlineSizingError::InvalidResultSize),
+    )?;
 
     Ok(TableFixedInlineSizingInput {
         sizing,

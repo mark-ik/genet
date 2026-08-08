@@ -10,10 +10,10 @@ use buckram::{
     TableAutomaticColumnGroupInput, TableAutomaticColumnInput, TableBlockConstraint,
     TableBorderError, TableBorderOrderKey, TableBorderOrigin, TableBorderResolutionError,
     TableBorderSides, TableBorderSource, TableBorderSources, TableBorderStyle, TableBoxSizing,
-    TableCellAlignment, TableCellBlockStyle, TableCellInlineStyle, TableDeferral,
-    TableFixedColumnGroupInput, TableFixedColumnInput, TableGrid, TableInlineConstraints,
-    TableInlineProperty, TableInlineSizingError, collect_table_border_candidates,
-    project_collapsed_border_metrics,
+    TableCellAlignment, TableCellBlockStyle, TableCellInlineStyle, TableCollapsedBorderMetrics,
+    TableDeferral, TableFixedColumnGroupInput, TableFixedColumnInput, TableGrid,
+    TableInlineConstraints, TableInlineProperty, TableInlineSizingError,
+    collect_table_border_candidates, project_collapsed_border_metrics,
 };
 use livery::{
     ComputedValues,
@@ -63,6 +63,75 @@ pub(crate) fn table_cell_inline_style(
 pub(crate) struct CollapsedTableBorders {
     pub winners: ResolvedTableBorderGrid<ComputedColor>,
     pub metrics: CollapsedBorderMetrics,
+}
+
+/// Lower the table box's own collapsed-model inline geometry. Its padding is
+/// still authored by the table, while K4g3's outer winners replace its
+/// declared borders and `border-spacing` entirely.
+pub(crate) fn collapsed_table_inline_metrics(
+    computed: &ComputedValues,
+    axes: FlowAxes,
+    font_size: f32,
+    root_font_size: f32,
+    metrics: &CollapsedBorderMetrics,
+) -> Result<TableCollapsedBorderMetrics, TableInlineSizingError> {
+    let mut table_padding =
+        table_cell_inline_style(computed, axes, font_size, root_font_size)?.offsets;
+    table_padding.border_start = 0.0;
+    table_padding.border_end = 0.0;
+    let outer_start = metrics.table_outer.inline_start;
+    let outer_end = metrics.table_outer.inline_end;
+    if !outer_start.is_finite() || outer_start < 0.0 || !outer_end.is_finite() || outer_end < 0.0 {
+        return Err(TableInlineSizingError::InvalidBorderMetrics);
+    }
+    Ok(TableCollapsedBorderMetrics {
+        table_padding,
+        outer_start,
+        outer_end,
+    })
+}
+
+/// Replace a cell's declared inline borders with the B2 winners that meet its
+/// four grid sides. Padding and CSS size constraints remain authored values.
+pub(crate) fn collapsed_cell_inline_style(
+    computed: &ComputedValues,
+    axes: FlowAxes,
+    font_size: f32,
+    root_font_size: f32,
+    metrics: &CollapsedBorderMetrics,
+    cell: buckram::BoxId,
+) -> Result<TableCellInlineStyle, TableInlineSizingError> {
+    let mut style = table_cell_inline_style(computed, axes, font_size, root_font_size)?;
+    let Some(cell_metrics) = metrics.cell_offsets.iter().find(|entry| entry.cell == cell) else {
+        return Err(TableInlineSizingError::InvalidOffsets { box_id: cell });
+    };
+    style.offsets.border_start = cell_metrics.sides.inline_start.projected_half_width;
+    style.offsets.border_end = cell_metrics.sides.inline_end.projected_half_width;
+    if !style.offsets.is_valid() {
+        return Err(TableInlineSizingError::InvalidOffsets { box_id: cell });
+    }
+    Ok(style)
+}
+
+/// The block-axis counterpart of [`collapsed_cell_inline_style`].
+pub(crate) fn collapsed_cell_block_style(
+    computed: &ComputedValues,
+    axes: FlowAxes,
+    font_size: f32,
+    root_font_size: f32,
+    metrics: &CollapsedBorderMetrics,
+    cell: buckram::BoxId,
+) -> Result<TableCellBlockStyle, TableInlineSizingError> {
+    let mut style = table_cell_block_style(computed, axes, font_size, root_font_size)?;
+    let Some(cell_metrics) = metrics.cell_offsets.iter().find(|entry| entry.cell == cell) else {
+        return Err(TableInlineSizingError::InvalidOffsets { box_id: cell });
+    };
+    style.offsets.border_start = cell_metrics.sides.block_start.projected_half_width;
+    style.offsets.border_end = cell_metrics.sides.block_end.projected_half_width;
+    if style.offsets.total().is_none() {
+        return Err(TableInlineSizingError::InvalidOffsets { box_id: cell });
+    }
+    Ok(style)
 }
 
 /// Lower every physical computed border side into the table's logical axes,

@@ -251,6 +251,39 @@ impl FragmentTree {
         }
         id
     }
+
+    /// Replace one fragment's overflow and union it into every structural
+    /// ancestor. Layout phases that add a real out-of-border-box extent use
+    /// this after their fragment exists; the fragment tree, not a paint
+    /// consumer, remains the owner of the propagated geometry.
+    pub fn set_overflow(&mut self, id: FragmentId, overflow: LogicalRect) {
+        let Some(fragment) = self.fragments.get_mut(id.index()) else {
+            return;
+        };
+        fragment.overflow = overflow;
+        let mut child = id;
+        while let Some(parent) = self.fragments[child.index()].parent {
+            let child_overflow = self.fragments[child.index()].overflow;
+            let parent_fragment = &mut self.fragments[parent.index()];
+            parent_fragment.overflow =
+                union_logical_rects(parent_fragment.overflow, child_overflow);
+            child = parent;
+        }
+    }
+}
+
+fn union_logical_rects(one: LogicalRect, other: LogicalRect) -> LogicalRect {
+    let inline_start = one.inline_start.min(other.inline_start);
+    let block_start = one.block_start.min(other.block_start);
+    let inline_end =
+        (one.inline_start + one.inline_size).max(other.inline_start + other.inline_size);
+    let block_end = (one.block_start + one.block_size).max(other.block_start + other.block_size);
+    LogicalRect {
+        inline_start,
+        block_start,
+        inline_size: inline_end - inline_start,
+        block_size: block_end - block_start,
+    }
 }
 
 /// The standards-owned result of one layout pass.

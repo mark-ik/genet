@@ -352,6 +352,43 @@ winners, table size, and overflow. K4c/K4d fixtures rerun under both border
 models. Accepted collapsed cases no longer produce either K4g metric
 deferral.
 
+### B4a. One sizing path and propagated outer spill - 2026-08-08
+
+`TableInlineBorderMetrics::Collapsed` and `TableBlockBorderMetrics::Collapsed`
+now carry the B2 projection through the existing fixed, automatic, and row
+algorithms. A collapsed table contributes its own padding, one half of each
+accepted outer winner, and no border spacing. Each cell replaces its declared
+border offsets with B2's projected half-winner offsets, so an interior winner
+is counted once across its two adjoining cells. No fixed, automatic, or row
+algorithm forks by border model.
+
+The emitted grid fragment retains the outer half-winner as logical overflow.
+When Livery commits it, that overflow is unioned into the grid fragment and
+its structural ancestors. The live 5px-border fixture observes a 2.5px spill
+at both inline-start and block-start; it is a fragment-tree fact rather than
+a paint-only rectangle.
+
+The refreshed table census covers the same 784 rendered documents as B3:
+
+| scope | inline assigned / verified / honored | block laid out / verified / agreed | collapsed metric deferrals |
+|---|---:|---:|---:|
+| `css/css-tables` | 293 / 276 / 276 | 293 / 279 / 279 | 0 of 127 projected tables |
+| `css/CSS2/tables` | 440 / 399 / 399 | 440 / 400 / 400 | 0 of 88 projected tables |
+
+There are no inline or block divergences. The six newly visible
+`AutomaticIndefinite::ContainingInlineSize` outcomes in `css/css-tables`
+are no longer concealed by a collapsed-metric deferral: they remain K4c's
+named absent-containing-basis result. Three percentage-padding deferrals and
+the two existing invalid inputs retain their B3 dispositions. The K4g metric
+deferral count is zero in both scopes.
+
+The reftest maps are now `64/66/198` for `css/css-tables` and `162/100/877`
+for `css/CSS2/tables` (pass/fail/skip, zero errors): improvements of two and
+twenty passes respectively over B3. The pure receipt has 188 Buckram tests,
+covering fixed, automatic, and row sizing under collapsed metrics; the live
+adapter suite covers the projected-metric dispatch and outer-spill fragment
+propagation.
+
 ## B5. Separated table paint closure
 
 Complete the unfinished portion of K4f before K4g5 relies on the table paint

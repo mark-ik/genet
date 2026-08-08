@@ -15,11 +15,12 @@ use std::hash::Hash;
 
 use buckram::{
     AlgorithmKind, AlgorithmLayout, AlgorithmNodeId, AlgorithmTree, BoxId, BoxOrigin,
-    CellBlockOffsets, FlowAxes, InternalTableRole, TableBlockBorderMetrics, TableBlockConstraint,
-    TableBlockDeferral, TableBlockLayout, TableBlockSizingInput, TableBoxSizing,
-    TableCellBlockStyle, TableCellFormatter, TableCellLayoutInput, TableCellLayoutOutput,
-    TableGrid, TableInlineSizingError, TableInlineSizingResult, TableRowLayoutError,
-    TableSeparatedBlockMetrics, TableTrackVisibility, layout_table_block,
+    CellBlockOffsets, CollapsedBorderMetrics, FlowAxes, InternalTableRole, TableBlockBorderMetrics,
+    TableBlockConstraint, TableBlockDeferral, TableBlockLayout, TableBlockSizingInput,
+    TableBoxSizing, TableCellBlockStyle, TableCellFormatter, TableCellLayoutInput,
+    TableCellLayoutOutput, TableCollapsedBlockMetrics, TableGrid, TableInlineSizingError,
+    TableInlineSizingResult, TableRowLayoutError, TableSeparatedBlockMetrics, TableTrackVisibility,
+    layout_table_block,
 };
 use livery::{
     ComputedValues,
@@ -30,7 +31,10 @@ use crate::{
     StylePlane,
     box_tree::GeneratedBoxTree,
     table_shadow::LIVE_ROOT_FONT_SIZE,
-    table_sizing::{block_size_constraint, table_cell_block_style, table_cell_inline_style},
+    table_sizing::{
+        block_size_constraint, collapsed_cell_block_style, collapsed_cell_inline_style,
+        table_cell_block_style, table_cell_inline_style,
+    },
 };
 
 /// Why a table received no Buckram block layout.
@@ -140,6 +144,7 @@ pub(crate) fn table_block_inputs<Id>(
     grid: &TableGrid,
     table: BoxId,
     computed: &ComputedValues,
+    collapsed_border_metrics: Option<&CollapsedBorderMetrics>,
     font_size: f32,
     containing_block_size: Option<f32>,
     ledger: &mut TableBlockLedger,
@@ -157,7 +162,42 @@ where
     };
 
     let border_metrics = match computed.border_collapse {
-        BorderCollapse::Collapse => TableBlockBorderMetrics::CollapsedPendingK4g,
+        BorderCollapse::Collapse => match collapsed_border_metrics {
+            None => TableBlockBorderMetrics::CollapsedPendingK4g,
+            Some(metrics) => {
+                let table_style = match table_cell_block_style(computed, axes, font_size, root) {
+                    Ok(style) => style,
+                    Err(error) => {
+                        ledger.skip(table, TableBlockSkip::DeferredInLowering(error));
+                        return None;
+                    },
+                };
+                let values = [
+                    table_style.offsets.padding_start,
+                    table_style.offsets.padding_end,
+                    metrics.table_outer.block_start,
+                    metrics.table_outer.block_end,
+                ];
+                if !values
+                    .iter()
+                    .all(|value| value.is_finite() && *value >= 0.0)
+                {
+                    ledger.skip(
+                        table,
+                        TableBlockSkip::Error(TableRowLayoutError::InvalidCellOutput {
+                            box_id: table,
+                        }),
+                    );
+                    return None;
+                }
+                TableBlockBorderMetrics::Collapsed(TableCollapsedBlockMetrics {
+                    table_padding_start: table_style.offsets.padding_start,
+                    table_padding_end: table_style.offsets.padding_end,
+                    outer_start: metrics.overflow.block_start,
+                    outer_end: metrics.overflow.block_end,
+                })
+            },
+        },
         BorderCollapse::Separate => {
             // The table's own block-axis padding and border, lowered through
             // the cell contract because the two boxes take the same edges.
@@ -190,7 +230,15 @@ where
             ledger.skip(table, TableBlockSkip::IncompleteCells);
             return None;
         };
-        let lowered = match lower_cell(boxes, styles, &style, cell.source, axes, font_size) {
+        let lowered = match lower_cell(
+            boxes,
+            styles,
+            &style,
+            cell.source,
+            axes,
+            font_size,
+            collapsed_border_metrics,
+        ) {
             Ok(lowered) => lowered,
             Err(error) => {
                 ledger.skip(table, TableBlockSkip::DeferredInLowering(error));
@@ -256,7 +304,10 @@ where
             livery::values::BoxSizing::BorderBox => TableBoxSizing::BorderBox,
         },
         border_metrics,
-        inline_spacing: spacing.unit.to_px(spacing.value, font_size, root),
+        inline_spacing: match computed.border_collapse {
+            BorderCollapse::Collapse => 0.0,
+            BorderCollapse::Separate => spacing.unit.to_px(spacing.value, font_size, root),
+        },
         track_visibility: crate::table_shadow::track_visibility(boxes, styles, grid),
     })
 }
@@ -293,20 +344,33 @@ fn lower_cell<Id>(
     source: BoxId,
     axes: FlowAxes,
     font_size: f32,
+    collapsed_border_metrics: Option<&CollapsedBorderMetrics>,
 ) -> Result<CellBlockInput, TableInlineSizingError>
 where
     Id: Copy + Eq + Hash,
 {
     let root = LIVE_ROOT_FONT_SIZE;
-    let mut style = table_cell_block_style(computed, axes, font_size, root)?;
+    let mut style = match collapsed_border_metrics {
+        Some(metrics) => {
+            collapsed_cell_block_style(computed, axes, font_size, root, metrics, source)?
+        },
+        None => table_cell_block_style(computed, axes, font_size, root)?,
+    };
     style.percentage_dependent_contents =
         contents_depend_on_block_size(boxes, styles, source, computed);
-    let inline_offsets = table_cell_inline_style(computed, axes, font_size, root)?
-        .offsets
-        .absolute_total()
-        .ok_or(TableInlineSizingError::Deferral(
-            buckram::TableDeferral::PercentagePaddingPendingBasis,
-        ))?;
+    let inline_style = match collapsed_border_metrics {
+        Some(metrics) => {
+            collapsed_cell_inline_style(computed, axes, font_size, root, metrics, source)?
+        },
+        None => table_cell_inline_style(computed, axes, font_size, root)?,
+    };
+    let inline_offsets =
+        inline_style
+            .offsets
+            .absolute_total()
+            .ok_or(TableInlineSizingError::Deferral(
+                buckram::TableDeferral::PercentagePaddingPendingBasis,
+            ))?;
     Ok(CellBlockInput {
         style,
         inline_offsets,
