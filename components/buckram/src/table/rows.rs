@@ -137,6 +137,19 @@ pub enum TableRowLayoutError {
         expected: usize,
         actual: usize,
     },
+    /// Non-empty per-row-group inputs must follow K4b's visual group order.
+    /// An empty slice means every group is `auto`, which keeps pure callers
+    /// from inventing a CSS box just to name an unconstrained group.
+    RowGroupInputCountMismatch {
+        expected: usize,
+        actual: usize,
+    },
+    /// K4b topology supplied a row-group range outside its row vector.
+    RowGroupRangeOutOfBounds {
+        start: usize,
+        span: usize,
+        rows: usize,
+    },
     Inline(TableInlineSizingError),
 }
 
@@ -316,6 +329,10 @@ pub struct TableBlockSizingInput<'a> {
     /// box at `content-box`, so the same specified height means two different
     /// used sizes.
     pub table_box_sizing: TableBoxSizing,
+    /// Definite `height` constraints for K4b row groups, in visual row-group
+    /// order. An empty slice means every group is unconstrained; otherwise it
+    /// must align exactly with `grid.row_groups`.
+    pub row_group_constraints: &'a [TableBlockConstraint],
     pub border_metrics: TableBlockBorderMetrics,
     pub available_block_size: Option<f32>,
     pub track_visibility: TableTrackVisibility,
@@ -606,6 +623,14 @@ pub fn size_table_rows(
             actual: measures.len(),
         });
     }
+    if !input.row_group_constraints.is_empty()
+        && input.row_group_constraints.len() != grid.row_groups.len()
+    {
+        return Err(TableRowLayoutError::RowGroupInputCountMismatch {
+            expected: grid.row_groups.len(),
+            actual: input.row_group_constraints.len(),
+        });
+    }
     if cell_styles.len() != grid.cells.len() || cell_outputs.len() != grid.cells.len() {
         return Err(TableRowLayoutError::CellInputCountMismatch {
             expected: grid.cells.len(),
@@ -664,6 +689,48 @@ pub fn size_table_rows(
             required - crossed_spacing,
             ZeroWeightFallback::LastEligibleRow,
         );
+    }
+
+    // CSS 2.1 leaves row-group height undefined, but the focused T4 matrix
+    // agrees across Chrome and Firefox: a definite group height is a minimum
+    // distributed over exactly that group's rows by the normal table-height
+    // rule. It must run after spanning-cell minima, since a group only grows
+    // the row sizes K4d already established; the table's own minimum follows
+    // afterwards and can grow every row in turn.
+    for (group_index, group) in grid.row_groups.iter().enumerate() {
+        let constraint = input
+            .row_group_constraints
+            .get(group_index)
+            .copied()
+            .unwrap_or(TableBlockConstraint::Auto);
+        let Some(target) = definite_block_size(constraint) else {
+            continue;
+        };
+        let Some(end) = group.start.checked_add(group.span) else {
+            return Err(TableRowLayoutError::RowGroupRangeOutOfBounds {
+                start: group.start,
+                span: group.span,
+                rows: grid.rows.len(),
+            });
+        };
+        if end > sizes.len() {
+            return Err(TableRowLayoutError::RowGroupRangeOutOfBounds {
+                start: group.start,
+                span: group.span,
+                rows: grid.rows.len(),
+            });
+        }
+        let current = sizes[group.start..end].iter().sum::<f32>();
+        if target > current {
+            distribute_over_rows(
+                &mut sizes,
+                &constrained,
+                group.start,
+                group.span,
+                target,
+                ZeroWeightFallback::EqualShares,
+            );
+        }
     }
 
     let rows_total = sizes.iter().sum::<f32>();
@@ -1368,6 +1435,7 @@ mod tests {
             inline: &inline,
             table_constraint: TableBlockConstraint::Auto,
             table_box_sizing: TableBoxSizing::BorderBox,
+            row_group_constraints: &[],
             border_metrics: TableBlockBorderMetrics::Separated(
                 TableSeparatedBlockMetrics::default(),
             ),
@@ -1411,6 +1479,7 @@ mod tests {
             inline: &inline,
             table_constraint: TableBlockConstraint::Auto,
             table_box_sizing: TableBoxSizing::BorderBox,
+            row_group_constraints: &[],
             border_metrics: TableBlockBorderMetrics::CollapsedPendingK4g,
             available_block_size: None,
             track_visibility: TableTrackVisibility::all_visible(&grid),
@@ -1442,6 +1511,7 @@ mod tests {
             inline: &inline,
             table_constraint: TableBlockConstraint::Auto,
             table_box_sizing: TableBoxSizing::BorderBox,
+            row_group_constraints: &[],
             border_metrics: TableBlockBorderMetrics::Separated(
                 TableSeparatedBlockMetrics::default(),
             ),
@@ -1535,6 +1605,7 @@ mod tests {
             inline,
             table_constraint: TableBlockConstraint::Auto,
             table_box_sizing: TableBoxSizing::BorderBox,
+            row_group_constraints: &[],
             border_metrics: TableBlockBorderMetrics::Separated(
                 TableSeparatedBlockMetrics::default(),
             ),
@@ -1858,6 +1929,7 @@ mod tests {
             inline: &inline,
             table_constraint: table,
             table_box_sizing: TableBoxSizing::BorderBox,
+            row_group_constraints: &[],
             border_metrics: TableBlockBorderMetrics::Separated(metrics),
             available_block_size: None,
             track_visibility: TableTrackVisibility::all_visible(&grid),
@@ -1976,6 +2048,68 @@ mod tests {
     }
 
     #[test]
+    fn row_group_height_uses_the_table_distribution_rule_for_its_own_rows() {
+        // T4 from the K4d3 matrix: `tbody { height: 200px }` over rows whose
+        // content minima are 20px and 40px. Both tested browsers distribute
+        // the group's minimum proportionally, and the table grows with it.
+        let grid = multi_row_grid(&[&[3], &[4]], &[]);
+        let inline = inline_result(&grid, vec![10.0]);
+        let group_constraints = [px(200.0)];
+        let mut input = block_input(&grid, &inline);
+        input.row_group_constraints = &group_constraints;
+        let styles = vec![TableCellBlockStyle::default(); grid.cells.len()];
+        let outputs = grid
+            .cells
+            .iter()
+            .map(|cell| {
+                (
+                    cell.source,
+                    output(if cell.row == 0 { 20.0 } else { 40.0 }, 0.0),
+                )
+            })
+            .collect::<Vec<_>>();
+        let row_constraints = vec![TableBlockConstraint::Auto; grid.rows.len()];
+        let measures = measure_single_span_rows(&input, &styles, &outputs, &row_constraints)
+            .expect("row measures");
+
+        let sizing = size_table_rows(&input, &measures, &styles, &outputs).expect("row sizing");
+        close(&sizing.row_sizes, &[66.67, 133.33]);
+        assert!((sizing.used_table_block_size - 200.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn nonempty_row_group_constraints_must_match_k4b_group_order() {
+        let grid = multi_row_grid(&[&[3]], &[]);
+        let inline = inline_result(&grid, vec![10.0]);
+        let constraints = [TableBlockConstraint::Auto, TableBlockConstraint::Auto];
+        let mut input = block_input(&grid, &inline);
+        input.row_group_constraints = &constraints;
+        let styles = vec![TableCellBlockStyle::default(); grid.cells.len()];
+        let outputs = grid
+            .cells
+            .iter()
+            .map(|cell| (cell.source, output(0.0, 0.0)))
+            .collect::<Vec<_>>();
+        let measures = vec![
+            TableRowMeasure {
+                row: None,
+                min_block_size: 0.0,
+                preferred: TableBlockConstraint::Auto,
+                constrained: false,
+            };
+            grid.rows.len()
+        ];
+
+        assert_eq!(
+            size_table_rows(&input, &measures, &styles, &outputs),
+            Err(TableRowLayoutError::RowGroupInputCountMismatch {
+                expected: 1,
+                actual: 2,
+            })
+        );
+    }
+
+    #[test]
     fn spacing_counts_once_at_the_table_and_inside_a_span() {
         let metrics = TableSeparatedBlockMetrics {
             table_offset_start: 1.0,
@@ -2038,6 +2172,7 @@ mod tests {
             inline: &inline,
             table_constraint: TableBlockConstraint::Auto,
             table_box_sizing: TableBoxSizing::BorderBox,
+            row_group_constraints: &[],
             border_metrics: TableBlockBorderMetrics::CollapsedPendingK4g,
             available_block_size: None,
             track_visibility: TableTrackVisibility::all_visible(&grid),
@@ -2121,6 +2256,7 @@ mod tests {
             inline: &inline,
             table_constraint: table,
             table_box_sizing: TableBoxSizing::BorderBox,
+            row_group_constraints: &[],
             border_metrics: TableBlockBorderMetrics::Separated(
                 TableSeparatedBlockMetrics::default(),
             ),
@@ -2325,6 +2461,7 @@ mod tests {
             inline: &inline,
             table_constraint: row_size.map_or(TableBlockConstraint::Auto, px),
             table_box_sizing: TableBoxSizing::BorderBox,
+            row_group_constraints: &[],
             border_metrics: TableBlockBorderMetrics::Separated(
                 TableSeparatedBlockMetrics::default(),
             ),
@@ -2437,6 +2574,7 @@ mod tests {
             inline: &inline,
             table_constraint: TableBlockConstraint::Auto,
             table_box_sizing: TableBoxSizing::BorderBox,
+            row_group_constraints: &[],
             border_metrics: TableBlockBorderMetrics::Separated(metrics),
             available_block_size: None,
             track_visibility: TableTrackVisibility::all_visible(&grid),
@@ -2479,6 +2617,7 @@ mod tests {
             inline: &inline,
             table_constraint: TableBlockConstraint::Auto,
             table_box_sizing: TableBoxSizing::BorderBox,
+            row_group_constraints: &[],
             border_metrics: TableBlockBorderMetrics::Separated(
                 TableSeparatedBlockMetrics::default(),
             ),

@@ -555,11 +555,10 @@ keeps a single distribution function rather than two that differ only in a
 rarely-reached branch. This is a measured tiebreak, not a reading of draft
 prose.
 
-**Row-group height (T4) is explicit but unimplemented.** Both engines apply a
-row-group height exactly as a table height over that group's rows. Buckram
-does not yet act on it because `TableBlockSizingInput` carries no per-group
-constraint; adding one the adapter does not supply would be worse than the
-recorded gap. K4d6 wires it when the adapter lowers group styles.
+**Row-group height (T4) is explicit but was not wired by K4d6.** Both engines
+apply a row-group height exactly as a table height over that group's rows.
+`TableBlockSizingInput` originally carried no per-group constraint; B3 owns
+the later adapter and model carry rather than making that gap look complete.
 
 ### K4d3 receipt - 2026-08-01
 

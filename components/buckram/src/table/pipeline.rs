@@ -264,6 +264,7 @@ mod tests {
                 inline: &self.inline,
                 table_constraint,
                 table_box_sizing: crate::TableBoxSizing::BorderBox,
+                row_group_constraints: &[],
                 border_metrics: TableBlockBorderMetrics::Separated(
                     TableSeparatedBlockMetrics::default(),
                 ),

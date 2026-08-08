@@ -4870,6 +4870,61 @@ mod tests {
         );
     }
 
+    /// B3: the accepted K4d3 row-group rule must reach live geometry rather
+    /// than remain a pure constraint. A definite `tbody` height is a minimum
+    /// shared proportionally by only that group's 20px and 40px rows.
+    #[test]
+    fn b3_row_group_height_reaches_the_buckram_table_route() {
+        let dom = StaticDocument::parse(
+            "<table><tbody><tr><td><i class=small></i></td></tr><tr><td><i class=large></i></td></tr></tbody></table>",
+        );
+        let styles = resolve_styles(
+            &dom,
+            &StyleSet::cambium(&[
+                "table { display: table; table-layout: fixed; width: 200px; border-spacing: 0; } \
+                 tbody { display: table-row-group; height: 200px; } \
+                 tr { display: table-row; } td { display: table-cell; padding: 0; } \
+                 i { display: block; } .small { height: 20px; } .large { height: 40px; }",
+            ]),
+            &Device::screen(320.0, 240.0),
+            &InteractionStates::default(),
+        );
+        let mut text = TextSystem::new();
+        let (_, layout) = layout_with_text_system(
+            &dom,
+            &styles,
+            320.0,
+            240.0,
+            ViewportSizes::uniform(320.0, 240.0),
+            &mut text,
+            &HashMap::new(),
+        )
+        .expect("layout");
+        let ledger = layout.table_shadow_ledger();
+        assert_eq!(ledger.block.laid_out, 1, "block ledger: {:?}", ledger.block);
+        assert_eq!(ledger.block.agreed, 1, "block ledger: {:?}", ledger.block);
+
+        let rows = layout
+            .boxes()
+            .iter()
+            .filter(|(_, css_box)| css_box.display.internal_table == Some(InternalTableRole::Row))
+            .filter_map(|(box_id, _)| {
+                layout
+                    .fragments()
+                    .fragments_for_box(box_id)
+                    .next()
+                    .map(|fragment| fragment.physical_rect())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 2, "rows: {rows:?}");
+        assert!((rows[0].height - 66.67).abs() < 0.5, "rows: {rows:?}");
+        assert!((rows[1].height - 133.33).abs() < 0.5, "rows: {rows:?}");
+        assert!(
+            (rows[0].height + rows[1].height - 200.0).abs() < 0.5,
+            "rows: {rows:?}"
+        );
+    }
+
     /// Lay out one document and return every table-role box's rectangle.
     fn table_boxes(html: &str, css: &str) -> Vec<(InternalTableRole, PhysicalRect)> {
         let dom = StaticDocument::parse(html);
@@ -5708,6 +5763,7 @@ mod tests {
             inline: &inline,
             table_constraint: buckram::TableBlockConstraint::Auto,
             table_box_sizing: buckram::TableBoxSizing::BorderBox,
+            row_group_constraints: &[],
             border_metrics: buckram::TableBlockBorderMetrics::Separated(
                 buckram::TableSeparatedBlockMetrics::default(),
             ),
@@ -5885,6 +5941,7 @@ mod tests {
             inline: &inline,
             table_constraint: buckram::TableBlockConstraint::Auto,
             table_box_sizing: buckram::TableBoxSizing::BorderBox,
+            row_group_constraints: &[],
             border_metrics: buckram::TableBlockBorderMetrics::Separated(
                 buckram::TableSeparatedBlockMetrics::default(),
             ),
@@ -6060,6 +6117,7 @@ mod tests {
             inline: &inline,
             table_constraint: buckram::TableBlockConstraint::Auto,
             table_box_sizing: buckram::TableBoxSizing::BorderBox,
+            row_group_constraints: &[],
             border_metrics: buckram::TableBlockBorderMetrics::Separated(
                 buckram::TableSeparatedBlockMetrics::default(),
             ),

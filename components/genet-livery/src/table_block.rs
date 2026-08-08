@@ -42,6 +42,9 @@ pub enum TableBlockSkip {
     DeferredInLowering(TableInlineSizingError),
     /// A grid cell built no algorithm node, so it cannot be formatted.
     IncompleteCells,
+    /// A K4b row-group source could not be lowered to its computed block
+    /// constraint, so accepting the table would silently discard geometry.
+    IncompleteRowGroup,
     Error(TableRowLayoutError),
 }
 
@@ -116,6 +119,9 @@ pub(crate) struct CellBlockInput {
 pub(crate) struct TableBlockInputs {
     pub cells: Vec<CellBlockInput>,
     pub rows: Vec<TableBlockConstraint>,
+    /// K4d3's measured group-height constraint, aligned with K4b visual row
+    /// groups. A group is still a structural range, never a synthetic row.
+    pub row_groups: Vec<TableBlockConstraint>,
     pub table_constraint: TableBlockConstraint,
     pub table_box_sizing: TableBoxSizing,
     pub border_metrics: TableBlockBorderMetrics,
@@ -204,10 +210,23 @@ where
         rows.push(block_size_constraint(style.height, font_size, root));
     }
 
+    let mut row_groups = Vec::with_capacity(grid.row_groups.len());
+    for group in &grid.row_groups {
+        // A K4b row group always has its generated source box. Keep the
+        // lowering explicit: inventing `auto` for a missing style would turn
+        // an adapter fault into silent geometry.
+        let Some(style) = style_of(group.source) else {
+            ledger.skip(table, TableBlockSkip::IncompleteRowGroup);
+            return None;
+        };
+        row_groups.push(block_size_constraint(style.height, font_size, root));
+    }
+
     let spacing = computed.border_spacing.horizontal;
     Some(TableBlockInputs {
         cells,
         rows,
+        row_groups,
         table_constraint: resolved_table_block_size(
             block_size_constraint(computed.height, font_size, root),
             containing_block_size,
@@ -341,6 +360,7 @@ pub(crate) fn buckram_table_block(
         inline,
         table_constraint: inputs.table_constraint,
         table_box_sizing: inputs.table_box_sizing,
+        row_group_constraints: &inputs.row_groups,
         border_metrics: inputs.border_metrics,
         available_block_size,
         track_visibility: inputs.track_visibility.clone(),

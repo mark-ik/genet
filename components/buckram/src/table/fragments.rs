@@ -413,6 +413,7 @@ mod tests {
             inline: &inline,
             table_constraint: TableBlockConstraint::Auto,
             table_box_sizing: crate::TableBoxSizing::BorderBox,
+            row_group_constraints: &[],
             border_metrics: TableBlockBorderMetrics::Separated(
                 TableSeparatedBlockMetrics::default(),
             ),
@@ -635,6 +636,7 @@ mod tests {
             inline: &inline,
             table_constraint: TableBlockConstraint::Auto,
             table_box_sizing: crate::TableBoxSizing::BorderBox,
+            row_group_constraints: &[],
             border_metrics: TableBlockBorderMetrics::CollapsedPendingK4g,
             available_block_size: None,
             track_visibility: TableTrackVisibility::all_visible(&grid),

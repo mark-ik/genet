@@ -237,6 +237,22 @@ touch independent acceptance surfaces. The lane order remains B3 before B4.
 deferral-census fixtures pass on the Buckram table route. The receipt names
 every surviving non-K4 owner.
 
+### B3a. Row-group block constraints - 2026-08-08
+
+`TableBlockSizingInput` now carries row-group constraints in K4b visual-group
+order, and Livery lowers each generated row-group's `height` explicitly. A
+definite group height is a minimum distributed only through that group's rows
+by the accepted K4d3 table-height rule. Empty input means all groups are
+`auto`; any non-empty input must match K4b group order exactly. The pure T4
+fixture yields 66.67px and 133.33px from 20px and 40px minima under a 200px
+group, and the live table-block route paints the same split.
+
+The focused interop recheck remains aligned: Chrome 151.0.0.0 dumps T4 as
+66.66px and 133.34px at 200px; Firefox 153.0's headless screenshot shows
+66.67px and 133.33px at 200px. The generated recheck stays outside Git at
+`target-buckram-b3/row-group-interop-recheck`. This subreceipt does not claim
+the separate inline-table baseline, vertical-caption, or census parts of B3.
+
 ## B4. Collapsed sizing and overflow
 
 Execute K4g4. Feed B2 metrics into the accepted K4c and K4d algorithms. Do
