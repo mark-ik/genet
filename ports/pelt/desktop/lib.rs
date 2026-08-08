@@ -11,6 +11,29 @@
 mod profile;
 mod static_viewer;
 
+/// The host of an absolute URL, without userinfo or port. `None` for anything
+/// without an authority, which includes every local filesystem path.
+///
+/// Pelt names things after the document, and falls back to the URL when a
+/// format carries no title: gemini, gopher, finger and nex carry none at all.
+/// Both fallbacks (a tab in `tile_surface`, a window in `static_viewer`) want
+/// the host, so it lives here rather than in whichever one is compiled in.
+pub(crate) fn url_host(url: &str) -> Option<&str> {
+    let authority = url.split_once("://")?.1.split(['/', '\\']).next()?;
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    // An IPv6 literal is bracketed and its colons are part of the address.
+    let host = if authority.starts_with('[') {
+        authority.split_inclusive(']').next().unwrap_or(authority)
+    } else {
+        authority
+            .split_once(':')
+            .map_or(authority, |(host, _)| host)
+    };
+    (!host.is_empty()).then_some(host)
+}
+
 // The content lanes moved to `genet-documents` (2026-07-10 session-engines
 // plan): pelt is now one consumer among hosts. These shim modules keep the
 // crate-internal paths (`crate::document::…`, `crate::href::…`) and the
@@ -111,6 +134,8 @@ pub use smoke_webgl::{WebGlWgpuSmokeOutcome, run_webgl_wgpu_smoke};
 pub use smoke_windows::{
     WindowsDxgiPresentSmokeConfig, WindowsDxgiPresentSmokeOutcome, run_windows_dxgi_present_smoke,
 };
+#[cfg(feature = "livery")]
+pub use static_viewer::run_livery_viewer;
 pub use static_viewer::{StaticViewerConfig, StaticViewerOutcome, run_static_viewer};
 // `ScriptResourceFetcher` is `genet_scripted::ResourceFetcher` (the external-script
 // byte seam `ScriptedDocument::from_body` takes), distinct from `genet_host_api::

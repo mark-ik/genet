@@ -61,13 +61,19 @@ pub struct StaticViewerOutcome {
     pub size: (u32, u32),
 }
 
-/// Turn an optional document title into the stable native-window title.
+/// Turn a document title into the stable native-window title, falling back to
+/// the loaded URL's host.
+///
+/// Gemini, gopher, finger and nex carry no title element, so without the
+/// fallback every capsule opens a window called plain "Pelt" -- indistinguishable
+/// in the taskbar from every other one.
 #[cfg(feature = "viewer")]
-pub(crate) fn pelt_window_title(document_title: Option<&str>) -> String {
-    match document_title
+pub(crate) fn pelt_window_title(document_title: Option<&str>, url: Option<&str>) -> String {
+    let named = document_title
         .map(str::trim)
         .filter(|title| !title.is_empty())
-    {
+        .or_else(|| url.and_then(crate::url_host));
+    match named {
         Some(title) => format!("Pelt — {title}"),
         None => "Pelt".into(),
     }
@@ -150,6 +156,41 @@ mod dpi_tests {
     }
 }
 
+#[cfg(all(test, feature = "viewer"))]
+mod title_tests {
+    use super::pelt_window_title;
+
+    /// A titled document names the window. The smolweb formats carry no title
+    /// element at all, so without a fallback every capsule opened a window
+    /// called plain "Pelt" and the taskbar could not tell two of them apart.
+    #[test]
+    fn a_window_is_named_by_its_document_then_by_its_host() {
+        let named = Some("Merely | Local-first software");
+        assert_eq!(
+            pelt_window_title(named, Some("https://merelyllc.com")),
+            "Pelt — Merely | Local-first software"
+        );
+        for url in [
+            "gemini://geminiprotocol.net/",
+            "gemini://user@geminiprotocol.net:1965/page",
+        ] {
+            assert_eq!(
+                pelt_window_title(None, Some(url)),
+                "Pelt — geminiprotocol.net",
+                "naming a window for {url}"
+            );
+        }
+        // A blank title is as absent as no title.
+        assert_eq!(
+            pelt_window_title(Some("   "), Some("gopher://gopher.floodgap.com/")),
+            "Pelt — gopher.floodgap.com"
+        );
+        // Nothing to fall back on: a local file has no authority.
+        assert_eq!(pelt_window_title(None, Some("C:\\docs\\a.html")), "Pelt");
+        assert_eq!(pelt_window_title(None, None), "Pelt");
+    }
+}
+
 /// Run the static viewer for `config`. Headless returns immediately with no window
 /// (the CI smoke shape); headed opens a window, presents the document, and scrolls
 /// it on the wheel until the window is closed.
@@ -163,6 +204,35 @@ pub fn run_static_viewer(config: StaticViewerConfig) -> Result<StaticViewerOutco
         }),
         WindowingMode::Headed => run_headed(config),
     }
+}
+
+/// Run the opt-in Livery engine through its inker registry entry. The
+/// incumbent static viewer deliberately continues using its existing direct
+/// `LoadedDocument` route until its frozen receipts are re-blessed.
+#[cfg(feature = "livery")]
+pub fn run_livery_viewer(config: StaticViewerConfig) -> Result<StaticViewerOutcome, String> {
+    use genet_documents::LiverySessionEngine;
+    use inker::{SessionRegistry, SessionSpawnRequest};
+    use netrender::Scene;
+
+    if matches!(config.profile.windowing, WindowingMode::Headless) {
+        return Ok(StaticViewerOutcome {
+            url: config.url,
+            created_window: false,
+            redraws: 0,
+            size: (0, 0),
+        });
+    }
+    let (width, height) = config.size.unwrap_or((800, 600));
+    let mut registry: SessionRegistry<Scene> = SessionRegistry::new();
+    registry.register(Box::new(LiverySessionEngine::new(
+        crate::document::LocalFetcher,
+    )));
+    let request = SessionSpawnRequest::new(&config.url).with_viewport(width, height);
+    let session = registry
+        .spawn(inker::routing::ENGINE_GENET_LIVERY, &request)
+        .map_err(|error| format!("could not spawn engine genet.livery: {error}"))?;
+    run_headed_with(config, LiveryViewerContent { session })
 }
 
 /// Without the `viewer` feature there is no render / present stack, so a headed run
@@ -181,6 +251,47 @@ fn run_headed(config: StaticViewerConfig) -> Result<StaticViewerOutcome, String>
     // caller reports the error) rather than flashing an empty window.
     let doc = crate::document::LoadedDocument::load(&crate::document::LocalFetcher, &config.url)?;
     run_headed_with(config, doc)
+}
+
+#[cfg(feature = "livery")]
+struct LiveryViewerContent {
+    session: Box<dyn inker::DocumentSession<netrender::Scene>>,
+}
+
+#[cfg(feature = "livery")]
+impl windowed::ViewerContent for LiveryViewerContent {
+    fn title(&self) -> Option<String> {
+        self.session.inspect().and_then(|report| report.title)
+    }
+
+    fn frame(&mut self, width: u32, height: u32) -> netrender::Scene {
+        self.session.frame(width, height)
+    }
+
+    fn scroll_by(&mut self, dx: f32, dy: f32) -> bool {
+        self.session.scroll_by(dx, dy)
+    }
+
+    fn scroll_at(&mut self, x: f32, y: f32, dx: f32, dy: f32) -> bool {
+        self.session.scroll_at(x, y, dx, dy)
+    }
+
+    fn scroll_for_key(&mut self, key: genet_layout::ScrollKey) -> bool {
+        let key = match key {
+            genet_layout::ScrollKey::Up => inker::SessionScrollKey::LineUp,
+            genet_layout::ScrollKey::Down => inker::SessionScrollKey::LineDown,
+            genet_layout::ScrollKey::PageUp => inker::SessionScrollKey::PageUp,
+            genet_layout::ScrollKey::PageDown => inker::SessionScrollKey::PageDown,
+            genet_layout::ScrollKey::Home => inker::SessionScrollKey::Home,
+            genet_layout::ScrollKey::End => inker::SessionScrollKey::End,
+            genet_layout::ScrollKey::Left | genet_layout::ScrollKey::Right => return false,
+        };
+        self.session.scroll_for_key(key)
+    }
+
+    fn click_at(&mut self, x: f32, y: f32) -> bool {
+        matches!(self.session.click_at(x, y), inker::SessionClick::Handled)
+    }
 }
 
 /// Open a window and present `content` (any [`ViewerContent`](windowed::ViewerContent))
@@ -365,7 +476,7 @@ pub(crate) mod windowed {
         }
 
         fn window_title(&self) -> String {
-            super::pelt_window_title(self.doc.title().as_deref())
+            super::pelt_window_title(self.doc.title().as_deref(), Some(&self.config.url))
         }
 
         fn logical_size(&self) -> (u32, u32) {

@@ -242,7 +242,11 @@ pub(crate) mod windowed {
         }
 
         fn window_title(&self) -> String {
-            crate::static_viewer::pelt_window_title(self.content.title().as_deref())
+            // `loaded_url` tracks navigation, so the title follows the omnibar.
+            crate::static_viewer::pelt_window_title(
+                self.content.title().as_deref(),
+                Some(&self.loaded_url),
+            )
         }
 
         /// `(strip_rect, content_rect)` for the current side + thickness + window size.

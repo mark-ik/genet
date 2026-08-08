@@ -241,7 +241,10 @@ mod windowed {
         }
 
         fn window_title(&self) -> String {
-            crate::static_viewer::pelt_window_title(self.shell.primary_document_title().as_deref())
+            crate::static_viewer::pelt_window_title(
+                self.shell.primary_document_title().as_deref(),
+                Some(&self.first_url),
+            )
         }
 
         fn render(&mut self, event_loop: &ActiveEventLoop) {

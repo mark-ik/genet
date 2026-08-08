@@ -1008,25 +1008,7 @@ pub(crate) fn tile_title(url: &str) -> String {
     // most common URL there is, and it is exactly the case where a document
     // title is most likely to be missing too: gopher and finger carry none, so
     // every root tab fell back to the literal "tile". Name the host instead.
-    url_host(trimmed).map_or_else(|| "tile".into(), |host| host.chars().take(24).collect())
-}
-
-/// The host of an absolute URL, without userinfo or port. `None` for anything
-/// without an authority, which includes every local filesystem path.
-fn url_host(url: &str) -> Option<&str> {
-    let authority = url.split_once("://")?.1.split(['/', '\\']).next()?;
-    let authority = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host);
-    // An IPv6 literal is bracketed and its colons are part of the address.
-    let host = if authority.starts_with('[') {
-        authority.split_inclusive(']').next().unwrap_or(authority)
-    } else {
-        authority
-            .split_once(':')
-            .map_or(authority, |(host, _)| host)
-    };
-    (!host.is_empty()).then_some(host)
+    crate::url_host(trimmed).map_or_else(|| "tile".into(), |host| host.chars().take(24).collect())
 }
 
 fn document_title(document: &dyn DocumentSession<Scene>, url: &str) -> String {
